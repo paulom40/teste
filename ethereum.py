@@ -18,18 +18,19 @@ if 'entry_price' not in st.session_state:
 st.set_page_config(page_title="Live Forex Trading", layout="wide")
 st.title("💱 Simulador de Trading com RSI + MACD (AwesomeAPI)")
 
-# 🔧 Configurações
-API_KEY = "ec35e0b10abf1b04611e447d413763e06eccecfa7d35e49ee7a8cc4d16a16422"
-pair = st.sidebar.selectbox("Seleciona o par de moedas", [
+# 🔧 Pares confirmados pela AwesomeAPI
+pares_suportados = [
     "USD-BRL", "EUR-BRL", "GBP-BRL", "JPY-BRL", "CAD-BRL",
-    "AUD-BRL", "CHF-BRL", "BTC-BRL", "ETH-BRL"
-])
+    "AUD-BRL", "CHF-BRL", "BTC-BRL", "ETH-BRL", "LTC-BRL",
+    "ARS-BRL", "CNY-BRL", "ILS-BRL"
+]
+pair = st.sidebar.selectbox("Seleciona o par de moedas", pares_suportados)
 
 # 📈 Obter dados da AwesomeAPI
 @st.cache_data(ttl=300)
 def get_forex_data(pair):
     url = f"https://economia.awesomeapi.com.br/json/daily/{pair}/30"
-    response = requests.get(url)  # sem headers, pois a chave não é necessária
+    response = requests.get(url)
     if response.status_code == 200:
         try:
             data = response.json()
@@ -170,10 +171,7 @@ if not st.session_state.trades.empty:
         period_counts.columns = ['Período', 'Quantidade']
         period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
 
-        st.download_button(
+    st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
         data=output.getvalue(),
-        file_name="trades_forex_awesomeapi.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
+        file_name="trades_forex_awesome
