@@ -55,6 +55,24 @@ def calculate_rsi_simple(prices, period=14):
         st.error(f"Erro no cálculo simplificado do RSI: {e}")
         return pd.Series([50] * len(prices), index=prices.index)
 
+# Função para calcular Médias Móveis Simples
+def calculate_sma(prices, period):
+    """
+    Calcula a Média Móvel Simples para o período especificado
+    """
+    try:
+        if not isinstance(prices, pd.Series):
+            prices = pd.Series(prices)
+        
+        sma = prices.rolling(window=period, min_periods=1).mean()
+        sma = sma.fillna(prices)  # Preencher NaNs com o preço atual inicialmente
+        
+        return sma
+        
+    except Exception as e:
+        st.error(f"Erro no cálculo da SMA: {e}")
+        return pd.Series([np.nan] * len(prices), index=prices.index)
+
 # Função para obter dados reais do Ethereum
 def get_real_ethereum_data():
     try:
@@ -139,6 +157,10 @@ def simulate_realistic_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14,
     
     # Calcular RSI
     df['rsi'] = calculate_rsi_simple(df['price'], rsi_period)
+    
+    # Calcular Médias Móveis
+    df['sma_9'] = calculate_sma(df['price'], 9)
+    df['sma_13'] = calculate_sma(df['price'], 13)
     
     # Configurações realistas
     current_capital = initial_capital
@@ -399,7 +421,7 @@ if df is not None and len(df) > 0:
     
     fig = make_subplots(
         rows=3, cols=1,
-        subplot_titles=('Preço do Ethereum com Sinais', 'RSI Indicator', 'Evolução do Capital'),
+        subplot_titles=('Preço do Ethereum com Sinais e Médias Móveis', 'RSI Indicator', 'Evolução do Capital'),
         vertical_spacing=0.08,
         row_heights=[0.5, 0.25, 0.25]
     )
@@ -411,6 +433,28 @@ if df is not None and len(df) > 0:
             y=trading_df['price'],
             name='Preço ETH',
             line=dict(color='#00D4AA', width=2)
+        ),
+        row=1, col=1
+    )
+    
+    # Média Móvel 9
+    fig.add_trace(
+        go.Scatter(
+            x=trading_df.index,
+            y=trading_df['sma_9'],
+            name='SMA 9',
+            line=dict(color='#FFD700', width=1.5, dash='dot')
+        ),
+        row=1, col=1
+    )
+    
+    # Média Móvel 13
+    fig.add_trace(
+        go.Scatter(
+            x=trading_df.index,
+            y=trading_df['sma_13'],
+            name='SMA 13',
+            line=dict(color='#FF6B6B', width=1.5, dash='dash')
         ),
         row=1, col=1
     )
@@ -512,6 +556,7 @@ if len(trades_df) > 0:
         - Gestão de risco incorporada
         - Custos de trading realistas
         - Limites de operação diária
+        - Indicadores de Média Móvel (9 e 13) adicionados para análise visual
         """)
     
     with conclusion_col2:
