@@ -176,4 +176,9 @@ if not st.session_state.trades.empty:
         period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
 
     st.download_button(
-        label
+    label="📥 Exportar para Excel com Segmentação e Gráficos",
+    data=output.getvalue(),
+    file_name="trades_forex_awesomeapi.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
