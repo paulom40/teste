@@ -169,6 +169,10 @@ if not st.session_state.trades.empty:
 
         writer.save()
 
-    st.download_button(
+        st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
-        data=)
+        data=output.getvalue(),
+        file_name="trades_forex_awesomeapi.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
