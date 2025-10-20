@@ -5,3 +5,4 @@ xlsxwriter
 matplotlib
 altair
 requests
+plotly
