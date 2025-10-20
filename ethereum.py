@@ -158,7 +158,7 @@ if not st.session_state.trades.empty:
     df_chart.reset_index(inplace=True)
 
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         trades.to_excel(writer, index=False, sheet_name='Trades')
         metrics_df.to_excel(writer, index=False, sheet_name='Métricas')
         df_chart.to_excel(writer, index=False, sheet_name='Gráfico Técnico')
@@ -173,7 +173,7 @@ if not st.session_state.trades.empty:
 
         period_counts = trades['Período'].value_counts().reset_index()
         period_counts.columns = ['Período', 'Quantidade']
-                period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
+        period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
 
     st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
@@ -181,4 +181,5 @@ if not st.session_state.trades.empty:
         file_name="trades_forex_awesomeapi.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
