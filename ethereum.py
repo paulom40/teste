@@ -46,7 +46,6 @@ def get_forex_data(from_symbol, to_symbol, interval):
         df["price"] = df["4. close"].astype(float)
         return df[["price"]]
     else:
-        st.error("Erro na API. Verifica o par ou limite de chamadas.")
         return pd.DataFrame()
 
 # 📊 Indicadores técnicos
@@ -108,7 +107,9 @@ def simulate_trading(df):
 
 # 🚀 Executar simulação
 df = get_forex_data(from_symbol, to_symbol, INTERVAL)
-if not df.empty:
+if df.empty:
+    st.error("❌ Erro na API. Verifica o par selecionado ou o limite de chamadas.")
+else:
     df = simulate_trading(df)
     st.metric("💰 Preço Atual", f"{df['price'].iloc[-1]:.4f}")
     st.metric("💳 Banca Atual", f"€{st.session_state.capital:.2f}")
@@ -144,12 +145,10 @@ if not st.session_state.trades.empty:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        wb = writer.book
         trades.to_excel(writer, index=False, sheet_name='Trades')
         metrics_df.to_excel(writer, index=False, sheet_name='Métricas')
         df_chart.to_excel(writer, index=False, sheet_name='Gráfico Técnico')
 
-        # Gráficos e segmentações
         pnl_counts = trades['pnl'].apply(lambda x: 'Lucro' if x > 0 else 'Prejuízo').value_counts().reset_index()
         pnl_counts.columns = ['Resultado', 'Quantidade']
         pnl_counts.to_excel(writer, index=False, sheet_name='Distribuição PnL')
