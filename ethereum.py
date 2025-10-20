@@ -173,4 +173,12 @@ if not st.session_state.trades.empty:
 
         period_counts = trades['Período'].value_counts().reset_index()
         period_counts.columns = ['Período', 'Quantidade']
-        period_counts.to_excel(writer, index
+                period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
+
+    st.download_button(
+        label="📥 Exportar para Excel com Segmentação e Gráficos",
+        data=output.getvalue(),
+        file_name="trades_forex_awesomeapi.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
