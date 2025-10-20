@@ -100,7 +100,7 @@ def get_real_coin_data(coin_id):
                 
                 df_hourly = df.resample('H').interpolate()
                 
-                np.random.seed(42 + hash(coin_id))  # Seed diferente por coin para variação
+                np.random.seed(abs(hash(coin_id)) % (1 << 32))
                 noise = np.random.normal(0, df_hourly['price'].std() * 0.01, len(df_hourly))
                 df_hourly['price'] = df_hourly['price'] + noise
                 
@@ -120,7 +120,7 @@ def create_realistic_sample_data(coin_id):
     start_date = end_date - timedelta(days=90)
     dates = pd.date_range(start=start_date, end=end_date, freq='H')
     
-    np.random.seed(42 + hash(coin_id))
+    np.random.seed(abs(hash(coin_id)) % (1 << 32))
     
     # Diferentes tendências baseadas no coin
     if coin_id == 'bitcoin':
@@ -175,7 +175,7 @@ def initialize_trading_columns(df, initial_capital):
     df['trade_price'] = 0.0
     df['pnl_percent'] = 0.0
     df['pnl_euros'] = 0.0
-    df['position_size_eth'] = 0.0  # Generalizar para position_size
+    df['position_size'] = 0.0
     df['current_capital'] = initial_capital
     df['trade_amount'] = 0.0
     df['fees'] = 0.0
@@ -319,7 +319,8 @@ def calculate_performance_metrics(trading_df, initial_capital, trades_df, risk_m
         'profit_factor': risk_metrics.get('Profit Factor', 0),
         'sharpe_ratio': risk_metrics.get('Sharpe Ratio', 0),
         'max_drawdown': risk_metrics.get('Max Drawdown', 0),
-        'volatilidade_anual': risk_metrics.get('Volatilidade Anual', 0)
+        'volatilidade_anual': risk_metrics.get('Volatilidade Anual', 0),
+        'var_95': risk_metrics.get('VaR 95%', 0)
     }
     
     return metrics
@@ -465,7 +466,7 @@ def display_main_metrics(current_price, current_rsi, metrics, coin_id):
     with col4:
         st.metric("📈 Retorno Total", f"€{metrics['total_pnl_euros']:.2f}", f"{metrics['total_return']:.2f}%")
 
-def display_performance_metrics(metrics, risk_metrics, coin_id):
+def display_performance_metrics(metrics, coin_id):
     """
     Exibe métricas de performance para um ativo
     """
@@ -485,29 +486,29 @@ def display_performance_metrics(metrics, risk_metrics, coin_id):
     with perf_col4:
         st.info(f"**Profit Factor:** {metrics['profit_factor']:.2f}")
 
-def display_risk_metrics(risk_metrics, coin_id):
+def display_risk_metrics(metrics, coin_id):
     """
     Exibe análise de risco para um ativo
     """
     st.subheader(f"⚠️ Análise de Risco - {coin_id.upper()}")
     
-    if risk_metrics:
+    if metrics:
         risk_col1, risk_col2, risk_col3, risk_col4 = st.columns(4)
         
         with risk_col1:
-            sharpe = risk_metrics.get('Sharpe Ratio', 0)
+            sharpe = metrics.get('sharpe_ratio', 0)
             st.metric("Sharpe Ratio", f"{sharpe:.2f}")
         
         with risk_col2:
-            max_dd = risk_metrics.get('Max Drawdown', 0)
+            max_dd = metrics.get('max_drawdown', 0)
             st.metric("Max Drawdown", f"€{max_dd:.2f}")
         
         with risk_col3:
-            volatility = risk_metrics.get('Volatilidade Anual', 0)
+            volatility = metrics.get('volatilidade_anual', 0)
             st.metric("Volatilidade Anual", f"{volatility:.2%}")
         
         with risk_col4:
-            var = risk_metrics.get('VaR 95%', 0)
+            var = metrics.get('var_95', 0)
             st.metric("VaR 95%", f"€{var:.2f}")
 
 def display_trades_table(trades_df, coin_id):
@@ -545,9 +546,9 @@ def display_asset_dashboard(coin_id, trading_df, trades_df, metrics, config):
     capital_fig = create_capital_evolution_fig(trading_df, config['initial_capital'], coin_id)
     st.plotly_chart(capital_fig, use_container_width=True)
     
-    display_performance_metrics(metrics, {}, coin_id)  # risk_metrics já em metrics
+    display_performance_metrics(metrics, coin_id)
     
-    display_risk_metrics({}, coin_id)  # Integrado em metrics
+    display_risk_metrics(metrics, coin_id)
     
     st.subheader(f"📊 Análise Técnica Completa - {coin_id.upper()}")
     main_fig = create_main_analysis_fig(trading_df, config['rsi_upper'], config['rsi_lower'], coin_id)
@@ -592,7 +593,7 @@ def setup_sidebar():
     selected_coins = st.sidebar.multiselect(
         "Selecione os ativos", 
         available_coins, 
-        default=['bitcoin', 'ethereum', 'solana']
+        default=['ethereum']
     )
 
     # Parâmetros de trading
