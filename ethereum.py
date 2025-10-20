@@ -19,59 +19,7 @@ st.set_page_config(
 st.title("🤖 Ethereum Trading Bot - RSI Strategy")
 st.markdown("---")
 
-# Função para calcular RSI - VERSÃO CORRIGIDA
-def calculate_rsi(prices, period=14):
-    """
-    Calcula o RSI (Relative Strength Index)
-    """
-    try:
-        # Converter para numpy array se for pandas Series
-        if isinstance(prices, pd.Series):
-            prices = prices.values
-        
-        # Calcular diferenças de preço
-        deltas = np.diff(prices)
-        
-        # Separar ganhos e perdas
-        gains = np.where(deltas > 0, deltas, 0)
-        losses = np.where(deltas < 0, -deltas, 0)
-        
-        # Calcular médias móveis
-        avg_gains = np.zeros_like(prices)
-        avg_losses = np.zeros_like(prices)
-        
-        # Primeiro valor
-        avg_gains[period] = np.mean(gains[:period])
-        avg_losses[period] = np.mean(losses[:period])
-        
-        # Calcular para os demais períodos
-        for i in range(period + 1, len(prices)):
-            avg_gains[i] = (avg_gains[i-1] * (period - 1) + gains[i-1]) / period
-            avg_losses[i] = (avg_losses[i-1] * (period - 1) + losses[i-1]) / period
-        
-        # Calcular RS e RSI
-        rs = np.zeros_like(prices)
-        rsi = np.zeros_like(prices)
-        
-        for i in range(period, len(prices)):
-            if avg_losses[i] == 0:
-                rs[i] = 100 if avg_gains[i] > 0 else 0
-            else:
-                rs[i] = avg_gains[i] / avg_losses[i]
-            
-            rsi[i] = 100 - (100 / (1 + rs[i]))
-        
-        # Preencher os primeiros valores com 50 (neutro)
-        rsi[:period] = 50
-        
-        return pd.Series(rsi, index=range(len(prices)))
-    
-    except Exception as e:
-        st.error(f"Erro no cálculo do RSI: {e}")
-        # Retornar RSI neutro em caso de erro
-        return pd.Series([50] * len(prices), index=range(len(prices)))
-
-# Função alternativa mais simples para calcular RSI
+# Função para calcular RSI
 def calculate_rsi_simple(prices, period=14):
     """
     Versão simplificada e mais robusta para calcular RSI
@@ -177,76 +125,113 @@ def create_sample_data():
     st.success("✅ Dados de exemplo gerados com sucesso!")
     return df
 
-# Função para simular trading
+# Função para simular trading com banca de 1000€ e trades de 10€
 def simulate_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14):
     df = df.copy()
     
     # Calcular RSI usando a versão simplificada
     df['rsi'] = calculate_rsi_simple(df['price'], rsi_period)
     
-    # Debug: mostrar informações do RSI
-    st.sidebar.info(f"📊 Estatísticas do RSI:")
-    st.sidebar.write(f"- Mínimo: {df['rsi'].min():.2f}")
-    st.sidebar.write(f"- Máximo: {df['rsi'].max():.2f}")
-    st.sidebar.write(f"- Atual: {df['rsi'].iloc[-1]:.2f}")
+    # Configurações de capital
+    initial_capital = 1000.0  # 1000€ de banca inicial
+    trade_amount = 10.0       # 10€ por trade
+    current_capital = initial_capital
     
     # Inicializar colunas de sinal
     df['signal'] = 'HOLD'
     df['position'] = 0
     df['trade_price'] = 0.0
-    df['pnl'] = 0.0
-    df['cumulative_pnl'] = 0.0
+    df['pnl_percent'] = 0.0
+    df['pnl_euros'] = 0.0
+    df['position_size_eth'] = 0.0
+    df['current_capital'] = current_capital
+    df['trade_amount'] = 0.0
     
     position = 0  # 0: sem posição, 1: comprado, -1: vendido
     entry_price = 0
-    cumulative_pnl = 0
+    position_size_eth = 0
 
     for i in range(len(df)):
         current_rsi = df['rsi'].iloc[i]
         current_price = df['price'].iloc[i]
         
+        # Atualizar capital atual
+        df.loc[df.index[i], 'current_capital'] = current_capital
+        
         # Lógica de trading
-        if position == 0:  # Sem posição
+        if position == 0 and current_capital >= trade_amount:  # Sem posição e com capital
             if current_rsi < rsi_lower:  # RSI abaixo do limite inferior - COMPRAR
                 df.loc[df.index[i], 'signal'] = 'BUY'
                 df.loc[df.index[i], 'position'] = 1
                 df.loc[df.index[i], 'trade_price'] = current_price
+                df.loc[df.index[i], 'trade_amount'] = trade_amount
+                
+                # Calcular tamanho da posição em ETH
+                position_size_eth = trade_amount / current_price
+                df.loc[df.index[i], 'position_size_eth'] = position_size_eth
+                
                 position = 1
                 entry_price = current_price
+                current_capital -= trade_amount  # Deduzir o valor do trade do capital
                 
             elif current_rsi > rsi_upper:  # RSI acima do limite superior - VENDER
-                df.loc[df.index[i], 'signal'] = 'SELL'
+                df.loc[df.index[i], 'signal'] = 'SELL_SHORT'
                 df.loc[df.index[i], 'position'] = -1
                 df.loc[df.index[i], 'trade_price'] = current_price
+                df.loc[df.index[i], 'trade_amount'] = trade_amount
+                
+                # Para venda a descoberto, assumimos que podemos vender 10€ em ETH
+                position_size_eth = trade_amount / current_price
+                df.loc[df.index[i], 'position_size_eth'] = position_size_eth
+                
                 position = -1
                 entry_price = current_price
+                current_capital -= trade_amount  # Margem para short
                 
         elif position == 1:  # Posição comprada
             if current_rsi > rsi_upper:  # Fechar posição quando RSI > limite superior
                 df.loc[df.index[i], 'signal'] = 'SELL'
                 df.loc[df.index[i], 'position'] = 0
                 df.loc[df.index[i], 'trade_price'] = current_price
-                pnl = (current_price - entry_price) / entry_price * 100
-                df.loc[df.index[i], 'pnl'] = pnl
-                cumulative_pnl += pnl
-                df.loc[df.index[i], 'cumulative_pnl'] = cumulative_pnl
-                position = 0
                 
-        elif position == -1:  # Posição vendida
+                # Calcular PnL
+                pnl_percent = (current_price - entry_price) / entry_price * 100
+                pnl_euros = position_size_eth * (current_price - entry_price)
+                
+                df.loc[df.index[i], 'pnl_percent'] = pnl_percent
+                df.loc[df.index[i], 'pnl_euros'] = pnl_euros
+                df.loc[df.index[i], 'trade_amount'] = trade_amount
+                
+                # Atualizar capital
+                current_capital += trade_amount + pnl_euros  # Devolver capital + lucro/prejuízo
+                
+                position = 0
+                position_size_eth = 0
+                
+        elif position == -1:  # Posição vendida (short)
             if current_rsi < rsi_lower:  # Fechar posição quando RSI < limite inferior
-                df.loc[df.index[i], 'signal'] = 'BUY'
+                df.loc[df.index[i], 'signal'] = 'BUY_COVER'
                 df.loc[df.index[i], 'position'] = 0
                 df.loc[df.index[i], 'trade_price'] = current_price
-                pnl = (entry_price - current_price) / entry_price * 100
-                df.loc[df.index[i], 'pnl'] = pnl
-                cumulative_pnl += pnl
-                df.loc[df.index[i], 'cumulative_pnl'] = cumulative_pnl
+                
+                # Calcular PnL (invertido para short)
+                pnl_percent = (entry_price - current_price) / entry_price * 100
+                pnl_euros = position_size_eth * (entry_price - current_price)
+                
+                df.loc[df.index[i], 'pnl_percent'] = pnl_percent
+                df.loc[df.index[i], 'pnl_euros'] = pnl_euros
+                df.loc[df.index[i], 'trade_amount'] = trade_amount
+                
+                # Atualizar capital
+                current_capital += trade_amount + pnl_euros  # Devolver margem + lucro/prejuízo
+                
                 position = 0
+                position_size_eth = 0
     
     return df
 
 # Função para exportar para Excel
-def export_to_excel(df, trades_df):
+def export_to_excel(df, trades_df, initial_capital=1000):
     output = io.BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -257,49 +242,65 @@ def export_to_excel(df, trades_df):
         if len(trades_df) > 0:
             trades_export = trades_df.copy()
             trades_export['timestamp'] = trades_export.index
-            trades_export = trades_export[['timestamp', 'price', 'rsi', 'signal', 'trade_price', 'pnl']]
-            trades_export.columns = ['Data/Hora', 'Preço ETH', 'RSI', 'Sinal', 'Preço Trade', 'PnL (%)']
+            trades_export = trades_export[['timestamp', 'price', 'rsi', 'signal', 'trade_price', 
+                                         'trade_amount', 'position_size_eth', 'pnl_percent', 'pnl_euros']]
+            trades_export.columns = ['Data/Hora', 'Preço ETH', 'RSI', 'Sinal', 'Preço Trade', 
+                                   'Valor Trade (€)', 'Tamanho Posição (ETH)', 'PnL (%)', 'PnL (€)']
             trades_export.to_excel(writer, sheet_name='Trades Executados', index=False)
         else:
             pd.DataFrame({'Info': ['Nenhum trade executado']}).to_excel(writer, sheet_name='Trades Executados', index=False)
         
         # Resumo de performance
         if len(trades_df) > 0:
+            final_capital = df['current_capital'].iloc[-1]
+            total_pnl_euros = final_capital - initial_capital
+            total_return = (total_pnl_euros / initial_capital) * 100
+            
             summary_data = {
                 'Métrica': [
+                    'Capital Inicial (€)',
+                    'Capital Final (€)',
+                    'Lucro/Prejuízo Total (€)',
+                    'Retorno Total (%)',
                     'Total de Trades',
                     'Trades Lucrativos',
                     'Trades Prejudiciais',
                     'Taxa de Sucesso (%)',
-                    'Lucro Total (%)',
-                    'Melhor Trade (%)',
-                    'Pior Trade (%)',
-                    'Lucro Médio por Trade (%)'
+                    'Lucro Total (€)',
+                    'Prejuízo Total (€)',
+                    'Melhor Trade (€)',
+                    'Pior Trade (€)',
+                    'Trade Médio (€)'
                 ],
                 'Valor': [
+                    initial_capital,
+                    final_capital,
+                    total_pnl_euros,
+                    total_return,
                     len(trades_df),
-                    len(trades_df[trades_df['pnl'] > 0]),
-                    len(trades_df[trades_df['pnl'] < 0]),
-                    len(trades_df[trades_df['pnl'] > 0]) / len(trades_df) * 100 if len(trades_df) > 0 else 0,
-                    trades_df['pnl'].sum(),
-                    trades_df['pnl'].max(),
-                    trades_df['pnl'].min(),
-                    trades_df['pnl'].mean()
+                    len(trades_df[trades_df['pnl_euros'] > 0]),
+                    len(trades_df[trades_df['pnl_euros'] < 0]),
+                    len(trades_df[trades_df['pnl_euros'] > 0]) / len(trades_df) * 100 if len(trades_df) > 0 else 0,
+                    trades_df[trades_df['pnl_euros'] > 0]['pnl_euros'].sum(),
+                    trades_df[trades_df['pnl_euros'] < 0]['pnl_euros'].sum(),
+                    trades_df['pnl_euros'].max(),
+                    trades_df['pnl_euros'].min(),
+                    trades_df['pnl_euros'].mean()
                 ]
             }
         else:
             summary_data = {
                 'Métrica': [
+                    'Capital Inicial (€)',
+                    'Capital Final (€)',
+                    'Lucro/Prejuízo Total (€)',
+                    'Retorno Total (%)',
                     'Total de Trades',
-                    'Trades Lucrativos', 
+                    'Trades Lucrativos',
                     'Trades Prejudiciais',
-                    'Taxa de Sucesso (%)',
-                    'Lucro Total (%)',
-                    'Melhor Trade (%)',
-                    'Pior Trade (%)',
-                    'Lucro Médio por Trade (%)'
+                    'Taxa de Sucesso (%)'
                 ],
-                'Valor': [0, 0, 0, 0, 0, 0, 0, 0]
+                'Valor': [initial_capital, initial_capital, 0, 0, 0, 0, 0, 0]
             }
             
         summary_df = pd.DataFrame(summary_data)
@@ -315,6 +316,11 @@ st.sidebar.header("⚙️ Configurações do Trading")
 rsi_period = st.sidebar.slider("Período RSI", 5, 30, 14)
 rsi_upper = st.sidebar.slider("RSI Superior (Venda)", 60, 90, 70)
 rsi_lower = st.sidebar.slider("RSI Inferior (Compra)", 10, 40, 30)
+
+# Configurações de capital
+st.sidebar.header("💰 Configurações de Capital")
+initial_capital = st.sidebar.number_input("Capital Inicial (€)", min_value=100, max_value=10000, value=1000, step=100)
+trade_amount = st.sidebar.number_input("Valor por Trade (€)", min_value=5, max_value=100, value=10, step=5)
 
 # Atualização automática
 auto_update = st.sidebar.checkbox("Atualização Automática", value=False)
@@ -337,6 +343,11 @@ if df is not None and len(df) > 0:
     # Filtrar apenas trades executados
     trades_df = trading_df[trading_df['signal'] != 'HOLD'].copy()
     
+    # Calcular métricas finais
+    final_capital = trading_df['current_capital'].iloc[-1]
+    total_pnl_euros = final_capital - initial_capital
+    total_return = (total_pnl_euros / initial_capital) * 100
+    
     # Layout de colunas para métricas
     col1, col2, col3, col4 = st.columns(4)
     
@@ -346,33 +357,63 @@ if df is not None and len(df) > 0:
     
     with col2:
         current_rsi = trading_df['rsi'].iloc[-1]
-        rsi_color = "red" if current_rsi > 70 else "green" if current_rsi < 30 else "gray"
         st.metric("RSI Atual", f"{current_rsi:.2f}")
     
     with col3:
-        total_trades = len(trades_df)
-        st.metric("Total de Trades", total_trades)
+        st.metric("Capital Atual", f"€{final_capital:.2f}")
     
     with col4:
-        if len(trades_df) > 0:
-            win_rate = len(trades_df[trades_df['pnl'] > 0]) / len(trades_df) * 100
-            st.metric("Taxa de Sucesso", f"{win_rate:.1f}%")
-        else:
-            st.metric("Taxa de Sucesso", "0%")
+        st.metric("Retorno Total", f"€{total_pnl_euros:.2f}", f"{total_return:.2f}%")
     
-    # Mostrar informações do RSI
-    st.subheader("📈 Informações do RSI")
-    rsi_col1, rsi_col2, rsi_col3, rsi_col4 = st.columns(4)
+    # Métricas de capital e performance
+    st.subheader("💰 Performance do Capital")
     
-    with rsi_col1:
-        st.info(f"**RSI Mínimo:** {trading_df['rsi'].min():.2f}")
-    with rsi_col2:
-        st.info(f"**RSI Máximo:** {trading_df['rsi'].max():.2f}")
-    with rsi_col3:
-        st.info(f"**RSI Médio:** {trading_df['rsi'].mean():.2f}")
-    with rsi_col4:
-        rsi_status = "Sobrecomprado" if current_rsi > 70 else "Sobrevendido" if current_rsi < 30 else "Neutro"
-        st.info(f"**Status:** {rsi_status}")
+    cap_col1, cap_col2, cap_col3, cap_col4 = st.columns(4)
+    
+    with cap_col1:
+        st.info(f"**Capital Inicial:** €{initial_capital:.2f}")
+    
+    with cap_col2:
+        st.info(f"**Capital Final:** €{final_capital:.2f}")
+    
+    with cap_col3:
+        return_color = "🟢" if total_return > 0 else "🔴" if total_return < 0 else "⚪"
+        st.info(f"**Retorno Total:** {return_color} {total_return:.2f}%")
+    
+    with cap_col4:
+        st.info(f"**Total de Trades:** {len(trades_df)}")
+    
+    # Gráfico de evolução do capital
+    st.subheader("📈 Evolução do Capital")
+    
+    capital_fig = go.Figure()
+    
+    capital_fig.add_trace(go.Scatter(
+        x=trading_df.index,
+        y=trading_df['current_capital'],
+        name='Capital (€)',
+        line=dict(color='#00D4AA', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(0, 212, 170, 0.1)'
+    ))
+    
+    # Adicionar linha do capital inicial
+    capital_fig.add_hline(
+        y=initial_capital, 
+        line_dash="dash", 
+        line_color="white",
+        annotation_text=f"Capital Inicial: €{initial_capital:.0f}"
+    )
+    
+    capital_fig.update_layout(
+        title="Evolução do Capital de Trading",
+        xaxis_title="Data",
+        yaxis_title="Capital (€)",
+        template="plotly_dark",
+        height=400
+    )
+    
+    st.plotly_chart(capital_fig, use_container_width=True)
     
     # Gráfico de preço e RSI
     st.header("📊 Gráfico de Preço e RSI")
@@ -396,7 +437,7 @@ if df is not None and len(df) > 0:
     )
     
     # Adicionar sinais de compra
-    buy_signals = trading_df[trading_df['signal'] == 'BUY']
+    buy_signals = trading_df[trading_df['signal'].str.contains('BUY')]
     if len(buy_signals) > 0:
         fig.add_trace(
             go.Scatter(
@@ -410,7 +451,7 @@ if df is not None and len(df) > 0:
         )
     
     # Adicionar sinais de venda
-    sell_signals = trading_df[trading_df['signal'] == 'SELL']
+    sell_signals = trading_df[trading_df['signal'].str.contains('SELL')]
     if len(sell_signals) > 0:
         fig.add_trace(
             go.Scatter(
@@ -423,7 +464,7 @@ if df is not None and len(df) > 0:
             row=1, col=1
         )
     
-    # Gráfico RSI - AGORA DEVE FUNCIONAR
+    # Gráfico RSI
     fig.add_trace(
         go.Scatter(
             x=trading_df.index,
@@ -456,45 +497,31 @@ if df is not None and len(df) > 0:
     st.header("💼 Trades Executados")
     
     if len(trades_df) > 0:
-        display_trades = trades_df[['price', 'rsi', 'signal', 'trade_price', 'pnl']].copy()
+        display_trades = trades_df[['price', 'rsi', 'signal', 'trade_price', 
+                                  'trade_amount', 'position_size_eth', 'pnl_percent', 'pnl_euros']].copy()
         display_trades['timestamp'] = display_trades.index
-        display_trades = display_trades[['timestamp', 'price', 'rsi', 'signal', 'trade_price', 'pnl']]
-        display_trades.columns = ['Data/Hora', 'Preço ETH', 'RSI', 'Sinal', 'Preço Trade', 'PnL (%)']
+        display_trades = display_trades[['timestamp', 'price', 'rsi', 'signal', 'trade_price', 
+                                       'trade_amount', 'position_size_eth', 'pnl_percent', 'pnl_euros']]
+        display_trades.columns = ['Data/Hora', 'Preço ETH', 'RSI', 'Sinal', 'Preço Trade', 
+                                'Valor Trade (€)', 'Tamanho Posição (ETH)', 'PnL (%)', 'PnL (€)']
+        
+        # Arredondar valores
         display_trades['PnL (%)'] = display_trades['PnL (%)'].round(2)
+        display_trades['PnL (€)'] = display_trades['PnL (€)'].round(2)
         display_trades['Preço ETH'] = display_trades['Preço ETH'].round(2)
         display_trades['Preço Trade'] = display_trades['Preço Trade'].round(2)
         display_trades['RSI'] = display_trades['RSI'].round(2)
+        display_trades['Tamanho Posição (ETH)'] = display_trades['Tamanho Posição (ETH)'].round(6)
+        display_trades['Valor Trade (€)'] = display_trades['Valor Trade (€)'].round(2)
         
-        # Colorir a coluna PnL
-        def color_pnl(val):
+        # Colorir a coluna PnL (€)
+        def color_pnl_euros(val):
             color = 'green' if val > 0 else 'red' if val < 0 else 'gray'
-            return f'color: {color}'
+            return f'color: {color}; font-weight: bold;'
         
-        styled_df = display_trades.style.applymap(color_pnl, subset=['PnL (%)'])
+        styled_df = display_trades.style.applymap(color_pnl_euros, subset=['PnL (€)'])
         st.dataframe(styled_df, use_container_width=True)
         
-        # Métricas de performance
-        st.header("📊 Performance do Trading")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            total_pnl = trades_df['pnl'].sum()
-            pnl_color = "green" if total_pnl > 0 else "red"
-            st.metric("Lucro/Prejuízo Total", f"{total_pnl:.2f}%", delta_color="off")
-        
-        with col2:
-            winning_trades = len(trades_df[trades_df['pnl'] > 0])
-            st.metric("Trades Lucrativos", winning_trades)
-        
-        with col3:
-            losing_trades = len(trades_df[trades_df['pnl'] < 0])
-            st.metric("Trades Prejudiciais", losing_trades)
-        
-        with col4:
-            best_trade = trades_df['pnl'].max()
-            st.metric("Melhor Trade", f"{best_trade:.2f}%")
-    
     else:
         st.info("ℹ️ Nenhum trade executado ainda com os parâmetros atuais.")
         st.info("💡 Tente ajustar os limites do RSI na sidebar para gerar mais sinais.")
@@ -507,7 +534,7 @@ if df is not None and len(df) > 0:
     with col1:
         st.download_button(
             label="📥 Baixar Relatório Excel Completo",
-            data=export_to_excel(trading_df, trades_df),
+            data=export_to_excel(trading_df, trades_df, initial_capital),
             file_name=f"ethereum_trading_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
@@ -519,6 +546,27 @@ if df is not None and len(df) > 0:
 
 else:
     st.error("❌ Não foi possível carregar os dados do Ethereum. Tente novamente.")
+
+# Informações na sidebar
+st.sidebar.header("💰 Configuração Atual")
+st.sidebar.info(f"""
+**Capital Inicial:** €{initial_capital:.2f}
+**Valor por Trade:** €{trade_amount:.2f}
+**Trades Possíveis:** {initial_capital // trade_amount}
+**Capital por Trade:** {(trade_amount / initial_capital * 100):.1f}%
+""")
+
+st.sidebar.header("ℹ️ Sobre a Estratégia")
+st.sidebar.info("""
+**Estratégia RSI:**
+- RSI < 30: COMPRA (10€)
+- RSI > 70: VENDA (10€)
+- Fechamento automático
+
+**⚠️ Aviso:**
+Ferramenta educacional para backtesting.
+Trading real envolve riscos.
+""")
 
 # Rodapé
 st.markdown("---")
