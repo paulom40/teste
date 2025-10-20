@@ -18,14 +18,19 @@ if 'entry_price' not in st.session_state:
 st.set_page_config(page_title="Live Forex Trading", layout="wide")
 st.title("💱 Simulador de Trading com RSI + MACD (AwesomeAPI)")
 
-# 🔧 Seleção de par de moedas
-pair = st.sidebar.selectbox("Seleciona o par de moedas", ["USD-BRL", "EUR-USD", "BTC-USD", "GBP-BRL"])
-symbol = pair.replace("-", "")
+# ✅ Pares suportados
+pares_suportados = [
+    "USD-BRL", "EUR-BRL", "GBP-BRL", "JPY-BRL", "CAD-BRL", "AUD-BRL",
+    "CHF-BRL", "BTC-BRL", "ETH-BRL", "EUR-USD", "BTC-USD", "ETH-USD"
+]
 
-# 📈 Obter dados da AwesomeAPI (últimos 30 dias)
+# 🔧 Seleção de par de moedas
+pair = st.sidebar.selectbox("Seleciona o par de moedas", pares_suportados)
+
+# 📈 Obter dados da AwesomeAPI
 @st.cache_data(ttl=300)
-def get_forex_data(symbol):
-    url = f"https://economia.awesomeapi.com.br/json/daily/{symbol}/30"
+def get_forex_data(pair):
+    url = f"https://economia.awesomeapi.com.br/json/daily/{pair}/30"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
@@ -36,7 +41,6 @@ def get_forex_data(symbol):
         df.set_index('timestamp', inplace=True)
         return df[['price']]
     else:
-        st.error("❌ Erro na API AwesomeAPI. Verifica o par selecionado.")
         return pd.DataFrame()
 
 # 📊 Indicadores técnicos
@@ -97,8 +101,10 @@ def simulate_trading(df):
     return df
 
 # 🚀 Executar simulação
-df = get_forex_data(symbol)
-if not df.empty:
+df = get_forex_data(pair)
+if df.empty:
+    st.error("❌ Erro na API AwesomeAPI. Verifica o par selecionado.")
+else:
     df = simulate_trading(df)
     st.metric("💰 Preço Atual", f"{df['price'].iloc[-1]:.4f}")
     st.metric("💳 Banca Atual", f"€{st.session_state.capital:.2f}")
