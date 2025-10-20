@@ -34,12 +34,16 @@ def get_forex_data(pair):
     if response.status_code == 200:
         try:
             data = response.json()
-            df = pd.DataFrame(data)
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            df = df.sort_values('timestamp')
-            df['price'] = df['bid'].astype(float)
-            df.set_index('timestamp', inplace=True)
-            return df[['price']]
+            if isinstance(data, list) and len(data) > 0 and 'bid' in data[0]:
+                df = pd.DataFrame(data)
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                df = df.sort_values('timestamp')
+                df['price'] = df['bid'].astype(float)
+                df.set_index('timestamp', inplace=True)
+                return df[['price']]
+            else:
+                st.error("❌ Dados inválidos ou vazios retornados pela API.")
+                return pd.DataFrame()
         except Exception as e:
             st.error(f"❌ Erro ao processar os dados: {e}")
             return pd.DataFrame()
@@ -169,14 +173,4 @@ if not st.session_state.trades.empty:
 
         period_counts = trades['Período'].value_counts().reset_index()
         period_counts.columns = ['Período', 'Quantidade']
-        period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
-
-    st.download_button(
-    label="📥 Exportar para Excel com Segmentação e Gráficos",
-    data=output.getvalue(),
-    file_name="trades_forex_awesomeapi.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-
-
+        period_counts.to_excel(writer, index
