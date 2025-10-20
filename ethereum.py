@@ -16,31 +16,34 @@ if 'entry_price' not in st.session_state:
 
 # 📊 Interface principal
 st.set_page_config(page_title="Live Forex Trading", layout="wide")
-st.title("💱 Simulador de Trading com RSI + MACD (AwesomeAPI)")
+st.title("💱 Simulador de Trading com RSI + MACD (Twelve Data)")
 
-# ✅ Pares suportados
-pares_suportados = [
-    "USD-BRL", "EUR-BRL", "GBP-BRL", "JPY-BRL", "CAD-BRL", "AUD-BRL",
-    "CHF-BRL", "BTC-BRL", "ETH-BRL", "EUR-USD", "BTC-USD", "ETH-USD"
-]
+# 🔧 Configurações
+API_KEY = "YOUR_TWELVE_DATA_API_KEY"  # substitui pela tua chave
+pair = st.sidebar.selectbox("Seleciona o par de moedas", ["EUR/USD", "USD/JPY", "GBP/USD", "AUD/USD", "USD/CHF"])
+symbol = pair.replace("/", "")
 
-# 🔧 Seleção de par de moedas
-pair = st.sidebar.selectbox("Seleciona o par de moedas", pares_suportados)
-
-# 📈 Obter dados da AwesomeAPI
+# 📈 Obter dados da Twelve Data
 @st.cache_data(ttl=300)
-def get_forex_data(pair):
-    url = f"https://economia.awesomeapi.com.br/json/daily/{pair}/30"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        df = pd.DataFrame(data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        df = df.sort_values('timestamp')
-        df['price'] = df['bid'].astype(float)
-        df.set_index('timestamp', inplace=True)
-        return df[['price']]
+def get_forex_data(symbol):
+    url = f"https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": symbol,
+        "interval": "1h",
+        "outputsize": 100,
+        "apikey": API_KEY
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+    if "values" in data:
+        df = pd.DataFrame(data["values"])
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime")
+        df["price"] = df["close"].astype(float)
+        df.set_index("datetime", inplace=True)
+        return df[["price"]]
     else:
+        st.error("❌ Erro na API Twelve Data. Verifica o par ou a chave.")
         return pd.DataFrame()
 
 # 📊 Indicadores técnicos
@@ -101,18 +104,29 @@ def simulate_trading(df):
     return df
 
 # 🚀 Executar simulação
-df = get_forex_data(pair)
-if df.empty:
-    st.error("❌ Erro na API AwesomeAPI. Verifica o par selecionado.")
-else:
+df = get_forex_data(symbol)
+if not df.empty:
     df = simulate_trading(df)
     st.metric("💰 Preço Atual", f"{df['price'].iloc[-1]:.4f}")
     st.metric("💳 Banca Atual", f"€{st.session_state.capital:.2f}")
     st.line_chart(df['price'])
 
-# 📤 Exportação para Excel com gráficos e métricas
+# 🎯 Filtros de análise
 if not st.session_state.trades.empty:
-    trades = st.session_state.trades.copy()
+    st.sidebar.markdown("### 🎯 Filtros de análise")
+    min_date = st.session_state.trades['time'].min().date()
+    max_date = st.session_state.trades['time'].max().date()
+    start_date = st.sidebar.date_input("Data inicial", min_value=min_date, max_value=max_date, value=min_date)
+    end_date = st.sidebar.date_input("Data final", min_value=min_date, max_value=max_date, value=max_date)
+    signal_filter = st.sidebar.multiselect("Tipo de sinal", ["BUY", "SELL"], default=["BUY", "SELL"])
+
+    filtered_trades = st.session_state.trades[
+        (st.session_state.trades['time'].dt.date >= start_date) &
+        (st.session_state.trades['time'].dt.date <= end_date) &
+        (st.session_state.trades['signal'].isin(signal_filter))
+    ]
+
+    trades = filtered_trades.copy()
     trades['Período'] = trades['time'].apply(lambda dt: 'Manhã' if dt.hour < 12 else 'Tarde' if dt.hour < 18 else 'Noite')
     trades['capital'] = 1000 + trades['pnl'].cumsum()
 
@@ -161,6 +175,6 @@ if not st.session_state.trades.empty:
     st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
         data=output.getvalue(),
-        file_name="trades_forex_awesomeapi.xlsx",
+        file_name="trades_forex_twelvedata.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
