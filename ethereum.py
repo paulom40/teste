@@ -10,7 +10,7 @@ import io
 
 # Configuração da página
 st.set_page_config(
-    page_title="Multi-Asset Trading Bot - Simulação Real",
+    page_title="Multi-Asset Trading Bot - RSI + MACD",
     page_icon="📈",
     layout="wide"
 )
@@ -61,7 +61,27 @@ def calculate_sma(prices, period):
         st.error(f"Erro no cálculo da SMA: {e}")
         return pd.Series([np.nan] * len(prices), index=prices.index)
 
-def calculate_indicators(df, rsi_period=14):
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """
+    Calcula o MACD
+    """
+    try:
+        if not isinstance(prices, pd.Series):
+            prices = pd.Series(prices)
+        
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal).mean()
+        histogram = macd_line - signal_line
+        
+        return macd_line, signal_line, histogram
+        
+    except Exception as e:
+        st.error(f"Erro no cálculo do MACD: {e}")
+        return pd.Series([0] * len(prices), index=prices.index), pd.Series([0] * len(prices), index=prices.index), pd.Series([0] * len(prices), index=prices.index)
+
+def calculate_indicators(df, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9):
     """
     Calcula todos os indicadores técnicos necessários
     """
@@ -69,6 +89,7 @@ def calculate_indicators(df, rsi_period=14):
     df['rsi'] = calculate_rsi_simple(df['price'], rsi_period)
     df['sma_9'] = calculate_sma(df['price'], 9)
     df['sma_13'] = calculate_sma(df['price'], 13)
+    df['macd'], df['macd_signal'], df['histogram'] = calculate_macd(df['price'], macd_fast, macd_slow, macd_signal)
     return df
 
 # =============================================================================
@@ -228,12 +249,13 @@ def execute_sell_signal(i, df, position_size, entry_price, current_price, fee_ra
     return 0, 0, 0, exit_fee, net_pnl_euros
 
 def simulate_realistic_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14, 
+                              macd_fast=12, macd_slow=26, macd_signal=9,
                               initial_capital=1000, trade_amount=10, 
                               fee_rate=0.002, max_trades_per_day=3, trading_hours=True):
     """
-    Simula trading realista com custos e limitações
+    Simula trading realista com RSI + MACD
     """
-    df = calculate_indicators(df, rsi_period)
+    df = calculate_indicators(df, rsi_period, macd_fast, macd_slow, macd_signal)
     df = initialize_trading_columns(df, initial_capital)
     
     current_capital = initial_capital
@@ -242,8 +264,10 @@ def simulate_realistic_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14,
     position_size = 0
     total_fees_paid = 0
 
-    for i in range(len(df)):
+    for i in range(1, len(df)):  # Começar de 1 para evitar NaNs iniciais
         current_rsi = df['rsi'].iloc[i]
+        current_macd = df['macd'].iloc[i]
+        current_macd_signal = df['macd_signal'].iloc[i]
         current_price = df['price'].iloc[i]
         current_hour = df.index[i].hour
         
@@ -255,9 +279,16 @@ def simulate_realistic_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14,
         
         trades_today_ok = check_daily_trade_limit(i, df, max_trades_per_day)
         
+        # Detectar cruzamentos MACD
+        prev_macd = df['macd'].iloc[i-1]
+        prev_macd_signal = df['macd_signal'].iloc[i-1]
+        macd_bullish_cross = (current_macd > current_macd_signal) and (prev_macd <= prev_macd_signal)
+        macd_bearish_cross = (current_macd < current_macd_signal) and (prev_macd >= prev_macd_signal)
+        
         if (position == 0 and current_capital >= trade_amount and trades_today_ok):
             
-            if current_rsi < rsi_lower:
+            # Sinal de COMPRA: RSI < lower E MACD bullish cross
+            if current_rsi < rsi_lower and macd_bullish_cross:
                 position, entry_price, position_size, trade_fee = execute_buy_signal(
                     i, df, trade_amount, fee_rate, current_price
                 )
@@ -268,7 +299,9 @@ def simulate_realistic_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14,
             take_profit = entry_price * 1.05
             stop_loss = entry_price * 0.95
             
-            if (current_rsi > rsi_upper or current_price >= take_profit or current_price <= stop_loss):
+            # Sinal de VENDA: RSI > upper OU MACD bearish cross OU TP/SL
+            if (current_rsi > rsi_upper or macd_bearish_cross or 
+                current_price >= take_profit or current_price <= stop_loss):
                 position, entry_price, position_size, exit_fee, net_pnl_euros = execute_sell_signal(
                     i, df, position_size, entry_price, current_price, fee_rate
                 )
@@ -333,7 +366,10 @@ def run_backtest_for_asset(coin_id, df, config):
         df, 
         config['rsi_lower'], 
         config['rsi_upper'], 
-        config['rsi_period'], 
+        config['rsi_period'],
+        config['macd_fast'],
+        config['macd_slow'],
+        config['macd_signal'],
         config['initial_capital'], 
         config['trade_amount'],
         config['trading_fee'],
@@ -389,10 +425,10 @@ def create_main_analysis_fig(trading_df, rsi_upper, rsi_lower, coin_id):
     Cria o gráfico principal de análise técnica para um ativo
     """
     fig = make_subplots(
-        rows=3, cols=1,
-        subplot_titles=(f'Preço do {coin_id.upper()} com Sinais e Médias Móveis', 'RSI Indicator', 'Evolução do Capital'),
+        rows=4, cols=1,  # Adicionado row para MACD
+        subplot_titles=(f'Preço do {coin_id.upper()} com Sinais e Médias Móveis', 'RSI Indicator', 'MACD', 'Evolução do Capital'),
         vertical_spacing=0.08,
-        row_heights=[0.5, 0.25, 0.25]
+        row_heights=[0.4, 0.2, 0.2, 0.2]
     )
     
     # Preço e SMAs
@@ -433,26 +469,41 @@ def create_main_analysis_fig(trading_df, rsi_upper, rsi_lower, coin_id):
     fig.add_hline(y=rsi_lower, line_dash="dash", line_color="green", row=2, col=1)
     fig.add_hline(y=50, line_dash="dot", line_color="gray", row=2, col=1)
     
+    # MACD
+    fig.add_trace(
+        go.Scatter(x=trading_df.index, y=trading_df['macd'], name='MACD',
+                   line=dict(color='#00D4AA', width=2)), row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=trading_df.index, y=trading_df['macd_signal'], name='Sinal MACD',
+                   line=dict(color='#FF6B6B', width=2)), row=3, col=1
+    )
+    fig.add_trace(
+        go.Bar(x=trading_df.index, y=trading_df['histogram'], name='Histograma', 
+               marker_color='rgba(158,202,225,0.5)'), row=3, col=1
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", row=3, col=1)
+    
     # Capital
     fig.add_trace(
         go.Scatter(x=trading_df.index, y=trading_df['current_capital'], name='Capital (€)',
-                   line=dict(color='#FFD700', width=2)), row=3, col=1
+                   line=dict(color='#FFD700', width=2)), row=4, col=1
     )
     
     fig.update_layout(
-        height=900, showlegend=True,
-        title_text=f"Simulação Realista - {coin_id.upper()} Trading Bot",
+        height=1000, showlegend=True,
+        title_text=f"Simulação RSI + MACD - {coin_id.upper()} Trading Bot",
         template="plotly_dark"
     )
     
     return fig
 
-def display_main_metrics(current_price, current_rsi, metrics, coin_id):
+def display_main_metrics(current_price, current_rsi, current_macd, metrics, coin_id):
     """
     Exibe as métricas principais para um ativo
     """
     st.subheader(f"📊 Visão Geral - {coin_id.upper()}")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric("💰 Preço Atual", f"${current_price:.2f}")
@@ -461,9 +512,12 @@ def display_main_metrics(current_price, current_rsi, metrics, coin_id):
         st.metric("📊 RSI Atual", f"{current_rsi:.2f}")
     
     with col3:
-        st.metric("💳 Capital Final", f"€{metrics['final_capital']:.2f}")
+        st.metric("📈 MACD Atual", f"{current_macd:.4f}")
     
     with col4:
+        st.metric("💳 Capital Final", f"€{metrics['final_capital']:.2f}")
+    
+    with col5:
         st.metric("📈 Retorno Total", f"€{metrics['total_pnl_euros']:.2f}", f"{metrics['total_return']:.2f}%")
 
 def display_performance_metrics(metrics, coin_id):
@@ -539,8 +593,9 @@ def display_asset_dashboard(coin_id, trading_df, trades_df, metrics, config):
     """
     current_price = trading_df['price'].iloc[-1]
     current_rsi = trading_df['rsi'].iloc[-1]
+    current_macd = trading_df['macd'].iloc[-1]
     
-    display_main_metrics(current_price, current_rsi, metrics, coin_id)
+    display_main_metrics(current_price, current_rsi, current_macd, metrics, coin_id)
     
     st.subheader(f"💹 Evolução do Capital - {coin_id.upper()}")
     capital_fig = create_capital_evolution_fig(trading_df, config['initial_capital'], coin_id)
@@ -589,17 +644,24 @@ def setup_sidebar():
 
     # Seleção de ativos
     st.sidebar.header("📈 Ativos para Backtest")
-    available_coins = ['bitcoin', 'ethereum', 'solana', 'cardano', 'polkadot']
+    available_coins = ['ethereum', 'solana', 'cardano', 'polkadot', 'bitcoin']
     selected_coins = st.sidebar.multiselect(
         "Selecione os ativos", 
         available_coins, 
         default=['ethereum']
     )
 
-    # Parâmetros de trading
+    # Parâmetros RSI
+    st.sidebar.header("📊 RSI")
     rsi_period = st.sidebar.slider("Período RSI", 5, 30, 14)
     rsi_upper = st.sidebar.slider("RSI Superior (Venda)", 60, 90, 70)
     rsi_lower = st.sidebar.slider("RSI Inferior (Compra)", 10, 40, 30)
+
+    # Parâmetros MACD
+    st.sidebar.header("📈 MACD")
+    macd_fast = st.sidebar.slider("MACD Rápido", 5, 20, 12)
+    macd_slow = st.sidebar.slider("MACD Lento", 20, 40, 26)
+    macd_signal = st.sidebar.slider("MACD Sinal", 5, 15, 9)
 
     # Configurações de capital
     st.sidebar.header("💰 Gestão de Capital")
@@ -618,6 +680,9 @@ def setup_sidebar():
         'rsi_period': rsi_period,
         'rsi_upper': rsi_upper,
         'rsi_lower': rsi_lower,
+        'macd_fast': macd_fast,
+        'macd_slow': macd_slow,
+        'macd_signal': macd_signal,
         'initial_capital': initial_capital,
         'trade_amount': trade_amount,
         'risk_per_trade': risk_per_trade,
@@ -631,7 +696,7 @@ def display_conclusion(all_metrics):
     Exibe a conclusão da simulação multi-ativo
     """
     st.markdown("---")
-    st.subheader("📋 Conclusão da Simulação Multi-Ativo")
+    st.subheader("📋 Conclusão da Simulação RSI + MACD")
 
     total_trades = sum(m['num_trades'] for m in all_metrics)
     if total_trades > 0:
@@ -640,8 +705,8 @@ def display_conclusion(all_metrics):
         with conclusion_col1:
             st.info("""
             **✅ Pontos Fortes:**
+            - Estratégia RSI + MACD para confirmação de sinais
             - Backtest independente por ativo
-            - Estratégia RSI consistente
             - Gestão de risco incorporada
             - Custos de trading realistas
             - Comparação entre ativos
@@ -661,7 +726,7 @@ def display_conclusion(all_metrics):
         st.info("""
         **ℹ️ Sem trades executados:**
         - Os parâmetros atuais não geraram sinais
-        - Ajuste os limites do RSI por ativo
+        - Ajuste os limites do RSI/MACD
         - Considere condições de mercado diferentes
         """)
 
@@ -684,7 +749,7 @@ def display_disclaimer():
 # =============================================================================
 
 def main():
-    st.title("🤖 Multi-Asset Trading Bot - Simulação Realista")
+    st.title("🤖 Multi-Asset Trading Bot - RSI + MACD")
     st.markdown("---")
     
     # Configurações
@@ -710,7 +775,7 @@ def main():
         if len(df) == 0:
             continue
         
-        st.info(f"🔄 Executando backtest para {coin_id.upper()}...")
+        st.info(f"🔄 Executando backtest RSI + MACD para {coin_id.upper()}...")
         trading_df, trades_df, metrics = run_backtest_for_asset(coin_id, df, config)
         all_results[coin_id] = {'trading_df': trading_df, 'trades_df': trades_df, 'metrics': metrics}
         all_metrics.append(metrics)
