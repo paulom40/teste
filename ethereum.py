@@ -171,4 +171,4 @@ if not st.session_state.trades.empty:
 
     st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
-        data=
+        data=)
