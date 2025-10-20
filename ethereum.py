@@ -1,57 +1,69 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
+import datetime
 
-st.set_page_config(page_title="Teste AwesomeAPI", layout="centered")
-st.title("💱 Teste de conexão com AwesomeAPI")
+st.set_page_config(page_title="Finnhub Forex", layout="centered")
+st.title("💱 Simulador com RSI + MACD (Finnhub)")
 
-# Pares confirmados pela documentação oficial
-pares_validos = [
-    "USD-BRL", "USDT-BRL", "CAD-BRL", "AUD-BRL", "EUR-BRL",
-    "GBP-BRL", "ARS-BRL", "JPY-BRL", "CHF-BRL", "BTC-BRL",
-    "LTC-BRL", "CNY-BRL", "ILS-BRL"
-]
+# Chave da API
+API_KEY = "d3r3tbpr01qopgh6rrtgd3r3tbpr01qopgh6rru0"
 
-# Seleção do par
-par = st.selectbox("Seleciona o par de moedas", pares_validos)
+# Pares suportados pela Finnhub
+pares = ["EUR/USD", "USD/BRL", "GBP/USD", "USD/JPY", "AUD/USD"]
+par = st.selectbox("Seleciona o par de moedas", pares)
 
-# Botão para atualizar
-atualizar = st.button("🔄 Atualizar dados")
+# Extrair símbolo Finnhub
+symbol = par.replace("/", "")
 
-# Função com cache estendido
-@st.cache_data(ttl=900)
-def get_data(par):
-    url = f"https://economia.awesomeapi.com.br/json/daily/{par}/30"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0 and 'bid' in data[0]:
-                df = pd.DataFrame(data)
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-                df['price'] = df['bid'].astype(float)
-                df.set_index('timestamp', inplace=True)
-                return df[['price']]
-            else:
-                st.error("❌ Dados inválidos ou vazios retornados pela API.")
-                return pd.DataFrame()
-        elif response.status_code == 429:
-            st.error("❌ Erro 429: Limite de requisições excedido. Tente novamente em alguns minutos.")
-            return pd.DataFrame()
+# Função para obter dados históricos
+@st.cache_data(ttl=600)
+def get_finnhub_data(symbol):
+    end = int(datetime.datetime.now().timestamp())
+    start = end - 60 * 60 * 24 * 30  # últimos 30 dias
+    url = f"https://finnhub.io/api/v1/forex/candle?symbol=OANDA:{symbol}&resolution=D&from={start}&to={end}&token={API_KEY}"
+    r = requests.get(url)
+    if r.status_code == 200:
+        data = r.json()
+        if data.get("s") == "ok":
+            df = pd.DataFrame({
+                "timestamp": pd.to_datetime(data["t"], unit="s"),
+                "price": data["c"]
+            })
+            df.set_index("timestamp", inplace=True)
+            return df
         else:
-            st.error(f"❌ Erro na API: {response.status_code}")
+            st.error("❌ Dados inválidos ou vazios retornados pela Finnhub.")
             return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Erro de conexão: {e}")
+    else:
+        st.error(f"❌ Erro na API Finnhub: {r.status_code}")
         return pd.DataFrame()
 
-# Executar somente se o botão for clicado
-if atualizar:
-    df = get_data(par)
-    if not df.empty:
-        st.line_chart(df['price'])
-        st.success("✅ Dados carregados com sucesso.")
-    else:
-        st.warning("Nenhum dado disponível para este par.")
+# Indicadores técnicos
+def calculate_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
+
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    ema_fast = prices.ewm(span=fast).mean()
+    ema_slow = prices.ewm(span=slow).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal).mean()
+    return macd_line, signal_line
+
+# Executar
+df = get_finnhub_data(symbol)
+if not df.empty:
+    df["rsi"] = calculate_rsi(df["price"])
+    df["macd"], df["macd_signal"] = calculate_macd(df["price"])
+    st.line_chart(df[["price", "rsi", "macd", "macd_signal"]])
+    st.success("✅ Dados carregados com sucesso.")
 else:
-    st.info("Clique em 'Atualizar dados' para buscar os preços.")
+    st.warning("Nenhum dado disponível para este par.")
