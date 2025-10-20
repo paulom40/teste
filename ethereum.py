@@ -16,36 +16,29 @@ if 'entry_price' not in st.session_state:
 
 # 📊 Interface principal
 st.set_page_config(page_title="Live Forex Trading", layout="wide")
-st.title("💱 Simulador de Trading com RSI + MACD (Alpha Vantage)")
+st.title("💱 Simulador de Trading com RSI + MACD (AwesomeAPI)")
 
 # 🔧 Configurações
-API_KEY = "O6DP7BY7OQ10I0G2"
-INTERVAL = "5min"
-pair = st.sidebar.selectbox("Seleciona o par de moedas", ["USD/JPY", "EUR/USD", "GBP/JPY", "AUD/CAD"])
-from_symbol, to_symbol = pair.split("/")
+API_KEY = "ec35e0b10abf1b04611e447d413763e06eccecfa7d35e49ee7a8cc4d16a16422"
+pair = st.sidebar.selectbox("Seleciona o par de moedas", ["USD-BRL", "EUR-USD", "BTC-USD", "GBP-BRL"])
+symbol = pair.replace("-", "")
 
-# 📈 Obter dados da Alpha Vantage
+# 📈 Obter dados da AwesomeAPI
 @st.cache_data(ttl=300)
-def get_forex_data(from_symbol, to_symbol, interval):
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "FX_INTRADAY",
-        "from_symbol": from_symbol,
-        "to_symbol": to_symbol,
-        "interval": interval,
-        "apikey": API_KEY,
-        "outputsize": "compact"
-    }
-    response = requests.get(url, params=params)
-    data = response.json()
-    key = f"Time Series FX ({interval})"
-    if key in data:
-        df = pd.DataFrame.from_dict(data[key], orient="index")
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        df["price"] = df["4. close"].astype(float)
-        return df[["price"]]
+def get_forex_data(symbol):
+    url = f"https://economia.awesomeapi.com.br/json/daily/{symbol}/30"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        df = pd.DataFrame(data)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        df = df.sort_values('timestamp')
+        df['price'] = df['bid'].astype(float)
+        df.set_index('timestamp', inplace=True)
+        return df[['price']]
     else:
+        st.error("❌ Erro na API AwesomeAPI. Verifica o par ou a chave.")
         return pd.DataFrame()
 
 # 📊 Indicadores técnicos
@@ -106,10 +99,8 @@ def simulate_trading(df):
     return df
 
 # 🚀 Executar simulação
-df = get_forex_data(from_symbol, to_symbol, INTERVAL)
-if df.empty:
-    st.error("❌ Erro na API. Verifica o par selecionado ou o limite de chamadas.")
-else:
+df = get_forex_data(symbol)
+if not df.empty:
     df = simulate_trading(df)
     st.metric("💰 Preço Atual", f"{df['price'].iloc[-1]:.4f}")
     st.metric("💳 Banca Atual", f"€{st.session_state.capital:.2f}")
@@ -166,6 +157,6 @@ if not st.session_state.trades.empty:
     st.download_button(
         label="📥 Exportar para Excel com Segmentação e Gráficos",
         data=output.getvalue(),
-        file_name="trades_forex_segmentado.xlsx",
+        file_name="trades_forex_awesomeapi.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
