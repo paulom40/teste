@@ -1,19 +1,33 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
 import io
 
+# Inicialização segura
+if 'capital' not in st.session_state:
+    st.session_state.capital = 1000
+if 'trades' not in st.session_state:
+    st.session_state.trades = pd.DataFrame()
+if 'position' not in st.session_state:
+    st.session_state.position = 0
+if 'entry_price' not in st.session_state:
+    st.session_state.entry_price = 0
 if not st.session_state.trades.empty:
-    st.subheader("💼 Trades Executados")
-    st.dataframe(st.session_state.trades.round(4))
+    st.subheader("📤 Exportar análise completa para Excel")
 
-    # Análise de risco
+    # Segmentação por horário
     trades = st.session_state.trades.copy()
     trades['Período'] = trades['time'].apply(lambda dt: 'Manhã' if dt.hour < 12 else 'Tarde' if dt.hour < 18 else 'Noite')
+    trades['capital'] = 1000 + trades['pnl'].cumsum()
+
+    # Métricas de risco
     total_trades = len(trades)
     total_pnl = trades['pnl'].sum()
     win_rate = len(trades[trades['pnl'] > 0]) / total_trades * 100 if total_trades > 0 else 0
     avg_pnl = trades['pnl'].mean()
     std_pnl = trades['pnl'].std()
     sharpe_ratio = avg_pnl / std_pnl if std_pnl != 0 else 0
-    trades['capital'] = 1000 + trades['pnl'].cumsum()
     drawdown = (trades['capital'].cummax() - trades['capital']).max()
 
     metrics_df = pd.DataFrame({
@@ -38,14 +52,11 @@ if not st.session_state.trades.empty:
 
         # Trades
         trades.to_excel(writer, index=False, sheet_name='Trades')
-        sheet = writer.sheets['Trades']
-        for i, col in enumerate(trades.columns):
-            sheet.set_column(i, i, 18)
+        writer.sheets['Trades'].set_column(0, len(trades.columns)-1, 18)
 
         # Métricas
         metrics_df.to_excel(writer, index=False, sheet_name='Métricas')
-        sheet = writer.sheets['Métricas']
-        sheet.set_column(0, 1, 25)
+        writer.sheets['Métricas'].set_column(0, 1, 25)
 
         # Gráfico Técnico
         df_chart.to_excel(writer, index=False, sheet_name='Gráfico Técnico')
@@ -78,7 +89,6 @@ if not st.session_state.trades.empty:
         pnl_counts = trades['pnl'].apply(lambda x: 'Lucro' if x > 0 else 'Prejuízo').value_counts().reset_index()
         pnl_counts.columns = ['Resultado', 'Quantidade']
         pnl_counts.to_excel(writer, index=False, sheet_name='Distribuição PnL')
-        sheet = writer.sheets['Distribuição PnL']
         chart = wb.add_chart({'type': 'column'})
         chart.add_series({
             'name': 'Distribuição de PnL',
@@ -86,13 +96,12 @@ if not st.session_state.trades.empty:
             'values': f'=Distribuição PnL!$B$2:$B${len(pnl_counts)+1}',
         })
         chart.set_title({'name': 'Lucros vs Prejuízos'})
-        sheet.insert_chart('D2', chart)
+        writer.sheets['Distribuição PnL'].insert_chart('D2', chart)
 
         # Sinais
         signal_counts = trades['signal'].value_counts().reset_index()
         signal_counts.columns = ['Sinal', 'Quantidade']
         signal_counts.to_excel(writer, index=False, sheet_name='Sinais')
-        sheet = writer.sheets['Sinais']
         chart = wb.add_chart({'type': 'pie'})
         chart.add_series({
             'name': 'Sinais',
@@ -100,13 +109,12 @@ if not st.session_state.trades.empty:
             'values': f'=Sinais!$B$2:$B${len(signal_counts)+1}',
         })
         chart.set_title({'name': 'Distribuição de Sinais'})
-        sheet.insert_chart('D2', chart)
+        writer.sheets['Sinais'].insert_chart('D2', chart)
 
         # Segmentação Horária
         period_counts = trades['Período'].value_counts().reset_index()
         period_counts.columns = ['Período', 'Quantidade']
         period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
-        sheet = writer.sheets['Segmentação Horária']
         chart = wb.add_chart({'type': 'column'})
         chart.add_series({
             'name': 'Trades por Período',
@@ -114,7 +122,7 @@ if not st.session_state.trades.empty:
             'values': f'=Segmentação Horária!$B$2:$B${len(period_counts)+1}',
         })
         chart.set_title({'name': 'Distribuição por Horário'})
-        sheet.insert_chart('D2', chart)
+        writer.sheets['Segmentação Horária'].insert_chart('D2', chart)
 
         writer.save()
 
