@@ -15,7 +15,11 @@ pares_validos = [
 # Seleção do par
 par = st.selectbox("Seleciona o par de moedas", pares_validos)
 
-# Função de chamada à API
+# Botão para atualizar
+atualizar = st.button("🔄 Atualizar dados")
+
+# Função com cache estendido
+@st.cache_data(ttl=900)
 def get_data(par):
     url = f"https://economia.awesomeapi.com.br/json/daily/{par}/30"
     try:
@@ -31,6 +35,9 @@ def get_data(par):
             else:
                 st.error("❌ Dados inválidos ou vazios retornados pela API.")
                 return pd.DataFrame()
+        elif response.status_code == 429:
+            st.error("❌ Erro 429: Limite de requisições excedido. Tente novamente em alguns minutos.")
+            return pd.DataFrame()
         else:
             st.error(f"❌ Erro na API: {response.status_code}")
             return pd.DataFrame()
@@ -38,10 +45,13 @@ def get_data(par):
         st.error(f"❌ Erro de conexão: {e}")
         return pd.DataFrame()
 
-# Executar e exibir
-df = get_data(par)
-if not df.empty:
-    st.line_chart(df['price'])
-    st.success("✅ Dados carregados com sucesso.")
+# Executar somente se o botão for clicado
+if atualizar:
+    df = get_data(par)
+    if not df.empty:
+        st.line_chart(df['price'])
+        st.success("✅ Dados carregados com sucesso.")
+    else:
+        st.warning("Nenhum dado disponível para este par.")
 else:
-    st.warning("Nenhum dado disponível para este par.")
+    st.info("Clique em 'Atualizar dados' para buscar os preços.")
