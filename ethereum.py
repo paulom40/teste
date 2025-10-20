@@ -19,24 +19,95 @@ st.set_page_config(
 st.title("🤖 Ethereum Trading Bot - RSI Strategy")
 st.markdown("---")
 
-# Função para calcular RSI
+# Função para calcular RSI - VERSÃO CORRIGIDA
 def calculate_rsi(prices, period=14):
-    deltas = np.diff(prices)
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
+    """
+    Calcula o RSI (Relative Strength Index)
+    """
+    try:
+        # Converter para numpy array se for pandas Series
+        if isinstance(prices, pd.Series):
+            prices = prices.values
+        
+        # Calcular diferenças de preço
+        deltas = np.diff(prices)
+        
+        # Separar ganhos e perdas
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        
+        # Calcular médias móveis
+        avg_gains = np.zeros_like(prices)
+        avg_losses = np.zeros_like(prices)
+        
+        # Primeiro valor
+        avg_gains[period] = np.mean(gains[:period])
+        avg_losses[period] = np.mean(losses[:period])
+        
+        # Calcular para os demais períodos
+        for i in range(period + 1, len(prices)):
+            avg_gains[i] = (avg_gains[i-1] * (period - 1) + gains[i-1]) / period
+            avg_losses[i] = (avg_losses[i-1] * (period - 1) + losses[i-1]) / period
+        
+        # Calcular RS e RSI
+        rs = np.zeros_like(prices)
+        rsi = np.zeros_like(prices)
+        
+        for i in range(period, len(prices)):
+            if avg_losses[i] == 0:
+                rs[i] = 100 if avg_gains[i] > 0 else 0
+            else:
+                rs[i] = avg_gains[i] / avg_losses[i]
+            
+            rsi[i] = 100 - (100 / (1 + rs[i]))
+        
+        # Preencher os primeiros valores com 50 (neutro)
+        rsi[:period] = 50
+        
+        return pd.Series(rsi, index=range(len(prices)))
     
-    avg_gains = pd.Series(gains).rolling(window=period).mean()
-    avg_losses = pd.Series(losses).rolling(window=period).mean()
-    
-    rs = avg_gains / avg_losses
-    rsi = 100 - (100 / (1 + rs))
-    
-    # Preencher valores NaN
-    rsi = rsi.fillna(50)
-    
-    return rsi
+    except Exception as e:
+        st.error(f"Erro no cálculo do RSI: {e}")
+        # Retornar RSI neutro em caso de erro
+        return pd.Series([50] * len(prices), index=range(len(prices)))
 
-# Função para obter dados do Ethereum - VERSÃO CORRIGIDA
+# Função alternativa mais simples para calcular RSI
+def calculate_rsi_simple(prices, period=14):
+    """
+    Versão simplificada e mais robusta para calcular RSI
+    """
+    try:
+        # Converter para pandas Series se necessário
+        if not isinstance(prices, pd.Series):
+            prices = pd.Series(prices)
+        
+        # Calcular mudanças de preço
+        delta = prices.diff()
+        
+        # Separar ganhos e perdas
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        # Calcular médias móveis simples
+        avg_gain = gain.rolling(window=period, min_periods=1).mean()
+        avg_loss = loss.rolling(window=period, min_periods=1).mean()
+        
+        # Calcular RS
+        rs = avg_gain / avg_loss
+        
+        # Calcular RSI
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Preencher valores NaN
+        rsi = rsi.fillna(50)
+        
+        return rsi
+        
+    except Exception as e:
+        st.error(f"Erro no cálculo simplificado do RSI: {e}")
+        return pd.Series([50] * len(prices), index=prices.index)
+
+# Função para obter dados do Ethereum
 def get_ethereum_data():
     try:
         # Tentativa 1: CoinGecko API
@@ -45,7 +116,7 @@ def get_ethereum_data():
         params = {
             'vs_currency': 'usd',
             'days': '30',
-            'interval': 'daily'  # Mudado para daily para mais estabilidade
+            'interval': 'daily'
         }
         
         response = requests.get(url, params=params, timeout=15)
@@ -82,7 +153,7 @@ def create_sample_data():
     start_date = end_date - timedelta(days=30)
     dates = pd.date_range(start=start_date, end=end_date, freq='H')
     
-    # Preços mais realistas do Ethereum
+    # Preços mais realistas do Ethereum com mais volatilidade
     np.random.seed(42)
     base_price = 3500  # Preço base do ETH
     
@@ -91,10 +162,12 @@ def create_sample_data():
     current_price = base_price
     
     for i in range(len(dates)):
-        # Adicionar alguma tendência e volatilidade
-        change = np.random.normal(0, 25)  # Mudança de preço
-        current_price += change
-        current_price = max(1000, current_price)  # Preço mínimo
+        # Adicionar alguma tendência e volatilidade mais pronunciada
+        change = np.random.normal(0, 50)  # Mais volatilidade para RSI funcionar melhor
+        # Adicionar uma tendência suave
+        trend = np.sin(i / 100) * 10
+        current_price += change + trend
+        current_price = max(2800, min(4200, current_price))  # Manter em range realista
         prices.append(current_price)
     
     df = pd.DataFrame({
@@ -105,11 +178,17 @@ def create_sample_data():
     return df
 
 # Função para simular trading
-def simulate_trading(df, rsi_lower=30, rsi_upper=70):
+def simulate_trading(df, rsi_lower=30, rsi_upper=70, rsi_period=14):
     df = df.copy()
     
-    # Calcular RSI
-    df['rsi'] = calculate_rsi(df['price'].values)
+    # Calcular RSI usando a versão simplificada
+    df['rsi'] = calculate_rsi_simple(df['price'], rsi_period)
+    
+    # Debug: mostrar informações do RSI
+    st.sidebar.info(f"📊 Estatísticas do RSI:")
+    st.sidebar.write(f"- Mínimo: {df['rsi'].min():.2f}")
+    st.sidebar.write(f"- Máximo: {df['rsi'].max():.2f}")
+    st.sidebar.write(f"- Atual: {df['rsi'].iloc[-1]:.2f}")
     
     # Inicializar colunas de sinal
     df['signal'] = 'HOLD'
@@ -122,7 +201,7 @@ def simulate_trading(df, rsi_lower=30, rsi_upper=70):
     entry_price = 0
     cumulative_pnl = 0
 
-    for i in range(1, len(df)):
+    for i in range(len(df)):
         current_rsi = df['rsi'].iloc[i]
         current_price = df['price'].iloc[i]
         
@@ -253,7 +332,7 @@ with st.spinner("Carregando dados do Ethereum..."):
 
 if df is not None and len(df) > 0:
     # Simular trading
-    trading_df = simulate_trading(df, rsi_lower, rsi_upper)
+    trading_df = simulate_trading(df, rsi_lower, rsi_upper, rsi_period)
     
     # Filtrar apenas trades executados
     trades_df = trading_df[trading_df['signal'] != 'HOLD'].copy()
@@ -281,8 +360,22 @@ if df is not None and len(df) > 0:
         else:
             st.metric("Taxa de Sucesso", "0%")
     
+    # Mostrar informações do RSI
+    st.subheader("📈 Informações do RSI")
+    rsi_col1, rsi_col2, rsi_col3, rsi_col4 = st.columns(4)
+    
+    with rsi_col1:
+        st.info(f"**RSI Mínimo:** {trading_df['rsi'].min():.2f}")
+    with rsi_col2:
+        st.info(f"**RSI Máximo:** {trading_df['rsi'].max():.2f}")
+    with rsi_col3:
+        st.info(f"**RSI Médio:** {trading_df['rsi'].mean():.2f}")
+    with rsi_col4:
+        rsi_status = "Sobrecomprado" if current_rsi > 70 else "Sobrevendido" if current_rsi < 30 else "Neutro"
+        st.info(f"**Status:** {rsi_status}")
+    
     # Gráfico de preço e RSI
-    st.header("📈 Gráfico de Preço e RSI")
+    st.header("📊 Gráfico de Preço e RSI")
     
     fig = make_subplots(
         rows=2, cols=1,
@@ -330,7 +423,7 @@ if df is not None and len(df) > 0:
             row=1, col=1
         )
     
-    # Gráfico RSI
+    # Gráfico RSI - AGORA DEVE FUNCIONAR
     fig.add_trace(
         go.Scatter(
             x=trading_df.index,
@@ -401,27 +494,6 @@ if df is not None and len(df) > 0:
         with col4:
             best_trade = trades_df['pnl'].max()
             st.metric("Melhor Trade", f"{best_trade:.2f}%")
-        
-        # Gráfico de performance acumulada
-        st.subheader("📈 Performance Acumulada")
-        
-        if 'cumulative_pnl' in trading_df.columns:
-            perf_fig = go.Figure()
-            perf_fig.add_trace(go.Scatter(
-                x=trading_df.index,
-                y=trading_df['cumulative_pnl'],
-                name='Performance Acumulada',
-                line=dict(color='#00D4AA', width=3)
-            ))
-            
-            perf_fig.update_layout(
-                title="Performance Acumulada da Estratégia",
-                xaxis_title="Data",
-                yaxis_title="Retorno Acumulado (%)",
-                template="plotly_dark",
-                height=400
-            )
-            st.plotly_chart(perf_fig, use_container_width=True)
     
     else:
         st.info("ℹ️ Nenhum trade executado ainda com os parâmetros atuais.")
@@ -444,31 +516,6 @@ if df is not None and len(df) > 0:
     with col2:
         if st.button("🔄 Simular com Novos Dados", use_container_width=True):
             st.rerun()
-    
-    # Informações adicionais
-    st.sidebar.header("ℹ️ Sobre a Estratégia")
-    st.sidebar.info("""
-    **Estratégia RSI:**
-    - RSI < 30: Sinal de COMPRA (sobrevendido)
-    - RSI > 70: Sinal de VENDA (sobrecomprado)
-    - Fechamento automático de posições
-    
-    **⚠️ Aviso:**
-    Esta é uma ferramenta educacional
-    para backtesting. Trading real
-    envolve riscos significativos.
-    """)
-    
-    # Status do sistema
-    st.sidebar.header("🖥️ Status do Sistema")
-    st.sidebar.success(f"✅ Dados carregados: {len(df)} registros")
-    st.sidebar.success(f"✅ Período: {df.index[0].strftime('%d/%m/%Y')} - {df.index[-1].strftime('%d/%m/%Y')}")
-    
-    # Atualização automática
-    if auto_update:
-        st.sidebar.info(f"⏰ Próxima atualização em {update_interval} minutos")
-        time.sleep(update_interval * 60)
-        st.rerun()
 
 else:
     st.error("❌ Não foi possível carregar os dados do Ethereum. Tente novamente.")
