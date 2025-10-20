@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import io
 
-# 🔒 Inicialização segura
+# Inicialização segura
 if 'capital' not in st.session_state:
     st.session_state.capital = 1000
 if 'trades' not in st.session_state:
@@ -14,11 +14,11 @@ if 'position' not in st.session_state:
 if 'entry_price' not in st.session_state:
     st.session_state.entry_price = 0
 
-# 📊 Interface principal
+# Interface principal
 st.set_page_config(page_title="Live Forex Trading", layout="wide")
 st.title("💱 Simulador de Trading com RSI + MACD (AwesomeAPI)")
 
-# 🔧 Pares confirmados pela AwesomeAPI
+# Pares confirmados pela AwesomeAPI
 pares_suportados = [
     "USD-BRL", "EUR-BRL", "GBP-BRL", "JPY-BRL", "CAD-BRL",
     "AUD-BRL", "CHF-BRL", "BTC-BRL", "ETH-BRL", "LTC-BRL",
@@ -26,7 +26,7 @@ pares_suportados = [
 ]
 pair = st.sidebar.selectbox("Seleciona o par de moedas", pares_suportados)
 
-# 📈 Obter dados da AwesomeAPI
+# Obter dados da AwesomeAPI
 @st.cache_data(ttl=300)
 def get_forex_data(pair):
     url = f"https://economia.awesomeapi.com.br/json/daily/{pair}/30"
@@ -51,7 +51,7 @@ def get_forex_data(pair):
         st.error("❌ Erro na API AwesomeAPI. Verifica o par selecionado.")
         return pd.DataFrame()
 
-# 📊 Indicadores técnicos
+# Indicadores técnicos
 def calculate_rsi(prices, period=14):
     delta = prices.diff()
     gain = delta.clip(lower=0)
@@ -69,7 +69,7 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     signal_line = macd_line.ewm(span=signal).mean()
     return macd_line, signal_line
 
-# 🧠 Simulação de trading
+# Simulação de trading
 def simulate_trading(df):
     df['rsi'] = calculate_rsi(df['price'])
     df['macd'], df['macd_signal'] = calculate_macd(df['price'])
@@ -108,7 +108,7 @@ def simulate_trading(df):
                 st.session_state.entry_price = 0
     return df
 
-# 🚀 Executar simulação
+# Executar simulação
 df = get_forex_data(pair)
 if not df.empty:
     df = simulate_trading(df)
@@ -116,7 +116,7 @@ if not df.empty:
     st.metric("💳 Banca Atual", f"€{st.session_state.capital:.2f}")
     st.line_chart(df['price'])
 
-# 🎯 Filtros de análise
+# Filtros de análise
 if not st.session_state.trades.empty:
     st.sidebar.markdown("### 🎯 Filtros de análise")
     min_date = st.session_state.trades['time'].min().date()
@@ -158,7 +158,7 @@ if not st.session_state.trades.empty:
     df_chart.reset_index(inplace=True)
 
     output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         trades.to_excel(writer, index=False, sheet_name='Trades')
         metrics_df.to_excel(writer, index=False, sheet_name='Métricas')
         df_chart.to_excel(writer, index=False, sheet_name='Gráfico Técnico')
@@ -176,10 +176,4 @@ if not st.session_state.trades.empty:
         period_counts.to_excel(writer, index=False, sheet_name='Segmentação Horária')
 
     st.download_button(
-        label="📥 Exportar para Excel com Segmentação e Gráficos",
-        data=output.getvalue(),
-        file_name="trades_forex_awesomeapi.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-
+        label
