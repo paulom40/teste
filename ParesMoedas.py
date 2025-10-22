@@ -47,6 +47,13 @@ initial_prices = {
     "NZD/USD": 0.6150
 }
 
+# Function to format price
+def format_price(price, pip_size):
+    if pip_size == 0.01:
+        return f"{price:.2f}"
+    else:
+        return f"{price:.4f}"
+
 # Function to generate simulated historical prices (fallback)
 def generate_simulated_historical(pair, days=30):
     np.random.seed(42)  # For reproducibility
@@ -484,6 +491,46 @@ if st.session_state.simulation_running:
     next_update = 30 - (current_time - st.session_state.last_update)
     st.info(f"🔄 Live data feed active... Next price check in {next_update:.0f} seconds. Indicators update on refresh or significant price change.")
 
+# Recompute indicators if params changed (store in session for slider changes)
+if "ma_period" not in st.session_state:
+    st.session_state.ma_period = ma_period
+    st.session_state.rsi_period = rsi_period
+    st.session_state.rsi_overbought = rsi_overbought
+    st.session_state.rsi_oversold = rsi_oversold
+
+if st.session_state.ma_period != ma_period or st.session_state.rsi_period != rsi_period or \
+   st.session_state.rsi_overbought != rsi_overbought or st.session_state.rsi_oversold != rsi_oversold:
+    st.session_state.ma_period = ma_period
+    st.session_state.rsi_period = rsi_period
+    st.session_state.rsi_overbought = rsi_overbought
+    st.session_state.rsi_oversold = rsi_oversold
+    for pair in trading_pairs:
+        if pair in st.session_state.prices and pair in st.session_state.historical_data:
+            hist_df = st.session_state.historical_data[pair].copy()
+            sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
+            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+    st.rerun()
+
+# Use session state params
+ma_period = st.session_state.ma_period
+rsi_period = st.session_state.rsi_period
+rsi_overbought = st.session_state.rsi_overbought
+rsi_oversold = st.session_state.rsi_oversold
+
+# Initialize prices and indicators if not set
+if not st.session_state.prices:
+    # Use initial prices and simulated historical
+    for pair in trading_pairs:
+        st.session_state.prices[pair] = {
+            "price": initial_prices[pair],
+            "pip_size": pip_sizes[pair]
+        }
+        hist_df = get_historical_prices(pair)  # Falls back to simulated if API fails
+        st.session_state.historical_data[pair] = hist_df
+        sma, rsi, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
+        st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+    st.session_state.api_last_fetched = "Initial (Simulated)"
+
 # Notes
 st.subheader("Demo Notes")
 st.info("""
@@ -499,10 +546,3 @@ st.info("""
 # Footer
 st.markdown("---")
 st.caption("Built with Streamlit. Data from exchangerate.host or simulated – for educational purposes only.")
-
-# Helper function for formatting price (define here to avoid KeyError)
-def format_price(price, pip_size):
-    if pip_size == 0.01:
-        return f"{price:.2f}"
-    else:
-        return f"{price:.4f}"
