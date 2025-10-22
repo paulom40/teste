@@ -141,8 +141,9 @@ def compute_indicators_and_signal(historical_df, current_price):
         return None, None, "Insufficient Data"
     
     # Append current price if not in historical
-    latest_date = historical_df["date"].max()
-    if pd.to_datetime(historical_df["date"].iloc[-1]) < datetime.now().date():
+    latest_date = pd.to_datetime(historical_df["date"].iloc[-1])
+    now_date = datetime.now().date()
+    if latest_date.date() < now_date:
         historical_df = pd.concat([historical_df, pd.DataFrame({"date": [datetime.now().strftime("%Y-%m-%d")], "close": [current_price]})], ignore_index=True)
     
     # Compute SMA
