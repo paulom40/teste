@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 import time
 from datetime import datetime
 
@@ -24,28 +25,61 @@ pip_sizes = {
     "NZD/USD": 0.0001
 }
 
-# Trading pairs with initial prices (simulated; in production, fetch from API)
+# Trading pairs
 trading_pairs = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD"
 ]
 
-initial_prices = {
-    "EUR/USD": 1.0850,
-    "GBP/USD": 1.2950,
-    "USD/JPY": 150.20,
-    "AUD/USD": 0.6750,
-    "USD/CAD": 1.3850,
-    "NZD/USD": 0.6150
-}
-
-initial_directions = {
-    "EUR/USD": 1,
-    "GBP/USD": -1,
-    "USD/JPY": 1,
-    "AUD/USD": 1,
-    "USD/CAD": -1,
-    "NZD/USD": 1
-}
+# Function to fetch live prices from Exchange API
+@st.cache_data(ttl=300)  # Cache for 5 minutes to respect any implicit limits
+def get_live_prices():
+    url = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
+    fallback_url = "https://latest.currency-api.pages.dev/v1/currencies/usd.json"
+    
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+        else:
+            # Fallback
+            resp = requests.get(fallback_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                return None
+    except Exception:
+        return None
+    
+    prices = {}
+    # EUR/USD: 1 / eur_per_usd
+    eur_per_usd = data.get("eur", 0)
+    if eur_per_usd > 0:
+        prices["EUR/USD"] = round(1 / eur_per_usd, 5)
+    
+    # GBP/USD: 1 / gbp_per_usd
+    gbp_per_usd = data.get("gbp", 0)
+    if gbp_per_usd > 0:
+        prices["GBP/USD"] = round(1 / gbp_per_usd, 5)
+    
+    # USD/JPY: direct
+    jpy_per_usd = data.get("jpy", 0)
+    prices["USD/JPY"] = round(jpy_per_usd, 2)
+    
+    # AUD/USD: 1 / aud_per_usd
+    aud_per_usd = data.get("aud", 0)
+    if aud_per_usd > 0:
+        prices["AUD/USD"] = round(1 / aud_per_usd, 5)
+    
+    # USD/CAD: direct
+    cad_per_usd = data.get("cad", 0)
+    prices["USD/CAD"] = round(cad_per_usd, 5)
+    
+    # NZD/USD: 1 / nzd_per_usd
+    nzd_per_usd = data.get("nzd", 0)
+    if nzd_per_usd > 0:
+        prices["NZD/USD"] = round(1 / nzd_per_usd, 5)
+    
+    return prices
 
 # Session state initialization
 if "bankroll" not in st.session_state:
@@ -55,17 +89,33 @@ if "active_trades" not in st.session_state:
 if "simulation_running" not in st.session_state:
     st.session_state.simulation_running = False
 if "prices" not in st.session_state:
-    st.session_state.prices = {}
-    for pair in trading_pairs:
-        st.session_state.prices[pair] = {
-            "price": initial_prices[pair],
-            "direction": initial_directions[pair],
-            "pip_size": pip_sizes[pair]
+    live_prices = get_live_prices()
+    if live_prices:
+        st.session_state.prices = {}
+        for pair in trading_pairs:
+            if pair in live_prices:
+                st.session_state.prices[pair] = {
+                    "price": live_prices[pair],
+                    "pip_size": pip_sizes[pair]
+                }
+    else:
+        # Fallback to initial simulated prices if API fails
+        initial_prices = {
+            "EUR/USD": 1.0850, "GBP/USD": 1.2950, "USD/JPY": 150.20,
+            "AUD/USD": 0.6750, "USD/CAD": 1.3850, "NZD/USD": 0.6150
         }
+        st.session_state.prices = {}
+        for pair in trading_pairs:
+            st.session_state.prices[pair] = {
+                "price": initial_prices[pair],
+                "pip_size": pip_sizes[pair]
+            }
 if "start_time" not in st.session_state:
     st.session_state.start_time = None
 if "last_update" not in st.session_state:
     st.session_state.last_update = None
+if "api_last_fetched" not in st.session_state:
+    st.session_state.api_last_fetched = None
 
 # Title
 st.title("Real-Time Trading Demo")
@@ -87,6 +137,15 @@ if st.sidebar.button("Start Simulation"):
 if st.sidebar.button("Stop Simulation"):
     st.session_state.simulation_running = False
 
+if st.sidebar.button("Refresh Live Prices"):
+    live_prices = get_live_prices()
+    if live_prices:
+        for pair in trading_pairs:
+            if pair in live_prices:
+                st.session_state.prices[pair]["price"] = live_prices[pair]
+        st.session_state.api_last_fetched = datetime.now().strftime("%H:%M:%S")
+    st.rerun()
+
 # Current bankroll display
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -95,15 +154,18 @@ with col2:
     if st.button("Reset Bankroll"):
         st.session_state.bankroll = initial_bank
         st.session_state.active_trades = []
-        st.session_state.prices = {}
-        for pair in trading_pairs:
-            st.session_state.prices[pair] = {
-                "price": initial_prices[pair],
-                "direction": initial_directions[pair],
-                "pip_size": pip_sizes[pair]
-            }
+        live_prices = get_live_prices()
+        if live_prices:
+            st.session_state.prices = {}
+            for pair in trading_pairs:
+                if pair in live_prices:
+                    st.session_state.prices[pair] = {
+                        "price": live_prices[pair],
+                        "pip_size": pip_sizes[pair]
+                    }
         st.session_state.simulation_running = False
         st.session_state.last_update = None
+        st.session_state.api_last_fetched = None
         st.rerun()
 
 # Function to format price
@@ -148,7 +210,7 @@ pairs_data = [
     {
         "Pair": pair,
         "Current Price": format_price(data["price"], data["pip_size"]),
-        "Bias": "Up" if data["direction"] > 0 else "Down"
+        "Last Updated": st.session_state.api_last_fetched or "Initial"
     }
     for pair, data in st.session_state.prices.items()
 ]
@@ -192,23 +254,23 @@ if st.button("Open Trade"):
     else:
         st.error("Insufficient bankroll!")
 
-# Simulation logic
+# Simulation logic (now fetches live prices periodically)
 if st.session_state.simulation_running:
     current_time = time.time()
     if st.session_state.last_update is None:
         st.session_state.last_update = current_time
     
     elapsed = current_time - st.session_state.last_update
-    if elapsed >= 2:
-        # Update prices
-        for pair, data in st.session_state.prices.items():
-            pip_vol = np.random.normal(0, 0.5)  # Random walk volatility in pips
-            bias_pip = data["direction"] * np.random.uniform(0, 0.2)  # Biased step in pips
-            total_pip_change = bias_pip + pip_vol
-            data["price"] += total_pip_change * data["pip_size"]
-            data["price"] = max(0.0001, data["price"])  # Prevent negative/zero
+    if elapsed >= 30:  # Fetch every 30 seconds
+        # Fetch live prices
+        live_prices = get_live_prices()
+        if live_prices:
+            for pair in trading_pairs:
+                if pair in live_prices:
+                    st.session_state.prices[pair]["price"] = live_prices[pair]
+            st.session_state.api_last_fetched = datetime.now().strftime("%H:%M:%S")
         
-        # Check active trades for TP/SL hits
+        # Check active trades for TP/SL hits (using updated prices)
         for trade in st.session_state.active_trades[:]:
             current_price = st.session_state.prices[trade["Pair"]]["price"]
             is_long = trade["Direction"] == "Long"
@@ -233,20 +295,21 @@ if st.session_state.simulation_running:
         st.rerun()
     
     # Placeholder for real-time update indicator
-    next_update = 2 - (current_time - st.session_state.last_update)
-    st.info(f"🔄 Simulation running... Next price update in {next_update:.1f} seconds.")
+    next_update = 30 - (current_time - st.session_state.last_update)
+    st.info(f"🔄 Live data feed active... Next price check in {next_update:.0f} seconds. (API updates daily)")
 
 # Notes
 st.subheader("Demo Notes")
 st.info("""
-- **P&L Calculation**: Realistic forex pip-based P&L with 1€ per pip (adjusted for pair pip sizes, e.g., 0.0001 for EUR/USD, 0.01 for USD/JPY). TP/SL enforced via exact price levels.
-- **Simulation**: Biased random walk (0.5 pip std dev + bias) every 2 seconds. In reality, integrate with APIs like Polygon.io for live forex data.
-- **Trade Mechanics**: Stake deducted on entry (as margin proxy). Closes add back stake + P&L. Current unrealized P&L shown live.
-- **Risk**: Demo only—real trading risks capital. Assumes consistent pip value across pairs for simplicity.
-- **Enhancements**: Add charts (`st.line_chart`), alerts, or WebSockets for true real-time.
-- Run with: `streamlit run app.py`
+- **Live Data Source**: Powered by [Exchange API](https://github.com/fawazahmed0/exchange-api) – free, no key, daily updated rates for 200+ currencies. Fetches USD-based rates and derives pairs (e.g., EUR/USD = 1 / EUR per USD).
+- **P&L Calculation**: Pip-based with realistic forex sizing. TP/SL checked on price updates.
+- **Real-Time**: API provides latest daily rates (refreshed periodically in demo). For intra-day ticks, consider premium APIs like Finnhub.
+- **Trade Mechanics**: Stake as margin proxy. Unrealized P&L updates live.
+- **Risk**: Educational demo—real trading risks capital.
+- **Enhancements**: Add charts, alerts, or error handling for API downtime.
+- Run with: `streamlit run app.py` (requires `pip install streamlit pandas numpy requests`)
 """)
 
 # Footer
 st.markdown("---")
-st.caption("Built with Streamlit. Simulation for educational purposes only.")
+st.caption("Built with Streamlit. Data from Exchange API – for educational purposes only.")
