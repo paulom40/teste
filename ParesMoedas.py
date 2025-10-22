@@ -314,23 +314,28 @@ if st.session_state.active_trades:
     active_trades_display = []
     for trade in st.session_state.active_trades:
         t = trade.copy()
-        current_price = st.session_state.prices[trade["Pair"]]["price"]
-        pip_size = trade["pip_size"]
-        is_long = trade["Direction"] == "Long"
-        entry = trade["Entry Price"]
-        
-        if is_long:
-            delta = current_price - entry
+        if trade["Pair"] in st.session_state.prices:
+            current_price = st.session_state.prices[trade["Pair"]]["price"]
+            pip_size = trade["pip_size"]
+            is_long = trade["Direction"] == "Long"
+            entry = trade["Entry Price"]
+            
+            if is_long:
+                delta = current_price - entry
+            else:
+                delta = entry - current_price
+            
+            pips = delta / pip_size
+            t["Current Price"] = format_price(current_price, pip_size)
+            t["Entry Price"] = format_price(entry, pip_size)
+            t["TP Price"] = format_price(trade["TP_price"], pip_size)
+            t["SL Price"] = format_price(trade["SL_price"], pip_size)
+            t["Pips"] = round(pips, 1)
+            t["Current P&L (€)"] = round(pips * pip_value, 2)
         else:
-            delta = entry - current_price
-        
-        pips = delta / pip_size
-        t["Current Price"] = format_price(current_price, pip_size)
-        t["Entry Price"] = format_price(entry, pip_size)
-        t["TP Price"] = format_price(trade["TP_price"], pip_size)
-        t["SL Price"] = format_price(trade["SL_price"], pip_size)
-        t["Pips"] = round(pips, 1)
-        t["Current P&L (€)"] = round(pips * pip_value, 2)
+            t["Current Price"] = "N/A"
+            t["Pips"] = "N/A"
+            t["Current P&L (€)"] = "N/A"
         
         active_trades_display.append(t)
     
@@ -343,12 +348,15 @@ if st.session_state.closed_trades:
     results_display = []
     for trade in st.session_state.closed_trades:
         t = trade.copy()
-        t["Entry Price"] = format_price(trade["Entry Price"], trade["pip_size"])
-        t["Exit Price"] = format_price(trade["Exit Price"], trade["pip_size"])
-        # Calculate duration roughly (in seconds for simplicity)
+        pip_size = trade["pip_size"]
+        t["Entry Price"] = format_price(trade["Entry Price"], pip_size)
+        t["Exit Price"] = format_price(trade["Exit Price"], pip_size)
+        # Calculate duration roughly (in seconds for simplicity, assuming same day)
         open_time = datetime.strptime(trade["Open Time"], "%H:%M:%S")
         close_time = datetime.strptime(trade["Close Time"], "%H:%M:%S")
         duration = (close_time - open_time).total_seconds()
+        if duration < 0:  # If cross day, approximate
+            duration += 86400  # Add one day in seconds
         t["Duration (s)"] = round(duration, 1)
         results_display.append(t)
     
@@ -396,7 +404,7 @@ st.info(f"Suggested Direction from Indicators: **{current_signal}** ({suggested_
 direction = st.selectbox("Trade Direction", ["Long", "Short"], index=0 if suggested_dir == "Long" else 1 if suggested_dir == "Short" else 0)
 
 if st.button("Open Trade"):
-    if st.session_state.bankroll >= stake:
+    if selected_pair in st.session_state.prices and st.session_state.bankroll >= stake:
         entry = st.session_state.prices[selected_pair]["price"]
         pip_size = st.session_state.prices[selected_pair]["pip_size"]
         tp_pips = profit_target / pip_value
@@ -426,7 +434,7 @@ if st.button("Open Trade"):
         st.session_state.bankroll -= stake
         st.rerun()
     else:
-        st.error("Insufficient bankroll!")
+        st.error("Insufficient bankroll or invalid pair!")
 
 # Simulation logic (fetches live every 30s, but indicators update on refresh)
 if st.session_state.simulation_running:
@@ -440,9 +448,12 @@ if st.session_state.simulation_running:
         updated = False
         if live_prices:
             for pair in trading_pairs:
-                if pair in live_prices:
-                    old_price = st.session_state.prices[pair]["price"]
-                    st.session_state.prices[pair]["price"] = live_prices[pair]
+                if pair in live_prices and pair in pip_sizes:
+                    old_price = st.session_state.prices.get(pair, {}).get("price", 0)
+                    st.session_state.prices[pair] = {
+                        "price": live_prices[pair],
+                        "pip_size": pip_sizes[pair]
+                    }
                     if abs(live_prices[pair] - old_price) > 0.0001:  # If price changed
                         hist_df = st.session_state.historical_data.get(pair)
                         if hist_df is not None:
@@ -453,46 +464,48 @@ if st.session_state.simulation_running:
         else:
             # Simulate small changes for demo
             for pair in trading_pairs:
-                pip_size = st.session_state.prices[pair]["pip_size"]
-                change = np.random.normal(0, 0.0005 / pip_size) * pip_size  # Small pip change
-                old_price = st.session_state.prices[pair]["price"]
-                st.session_state.prices[pair]["price"] += change
-                if abs(change) > 0:
-                    hist_df = st.session_state.historical_data.get(pair)
-                    if hist_df is not None:
-                        sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
-                        st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
-                        updated = True
+                if pair in st.session_state.prices and "pip_size" in st.session_state.prices[pair]:
+                    pip_size = st.session_state.prices[pair]["pip_size"]
+                    change = np.random.normal(0, 0.0005 / pip_size) * pip_size  # Small pip change
+                    old_price = st.session_state.prices[pair]["price"]
+                    st.session_state.prices[pair]["price"] += change
+                    if abs(change) > 0:
+                        hist_df = st.session_state.historical_data.get(pair)
+                        if hist_df is not None:
+                            sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
+                            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+                            updated = True
         
         # Check active trades
         for trade in st.session_state.active_trades[:]:
-            current_price = st.session_state.prices[trade["Pair"]]["price"]
-            is_long = trade["Direction"] == "Long"
-            
-            tp_hit = False
-            sl_hit = False
-            if is_long:
-                tp_hit = current_price >= trade["TP_price"]
-                sl_hit = current_price <= trade["SL_price"]
-            else:
-                tp_hit = current_price <= trade["TP_price"]
-                sl_hit = current_price >= trade["SL_price"]
-            
-            if tp_hit or sl_hit:
-                # Close the trade
-                closed_trade = trade.copy()
-                closed_trade["Exit Price"] = current_price
-                closed_trade["Close Time"] = datetime.now().strftime("%H:%M:%S")
-                closed_trade["Status"] = "Closed (TP Hit)" if tp_hit else "Closed (SL Hit)"
-                closed_trade["P&L"] = profit_target if tp_hit else -stop_loss
-                st.session_state.closed_trades.append(closed_trade)
+            if trade["Pair"] in st.session_state.prices:
+                current_price = st.session_state.prices[trade["Pair"]]["price"]
+                is_long = trade["Direction"] == "Long"
                 
-                # Update bankroll
-                pnl = closed_trade["P&L"]
-                st.session_state.bankroll += stake + pnl
+                tp_hit = False
+                sl_hit = False
+                if is_long:
+                    tp_hit = current_price >= trade["TP_price"]
+                    sl_hit = current_price <= trade["SL_price"]
+                else:
+                    tp_hit = current_price <= trade["TP_price"]
+                    sl_hit = current_price >= trade["SL_price"]
                 
-                # Remove from active
-                st.session_state.active_trades.remove(trade)
+                if tp_hit or sl_hit:
+                    # Close the trade
+                    closed_trade = trade.copy()
+                    closed_trade["Exit Price"] = current_price
+                    closed_trade["Close Time"] = datetime.now().strftime("%H:%M:%S")
+                    closed_trade["Status"] = "Closed (TP Hit)" if tp_hit else "Closed (SL Hit)"
+                    closed_trade["P&L"] = profit_target if tp_hit else -stop_loss
+                    st.session_state.closed_trades.append(closed_trade)
+                    
+                    # Update bankroll
+                    pnl = closed_trade["P&L"]
+                    st.session_state.bankroll += stake + pnl
+                    
+                    # Remove from active
+                    st.session_state.active_trades.remove(trade)
         
         st.session_state.last_update = current_time
         if updated:
