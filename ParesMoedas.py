@@ -170,6 +170,8 @@ if "bankroll" not in st.session_state:
     st.session_state.bankroll = initial_bank
 if "active_trades" not in st.session_state:
     st.session_state.active_trades = []
+if "closed_trades" not in st.session_state:
+    st.session_state.closed_trades = []
 if "simulation_running" not in st.session_state:
     st.session_state.simulation_running = False
 if "prices" not in st.session_state:
@@ -250,6 +252,7 @@ with col2:
     if st.button("Reset Bankroll"):
         st.session_state.bankroll = initial_bank
         st.session_state.active_trades = []
+        st.session_state.closed_trades = []
         st.session_state.prices = {}
         st.session_state.historical_data = {}
         st.session_state.indicators = {}
@@ -333,6 +336,37 @@ if st.session_state.active_trades:
     
     trades_df = pd.DataFrame(active_trades_display)
     st.dataframe(trades_df, use_container_width=True)
+
+# Trading Results table
+st.subheader("Trading Results")
+if st.session_state.closed_trades:
+    results_display = []
+    for trade in st.session_state.closed_trades:
+        t = trade.copy()
+        t["Entry Price"] = format_price(trade["Entry Price"], trade["pip_size"])
+        t["Exit Price"] = format_price(trade["Exit Price"], trade["pip_size"])
+        # Calculate duration roughly (in seconds for simplicity)
+        open_time = datetime.strptime(trade["Open Time"], "%H:%M:%S")
+        close_time = datetime.strptime(trade["Close Time"], "%H:%M:%S")
+        duration = (close_time - open_time).total_seconds()
+        t["Duration (s)"] = round(duration, 1)
+        results_display.append(t)
+    
+    results_df = pd.DataFrame(results_display)[["Pair", "Direction", "Entry Price", "Exit Price", "P&L (€)", "Duration (s)", "Status"]]
+    st.dataframe(results_df, use_container_width=True)
+    
+    # Summary metrics
+    total_trades = len(st.session_state.closed_trades)
+    total_pnl = sum(trade["P&L"] for trade in st.session_state.closed_trades)
+    wins = sum(1 for trade in st.session_state.closed_trades if trade["P&L"] > 0)
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Trades", total_trades)
+    col2.metric("Total P&L (€)", f"{total_pnl:.2f}")
+    col3.metric("Wins", wins)
+    col4.metric("Win Rate (%)", f"{win_rate:.1f}")
+else:
+    st.info("No closed trades yet. Open some trades and run the simulation to see results.")
 
 # Available pairs for trading with indicators
 st.subheader("Trading Pairs - Signals from Indicators")
@@ -435,6 +469,8 @@ if st.session_state.simulation_running:
             current_price = st.session_state.prices[trade["Pair"]]["price"]
             is_long = trade["Direction"] == "Long"
             
+            tp_hit = False
+            sl_hit = False
             if is_long:
                 tp_hit = current_price >= trade["TP_price"]
                 sl_hit = current_price <= trade["SL_price"]
@@ -442,13 +478,20 @@ if st.session_state.simulation_running:
                 tp_hit = current_price <= trade["TP_price"]
                 sl_hit = current_price >= trade["SL_price"]
             
-            if tp_hit:
-                trade["Status"] = "Closed (TP Hit)"
-                st.session_state.bankroll += stake + profit_target
-                st.session_state.active_trades.remove(trade)
-            elif sl_hit:
-                trade["Status"] = "Closed (SL Hit)"
-                st.session_state.bankroll += stake - stop_loss
+            if tp_hit or sl_hit:
+                # Close the trade
+                closed_trade = trade.copy()
+                closed_trade["Exit Price"] = current_price
+                closed_trade["Close Time"] = datetime.now().strftime("%H:%M:%S")
+                closed_trade["Status"] = "Closed (TP Hit)" if tp_hit else "Closed (SL Hit)"
+                closed_trade["P&L"] = profit_target if tp_hit else -stop_loss
+                st.session_state.closed_trades.append(closed_trade)
+                
+                # Update bankroll
+                pnl = closed_trade["P&L"]
+                st.session_state.bankroll += stake + pnl
+                
+                # Remove from active
                 st.session_state.active_trades.remove(trade)
         
         st.session_state.last_update = current_time
