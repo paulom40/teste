@@ -261,59 +261,15 @@ with col2:
         st.session_state.api_last_fetched = None
         st.rerun()
 
-# Initialize prices and indicators if not set
-if not st.session_state.prices:
-    # Use initial prices and simulated historical
-    for pair in trading_pairs:
-        st.session_state.prices[pair] = {
-            "price": initial_prices[pair],
-            "pip_size": pip_sizes[pair]
-        }
-        hist_df = get_historical_prices(pair)  # Falls back to simulated if API fails
-        st.session_state.historical_data[pair] = hist_df
-        sma, rsi, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
-        st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
-    st.session_state.api_last_fetched = "Initial (Simulated)"
-
-# Recompute indicators if params changed (store in session for slider changes)
-if "ma_period" not in st.session_state:
-    st.session_state.ma_period = ma_period
-    st.session_state.rsi_period = rsi_period
-    st.session_state.rsi_overbought = rsi_overbought
-    st.session_state.rsi_oversold = rsi_oversold
-
-if st.session_state.ma_period != ma_period or st.session_state.rsi_period != rsi_period or \
-   st.session_state.rsi_overbought != rsi_overbought or st.session_state.rsi_oversold != rsi_oversold:
-    st.session_state.ma_period = ma_period
-    st.session_state.rsi_period = rsi_period
-    st.session_state.rsi_overbought = rsi_overbought
-    st.session_state.rsi_oversold = rsi_oversold
-    for pair in trading_pairs:
-        if pair in st.session_state.prices and pair in st.session_state.historical_data:
-            hist_df = st.session_state.historical_data[pair].copy()
-            sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
-            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
-    st.rerun()
-
-# Use session state params
-ma_period = st.session_state.ma_period
-rsi_period = st.session_state.rsi_period
-rsi_overbought = st.session_state.rsi_overbought
-rsi_oversold = st.session_state.rsi_oversold
-
-# Function to format price
-def format_price(price, pip_size):
-    if pip_size == 0.01:
-        return f"{price:.2f}"
-    else:
-        return f"{price:.4f}"
-
-# Active trades display
+# Real-time P&L View for Active Trades
+st.subheader("Real-Time P&L View for Active Trades")
 if st.session_state.active_trades:
-    st.subheader("Active Trades")
+    # Use st.empty() for dynamic updates
+    pnl_placeholder = st.empty()
+    
     active_trades_display = []
+    total_unrealized_pnl = 0
     for trade in st.session_state.active_trades:
-        t = trade.copy()
         if trade["Pair"] in st.session_state.prices:
             current_price = st.session_state.prices[trade["Pair"]]["price"]
             pip_size = trade["pip_size"]
@@ -326,21 +282,35 @@ if st.session_state.active_trades:
                 delta = entry - current_price
             
             pips = delta / pip_size
-            t["Current Price"] = format_price(current_price, pip_size)
-            t["Entry Price"] = format_price(entry, pip_size)
-            t["TP Price"] = format_price(trade["TP_price"], pip_size)
-            t["SL Price"] = format_price(trade["SL_price"], pip_size)
-            t["Pips"] = round(pips, 1)
-            t["Current P&L (€)"] = round(pips * pip_value, 2)
-        else:
-            t["Current Price"] = "N/A"
-            t["Pips"] = "N/A"
-            t["Current P&L (€)"] = "N/A"
-        
-        active_trades_display.append(t)
+            pnl = pips * pip_value
+            total_unrealized_pnl += pnl
+            
+            t = {
+                "Pair": trade["Pair"],
+                "Direction": trade["Direction"],
+                "Entry Price": format_price(entry, pip_size),
+                "Current Price": format_price(current_price, pip_size),
+                "Pips": round(pips, 1),
+                "Unrealized P&L (€)": round(pnl, 2),
+                "Open Time": trade["Open Time"]
+            }
+            active_trades_display.append(t)
     
-    trades_df = pd.DataFrame(active_trades_display)
-    st.dataframe(trades_df, use_container_width=True)
+    with pnl_placeholder.container():
+        trades_df = pd.DataFrame(active_trades_display)
+        st.dataframe(trades_df, use_container_width=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Unrealized P&L", f"{total_unrealized_pnl:.2f}€")
+        with col2:
+            st.metric("Number of Active Trades", len(st.session_state.active_trades))
+        
+        # Live update indicator
+        if st.session_state.simulation_running:
+            st.info("🔄 Real-time updates every 30 seconds during simulation.")
+else:
+    st.info("No active trades. Open some trades to see real-time P&L.")
 
 # Trading Results table
 st.subheader("Trading Results")
@@ -529,3 +499,10 @@ st.info("""
 # Footer
 st.markdown("---")
 st.caption("Built with Streamlit. Data from exchangerate.host or simulated – for educational purposes only.")
+
+# Helper function for formatting price (define here to avoid KeyError)
+def format_price(price, pip_size):
+    if pip_size == 0.01:
+        return f"{price:.2f}"
+    else:
+        return f"{price:.4f}"
