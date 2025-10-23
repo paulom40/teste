@@ -280,6 +280,8 @@ if "closed_trades" not in st.session_state:
     st.session_state.closed_trades = []
 if "simulation_running" not in st.session_state:
     st.session_state.simulation_running = False
+if "auto_trade_enabled" not in st.session_state:
+    st.session_state.auto_trade_enabled = False
 if "prices" not in st.session_state:
     st.session_state.prices = {}
 if "historical_data" not in st.session_state:
@@ -321,6 +323,9 @@ if st.sidebar.button("Start Simulation"):
         st.session_state.last_update = time.time()
 if st.sidebar.button("Stop Simulation"):
     st.session_state.simulation_running = False
+
+st.sidebar.checkbox("Enable Auto-Trade on Signals", key="auto_trade_toggle")
+st.session_state.auto_trade_enabled = st.sidebar.checkbox("Enable Auto-Trade on Signals", value=st.session_state.auto_trade_enabled)
 
 if st.sidebar.button("Refresh Live Prices & Indicators"):
     # Fetch live and historical
@@ -366,6 +371,7 @@ with col2:
         st.session_state.historical_data = {}
         st.session_state.indicators = {}
         st.session_state.simulation_running = False
+        st.session_state.auto_trade_enabled = False
         st.session_state.last_update = None
         st.session_state.api_last_fetched = None
         st.rerun()
@@ -560,7 +566,52 @@ if st.session_state.simulation_running:
                             st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
                             updated = True
         
-        # Check active trades
+        # Auto-trade logic if enabled
+        if st.session_state.auto_trade_enabled:
+            for pair in trading_pairs:
+                if pair in st.session_state.indicators:
+                    signal = st.session_state.indicators[pair]["signal"]
+                    # Check if no active trade for this pair
+                    has_active_trade = any(trade["Pair"] == pair and trade["Status"] == "Open" for trade in st.session_state.active_trades)
+                    if not has_active_trade and st.session_state.bankroll >= stake:
+                        if "Buy" in signal:
+                            direction = "Long"
+                        elif "Sell" in signal:
+                            direction = "Short"
+                        else:
+                            continue
+                        
+                        # Open trade
+                        entry = st.session_state.prices[pair]["price"]
+                        pip_size = st.session_state.prices[pair]["pip_size"]
+                        tp_pips = profit_target / pip_value
+                        sl_pips = stop_loss / pip_value
+                        
+                        trade = {
+                            "Pair": pair,
+                            "Direction": direction,
+                            "Entry Price": entry,
+                            "Stake": stake,
+                            "TP": profit_target,
+                            "SL": stop_loss,
+                            "pip_size": pip_size,
+                            "Open Time": datetime.now().strftime("%H:%M:%S"),
+                            "Status": "Open"
+                        }
+                        
+                        is_long = direction == "Long"
+                        if is_long:
+                            trade["TP_price"] = entry + tp_pips * pip_size
+                            trade["SL_price"] = entry - sl_pips * pip_size
+                        else:
+                            trade["TP_price"] = entry - tp_pips * pip_size
+                            trade["SL_price"] = entry + sl_pips * pip_size
+                        
+                        st.session_state.active_trades.append(trade)
+                        st.session_state.bankroll -= stake
+                        st.success(f"Auto-opened {direction} trade on {pair} based on signal!")
+        
+        # Check active trades for TP/SL
         for trade in st.session_state.active_trades[:]:
             if trade["Pair"] in st.session_state.prices:
                 current_price = st.session_state.prices[trade["Pair"]]["price"]
@@ -590,13 +641,14 @@ if st.session_state.simulation_running:
                     
                     # Remove from active
                     st.session_state.active_trades.remove(trade)
+                    st.info(f"Auto-closed {trade['Direction']} trade on {trade['Pair']} ({'TP' if tp_hit else 'SL'} hit)")
         
         st.session_state.last_update = current_time
         if updated:
             st.rerun()
     
     next_update = 30 - (current_time - st.session_state.last_update)
-    st.info(f"🔄 Live data feed active... Next price check in {next_update:.0f} seconds. Indicators update on refresh or significant price change.")
+    st.info(f"🔄 Live data feed active... Next price check in {next_update:.0f} seconds. Indicators update on refresh or significant price change. {'Auto-trading enabled!' if st.session_state.auto_trade_enabled else ''}")
 
 # Recompute indicators if params changed (store in session for slider changes)
 if "ma_period" not in st.session_state:
