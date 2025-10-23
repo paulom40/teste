@@ -11,16 +11,19 @@ st.set_page_config(page_title="Real-Time Trading Demo with Indicators", layout="
 
 # Fixed parameters
 initial_bank = 1000
-stake = 10
+stake = 15  # Increased stake for more risk
 profit_target = 10
-stop_loss = 20
-pip_value = stake / 10  # € per pip (1€ per pip for simplicity)
+stop_loss = 30  # Wider stop loss for more risk (1:0.33 risk/reward ratio)
+pip_value = stake / 10  # € per pip (adjusted for new stake)
 
 # Indicator parameters
 ma_period = 20  # Simple Moving Average period
 rsi_period = 14  # RSI period
 rsi_overbought = 70
 rsi_oversold = 30
+macd_fast = 12
+macd_slow = 26
+macd_signal = 9
 
 # Pip sizes for pairs
 pip_sizes = {
@@ -142,10 +145,10 @@ def get_live_prices():
         st.warning(f"Live API fetch failed: {e}. Using initial prices.")
     return None
 
-# Function to compute indicators and signal
+# Function to compute indicators and signal (Updated with more aggressive logic)
 def compute_indicators_and_signal(historical_df, current_price):
-    if historical_df is None or len(historical_df) < max(ma_period, rsi_period):
-        return None, None, "Insufficient Data"
+    if historical_df is None or len(historical_df) < max(ma_period, rsi_period, macd_slow + macd_signal):
+        return None, None, None, "Insufficient Data"
     
     # Append current price if not in historical
     latest_date = pd.to_datetime(historical_df["date"].iloc[-1])
@@ -159,18 +162,36 @@ def compute_indicators_and_signal(historical_df, current_price):
     # Compute RSI using ta library
     historical_df["rsi"] = ta.momentum.RSIIndicator(historical_df["close"], window=rsi_period).rsi()
     
+    # Compute MACD using ta library
+    macd_indicator = ta.trend.MACD(historical_df["close"], window_fast=macd_fast, window_slow=macd_slow, window_sign=macd_signal)
+    historical_df["macd"] = macd_indicator.macd()
+    historical_df["macd_signal"] = macd_indicator.macd_signal()
+    historical_df["macd_histogram"] = macd_indicator.macd_diff()
+    
     current_sma = historical_df["sma"].iloc[-1]
     current_rsi = historical_df["rsi"].iloc[-1]
+    current_macd = historical_df["macd"].iloc[-1]
+    current_macd_signal = historical_df["macd_signal"].iloc[-1]
+    prev_macd = historical_df["macd"].iloc[-2]
+    prev_macd_signal = historical_df["macd_signal"].iloc[-2]
+    current_histogram = historical_df["macd_histogram"].iloc[-1]
+    prev_histogram = historical_df["macd_histogram"].iloc[-2]
     
-    # Simple signal logic
-    if current_price > current_sma and current_rsi < rsi_overbought:
+    # More aggressive strategy: Frequent signals via MACD momentum + very loose filters
+    # Long: MACD > 0 or bullish histogram increase, OR price > SMA with RSI < 90 (very loose)
+    # Short: MACD < 0 or bearish histogram decrease, OR price < SMA with RSI > 10 (very loose)
+    # This generates signals almost always in trending markets, high frequency/risk
+    macd_bullish_momentum = current_macd > 0 or current_histogram > prev_histogram
+    macd_bearish_momentum = current_macd < 0 or current_histogram < prev_histogram
+    
+    if (macd_bullish_momentum or (current_price > current_sma and current_rsi < 90)) and current_rsi > 5:  # Extremely loose
         signal = "Buy (Long)"
-    elif current_price < current_sma and current_rsi > rsi_oversold:
+    elif (macd_bearish_momentum or (current_price < current_sma and current_rsi > 10)) and current_rsi < 95:  # Extremely loose
         signal = "Sell (Short)"
     else:
         signal = "Hold"
     
-    return current_sma, current_rsi, signal
+    return current_sma, current_rsi, current_macd, signal
 
 # Session state initialization
 if "bankroll" not in st.session_state:
@@ -210,6 +231,9 @@ ma_period = st.sidebar.slider("MA Period", 5, 50, 20)
 rsi_period = st.sidebar.slider("RSI Period", 5, 30, 14)
 rsi_overbought = st.sidebar.slider("RSI Overbought", 50, 90, 70)
 rsi_oversold = st.sidebar.slider("RSI Oversold", 10, 50, 30)
+macd_fast = st.sidebar.slider("MACD Fast", 5, 20, 12)
+macd_slow = st.sidebar.slider("MACD Slow", 20, 40, 26)
+macd_signal = st.sidebar.slider("MACD Signal", 5, 15, 9)
 
 st.sidebar.header("Simulation Controls")
 if st.sidebar.button("Start Simulation"):
@@ -234,8 +258,8 @@ if st.sidebar.button("Refresh Live Prices & Indicators"):
                 hist_df = get_historical_prices(pair)
                 if hist_df is not None:
                     st.session_state.historical_data[pair] = hist_df
-                    sma, rsi, signal = compute_indicators_and_signal(hist_df, live_prices[pair])
-                    st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+                    sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, live_prices[pair])
+                    st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
         st.session_state.api_last_fetched = datetime.now().strftime("%H:%M:%S")
     else:
         # Use initial if API fails
@@ -246,8 +270,8 @@ if st.sidebar.button("Refresh Live Prices & Indicators"):
             }
             hist_df = get_historical_prices(pair)  # Will fallback to simulated
             st.session_state.historical_data[pair] = hist_df
-            sma, rsi, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
-            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+            sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
+            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
         st.session_state.api_last_fetched = "Fallback (Simulated)"
     st.rerun()
 
@@ -365,6 +389,7 @@ for pair in trading_pairs:
             "Current Price": format_price(data["price"], data["pip_size"]),
             "MA (" + str(ma_period) + ")": f"{ind['sma']:.4f}" if ind['sma'] is not None else "N/A",
             "RSI (" + str(rsi_period) + ")": f"{ind['rsi']:.1f}" if ind['rsi'] is not None and not np.isnan(ind['rsi']) else "N/A",
+            "MACD": f"{ind['macd']:.4f}" if ind['macd'] is not None else "N/A",
             "Signal": ind['signal'],
             "Last Updated": st.session_state.api_last_fetched or "Initial"
         })
@@ -434,8 +459,8 @@ if st.session_state.simulation_running:
                     if abs(live_prices[pair] - old_price) > 0.0001:  # If price changed
                         hist_df = st.session_state.historical_data.get(pair)
                         if hist_df is not None:
-                            sma, rsi, signal = compute_indicators_and_signal(hist_df, live_prices[pair])
-                            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+                            sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, live_prices[pair])
+                            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
                             updated = True
                     st.session_state.api_last_fetched = datetime.now().strftime("%H:%M:%S")
         else:
@@ -449,8 +474,8 @@ if st.session_state.simulation_running:
                     if abs(change) > 0:
                         hist_df = st.session_state.historical_data.get(pair)
                         if hist_df is not None:
-                            sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
-                            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+                            sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
+                            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
                             updated = True
         
         # Check active trades
@@ -497,18 +522,26 @@ if "ma_period" not in st.session_state:
     st.session_state.rsi_period = rsi_period
     st.session_state.rsi_overbought = rsi_overbought
     st.session_state.rsi_oversold = rsi_oversold
+    st.session_state.macd_fast = macd_fast
+    st.session_state.macd_slow = macd_slow
+    st.session_state.macd_signal = macd_signal
 
-if st.session_state.ma_period != ma_period or st.session_state.rsi_period != rsi_period or \
-   st.session_state.rsi_overbought != rsi_overbought or st.session_state.rsi_oversold != rsi_oversold:
+if (st.session_state.ma_period != ma_period or st.session_state.rsi_period != rsi_period or 
+    st.session_state.rsi_overbought != rsi_overbought or st.session_state.rsi_oversold != rsi_oversold or
+    st.session_state.macd_fast != macd_fast or st.session_state.macd_slow != macd_slow or 
+    st.session_state.macd_signal != macd_signal):
     st.session_state.ma_period = ma_period
     st.session_state.rsi_period = rsi_period
     st.session_state.rsi_overbought = rsi_overbought
     st.session_state.rsi_oversold = rsi_oversold
+    st.session_state.macd_fast = macd_fast
+    st.session_state.macd_slow = macd_slow
+    st.session_state.macd_signal = macd_signal
     for pair in trading_pairs:
         if pair in st.session_state.prices and pair in st.session_state.historical_data:
             hist_df = st.session_state.historical_data[pair].copy()
-            sma, rsi, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
-            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+            sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, st.session_state.prices[pair]["price"])
+            st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
     st.rerun()
 
 # Use session state params
@@ -516,6 +549,9 @@ ma_period = st.session_state.ma_period
 rsi_period = st.session_state.rsi_period
 rsi_overbought = st.session_state.rsi_overbought
 rsi_oversold = st.session_state.rsi_oversold
+macd_fast = st.session_state.macd_fast
+macd_slow = st.session_state.macd_slow
+macd_signal = st.session_state.macd_signal
 
 # Initialize prices and indicators if not set
 if not st.session_state.prices:
@@ -527,19 +563,20 @@ if not st.session_state.prices:
         }
         hist_df = get_historical_prices(pair)  # Falls back to simulated if API fails
         st.session_state.historical_data[pair] = hist_df
-        sma, rsi, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
-        st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "signal": signal}
+        sma, rsi, macd, signal = compute_indicators_and_signal(hist_df, initial_prices[pair])
+        st.session_state.indicators[pair] = {"sma": sma, "rsi": rsi, "macd": macd, "signal": signal}
     st.session_state.api_last_fetched = "Initial (Simulated)"
 
 # Notes
 st.subheader("Demo Notes")
 st.info("""
-- **Indicators**: Uses SMA (trend) and RSI (momentum) for signals. Buy if price > SMA & RSI < 70; Sell if price < SMA & RSI > 30; else Hold. Adjustable in sidebar.
-- **Data**: Attempts live from exchangerate.host (daily rates). Falls back to simulated data if API unavailable. Historical (30 days) used for indicators. Requires `pip install ta` for RSI calc.
+- **Strategy**: Ultra-aggressive high-frequency approach using MACD momentum (MACD >0 or histogram increasing for long; <0 or decreasing for short) with extremely loose RSI filters (RSI <90 for long, >10 for short). Ignores SMA unless reinforced. Increased stake (15€) and wider SL (30€) for maximal risk. This will generate signals in nearly all conditions, leading to high trade volume and potential for rapid gains/losses.
+- **Indicators**: SMA (trend), RSI (momentum), MACD (momentum/histogram). Adjustable in sidebar.
+- **Data**: Attempts live from exchangerate.host (daily rates). Falls back to simulated data if API unavailable. Historical (30 days) used for indicators. Requires `pip install ta` for RSI/MACD calc.
 - **Signals**: Guide trade direction—override manually if needed. Auto-trading not implemented (demo focuses on signals).
 - **P&L**: Pip-based. TP/SL on price hits.
-- **Risk**: Educational only—indicators aren't foolproof; backtest in real scenarios.
-- **Enhancements**: Add more indicators (e.g., MACD via ta), charts with plotly, or auto-trade on signals.
+- **Risk**: Extremely high-risk demo—frequent trades + wide SL can wipe out bankroll quickly. Educational only; backtest thoroughly.
+- **Enhancements**: Add more indicators (e.g., Bollinger Bands via ta), charts with plotly, or auto-trade on signals.
 - Run with: `streamlit run app.py` (requires `pip install streamlit pandas numpy requests ta`)
 """)
 
