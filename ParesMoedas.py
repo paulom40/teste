@@ -141,7 +141,6 @@ st.markdown("""
 
 # Trading parameters
 initial_bank = 1000
-max_trades_per_pair = 2
 stake = 10  # €10 per trade
 profit_target = 10  # +10 pips
 stop_loss = 10     # -10 pips
@@ -364,17 +363,18 @@ def detect_trading_signals(df):
     except Exception as e:
         return [], [], [], []
 
-# Function to check if we can open a new trade for a pair
+# Function to check if we can open a new trade for a pair - UPDATED: No max trades limit
 def can_open_trade(pair, direction):
-    # Count current open trades for this pair
-    current_trades = [t for t in st.session_state.open_trades if t['pair'] == pair]
+    # Count current open trades for this pair in the same direction
+    same_direction_trades = [t for t in st.session_state.open_trades 
+                           if t['pair'] == pair and t['direction'] == direction]
     
-    if len(current_trades) >= max_trades_per_pair:
+    # No same-direction duplicates allowed
+    if same_direction_trades:
         return False
     
-    # Don't open same direction trade if we already have one
-    same_direction_trades = [t for t in current_trades if t['direction'] == direction]
-    if same_direction_trades:
+    # Check bank balance
+    if st.session_state.bank_balance < stake:
         return False
     
     return True
@@ -542,7 +542,6 @@ with st.sidebar:
     st.write(f"**Stake per trade:** €{stake}")
     st.write(f"**Profit Target:** +{profit_target} pips")
     st.write(f"**Stop Loss:** -{stop_loss} pips")
-    st.write(f"**Max trades per pair:** {max_trades_per_pair}")
     st.write(f"**Required Indicators:** {REQUIRED_INDICATORS}")
     st.write(f"**Bank Balance:** €{st.session_state.bank_balance:.2f}")
     
@@ -554,8 +553,8 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("## 🎯 Trading Rules")
     st.write(f"• Enter only when **{REQUIRED_INDICATORS} indicators** agree")
-    st.write("• No same-direction duplicates")
-    st.write(f"• Max {max_trades_per_pair} trades per pair")
+    st.write("• **No same-direction duplicates** per pair")
+    st.write("• **No maximum trades** per pair")
     st.write("• 1:1 Risk/Reward ratio")
 
 # Update prices and execute auto trades
@@ -613,7 +612,7 @@ if auto_trades_executed:
         else:
             st.error(f"❌ {trade}")
 
-# ALL PAIRS SIGNAL DASHBOARD - NEW SECTION
+# ALL PAIRS SIGNAL DASHBOARD
 st.markdown("---")
 st.markdown("## 📊 All Pairs Signal Dashboard")
 
@@ -627,6 +626,11 @@ for idx, pair in enumerate(trading_pairs):
         sell_count = signal_info.get('sell_count', 0)
         current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
         price_change = signal_info.get('price_change', 0)
+        
+        # Count current trades for this pair
+        current_trades = [t for t in st.session_state.open_trades if t['pair'] == pair]
+        buy_trades = len([t for t in current_trades if t['direction'] == 'BUY'])
+        sell_trades = len([t for t in current_trades if t['direction'] == 'SELL'])
         
         # Price display
         pip_size = pip_sizes[pair]
@@ -672,7 +676,8 @@ for idx, pair in enumerate(trading_pairs):
                 <strong>Price: {price_display}</strong><br>
                 <span style="color: {change_color};">
                     {change_emoji} {price_change:+.2f}%
-                </span>
+                </span><br>
+                <small>Open Trades: {buy_trades} BUY, {sell_trades} SELL</small>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -696,9 +701,15 @@ for idx, pair in enumerate(trading_pairs):
             
             # Trading recommendation
             if buy_count >= REQUIRED_INDICATORS:
-                st.success(f"🎯 TRADING SIGNAL: BUY {pair}")
+                if buy_trades == 0:
+                    st.success(f"🎯 TRADING SIGNAL: OPEN BUY {pair}")
+                else:
+                    st.info(f"📊 Already have BUY position on {pair}")
             elif sell_count >= REQUIRED_INDICATORS:
-                st.error(f"🎯 TRADING SIGNAL: SELL {pair}")
+                if sell_trades == 0:
+                    st.error(f"🎯 TRADING SIGNAL: OPEN SELL {pair}")
+                else:
+                    st.info(f"📊 Already have SELL position on {pair}")
             else:
                 st.warning("⏸️ Waiting for signal confirmation")
 
@@ -711,21 +722,35 @@ strong_buy_pairs = [p for p in trading_pairs
 strong_sell_pairs = [p for p in trading_pairs 
                     if st.session_state.all_signals.get(p, {}).get('sell_count', 0) >= REQUIRED_INDICATORS]
 
+# Filter pairs that can actually be traded (no same-direction duplicates)
+tradable_buy_pairs = [p for p in strong_buy_pairs 
+                     if len([t for t in st.session_state.open_trades if t['pair'] == p and t['direction'] == 'BUY']) == 0]
+tradable_sell_pairs = [p for p in strong_sell_pairs 
+                      if len([t for t in st.session_state.open_trades if t['pair'] == p and t['direction'] == 'SELL']) == 0]
+
 col1, col2 = st.columns(2)
 
 with col1:
-    st.metric("Strong Buy Signals", len(strong_buy_pairs))
-    if strong_buy_pairs:
-        st.write("**Pairs with BUY signals:**")
+    st.metric("Strong Buy Signals", f"{len(tradable_buy_pairs)}/{len(strong_buy_pairs)} tradable")
+    if tradable_buy_pairs:
+        st.write("**Pairs ready for BUY:**")
+        for pair in tradable_buy_pairs:
+            st.success(f"✅ {pair} - READY TO BUY")
+    elif strong_buy_pairs:
+        st.write("**Pairs with BUY signals (already trading):**")
         for pair in strong_buy_pairs:
-            st.success(f"✅ {pair}")
+            st.info(f"📊 {pair} - Already have BUY position")
 
 with col2:
-    st.metric("Strong Sell Signals", len(strong_sell_pairs))
-    if strong_sell_pairs:
-        st.write("**Pairs with SELL signals:**")
+    st.metric("Strong Sell Signals", f"{len(tradable_sell_pairs)}/{len(strong_sell_pairs)} tradable")
+    if tradable_sell_pairs:
+        st.write("**Pairs ready for SELL:**")
+        for pair in tradable_sell_pairs:
+            st.error(f"❌ {pair} - READY TO SELL")
+    elif strong_sell_pairs:
+        st.write("**Pairs with SELL signals (already trading):**")
         for pair in strong_sell_pairs:
-            st.error(f"❌ {pair}")
+            st.info(f"📊 {pair} - Already have SELL position")
 
 # Detailed Analysis for Selected Pair
 st.markdown("---")
@@ -784,8 +809,15 @@ with col2:
     buy_indicators = signal_info.get('buy_indicators', [])
     sell_indicators = signal_info.get('sell_indicators', [])
     
+    # Count current trades
+    current_trades = [t for t in st.session_state.open_trades if t['pair'] == selected_pair]
+    buy_trades = len([t for t in current_trades if t['direction'] == 'BUY'])
+    sell_trades = len([t for t in current_trades if t['direction'] == 'SELL'])
+    
     st.metric("Buy Indicators", f"{buy_count}/{REQUIRED_INDICATORS}")
     st.metric("Sell Indicators", f"{sell_count}/{REQUIRED_INDICATORS}")
+    st.metric("Open BUY Trades", buy_trades)
+    st.metric("Open SELL Trades", sell_trades)
     
     st.markdown("### Active Buy Signals:")
     for indicator in buy_indicators:
@@ -801,9 +833,15 @@ with col2:
     
     # Trading status
     if buy_count >= REQUIRED_INDICATORS:
-        st.success(f"✅ READY TO BUY - {buy_count} indicators confirming")
+        if buy_trades == 0:
+            st.success(f"✅ READY TO BUY - {buy_count} indicators confirming")
+        else:
+            st.info(f"📊 Already trading BUY - {buy_trades} open position(s)")
     elif sell_count >= REQUIRED_INDICATORS:
-        st.error(f"❌ READY TO SELL - {sell_count} indicators confirming")
+        if sell_trades == 0:
+            st.error(f"❌ READY TO SELL - {sell_count} indicators confirming")
+        else:
+            st.info(f"📊 Already trading SELL - {sell_trades} open position(s)")
     else:
         st.warning(f"⏸️ WAITING - Need {REQUIRED_INDICATORS} indicators")
 
@@ -814,35 +852,44 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("## 🔓 Open Trades")
     if st.session_state.open_trades:
+        # Group trades by pair
+        trades_by_pair = {}
         for trade in st.session_state.open_trades:
-            trade_class = "trade-buy" if trade['direction'] == 'BUY' else "trade-sell"
-            current_pl = trade['profit_loss']
-            pl_class = "profit-positive" if current_pl >= 0 else "profit-negative"
-            trade_type = trade.get('type', 'MANUAL')
-            
-            # Calculate pips
-            pip_size = pip_sizes[trade['pair']]
-            current_price = trade.get('current_price', trade['entry_price'])
-            if trade['direction'] == 'BUY':
-                pips = (current_price - trade['entry_price']) / pip_size
-            else:
-                pips = (trade['entry_price'] - current_price) / pip_size
-            
-            st.markdown(f"""
-            <div class="{trade_class}">
-                <strong>{trade['pair']} {trade['direction']} ({trade_type})</strong><br>
-                Entry: {trade['entry_price']:.4f}<br>
-                P&L: <span class="{pl_class}">€{current_pl:.2f}</span><br>
-                Pips: <span class="{pl_class}">{pips:+.1f}</span><br>
-                <small>{trade['time'].strftime('%H:%M:%S')}</small>
-            </div>
-            """, unsafe_allow_html=True)
+            if trade['pair'] not in trades_by_pair:
+                trades_by_pair[trade['pair']] = []
+            trades_by_pair[trade['pair']].append(trade)
+        
+        for pair, trades in trades_by_pair.items():
+            st.markdown(f"**{pair}**")
+            for trade in trades:
+                trade_class = "trade-buy" if trade['direction'] == 'BUY' else "trade-sell"
+                current_pl = trade['profit_loss']
+                pl_class = "profit-positive" if current_pl >= 0 else "profit-negative"
+                trade_type = trade.get('type', 'MANUAL')
+                
+                # Calculate pips
+                pip_size = pip_sizes[trade['pair']]
+                current_price = trade.get('current_price', trade['entry_price'])
+                if trade['direction'] == 'BUY':
+                    pips = (current_price - trade['entry_price']) / pip_size
+                else:
+                    pips = (trade['entry_price'] - current_price) / pip_size
+                
+                st.markdown(f"""
+                <div class="{trade_class}">
+                    <strong>{trade['direction']} ({trade_type})</strong><br>
+                    Entry: {trade['entry_price']:.4f}<br>
+                    P&L: <span class="{pl_class}">€{current_pl:.2f}</span><br>
+                    Pips: <span class="{pl_class}">{pips:+.1f}</span><br>
+                    <small>{trade['time'].strftime('%H:%M:%S')}</small>
+                </div>
+                """, unsafe_allow_html=True)
     else:
         st.info("No open trades")
 
 with col2:
     st.markdown("## 📋 Trade History")
-    recent_trades = st.session_state.trade_history[-8:] if st.session_state.trade_history else []
+    recent_trades = st.session_state.trade_history[-10:] if st.session_state.trade_history else []
     
     if recent_trades:
         for trade in reversed(recent_trades):
