@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 # Page configuration with modern theme
 st.set_page_config(
-    page_title="Auto Trading Bot - 2 Indicator Strategy",
+    page_title="Auto Trading Bot - Multi-Pair Signal Scanner",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,6 +70,24 @@ st.markdown("""
         text-align: center;
         font-weight: bold;
     }
+    .signal-weak-buy {
+        background: linear-gradient(135deg, #aaffaa 0%, #88cc88 100%);
+        color: black;
+        padding: 0.5rem;
+        border-radius: 5px;
+        margin: 0.2rem 0;
+        text-align: center;
+        font-weight: bold;
+    }
+    .signal-weak-sell {
+        background: linear-gradient(135deg, #ffaaaa 0%, #cc8888 100%);
+        color: black;
+        padding: 0.5rem;
+        border-radius: 5px;
+        margin: 0.2rem 0;
+        text-align: center;
+        font-weight: bold;
+    }
     .trade-buy {
         background-color: rgba(0, 255, 136, 0.1);
         border-left: 4px solid #00ff88;
@@ -105,10 +123,23 @@ st.markdown("""
     .indicator-inactive {
         color: #ff4444;
     }
+    .signal-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    .pair-card {
+        background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Trading parameters - UPDATED AS REQUESTED
+# Trading parameters
 initial_bank = 1000
 max_trades_per_pair = 2
 stake = 10  # €10 per trade
@@ -126,7 +157,7 @@ macd_fast = 12
 macd_slow = 26
 macd_signal = 9
 
-# Signal threshold - UPDATED: Require exactly 2 indicators
+# Signal threshold - Require exactly 2 indicators
 REQUIRED_INDICATORS = 2
 
 # Pip sizes for pairs
@@ -171,6 +202,8 @@ if 'signal_history' not in st.session_state:
     st.session_state.signal_history = {}
 if 'last_auto_trade' not in st.session_state:
     st.session_state.last_auto_trade = {}
+if 'all_signals' not in st.session_state:
+    st.session_state.all_signals = {}
 
 # Initialize signal history for all pairs
 for pair in trading_pairs:
@@ -186,7 +219,7 @@ for pair in trading_pairs:
 
 # Function to generate simulated historical prices
 def generate_simulated_historical(pair, periods=200):
-    np.random.seed(42)
+    np.random.seed(hash(pair) % 10000)  # Different seed for each pair
     base_price = initial_prices[pair]
     prices = []
     current_time = datetime.now()
@@ -196,7 +229,7 @@ def generate_simulated_historical(pair, periods=200):
         
         # Generate OHLC data with realistic volatility
         open_price = base_price
-        change = np.random.normal(0, 0.0015)  # Good volatility for signal generation
+        change = np.random.normal(0, 0.0015)
         close_price = base_price * (1 + change)
         high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, 0.0008)))
         low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, 0.0008)))
@@ -237,6 +270,44 @@ def calculate_indicators(df):
     except Exception as e:
         return df
 
+# Function to detect trading signals for ALL pairs
+def scan_all_pairs_signals():
+    all_signals = {}
+    
+    for pair in trading_pairs:
+        if pair in st.session_state.price_history:
+            df = st.session_state.price_history[pair].copy()
+            df_with_indicators = calculate_indicators(df)
+            
+            signals, buy_indicators, sell_indicators, _ = detect_trading_signals(df_with_indicators)
+            
+            # Store signals for this pair
+            all_signals[pair] = {
+                'signals': signals,
+                'buy_indicators': buy_indicators,
+                'sell_indicators': sell_indicators,
+                'time': datetime.now(),
+                'buy_count': len(buy_indicators),
+                'sell_count': len(sell_indicators),
+                'current_price': st.session_state.current_prices[pair],
+                'price_change': calculate_price_change(pair)
+            }
+            
+            # Also update signal history
+            st.session_state.signal_history[pair] = all_signals[pair]
+    
+    return all_signals
+
+# Function to calculate price change
+def calculate_price_change(pair):
+    if pair in st.session_state.price_history and len(st.session_state.price_history[pair]) > 1:
+        df = st.session_state.price_history[pair]
+        current_price = df.iloc[-1]['close']
+        previous_price = df.iloc[-2]['close']
+        change = ((current_price - previous_price) / previous_price) * 100
+        return change
+    return 0
+
 # Function to detect trading signals with EXACTLY 2 indicator requirement
 def detect_trading_signals(df):
     buy_indicators = []
@@ -259,9 +330,9 @@ def detect_trading_signals(df):
         # 1. Moving Average Crossover Signal
         if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']):
             if latest['MA_Fast'] > latest['MA_Slow'] and previous['MA_Fast'] <= previous['MA_Slow']:
-                buy_indicators.append("MA Crossover Bullish")
+                buy_indicators.append("MA Crossover")
             elif latest['MA_Fast'] < latest['MA_Slow'] and previous['MA_Fast'] >= previous['MA_Slow']:
-                sell_indicators.append("MA Crossover Bearish")
+                sell_indicators.append("MA Crossover")
         
         # 2. RSI Signals
         if pd.notna(latest['RSI']):
@@ -273,9 +344,9 @@ def detect_trading_signals(df):
         # 3. MACD Signals
         if pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']):
             if latest['MACD'] > latest['MACD_Signal'] and previous['MACD'] <= previous['MACD_Signal']:
-                buy_indicators.append("MACD Bullish Crossover")
+                buy_indicators.append("MACD Bullish")
             elif latest['MACD'] < latest['MACD_Signal'] and previous['MACD'] >= previous['MACD_Signal']:
-                sell_indicators.append("MACD Bearish Crossover")
+                sell_indicators.append("MACD Bearish")
         
         # Determine if we have EXACTLY 2 indicators agreeing
         buy_signal = len(buy_indicators) >= REQUIRED_INDICATORS
@@ -308,52 +379,30 @@ def can_open_trade(pair, direction):
     
     return True
 
-# Function to execute auto trade based on signals
+# Function to execute auto trade based on signals for ALL pairs
 def execute_auto_trades():
     if not st.session_state.auto_trading:
         return []
     
     auto_trades_executed = []
     
-    for pair in trading_pairs:
-        if pair in st.session_state.price_history:
-            df = st.session_state.price_history[pair].copy()
-            df_with_indicators = calculate_indicators(df)
+    # Scan all pairs for signals
+    all_signals = scan_all_pairs_signals()
+    
+    for pair, signal_info in all_signals.items():
+        signals = signal_info.get('signals', [])
+        
+        # Execute trades based on signals with EXACTLY 2 indicators
+        for signal_type, count, indicators in signals:
+            if signal_type == "BUY" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'BUY'):
+                if execute_trade(pair, 'BUY', st.session_state.current_prices[pair]):
+                    auto_trades_executed.append(f"AUTO BUY {pair} ({count} indicators: {', '.join(indicators)})")
+                    st.session_state.last_auto_trade[pair] = datetime.now()
             
-            signals, buy_indicators, sell_indicators, _ = detect_trading_signals(df_with_indicators)
-            
-            # Store signal history for display with safe initialization
-            if pair not in st.session_state.signal_history:
-                st.session_state.signal_history[pair] = {
-                    'signals': [],
-                    'buy_indicators': [],
-                    'sell_indicators': [],
-                    'time': datetime.now(),
-                    'buy_count': 0,
-                    'sell_count': 0
-                }
-            
-            # Update signal history
-            st.session_state.signal_history[pair] = {
-                'signals': signals,
-                'buy_indicators': buy_indicators,
-                'sell_indicators': sell_indicators,
-                'time': datetime.now(),
-                'buy_count': len(buy_indicators),
-                'sell_count': len(sell_indicators)
-            }
-            
-            # Execute trades based on signals with EXACTLY 2 indicators
-            for signal_type, count, indicators in signals:
-                if signal_type == "BUY" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'BUY'):
-                    if execute_trade(pair, 'BUY', st.session_state.current_prices[pair]):
-                        auto_trades_executed.append(f"AUTO BUY {pair} ({count} indicators: {', '.join(indicators)})")
-                        st.session_state.last_auto_trade[pair] = datetime.now()
-                
-                elif signal_type == "SELL" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'SELL'):
-                    if execute_trade(pair, 'SELL', st.session_state.current_prices[pair]):
-                        auto_trades_executed.append(f"AUTO SELL {pair} ({count} indicators: {', '.join(indicators)})")
-                        st.session_state.last_auto_trade[pair] = datetime.now()
+            elif signal_type == "SELL" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'SELL'):
+                if execute_trade(pair, 'SELL', st.session_state.current_prices[pair]):
+                    auto_trades_executed.append(f"AUTO SELL {pair} ({count} indicators: {', '.join(indicators)})")
+                    st.session_state.last_auto_trade[pair] = datetime.now()
     
     return auto_trades_executed
 
@@ -379,48 +428,49 @@ def execute_trade(pair, direction, entry_price):
     except Exception as e:
         return False
 
-# Function to simulate price movement
-def simulate_price_movement(pair):
-    try:
-        current_price = st.session_state.current_prices[pair]
-        
-        # Moderate volatility for better signal generation
-        volatility = 0.0008
-        
-        # Small trend bias based on recent signals
-        trend_bias = 0
-        if pair in st.session_state.signal_history:
-            signal_info = st.session_state.signal_history[pair]
-            buy_count = signal_info.get('buy_count', 0)
-            sell_count = signal_info.get('sell_count', 0)
-            if buy_count > sell_count:
-                trend_bias += 0.0002
-            elif sell_count > buy_count:
-                trend_bias -= 0.0002
-        
-        change = np.random.normal(trend_bias, volatility)
-        new_price = current_price * (1 + change)
-        st.session_state.current_prices[pair] = new_price
-        
-        # Initialize price history if not exists
-        if pair not in st.session_state.price_history:
-            st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
-        
-        # Add new price data
-        new_row = pd.DataFrame([{
-            'date': datetime.now(),
-            'open': current_price,
-            'high': max(current_price, new_price),
-            'low': min(current_price, new_price),
-            'close': new_price
-        }])
-        
-        st.session_state.price_history[pair] = pd.concat([
-            st.session_state.price_history[pair], new_row
-        ]).tail(250)
-        
-    except Exception as e:
-        pass
+# Function to simulate price movement for ALL pairs
+def simulate_all_prices_movement():
+    for pair in trading_pairs:
+        try:
+            current_price = st.session_state.current_prices[pair]
+            
+            # Moderate volatility for better signal generation
+            volatility = 0.0008
+            
+            # Small trend bias based on recent signals
+            trend_bias = 0
+            if pair in st.session_state.signal_history:
+                signal_info = st.session_state.signal_history[pair]
+                buy_count = signal_info.get('buy_count', 0)
+                sell_count = signal_info.get('sell_count', 0)
+                if buy_count > sell_count:
+                    trend_bias += 0.0002
+                elif sell_count > buy_count:
+                    trend_bias -= 0.0002
+            
+            change = np.random.normal(trend_bias, volatility)
+            new_price = current_price * (1 + change)
+            st.session_state.current_prices[pair] = new_price
+            
+            # Initialize price history if not exists
+            if pair not in st.session_state.price_history:
+                st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
+            
+            # Add new price data
+            new_row = pd.DataFrame([{
+                'date': datetime.now(),
+                'open': current_price,
+                'high': max(current_price, new_price),
+                'low': min(current_price, new_price),
+                'close': new_price
+            }])
+            
+            st.session_state.price_history[pair] = pd.concat([
+                st.session_state.price_history[pair], new_row
+            ]).tail(250)
+            
+        except Exception as e:
+            continue
 
 # Function to update open trades
 def update_trades():
@@ -464,13 +514,13 @@ def update_trades():
     except Exception as e:
         pass
 
-# Initialize price history
+# Initialize price history for all pairs
 for pair in trading_pairs:
     if pair not in st.session_state.price_history:
         st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
 
 # Main application layout
-st.markdown('<h1 class="main-header">🤖 Auto Trading - 2 Indicator Strategy</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Multi-Pair Signal Scanner</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -497,10 +547,9 @@ with st.sidebar:
     st.write(f"**Bank Balance:** €{st.session_state.bank_balance:.2f}")
     
     st.markdown("---")
-    st.markdown("## 📊 Active Indicators")
-    st.write("✓ Moving Average Crossover")
-    st.write("✓ RSI (Overbought/Oversold)")
-    st.write("✓ MACD Crossover")
+    st.markdown("## 📊 Monitoring Pairs")
+    for pair in trading_pairs:
+        st.write(f"• {pair}")
     
     st.markdown("---")
     st.markdown("## 🎯 Trading Rules")
@@ -510,9 +559,8 @@ with st.sidebar:
     st.write("• 1:1 Risk/Reward ratio")
 
 # Update prices and execute auto trades
-for pair in trading_pairs:
-    simulate_price_movement(pair)
-
+simulate_all_prices_movement()
+st.session_state.all_signals = scan_all_pairs_signals()
 auto_trades_executed = execute_auto_trades()
 update_trades()
 
@@ -565,54 +613,125 @@ if auto_trades_executed:
         else:
             st.error(f"❌ {trade}")
 
-# Signal Dashboard - UPDATED for 2 indicator requirement
+# ALL PAIRS SIGNAL DASHBOARD - NEW SECTION
 st.markdown("---")
-st.markdown("## 🎯 Live Signal Detection")
+st.markdown("## 📊 All Pairs Signal Dashboard")
 
-signal_cols = st.columns(len(trading_pairs))
+# Create a grid layout for all pairs
+cols = st.columns(3)
 
 for idx, pair in enumerate(trading_pairs):
-    with signal_cols[idx]:
-        st.markdown(f"**{pair}**")
-        
-        # Safe access to signal history
-        signal_info = st.session_state.signal_history.get(pair, {})
+    with cols[idx % 3]:
+        signal_info = st.session_state.all_signals.get(pair, {})
         buy_count = signal_info.get('buy_count', 0)
         sell_count = signal_info.get('sell_count', 0)
+        current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
+        price_change = signal_info.get('price_change', 0)
         
-        # Display signal based on 2 indicator requirement
-        if buy_count >= REQUIRED_INDICATORS:
-            st.markdown(f'<div class="signal-strong-buy">BUY SIGNAL<br>{buy_count}/{REQUIRED_INDICATORS} indicators</div>', unsafe_allow_html=True)
-        elif sell_count >= REQUIRED_INDICATORS:
-            st.markdown(f'<div class="signal-strong-sell">SELL SIGNAL<br>{sell_count}/{REQUIRED_INDICATORS} indicators</div>', unsafe_allow_html=True)
+        # Price display
+        pip_size = pip_sizes[pair]
+        if pip_size == 0.01:
+            price_display = f"{current_price:.2f}"
         else:
-            st.markdown(f'<div class="signal-no-trade">NO TRADE<br>{max(buy_count, sell_count)}/{REQUIRED_INDICATORS} indicators</div>', unsafe_allow_html=True)
+            price_display = f"{current_price:.4f}"
         
-        # Show indicator details safely
-        with st.expander("Indicator Details"):
+        # Determine signal type and styling
+        if buy_count >= REQUIRED_INDICATORS:
+            signal_class = "signal-strong-buy"
+            signal_text = "STRONG BUY"
+            signal_emoji = "🟢"
+        elif sell_count >= REQUIRED_INDICATORS:
+            signal_class = "signal-strong-sell"
+            signal_text = "STRONG SELL"
+            signal_emoji = "🔴"
+        elif buy_count == 1:
+            signal_class = "signal-weak-buy"
+            signal_text = "WEAK BUY"
+            signal_emoji = "🟡"
+        elif sell_count == 1:
+            signal_class = "signal-weak-sell"
+            signal_text = "WEAK SELL"
+            signal_emoji = "🟠"
+        else:
+            signal_class = "signal-no-trade"
+            signal_text = "NO SIGNAL"
+            signal_emoji = "⚪"
+        
+        # Price change styling
+        change_color = "#00ff88" if price_change >= 0 else "#ff4444"
+        change_emoji = "📈" if price_change >= 0 else "📉"
+        
+        st.markdown(f"""
+        <div class="pair-card">
+            <h3>{pair} {signal_emoji}</h3>
+            <div class="{signal_class}">
+                {signal_text}<br>
+                {buy_count}/{REQUIRED_INDICATORS} Buy • {sell_count}/{REQUIRED_INDICATORS} Sell
+            </div>
+            <div style="margin-top: 0.5rem;">
+                <strong>Price: {price_display}</strong><br>
+                <span style="color: {change_color};">
+                    {change_emoji} {price_change:+.2f}%
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show active indicators
+        with st.expander(f"View {pair} Details"):
             buy_indicators = signal_info.get('buy_indicators', [])
             sell_indicators = signal_info.get('sell_indicators', [])
             
-            st.write("**Buy Indicators:**")
+            st.write("**Active Buy Signals:**")
             for indicator in buy_indicators:
-                st.write(f"✓ {indicator}")
+                st.write(f"✅ {indicator}")
             if not buy_indicators:
                 st.write("None")
             
-            st.write("**Sell Indicators:**")
+            st.write("**Active Sell Signals:**")
             for indicator in sell_indicators:
-                st.write(f"✓ {indicator}")
+                st.write(f"❌ {indicator}")
             if not sell_indicators:
                 st.write("None")
-        
-        # Show last update safely
-        last_time = signal_info.get('time', datetime.now())
-        last_update = last_time.strftime("%H:%M:%S")
-        st.caption(f"Last: {last_update}")
+            
+            # Trading recommendation
+            if buy_count >= REQUIRED_INDICATORS:
+                st.success(f"🎯 TRADING SIGNAL: BUY {pair}")
+            elif sell_count >= REQUIRED_INDICATORS:
+                st.error(f"🎯 TRADING SIGNAL: SELL {pair}")
+            else:
+                st.warning("⏸️ Waiting for signal confirmation")
 
-# Detailed Analysis
+# Signal Summary
 st.markdown("---")
-selected_pair = st.selectbox("Select Pair for Detailed Analysis", trading_pairs)
+st.markdown("## 📈 Signal Summary")
+
+strong_buy_pairs = [p for p in trading_pairs 
+                   if st.session_state.all_signals.get(p, {}).get('buy_count', 0) >= REQUIRED_INDICATORS]
+strong_sell_pairs = [p for p in trading_pairs 
+                    if st.session_state.all_signals.get(p, {}).get('sell_count', 0) >= REQUIRED_INDICATORS]
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric("Strong Buy Signals", len(strong_buy_pairs))
+    if strong_buy_pairs:
+        st.write("**Pairs with BUY signals:**")
+        for pair in strong_buy_pairs:
+            st.success(f"✅ {pair}")
+
+with col2:
+    st.metric("Strong Sell Signals", len(strong_sell_pairs))
+    if strong_sell_pairs:
+        st.write("**Pairs with SELL signals:**")
+        for pair in strong_sell_pairs:
+            st.error(f"❌ {pair}")
+
+# Detailed Analysis for Selected Pair
+st.markdown("---")
+st.markdown("## 🔍 Detailed Pair Analysis")
+
+selected_pair = st.selectbox("Select Pair for Detailed Chart Analysis", trading_pairs)
 
 col1, col2 = st.columns([2, 1])
 
@@ -659,7 +778,7 @@ with col2:
     st.markdown("## 📊 Current Signals")
     
     # Safe access to signal info
-    signal_info = st.session_state.signal_history.get(selected_pair, {})
+    signal_info = st.session_state.all_signals.get(selected_pair, {})
     buy_count = signal_info.get('buy_count', 0)
     sell_count = signal_info.get('sell_count', 0)
     buy_indicators = signal_info.get('buy_indicators', [])
@@ -670,13 +789,13 @@ with col2:
     
     st.markdown("### Active Buy Signals:")
     for indicator in buy_indicators:
-        st.markdown(f"<span class='indicator-active'>✓ {indicator}</span>", unsafe_allow_html=True)
+        st.markdown(f"<span class='indicator-active'>✅ {indicator}</span>", unsafe_allow_html=True)
     if not buy_indicators:
         st.write("No buy signals")
     
     st.markdown("### Active Sell Signals:")
     for indicator in sell_indicators:
-        st.markdown(f"<span class='indicator-active'>✓ {indicator}</span>", unsafe_allow_html=True)
+        st.markdown(f"<span class='indicator-active'>❌ {indicator}</span>", unsafe_allow_html=True)
     if not sell_indicators:
         st.write("No sell signals")
     
@@ -740,50 +859,6 @@ with col2:
             """, unsafe_allow_html=True)
     else:
         st.info("No trade history yet")
-
-# Performance metrics
-st.markdown("---")
-st.markdown("## 📈 Strategy Performance")
-
-if st.session_state.trade_history:
-    total_trades = len(st.session_state.trade_history)
-    winning_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] > 0])
-    losing_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] < 0])
-    break_even_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] == 0])
-    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
-    
-    auto_trades = [t for t in st.session_state.trade_history if t.get('type') == 'AUTO']
-    auto_win_rate = (len([t for t in auto_trades if t['profit_loss'] > 0]) / len(auto_trades)) * 100 if auto_trades else 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Trades", total_trades)
-    with col2:
-        st.metric("Win Rate", f"{win_rate:.1f}%")
-    with col3:
-        st.metric("Auto Trades", len(auto_trades))
-    with col4:
-        st.metric("Auto Win Rate", f"{auto_win_rate:.1f}%" if auto_trades else "N/A")
-
-# Strategy Info
-st.markdown("---")
-st.markdown("## 🎯 Trading Strategy Summary")
-st.markdown(f"""
-**Strategy:** 2-Indicator Confirmation  
-**Rules:**
-- Enter trade only when **{REQUIRED_INDICATORS} technical indicators** agree on direction
-- **Stake:** €{stake} per trade
-- **Profit Target:** +{profit_target} pips (€{profit_target * pip_value:.2f})
-- **Stop Loss:** -{stop_loss} pips (€{stop_loss * pip_value:.2f})
-- **Risk/Reward:** 1:1
-- **Max trades per pair:** {max_trades_per_pair}
-
-**Indicators Used:**
-1. Moving Average Crossover (Fast: {ma_fast}, Slow: {ma_slow})
-2. RSI (Overbought: {rsi_overbought}, Oversold: {rsi_oversold})
-3. MACD Crossover (Fast: {macd_fast}, Slow: {macd_slow}, Signal: {macd_signal})
-""")
 
 # Auto-refresh
 st.markdown("---")
