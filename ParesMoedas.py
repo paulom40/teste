@@ -5,6 +5,9 @@ import requests
 import time
 from datetime import datetime, timedelta
 import ta  # Technical Analysis library; install with pip install ta
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Page configuration
 st.set_page_config(page_title="Real-Time Trading Demo with Indicators", layout="wide")
@@ -192,6 +195,81 @@ def compute_indicators_and_signal(historical_df, current_price):
         signal = "Hold"
     
     return current_sma, current_rsi, current_macd, signal
+
+# Function to create signal plot for a pair
+def create_signal_plot(pair):
+    if pair not in st.session_state.historical_data or pair not in st.session_state.prices:
+        st.warning("No data available for plot.")
+        return
+    
+    df = st.session_state.historical_data[pair].copy()
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+    
+    # Append current if needed
+    current_price = st.session_state.prices[pair]["price"]
+    if df.index[-1] < datetime.now().date():
+        df.loc[datetime.now(), 'close'] = current_price
+    
+    # Compute indicators for full history
+    df["sma"] = df["close"].rolling(window=ma_period).mean()
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=rsi_period).rsi()
+    macd_indicator = ta.trend.MACD(df["close"], window_fast=macd_fast, window_slow=macd_slow, window_sign=macd_signal)
+    df["macd"] = macd_indicator.macd()
+    df["macd_signal"] = macd_indicator.macd_signal()
+    df["macd_histogram"] = macd_indicator.macd_diff()
+    
+    # Compute historical signals for plotting
+    df["signal"] = "Hold"
+    for i in range(max(ma_period, rsi_period, macd_slow + macd_signal), len(df)):
+        row = df.iloc[i]
+        prev_row = df.iloc[i-1]
+        current_histogram = row["macd_histogram"]
+        prev_histogram = prev_row["macd_histogram"]
+        current_macd = row["macd"]
+        current_rsi = row["rsi"]
+        current_sma = row["sma"]
+        current_close = row["close"]
+        
+        macd_bullish_momentum = current_macd > 0 or current_histogram > prev_histogram
+        macd_bearish_momentum = current_macd < 0 or current_histogram < prev_histogram
+        
+        if (macd_bullish_momentum or (current_close > current_sma and current_rsi < 90)) and current_rsi > 5:
+            df.iloc[i, df.columns.get_loc("signal")] = "Buy (Long)"
+        elif (macd_bearish_momentum or (current_close < current_sma and current_rsi > 10)) and current_rsi < 95:
+            df.iloc[i, df.columns.get_loc("signal")] = "Sell (Short)"
+    
+    # Create subplots
+    fig = make_subplots(
+        rows=4, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=('Price & SMA', 'MACD', 'RSI', 'Signals'),
+        row_heights=[0.4, 0.25, 0.2, 0.15]
+    )
+    
+    # Price and SMA
+    fig.add_trace(go.Scatter(x=df.index, y=df['close'], name='Close', line=dict(color='blue')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['sma'], name='SMA', line=dict(color='orange')), row=1, col=1)
+    
+    # MACD
+    fig.add_trace(go.Scatter(x=df.index, y=df['macd'], name='MACD', line=dict(color='green')), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], name='Signal', line=dict(color='red')), row=2, col=1)
+    fig.add_trace(go.Bar(x=df.index, y=df['macd_histogram'], name='Histogram', marker_color='gray'), row=2, col=1)
+    
+    # RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], name='RSI', line=dict(color='purple')), row=3, col=1)
+    fig.add_hline(y=rsi_overbought, line_dash="dash", line_color="red", row=3, col=1)
+    fig.add_hline(y=rsi_oversold, line_dash="dash", line_color="green", row=3, col=1)
+    
+    # Signals (simplified as markers on price subplot for visibility)
+    buy_signals = df[df['signal'] == 'Buy (Long)']
+    sell_signals = df[df['signal'] == 'Sell (Short)']
+    fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['close'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='green'), name='Buy Signal'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['close'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='red'), name='Sell Signal'), row=1, col=1)
+    
+    fig.update_layout(height=800, title=f'{pair} Signal Plot', xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
 
 # Session state initialization
 if "bankroll" not in st.session_state:
@@ -438,6 +516,10 @@ if st.button("Open Trade"):
     else:
         st.error("Insufficient bankroll or invalid pair!")
 
+# Signal Plot for Selected Pair
+if st.checkbox("Show Signal Plot for Selected Pair"):
+    create_signal_plot(selected_pair)
+
 # Simulation logic (fetches live every 30s, but indicators update on refresh)
 if st.session_state.simulation_running:
     current_time = time.time()
@@ -572,12 +654,12 @@ st.subheader("Demo Notes")
 st.info("""
 - **Strategy**: Ultra-aggressive high-frequency approach using MACD momentum (MACD >0 or histogram increasing for long; <0 or decreasing for short) with extremely loose RSI filters (RSI <90 for long, >10 for short). Ignores SMA unless reinforced. Increased stake (15€) and wider SL (30€) for maximal risk. This will generate signals in nearly all conditions, leading to high trade volume and potential for rapid gains/losses.
 - **Indicators**: SMA (trend), RSI (momentum), MACD (momentum/histogram). Adjustable in sidebar.
-- **Data**: Attempts live from exchangerate.host (daily rates). Falls back to simulated data if API unavailable. Historical (30 days) used for indicators. Requires `pip install ta` for RSI/MACD calc.
+- **Data**: Attempts live from exchangerate.host (daily rates). Falls back to simulated data if API unavailable. Historical (30 days) used for indicators. Requires `pip install ta plotly` for RSI/MACD calc and plots.
 - **Signals**: Guide trade direction—override manually if needed. Auto-trading not implemented (demo focuses on signals).
 - **P&L**: Pip-based. TP/SL on price hits.
 - **Risk**: Extremely high-risk demo—frequent trades + wide SL can wipe out bankroll quickly. Educational only; backtest thoroughly.
 - **Enhancements**: Add more indicators (e.g., Bollinger Bands via ta), charts with plotly, or auto-trade on signals.
-- Run with: `streamlit run app.py` (requires `pip install streamlit pandas numpy requests ta`)
+- Run with: `streamlit run app.py` (requires `pip install streamlit pandas numpy requests ta plotly`)
 """)
 
 # Footer
