@@ -158,26 +158,49 @@ def generate_simulated_historical(pair, periods=100):
 # Function to calculate technical indicators with error handling
 def calculate_indicators(df):
     try:
-        # Ensure we have enough data
-        if len(df) < max(ma_period, rsi_period, macd_slow):
-            return df
+        # Create a copy to avoid modifying original
+        df_indicators = df.copy()
+        
+        # Ensure we have enough data for calculations
+        min_data_required = max(ma_period, rsi_period, macd_slow)
+        
+        if len(df_indicators) < min_data_required:
+            # Initialize columns with NaN if not enough data
+            df_indicators['MA'] = np.nan
+            df_indicators['RSI'] = np.nan
+            df_indicators['MACD'] = np.nan
+            df_indicators['MACD_Signal'] = np.nan
+            df_indicators['MACD_Histogram'] = np.nan
+            return df_indicators
         
         # Calculate Moving Average
-        df['MA'] = ta.trend.sma_indicator(df['close'], window=ma_period)
+        df_indicators['MA'] = ta.trend.sma_indicator(df_indicators['close'], window=ma_period)
         
-        # Calculate RSI - handle potential NaN values
-        df['RSI'] = ta.momentum.rsi(df['close'], window=rsi_period)
+        # Calculate RSI
+        df_indicators['RSI'] = ta.momentum.rsi(df_indicators['close'], window=rsi_period)
         
         # Calculate MACD
-        macd = ta.trend.MACD(df['close'], window_fast=macd_fast, window_slow=macd_slow, window_sign=macd_signal)
-        df['MACD'] = macd.macd()
-        df['MACD_Signal'] = macd.macd_signal()
-        df['MACD_Histogram'] = macd.macd_diff()
+        macd_indicator = ta.trend.MACD(
+            df_indicators['close'], 
+            window_fast=macd_fast, 
+            window_slow=macd_slow, 
+            window_sign=macd_signal
+        )
+        df_indicators['MACD'] = macd_indicator.macd()
+        df_indicators['MACD_Signal'] = macd_indicator.macd_signal()
+        df_indicators['MACD_Histogram'] = macd_indicator.macd_diff()
+        
+        return df_indicators
         
     except Exception as e:
-        st.warning(f"Indicator calculation warning: {e}")
-    
-    return df
+        st.error(f"Error calculating indicators: {e}")
+        # Return original dataframe if calculation fails
+        df['MA'] = np.nan
+        df['RSI'] = np.nan
+        df['MACD'] = np.nan
+        df['MACD_Signal'] = np.nan
+        df['MACD_Histogram'] = np.nan
+        return df
 
 # Function to generate trading signals with safe data access
 def generate_signals(df):
@@ -190,11 +213,12 @@ def generate_signals(df):
         latest = df.iloc[-1]
         previous = df.iloc[-2]
         
-        # Check if we have valid indicator values
-        has_valid_rsi = pd.notna(latest['RSI']) and pd.notna(previous['RSI'])
-        has_valid_macd = (pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']) and 
+        # Check if we have valid indicator values (not NaN)
+        has_valid_rsi = 'RSI' in df.columns and pd.notna(latest['RSI']) and pd.notna(previous['RSI'])
+        has_valid_macd = ('MACD' in df.columns and 'MACD_Signal' in df.columns and 
+                         pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']) and 
                          pd.notna(previous['MACD']) and pd.notna(previous['MACD_Signal']))
-        has_valid_ma = pd.notna(latest['MA']) and pd.notna(previous['MA'])
+        has_valid_ma = 'MA' in df.columns and pd.notna(latest['MA']) and pd.notna(previous['MA'])
         
         # RSI signals
         if has_valid_rsi:
@@ -218,7 +242,9 @@ def generate_signals(df):
                 signals.append("Price below MA - SELL")
                 
     except Exception as e:
-        st.error(f"Error generating signals: {e}")
+        # Don't show error for missing data, just return no signals
+        if "RSI" not in str(e):
+            st.error(f"Error generating signals: {e}")
     
     return signals
 
@@ -228,11 +254,16 @@ def simulate_price_movement(pair):
         current_price = st.session_state.current_prices[pair]
         volatility = 0.0005
         
+        # Initialize price history if not exists
+        if pair not in st.session_state.price_history:
+            st.session_state.price_history[pair] = generate_simulated_historical(pair, 100)
+        
         # Add some trend based on recent signals if available
         trend_bias = 0
-        if pair in st.session_state.price_history and len(st.session_state.price_history[pair]) > 10:
-            df = st.session_state.price_history[pair]
-            signals = generate_signals(df)
+        df = st.session_state.price_history[pair]
+        if len(df) > 10:
+            df_with_indicators = calculate_indicators(df)
+            signals = generate_signals(df_with_indicators)
             for signal in signals:
                 if "BUY" in signal:
                     trend_bias += 0.0002
@@ -242,10 +273,6 @@ def simulate_price_movement(pair):
         change = np.random.normal(trend_bias, volatility)
         new_price = current_price * (1 + change)
         st.session_state.current_prices[pair] = new_price
-        
-        # Initialize price history if not exists
-        if pair not in st.session_state.price_history:
-            st.session_state.price_history[pair] = generate_simulated_historical(pair, 100)
         
         # Add new price data
         new_row = pd.DataFrame([{
@@ -288,7 +315,8 @@ def execute_trade(pair, direction, entry_price):
 # Function to update open trades
 def update_trades():
     try:
-        for trade in st.session_state.open_trades[:]:
+        trades_to_remove = []
+        for i, trade in enumerate(st.session_state.open_trades):
             if trade['status'] == 'open':
                 current_price = st.session_state.current_prices[trade['pair']]
                 pip_size = pip_sizes[trade['pair']]
@@ -309,16 +337,27 @@ def update_trades():
                     trade['close_price'] = current_price
                     st.session_state.bank_balance += stake + profit_loss
                     st.session_state.trade_history.append(trade.copy())
-                    st.session_state.open_trades.remove(trade)
+                    trades_to_remove.append(i)
                 elif profit_loss <= -stop_loss:
                     trade['status'] = 'closed'
                     trade['close_time'] = datetime.now()
                     trade['close_price'] = current_price
                     st.session_state.bank_balance += stake + profit_loss
                     st.session_state.trade_history.append(trade.copy())
-                    st.session_state.open_trades.remove(trade)
+                    trades_to_remove.append(i)
+        
+        # Remove closed trades in reverse order
+        for i in sorted(trades_to_remove, reverse=True):
+            if i < len(st.session_state.open_trades):
+                st.session_state.open_trades.pop(i)
+                
     except Exception as e:
         st.error(f"Error updating trades: {e}")
+
+# Initialize price history for all pairs
+for pair in trading_pairs:
+    if pair not in st.session_state.price_history:
+        st.session_state.price_history[pair] = generate_simulated_historical(pair, 100)
 
 # Main application layout
 st.markdown('<h1 class="main-header">📈 Real-Time Trading Dashboard</h1>', unsafe_allow_html=True)
@@ -362,6 +401,11 @@ with st.sidebar:
         st.session_state.last_refresh = datetime.now()
         st.rerun()
 
+# Update prices and trades
+for pair in trading_pairs:
+    simulate_price_movement(pair)
+update_trades()
+
 # Main content
 col1, col2, col3 = st.columns(3)
 
@@ -394,11 +438,6 @@ with col3:
 # Price and chart section
 st.markdown("---")
 
-# Update prices and trades
-for pair in trading_pairs:
-    simulate_price_movement(pair)
-update_trades()
-
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -408,10 +447,10 @@ with col1:
         df = st.session_state.price_history[selected_pair].copy()
         
         # Calculate indicators
-        df = calculate_indicators(df)
+        df_with_indicators = calculate_indicators(df)
         
         # Create chart only if we have enough data
-        if len(df) > ma_period:
+        if len(df_with_indicators) > ma_period and pd.notna(df_with_indicators['MA'].iloc[-1]):
             fig = make_subplots(rows=3, cols=1, 
                                shared_xaxes=True,
                                vertical_spacing=0.05,
@@ -419,25 +458,51 @@ with col1:
                                row_heights=[0.5, 0.25, 0.25])
             
             # Price and MA
-            fig.add_trace(go.Scatter(x=df['date'], y=df['close'], name='Price', line=dict(color='#00ff88')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['date'], y=df['MA'], name=f'MA{ma_period}', line=dict(color='#ff4444', dash='dash')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_with_indicators['date'], 
+                                   y=df_with_indicators['close'], 
+                                   name='Price', 
+                                   line=dict(color='#00ff88')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_with_indicators['date'], 
+                                   y=df_with_indicators['MA'], 
+                                   name=f'MA{ma_period}', 
+                                   line=dict(color='#ff4444', dash='dash')), row=1, col=1)
             
-            # RSI
-            rsi_data = df['RSI'].dropna()
-            if len(rsi_data) > 0:
-                fig.add_trace(go.Scatter(x=df['date'], y=df['RSI'], name='RSI', line=dict(color='#ffaa00')), row=2, col=1)
+            # RSI - only if we have valid data
+            valid_rsi_data = df_with_indicators['RSI'].dropna()
+            if len(valid_rsi_data) > 0:
+                fig.add_trace(go.Scatter(x=df_with_indicators['date'], 
+                                       y=df_with_indicators['RSI'], 
+                                       name='RSI', 
+                                       line=dict(color='#ffaa00')), row=2, col=1)
                 fig.add_hline(y=rsi_overbought, line_dash="dash", line_color="red", row=2, col=1)
                 fig.add_hline(y=rsi_oversold, line_dash="dash", line_color="green", row=2, col=1)
+            else:
+                fig.add_annotation(x=0.5, y=0.5, xref="paper", yref="paper",
+                                 text="RSI data not available yet",
+                                 showarrow=False, row=2, col=1)
             
-            # MACD
-            if 'MACD' in df.columns and 'MACD_Signal' in df.columns:
-                macd_data = df['MACD'].dropna()
-                if len(macd_data) > 0:
-                    fig.add_trace(go.Scatter(x=df['date'], y=df['MACD'], name='MACD', line=dict(color='#00ff88')), row=3, col=1)
-                    fig.add_trace(go.Scatter(x=df['date'], y=df['MACD_Signal'], name='Signal', line=dict(color='#ff4444')), row=3, col=1)
+            # MACD - only if we have valid data
+            if 'MACD' in df_with_indicators.columns:
+                valid_macd_data = df_with_indicators['MACD'].dropna()
+                if len(valid_macd_data) > 0:
+                    fig.add_trace(go.Scatter(x=df_with_indicators['date'], 
+                                           y=df_with_indicators['MACD'], 
+                                           name='MACD', 
+                                           line=dict(color='#00ff88')), row=3, col=1)
+                    fig.add_trace(go.Scatter(x=df_with_indicators['date'], 
+                                           y=df_with_indicators['MACD_Signal'], 
+                                           name='Signal', 
+                                           line=dict(color='#ff4444')), row=3, col=1)
                     
-                    if 'MACD_Histogram' in df.columns:
-                        fig.add_trace(go.Bar(x=df['date'], y=df['MACD_Histogram'], name='Histogram', marker_color='#777777'), row=3, col=1)
+                    if 'MACD_Histogram' in df_with_indicators.columns:
+                        fig.add_trace(go.Bar(x=df_with_indicators['date'], 
+                                           y=df_with_indicators['MACD_Histogram'], 
+                                           name='Histogram', 
+                                           marker_color='#777777'), row=3, col=1)
+                else:
+                    fig.add_annotation(x=0.5, y=0.5, xref="paper", yref="paper",
+                                     text="MACD data not available yet",
+                                     showarrow=False, row=3, col=1)
             
             fig.update_layout(height=600, showlegend=True, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
@@ -451,8 +516,8 @@ with col2:
     
     if selected_pair in st.session_state.price_history:
         df = st.session_state.price_history[selected_pair].copy()
-        df = calculate_indicators(df)
-        signals = generate_signals(df)
+        df_with_indicators = calculate_indicators(df)
+        signals = generate_signals(df_with_indicators)
         
         if signals:
             for signal in signals:
