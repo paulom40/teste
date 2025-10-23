@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 # Page configuration with modern theme
 st.set_page_config(
-    page_title="Auto Trading Bot - Multi-Pair Signal Scanner",
+    page_title="Auto Trading Bot - 2 Indicator Agreement",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -70,18 +70,9 @@ st.markdown("""
         text-align: center;
         font-weight: bold;
     }
-    .signal-weak-buy {
-        background: linear-gradient(135deg, #aaffaa 0%, #88cc88 100%);
-        color: black;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.2rem 0;
-        text-align: center;
-        font-weight: bold;
-    }
-    .signal-weak-sell {
-        background: linear-gradient(135deg, #ffaaaa 0%, #cc8888 100%);
-        color: black;
+    .signal-mixed {
+        background: linear-gradient(135deg, #ffaa00 0%, #ff8800 100%);
+        color: white;
         padding: 0.5rem;
         border-radius: 5px;
         margin: 0.2rem 0;
@@ -120,14 +111,9 @@ st.markdown("""
         color: #00ff88;
         font-weight: bold;
     }
-    .indicator-inactive {
-        color: #ff4444;
-    }
-    .signal-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 1rem;
-        margin: 1rem 0;
+    .indicator-conflict {
+        color: #ffaa00;
+        font-weight: bold;
     }
     .pair-card {
         background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
@@ -135,6 +121,15 @@ st.markdown("""
         border-radius: 10px;
         color: white;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .agreement-buy {
+        border: 3px solid #00ff88;
+    }
+    .agreement-sell {
+        border: 3px solid #ff4444;
+    }
+    .no-agreement {
+        border: 3px solid #ffaa00;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -156,7 +151,7 @@ macd_fast = 12
 macd_slow = 26
 macd_signal = 9
 
-# Signal threshold - Require exactly 2 indicators
+# Signal threshold - Require BOTH indicators to agree
 REQUIRED_INDICATORS = 2
 
 # Pip sizes for pairs
@@ -213,7 +208,8 @@ for pair in trading_pairs:
             'sell_indicators': [],
             'time': datetime.now(),
             'buy_count': 0,
-            'sell_count': 0
+            'sell_count': 0,
+            'agreement': 'NONE'  # NONE, BUY, SELL, MIXED
         }
 
 # Function to generate simulated historical prices
@@ -269,7 +265,7 @@ def calculate_indicators(df):
     except Exception as e:
         return df
 
-# Function to detect trading signals for ALL pairs
+# Function to detect trading signals for ALL pairs - UPDATED FOR AGREEMENT
 def scan_all_pairs_signals():
     all_signals = {}
     
@@ -278,7 +274,7 @@ def scan_all_pairs_signals():
             df = st.session_state.price_history[pair].copy()
             df_with_indicators = calculate_indicators(df)
             
-            signals, buy_indicators, sell_indicators, _ = detect_trading_signals(df_with_indicators)
+            signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
             
             # Store signals for this pair
             all_signals[pair] = {
@@ -288,6 +284,7 @@ def scan_all_pairs_signals():
                 'time': datetime.now(),
                 'buy_count': len(buy_indicators),
                 'sell_count': len(sell_indicators),
+                'agreement': agreement,
                 'current_price': st.session_state.current_prices[pair],
                 'price_change': calculate_price_change(pair)
             }
@@ -307,14 +304,14 @@ def calculate_price_change(pair):
         return change
     return 0
 
-# Function to detect trading signals with EXACTLY 2 indicator requirement
+# Function to detect trading signals with BOTH INDICATORS AGREEMENT
 def detect_trading_signals(df):
     buy_indicators = []
     sell_indicators = []
     
     try:
         if len(df) < max(ma_slow, macd_slow, rsi_period) + 5:
-            return [], [], [], []
+            return [], [], [], 'NONE'
             
         latest = df.iloc[-1]
         previous = df.iloc[-2]
@@ -324,7 +321,7 @@ def detect_trading_signals(df):
                            ['MA_Fast', 'MA_Slow', 'RSI', 'MACD', 'MACD_Signal'])
         
         if not has_valid_data:
-            return [], [], [], []
+            return [], [], [], 'NONE'
         
         # 1. Moving Average Crossover Signal
         if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']):
@@ -347,23 +344,30 @@ def detect_trading_signals(df):
             elif latest['MACD'] < latest['MACD_Signal'] and previous['MACD'] >= previous['MACD_Signal']:
                 sell_indicators.append("MACD Bearish")
         
-        # Determine if we have EXACTLY 2 indicators agreeing
-        buy_signal = len(buy_indicators) >= REQUIRED_INDICATORS
-        sell_signal = len(sell_indicators) >= REQUIRED_INDICATORS
+        # Determine agreement type
+        total_buy = len(buy_indicators)
+        total_sell = len(sell_indicators)
         
-        # Return signals and indicator details
-        signals = []
-        if buy_signal:
-            signals.append(("BUY", len(buy_indicators), buy_indicators))
-        if sell_signal:
-            signals.append(("SELL", len(sell_indicators), sell_indicators))
+        # Check for perfect agreement (both indicators say the same thing)
+        if total_buy == REQUIRED_INDICATORS and total_sell == 0:
+            agreement = 'BUY'
+            signals = [("BUY", total_buy, buy_indicators)]
+        elif total_sell == REQUIRED_INDICATORS and total_buy == 0:
+            agreement = 'SELL'
+            signals = [("SELL", total_sell, sell_indicators)]
+        elif total_buy > 0 and total_sell > 0:
+            agreement = 'MIXED'
+            signals = []
+        else:
+            agreement = 'NONE'
+            signals = []
             
-        return signals, buy_indicators, sell_indicators, []
+        return signals, buy_indicators, sell_indicators, agreement
         
     except Exception as e:
-        return [], [], [], []
+        return [], [], [], 'NONE'
 
-# Function to check if we can open a new trade for a pair - UPDATED: No max trades limit
+# Function to check if we can open a new trade for a pair
 def can_open_trade(pair, direction):
     # Count current open trades for this pair in the same direction
     same_direction_trades = [t for t in st.session_state.open_trades 
@@ -379,7 +383,7 @@ def can_open_trade(pair, direction):
     
     return True
 
-# Function to execute auto trade based on signals for ALL pairs
+# Function to execute auto trade based on signals for ALL pairs - UPDATED FOR AGREEMENT
 def execute_auto_trades():
     if not st.session_state.auto_trading:
         return []
@@ -391,17 +395,18 @@ def execute_auto_trades():
     
     for pair, signal_info in all_signals.items():
         signals = signal_info.get('signals', [])
+        agreement = signal_info.get('agreement', 'NONE')
         
-        # Execute trades based on signals with EXACTLY 2 indicators
+        # Execute trades only when BOTH indicators agree on the same direction
         for signal_type, count, indicators in signals:
-            if signal_type == "BUY" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'BUY'):
+            if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
                 if execute_trade(pair, 'BUY', st.session_state.current_prices[pair]):
-                    auto_trades_executed.append(f"AUTO BUY {pair} ({count} indicators: {', '.join(indicators)})")
+                    auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
             
-            elif signal_type == "SELL" and count >= REQUIRED_INDICATORS and can_open_trade(pair, 'SELL'):
+            elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
                 if execute_trade(pair, 'SELL', st.session_state.current_prices[pair]):
-                    auto_trades_executed.append(f"AUTO SELL {pair} ({count} indicators: {', '.join(indicators)})")
+                    auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
     
     return auto_trades_executed
@@ -441,12 +446,11 @@ def simulate_all_prices_movement():
             trend_bias = 0
             if pair in st.session_state.signal_history:
                 signal_info = st.session_state.signal_history[pair]
-                buy_count = signal_info.get('buy_count', 0)
-                sell_count = signal_info.get('sell_count', 0)
-                if buy_count > sell_count:
-                    trend_bias += 0.0002
-                elif sell_count > buy_count:
-                    trend_bias -= 0.0002
+                agreement = signal_info.get('agreement', 'NONE')
+                if agreement == 'BUY':
+                    trend_bias += 0.0003
+                elif agreement == 'SELL':
+                    trend_bias -= 0.0003
             
             change = np.random.normal(trend_bias, volatility)
             new_price = current_price * (1 + change)
@@ -520,7 +524,7 @@ for pair in trading_pairs:
         st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
 
 # Main application layout
-st.markdown('<h1 class="main-header">🤖 Multi-Pair Signal Scanner</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 2 Indicator Agreement Strategy</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -542,7 +546,7 @@ with st.sidebar:
     st.write(f"**Stake per trade:** €{stake}")
     st.write(f"**Profit Target:** +{profit_target} pips")
     st.write(f"**Stop Loss:** -{stop_loss} pips")
-    st.write(f"**Required Indicators:** {REQUIRED_INDICATORS}")
+    st.write(f"**Required Agreement:** {REQUIRED_INDICATORS} indicators")
     st.write(f"**Bank Balance:** €{st.session_state.bank_balance:.2f}")
     
     st.markdown("---")
@@ -552,10 +556,13 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("## 🎯 Trading Rules")
-    st.write(f"• Enter only when **{REQUIRED_INDICATORS} indicators** agree")
+    st.write(f"• Enter only when **BOTH indicators agree**")
     st.write("• **No same-direction duplicates** per pair")
     st.write("• **No maximum trades** per pair")
     st.write("• 1:1 Risk/Reward ratio")
+    st.write("• **BUY:** Both indicators say BUY")
+    st.write("• **SELL:** Both indicators say SELL")
+    st.write("• **NO TRADE:** Mixed signals")
 
 # Update prices and execute auto trades
 simulate_all_prices_movement()
@@ -612,9 +619,9 @@ if auto_trades_executed:
         else:
             st.error(f"❌ {trade}")
 
-# ALL PAIRS SIGNAL DASHBOARD
+# ALL PAIRS SIGNAL DASHBOARD - UPDATED FOR AGREEMENT
 st.markdown("---")
-st.markdown("## 📊 All Pairs Signal Dashboard")
+st.markdown("## 📊 All Pairs Agreement Dashboard")
 
 # Create a grid layout for all pairs
 cols = st.columns(3)
@@ -624,6 +631,7 @@ for idx, pair in enumerate(trading_pairs):
         signal_info = st.session_state.all_signals.get(pair, {})
         buy_count = signal_info.get('buy_count', 0)
         sell_count = signal_info.get('sell_count', 0)
+        agreement = signal_info.get('agreement', 'NONE')
         current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
         price_change = signal_info.get('price_change', 0)
         
@@ -639,38 +647,38 @@ for idx, pair in enumerate(trading_pairs):
         else:
             price_display = f"{current_price:.4f}"
         
-        # Determine signal type and styling
-        if buy_count >= REQUIRED_INDICATORS:
+        # Determine signal type and styling based on AGREEMENT
+        if agreement == 'BUY':
             signal_class = "signal-strong-buy"
-            signal_text = "STRONG BUY"
+            signal_text = "BOTH SAY BUY"
             signal_emoji = "🟢"
-        elif sell_count >= REQUIRED_INDICATORS:
+            border_class = "agreement-buy"
+        elif agreement == 'SELL':
             signal_class = "signal-strong-sell"
-            signal_text = "STRONG SELL"
+            signal_text = "BOTH SAY SELL"
             signal_emoji = "🔴"
-        elif buy_count == 1:
-            signal_class = "signal-weak-buy"
-            signal_text = "WEAK BUY"
+            border_class = "agreement-sell"
+        elif agreement == 'MIXED':
+            signal_class = "signal-mixed"
+            signal_text = "MIXED SIGNALS"
             signal_emoji = "🟡"
-        elif sell_count == 1:
-            signal_class = "signal-weak-sell"
-            signal_text = "WEAK SELL"
-            signal_emoji = "🟠"
+            border_class = "no-agreement"
         else:
             signal_class = "signal-no-trade"
-            signal_text = "NO SIGNAL"
+            signal_text = "NO AGREEMENT"
             signal_emoji = "⚪"
+            border_class = "no-agreement"
         
         # Price change styling
         change_color = "#00ff88" if price_change >= 0 else "#ff4444"
         change_emoji = "📈" if price_change >= 0 else "📉"
         
         st.markdown(f"""
-        <div class="pair-card">
+        <div class="pair-card {border_class}">
             <h3>{pair} {signal_emoji}</h3>
             <div class="{signal_class}">
                 {signal_text}<br>
-                {buy_count}/{REQUIRED_INDICATORS} Buy • {sell_count}/{REQUIRED_INDICATORS} Sell
+                Buy: {buy_count}/2 • Sell: {sell_count}/2
             </div>
             <div style="margin-top: 0.5rem;">
                 <strong>Price: {price_display}</strong><br>
@@ -687,70 +695,82 @@ for idx, pair in enumerate(trading_pairs):
             buy_indicators = signal_info.get('buy_indicators', [])
             sell_indicators = signal_info.get('sell_indicators', [])
             
-            st.write("**Active Buy Signals:**")
+            st.write("**Buy Indicators:**")
             for indicator in buy_indicators:
-                st.write(f"✅ {indicator}")
+                st.markdown(f"<span class='indicator-active'>✅ {indicator}</span>", unsafe_allow_html=True)
             if not buy_indicators:
                 st.write("None")
             
-            st.write("**Active Sell Signals:**")
+            st.write("**Sell Indicators:**")
             for indicator in sell_indicators:
-                st.write(f"❌ {indicator}")
+                st.markdown(f"<span class='indicator-active'>❌ {indicator}</span>", unsafe_allow_html=True)
             if not sell_indicators:
                 st.write("None")
             
-            # Trading recommendation
-            if buy_count >= REQUIRED_INDICATORS:
+            # Agreement status
+            if agreement == 'BUY':
                 if buy_trades == 0:
-                    st.success(f"🎯 TRADING SIGNAL: OPEN BUY {pair}")
+                    st.success(f"🎯 **PERFECT BUY AGREEMENT** - Both indicators say BUY!")
                 else:
-                    st.info(f"📊 Already have BUY position on {pair}")
-            elif sell_count >= REQUIRED_INDICATORS:
+                    st.info(f"📊 Already have BUY position - Both indicators still agree on BUY")
+            elif agreement == 'SELL':
                 if sell_trades == 0:
-                    st.error(f"🎯 TRADING SIGNAL: OPEN SELL {pair}")
+                    st.error(f"🎯 **PERFECT SELL AGREEMENT** - Both indicators say SELL!")
                 else:
-                    st.info(f"📊 Already have SELL position on {pair}")
+                    st.info(f"📊 Already have SELL position - Both indicators still agree on SELL")
+            elif agreement == 'MIXED':
+                st.warning(f"⚠️ **MIXED SIGNALS** - Indicators disagree (BUY: {buy_count}, SELL: {sell_count})")
             else:
-                st.warning("⏸️ Waiting for signal confirmation")
+                st.info("⏸️ **NO AGREEMENT** - Waiting for both indicators to agree")
 
-# Signal Summary
+# Agreement Summary
 st.markdown("---")
-st.markdown("## 📈 Signal Summary")
+st.markdown("## 📈 Agreement Summary")
 
-strong_buy_pairs = [p for p in trading_pairs 
-                   if st.session_state.all_signals.get(p, {}).get('buy_count', 0) >= REQUIRED_INDICATORS]
-strong_sell_pairs = [p for p in trading_pairs 
-                    if st.session_state.all_signals.get(p, {}).get('sell_count', 0) >= REQUIRED_INDICATORS]
+perfect_buy_pairs = [p for p in trading_pairs 
+                    if st.session_state.all_signals.get(p, {}).get('agreement') == 'BUY']
+perfect_sell_pairs = [p for p in trading_pairs 
+                     if st.session_state.all_signals.get(p, {}).get('agreement') == 'SELL']
+mixed_pairs = [p for p in trading_pairs 
+              if st.session_state.all_signals.get(p, {}).get('agreement') == 'MIXED']
 
 # Filter pairs that can actually be traded (no same-direction duplicates)
-tradable_buy_pairs = [p for p in strong_buy_pairs 
+tradable_buy_pairs = [p for p in perfect_buy_pairs 
                      if len([t for t in st.session_state.open_trades if t['pair'] == p and t['direction'] == 'BUY']) == 0]
-tradable_sell_pairs = [p for p in strong_sell_pairs 
+tradable_sell_pairs = [p for p in perfect_sell_pairs 
                       if len([t for t in st.session_state.open_trades if t['pair'] == p and t['direction'] == 'SELL']) == 0]
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("Strong Buy Signals", f"{len(tradable_buy_pairs)}/{len(strong_buy_pairs)} tradable")
+    st.metric("Perfect BUY Agreement", f"{len(tradable_buy_pairs)}/{len(perfect_buy_pairs)} tradable")
     if tradable_buy_pairs:
-        st.write("**Pairs ready for BUY:**")
+        st.write("**Ready to BUY:**")
         for pair in tradable_buy_pairs:
-            st.success(f"✅ {pair} - READY TO BUY")
-    elif strong_buy_pairs:
-        st.write("**Pairs with BUY signals (already trading):**")
-        for pair in strong_buy_pairs:
+            st.success(f"✅ {pair} - BOTH indicators say BUY")
+    elif perfect_buy_pairs:
+        st.write("**Already trading BUY:**")
+        for pair in perfect_buy_pairs:
             st.info(f"📊 {pair} - Already have BUY position")
 
 with col2:
-    st.metric("Strong Sell Signals", f"{len(tradable_sell_pairs)}/{len(strong_sell_pairs)} tradable")
+    st.metric("Perfect SELL Agreement", f"{len(tradable_sell_pairs)}/{len(perfect_sell_pairs)} tradable")
     if tradable_sell_pairs:
-        st.write("**Pairs ready for SELL:**")
+        st.write("**Ready to SELL:**")
         for pair in tradable_sell_pairs:
-            st.error(f"❌ {pair} - READY TO SELL")
-    elif strong_sell_pairs:
-        st.write("**Pairs with SELL signals (already trading):**")
-        for pair in strong_sell_pairs:
+            st.error(f"❌ {pair} - BOTH indicators say SELL")
+    elif perfect_sell_pairs:
+        st.write("**Already trading SELL:**")
+        for pair in perfect_sell_pairs:
             st.info(f"📊 {pair} - Already have SELL position")
+
+with col3:
+    st.metric("Mixed Signals", len(mixed_pairs))
+    if mixed_pairs:
+        st.write("**Indicators disagree:**")
+        for pair in mixed_pairs:
+            signal_info = st.session_state.all_signals.get(pair, {})
+            st.warning(f"⚠️ {pair} - BUY: {signal_info.get('buy_count', 0)}, SELL: {signal_info.get('sell_count', 0)}")
 
 # Detailed Analysis for Selected Pair
 st.markdown("---")
@@ -800,12 +820,13 @@ with col1:
         st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.markdown("## 📊 Current Signals")
+    st.markdown("## 📊 Current Agreement")
     
     # Safe access to signal info
     signal_info = st.session_state.all_signals.get(selected_pair, {})
     buy_count = signal_info.get('buy_count', 0)
     sell_count = signal_info.get('sell_count', 0)
+    agreement = signal_info.get('agreement', 'NONE')
     buy_indicators = signal_info.get('buy_indicators', [])
     sell_indicators = signal_info.get('sell_indicators', [])
     
@@ -814,36 +835,39 @@ with col2:
     buy_trades = len([t for t in current_trades if t['direction'] == 'BUY'])
     sell_trades = len([t for t in current_trades if t['direction'] == 'SELL'])
     
+    st.metric("Agreement Status", agreement)
     st.metric("Buy Indicators", f"{buy_count}/{REQUIRED_INDICATORS}")
     st.metric("Sell Indicators", f"{sell_count}/{REQUIRED_INDICATORS}")
     st.metric("Open BUY Trades", buy_trades)
     st.metric("Open SELL Trades", sell_trades)
     
-    st.markdown("### Active Buy Signals:")
+    st.markdown("### Buy Signals:")
     for indicator in buy_indicators:
         st.markdown(f"<span class='indicator-active'>✅ {indicator}</span>", unsafe_allow_html=True)
     if not buy_indicators:
-        st.write("No buy signals")
+        st.write("None")
     
-    st.markdown("### Active Sell Signals:")
+    st.markdown("### Sell Signals:")
     for indicator in sell_indicators:
         st.markdown(f"<span class='indicator-active'>❌ {indicator}</span>", unsafe_allow_html=True)
     if not sell_indicators:
-        st.write("No sell signals")
+        st.write("None")
     
-    # Trading status
-    if buy_count >= REQUIRED_INDICATORS:
+    # Trading status based on AGREEMENT
+    if agreement == 'BUY':
         if buy_trades == 0:
-            st.success(f"✅ READY TO BUY - {buy_count} indicators confirming")
+            st.success(f"🎯 **PERFECT BUY AGREEMENT**\n\nBoth indicators confirm BUY signal!")
         else:
-            st.info(f"📊 Already trading BUY - {buy_trades} open position(s)")
-    elif sell_count >= REQUIRED_INDICATORS:
+            st.info(f"📊 **Already Trading BUY**\n\nBoth indicators still agree on BUY")
+    elif agreement == 'SELL':
         if sell_trades == 0:
-            st.error(f"❌ READY TO SELL - {sell_count} indicators confirming")
+            st.error(f"🎯 **PERFECT SELL AGREEMENT**\n\nBoth indicators confirm SELL signal!")
         else:
-            st.info(f"📊 Already trading SELL - {sell_trades} open position(s)")
+            st.info(f"📊 **Already Trading SELL**\n\nBoth indicators still agree on SELL")
+    elif agreement == 'MIXED':
+        st.warning(f"⚠️ **MIXED SIGNALS**\n\nIndicators disagree: {buy_count} BUY vs {sell_count} SELL")
     else:
-        st.warning(f"⏸️ WAITING - Need {REQUIRED_INDICATORS} indicators")
+        st.info("⏸️ **NO AGREEMENT**\n\nWaiting for both indicators to agree")
 
 # Trades section
 st.markdown("---")
