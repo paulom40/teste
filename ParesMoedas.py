@@ -9,14 +9,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
-""", unsafe_allow_html=True)
-
 # Page configuration with modern theme
 st.set_page_config(
     page_title="Auto Trading Bot - 2 Indicator Agreement",
@@ -574,11 +566,11 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Start Auto Trading", use_container_width=True, type="primary"):
+        if st.button("🚀 Start Auto Trading", width='stretch', type="primary"):
             st.session_state.auto_trading = True
             st.success("Auto Trading Started!")
     with col2:
-        if st.button("🛑 Stop Auto Trading", use_container_width=True, type="secondary"):
+        if st.button("🛑 Stop Auto Trading", width='stretch', type="secondary"):
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
@@ -708,7 +700,7 @@ with st.sidebar:
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Apply Parameters Button
-    if st.button("🔄 Apply Parameters & Reset", type="primary", use_container_width=True):
+    if st.button("🔄 Apply Parameters & Reset", type="primary", width='stretch'):
         reset_trading_system()
         st.success("Parameters applied and system reset!")
     
@@ -962,7 +954,7 @@ with tab1:
             'type': 'Type',
             'duration': 'Duration (hrs)'
         })
-        st.dataframe(closed_df_display, use_container_width=True, hide_index=True)
+        st.dataframe(closed_df_display, width='stretch', hide_index=True)
         
         # Total P&L summary
         total_pnl_closed = closed_df['profit_loss'].sum()
@@ -992,7 +984,7 @@ with tab2:
             'type': 'Type',
             'duration': 'Duration (hrs)'
         })
-        st.dataframe(open_df_display, use_container_width=True, hide_index=True)
+        st.dataframe(open_df_display, width='stretch', hide_index=True)
         
         # Total Unrealized P&L summary
         total_unrealized = open_df['profit_loss'].sum()
