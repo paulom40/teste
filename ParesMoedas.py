@@ -877,8 +877,6 @@ for idx, pair in enumerate(trading_pairs):
             else:
                 st.info("⏸️ **NO AGREEMENT** - Waiting for both indicators to agree")
 
-# [Rest of the code remains the same for agreement summary, detailed analysis, trades section...]
-
 # Agreement Summary
 st.markdown("---")
 st.markdown("## 📈 Agreement Summary")
@@ -926,6 +924,73 @@ with col3:
         for pair in mixed_pairs:
             signal_info = st.session_state.all_signals.get(pair, {})
             st.warning(f"⚠️ {pair} - BUY: {signal_info.get('buy_count', 0)}, SELL: {signal_info.get('sell_count', 0)}")
+
+# Trade Summary Table
+st.markdown("---")
+st.markdown("## 📋 Trade Summary Table")
+
+tab1, tab2 = st.tabs(["Closed Trades", "Open Trades"])
+
+with tab1:
+    if st.session_state.trade_history:
+        closed_df = pd.DataFrame(st.session_state.trade_history)
+        # Select and format relevant columns
+        closed_df_display = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'stake', 'time', 'close_time', 'type']].copy()
+        closed_df_display['profit_loss'] = closed_df_display['profit_loss'].round(2)
+        closed_df_display['entry_price'] = closed_df_display['entry_price'].round(4)
+        closed_df_display['close_price'] = closed_df_display['close_price'].round(4)
+        closed_df_display['duration'] = (pd.to_datetime(closed_df_display['close_time']) - pd.to_datetime(closed_df_display['time'])).dt.total_seconds() / 3600  # Hours
+        closed_df_display['duration'] = closed_df_display['duration'].round(2)
+        closed_df_display = closed_df_display.rename(columns={
+            'id': 'ID',
+            'pair': 'Pair',
+            'direction': 'Direction',
+            'entry_price': 'Entry Price',
+            'close_price': 'Exit Price',
+            'profit_loss': 'P&L (€)',
+            'stake': 'Stake (€)',
+            'time': 'Open Time',
+            'close_time': 'Close Time',
+            'type': 'Type',
+            'duration': 'Duration (hrs)'
+        })
+        st.dataframe(closed_df_display, use_container_width=True, hide_index=True)
+        
+        # Total P&L summary
+        total_pnl_closed = closed_df['profit_loss'].sum()
+        st.metric("Total P&L (Closed Trades)", f"€{total_pnl_closed:.2f}")
+    else:
+        st.info("No closed trades yet.")
+
+with tab2:
+    if st.session_state.open_trades:
+        open_df = pd.DataFrame(st.session_state.open_trades)
+        # Select and format relevant columns
+        open_df_display = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'stake', 'time', 'type']].copy()
+        open_df_display['profit_loss'] = open_df_display['profit_loss'].round(2)
+        open_df_display['entry_price'] = open_df_display['entry_price'].round(4)
+        open_df_display['current_price'] = open_df_display['current_price'].round(4)
+        open_df_display['duration'] = (pd.to_datetime(datetime.now()) - pd.to_datetime(open_df_display['time'])).dt.total_seconds() / 3600  # Hours
+        open_df_display['duration'] = open_df_display['duration'].round(2)
+        open_df_display = open_df_display.rename(columns={
+            'id': 'ID',
+            'pair': 'Pair',
+            'direction': 'Direction',
+            'entry_price': 'Entry Price',
+            'current_price': 'Current Price',
+            'profit_loss': 'Unrealized P&L (€)',
+            'stake': 'Stake (€)',
+            'time': 'Open Time',
+            'type': 'Type',
+            'duration': 'Duration (hrs)'
+        })
+        st.dataframe(open_df_display, use_container_width=True, hide_index=True)
+        
+        # Total Unrealized P&L summary
+        total_unrealized = open_df['profit_loss'].sum()
+        st.metric("Total Unrealized P&L", f"€{total_unrealized:.2f}")
+    else:
+        st.info("No open trades.")
 
 # Auto-refresh
 st.markdown("---")
