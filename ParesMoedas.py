@@ -8,6 +8,13 @@ import ta  # Technical Analysis library
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
 
 # Page configuration with modern theme
 st.set_page_config(
