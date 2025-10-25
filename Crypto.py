@@ -145,6 +145,15 @@ st.markdown("""
         margin: 0.5rem 0;
         border-left: 4px solid #667eea;
     }
+    .risk-warning {
+        background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        color: white;
+        padding: 0.5rem;
+        border-radius: 5px;
+        margin: 0.2rem 0;
+        text-align: center;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -171,7 +180,12 @@ DEFAULT_PARAMS = {
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
-    'required_indicators': 2
+    'required_indicators': 2,
+    # Risk Management Parameters
+    'max_open_trades': 3,
+    'max_risk_percent': 2.0,  # % of balance per trade
+    'daily_loss_limit': 5.0,   # % of daily start balance
+    'max_drawdown': 10.0       # % from peak balance
 }
 
 # Initialize session state with parameters
@@ -192,6 +206,18 @@ if 'last_auto_trade' not in st.session_state:
     st.session_state.last_auto_trade = {}
 if 'all_signals' not in st.session_state:
     st.session_state.all_signals = {}
+
+# Risk Management Session State
+if 'peak_balance' not in st.session_state:
+    st.session_state.peak_balance = st.session_state.bank_balance
+if 'daily_start_balance' not in st.session_state:
+    st.session_state.daily_start_balance = st.session_state.bank_balance
+if 'current_date' not in st.session_state:
+    st.session_state.current_date = datetime.now().date()
+if 'daily_pnl' not in st.session_state:
+    st.session_state.daily_pnl = 0.0
+if 'risk_halt' not in st.session_state:
+    st.session_state.risk_halt = False
 
 # Pip sizes for pairs
 pip_sizes = {
@@ -235,6 +261,15 @@ for pair in trading_pairs:
             'agreement': 'NONE'
         }
 
+# Function to check and update daily reset
+def check_daily_reset():
+    today = datetime.now().date()
+    if today > st.session_state.current_date:
+        st.session_state.daily_start_balance = st.session_state.bank_balance
+        st.session_state.daily_pnl = 0.0
+        st.session_state.current_date = today
+        st.rerun()
+
 # Function to fetch OHLC data from CoinGecko
 def fetch_ohlc_prices(coin_id, days=14):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
@@ -266,6 +301,12 @@ def reset_trading_system():
     st.session_state.all_signals = {}
     st.session_state.current_prices = initial_prices.copy()
     st.session_state.price_history = {}
+    # Reset risk state
+    st.session_state.peak_balance = st.session_state.bank_balance
+    st.session_state.daily_start_balance = st.session_state.bank_balance
+    st.session_state.daily_pnl = 0.0
+    st.session_state.current_date = datetime.now().date()
+    st.session_state.risk_halt = False
     
     # Re-initialize signal history
     for pair in trading_pairs:
@@ -441,24 +482,55 @@ def detect_trading_signals(df):
     except Exception as e:
         return [], [], [], 'NONE'
 
-# Function to check if we can open a new trade for a pair
-def can_open_trade(pair, direction):
+# Function to check risk management rules before opening trade
+def check_risk_rules():
     params = st.session_state.trading_params
     
+    # Daily loss limit
+    daily_loss_percent = (st.session_state.daily_pnl / st.session_state.daily_start_balance) * 100
+    if daily_loss_percent <= -params['daily_loss_limit']:
+        return False, f"Daily loss limit exceeded: {daily_loss_percent:.2f}%"
+    
+    # Max drawdown
+    drawdown = ((st.session_state.bank_balance - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
+    if drawdown <= -params['max_drawdown']:
+        return False, f"Max drawdown exceeded: {drawdown:.2f}%"
+    
+    # Max open trades
+    if len(st.session_state.open_trades) >= params['max_open_trades']:
+        return False, f"Max open trades limit reached: {params['max_open_trades']}"
+    
+    return True, "OK"
+
+# Function to check if we can open a new trade for a pair
+def can_open_trade(pair, direction):
+    if st.session_state.risk_halt:
+        return False
+    
+    params = st.session_state.trading_params
+    
+    # Check global risk rules
+    can_trade, reason = check_risk_rules()
+    if not can_trade:
+        return False
+    
+    # Same direction trades check
     same_direction_trades = [t for t in st.session_state.open_trades 
                            if t['pair'] == pair and t['direction'] == direction]
     
     if same_direction_trades:
         return False
     
-    if st.session_state.bank_balance < params['stake']:
+    # Dynamic stake based on risk %
+    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+    if st.session_state.bank_balance < risk_amount:
         return False
     
     return True
 
 # Function to execute auto trade based on signals for ALL pairs
 def execute_auto_trades():
-    if not st.session_state.auto_trading:
+    if not st.session_state.auto_trading or st.session_state.risk_halt:
         return []
     
     auto_trades_executed = []
@@ -473,51 +545,52 @@ def execute_auto_trades():
         for signal_type, count, indicators in signals:
             if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
                 current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
-                if execute_trade(pair, 'BUY', current_price):
+                risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                if execute_trade(pair, 'BUY', current_price, risk_amount):
                     auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
             
             elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
                 current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
-                if execute_trade(pair, 'SELL', current_price):
+                risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                if execute_trade(pair, 'SELL', current_price, risk_amount):
                     auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
     
     return auto_trades_executed
 
-# Function to execute trade
-def execute_trade(pair, direction, entry_price):
+# Function to execute trade with dynamic stake
+def execute_trade(pair, direction, entry_price, stake_amount):
     try:
         params = st.session_state.trading_params
-        stake = params['stake']
         
-        if st.session_state.bank_balance >= stake:
+        if st.session_state.bank_balance >= stake_amount:
             trade = {
                 'id': len(st.session_state.trade_history) + 1,
                 'pair': pair,
                 'direction': direction,
                 'entry_price': entry_price,
-                'stake': stake,
+                'stake': stake_amount,
                 'time': datetime.now(),
                 'status': 'open',
                 'profit_loss': 0,
                 'type': 'AUTO' if st.session_state.auto_trading else 'MANUAL'
             }
             st.session_state.open_trades.append(trade)
-            st.session_state.bank_balance -= stake
+            st.session_state.bank_balance -= stake_amount
+            st.session_state.peak_balance = max(st.session_state.peak_balance, st.session_state.bank_balance + sum(t['stake'] + t['profit_loss'] for t in st.session_state.open_trades))
             return True
         return False
     except Exception as e:
         return False
 
-# Function to update open trades
+# Function to update open trades and risk metrics
 def update_trades():
     try:
         params = st.session_state.trading_params
-        stake = params['stake']
         profit_target = params['profit_target']
         stop_loss = params['stop_loss']
-        pip_value = stake / 10
+        pip_value = 1  # Simplified, as stake is now dynamic; adjust P&L calculation accordingly
         
         trades_to_remove = []
         for i, trade in enumerate(st.session_state.open_trades):
@@ -530,7 +603,8 @@ def update_trades():
                 else:
                     pips = (trade['entry_price'] - current_price) / pip_size
                 
-                profit_loss = pips * pip_value
+                # P&L based on stake (assuming 1 pip = 1% of stake or adjust formula)
+                profit_loss = pips * (trade['stake'] / 10)  # Arbitrary scaling; tune as needed
                 trade['profit_loss'] = profit_loss
                 trade['current_price'] = current_price
                 
@@ -538,26 +612,41 @@ def update_trades():
                     trade['status'] = 'closed'
                     trade['close_time'] = datetime.now()
                     trade['close_price'] = current_price
-                    st.session_state.bank_balance += stake + profit_loss
+                    st.session_state.bank_balance += trade['stake'] + profit_loss
+                    st.session_state.daily_pnl += profit_loss
                     st.session_state.trade_history.append(trade.copy())
                     trades_to_remove.append(i)
                 elif profit_loss <= -stop_loss:
                     trade['status'] = 'closed'
                     trade['close_time'] = datetime.now()
                     trade['close_price'] = current_price
-                    st.session_state.bank_balance += stake + profit_loss
+                    st.session_state.bank_balance += trade['stake'] + profit_loss
+                    st.session_state.daily_pnl += profit_loss
                     st.session_state.trade_history.append(trade.copy())
                     trades_to_remove.append(i)
         
         for i in sorted(trades_to_remove, reverse=True):
             if i < len(st.session_state.open_trades):
                 st.session_state.open_trades.pop(i)
+        
+        # Update peak balance
+        total_open_pnl = sum(t['profit_loss'] for t in st.session_state.open_trades)
+        current_equity = st.session_state.bank_balance + total_open_pnl
+        st.session_state.peak_balance = max(st.session_state.peak_balance, current_equity)
+        
+        # Check for risk halt
+        drawdown = ((current_equity - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
+        if drawdown <= -params['max_drawdown']:
+            st.session_state.risk_halt = True
                 
     except Exception as e:
         pass
 
 # Main application layout
 st.markdown('<h1 class="main-header">🤖 Crypto 2 Indicator Agreement Strategy</h1>', unsafe_allow_html=True)
+
+# Check daily reset
+check_daily_reset()
 
 # Sidebar
 with st.sidebar:
@@ -567,11 +656,15 @@ with st.sidebar:
     with col1:
         if st.button("🚀 Start Auto Trading", width='stretch', type="primary"):
             st.session_state.auto_trading = True
+            st.session_state.risk_halt = False
             st.success("Auto Trading Started!")
     with col2:
         if st.button("🛑 Stop Auto Trading", width='stretch', type="secondary"):
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
+    
+    if st.session_state.risk_halt:
+        st.markdown('<div class="risk-warning">🚨 RISK HALT ACTIVE - Trading Paused</div>', unsafe_allow_html=True)
     
     st.markdown("---")
     
@@ -588,13 +681,13 @@ with st.sidebar:
             step=100,
             help="Starting capital for trading"
         )
-        st.session_state.trading_params['stake'] = st.number_input(
-            "Stake per Trade (USDT)", 
-            min_value=1, 
-            max_value=500, 
-            value=st.session_state.trading_params['stake'],
-            step=1,
-            help="Amount to risk per trade"
+        st.session_state.trading_params['max_risk_percent'] = st.number_input(
+            "Max Risk per Trade (%)", 
+            min_value=0.5, 
+            max_value=5.0, 
+            value=st.session_state.trading_params['max_risk_percent'],
+            step=0.5,
+            help="Max % of balance to risk per trade (dynamic stake)"
         )
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -621,6 +714,34 @@ with st.sidebar:
             options=[2, 3],
             index=0 if st.session_state.trading_params['required_indicators'] == 2 else 1,
             help="Number of indicators that must agree for trade entry"
+        )
+        st.session_state.trading_params['max_open_trades'] = st.number_input(
+            "Max Open Trades", 
+            min_value=1, 
+            max_value=10, 
+            value=st.session_state.trading_params['max_open_trades'],
+            step=1,
+            help="Maximum concurrent open trades"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with st.expander("🛡️ Risk Management", expanded=True):
+        st.markdown('<div class="param-section">', unsafe_allow_html=True)
+        st.session_state.trading_params['daily_loss_limit'] = st.number_input(
+            "Daily Loss Limit (%)", 
+            min_value=1.0, 
+            max_value=20.0, 
+            value=st.session_state.trading_params['daily_loss_limit'],
+            step=1.0,
+            help="Stop trading if daily losses exceed this %"
+        )
+        st.session_state.trading_params['max_drawdown'] = st.number_input(
+            "Max Drawdown (%)", 
+            min_value=5.0, 
+            max_value=30.0, 
+            value=st.session_state.trading_params['max_drawdown'],
+            step=1.0,
+            help="Pause trading if drawdown from peak exceeds this %"
         )
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -707,9 +828,12 @@ with st.sidebar:
     st.markdown("## 📊 Current Parameters")
     params = st.session_state.trading_params
     st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
-    st.write(f"**Stake:** ${params['stake']}")
+    st.write(f"**Risk/Trade:** {params['max_risk_percent']}% (${(params['max_risk_percent']/100 * st.session_state.bank_balance):.2f})")
     st.write(f"**TP/SL:** ±{params['profit_target']} pips")
+    st.write(f"**Max Open:** {params['max_open_trades']}")
     st.write(f"**Agreement:** {params['required_indicators']}/3 indicators")
+    st.write(f"**Daily Loss Limit:** {params['daily_loss_limit']}%")
+    st.write(f"**Max Drawdown:** {params['max_drawdown']}%")
     
     st.markdown("---")
     st.markdown("## 📈 Monitoring Crypto Pairs")
@@ -720,11 +844,8 @@ with st.sidebar:
     st.markdown("## 🎯 Trading Rules")
     st.write(f"• Enter only when **{params['required_indicators']} indicators agree**")
     st.write("• **No same-direction duplicates** per pair")
-    st.write("• **No maximum trades** per pair")
+    st.write("• **Dynamic stake** based on risk %")
     st.write(f"• Risk/Reward: 1:{params['profit_target']/params['stop_loss']:.1f}")
-    
-    st.markdown("---")
-    st.markdown("**Note:** Using CoinGecko free API for real prices. Rate limit: ~50 calls/min. Consider increasing refresh interval if hitting limits.")
 
 # Fetch real data and execute auto trades
 st.session_state.all_signals = scan_all_pairs_signals()
@@ -732,7 +853,7 @@ auto_trades_executed = execute_auto_trades()
 update_trades()
 
 # Main dashboard
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     status_color = "auto-trade-active" if st.session_state.auto_trading else "metric-card"
@@ -769,6 +890,30 @@ with col4:
         <h2>{len(st.session_state.open_trades)}</h2>
     </div>
     """, unsafe_allow_html=True)
+
+with col5:
+    drawdown = ((st.session_state.bank_balance - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
+    dd_class = "profit-negative" if drawdown < 0 else "profit-positive"
+    st.markdown(f"""
+    <div class="metric-card">
+        <h3>📉 Drawdown</h3>
+        <h2 class="{dd_class}">{drawdown:.2f}%</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Risk Metrics
+st.markdown("---")
+st.markdown("## 🛡️ Risk Metrics")
+col1, col2, col3 = st.columns(3)
+daily_loss = (st.session_state.daily_pnl / st.session_state.daily_start_balance) * 100
+with col1:
+    st.metric("Daily P&L", f"${st.session_state.daily_pnl:.2f}", f"{daily_loss:.2f}%")
+with col2:
+    current_open_pnl = sum(t['profit_loss'] for t in st.session_state.open_trades)
+    st.metric("Open P&L", f"${current_open_pnl:.2f}")
+with col3:
+    equity = st.session_state.bank_balance + current_open_pnl
+    st.metric("Total Equity", f"${equity:.2f}")
 
 # Show auto trade executions
 if auto_trades_executed:
