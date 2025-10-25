@@ -148,6 +148,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# CoinGecko coin IDs mapping
+coin_map = {
+    "ETH/USDT": "ethereum",
+    "BNB/USDT": "binancecoin",
+    "XRP/USDT": "ripple",
+    "SOL/USDT": "solana",
+    "ADA/USDT": "cardano"
+}
+
 # Default trading parameters
 DEFAULT_PARAMS = {
     'initial_bank': 1000,
@@ -186,7 +195,6 @@ if 'all_signals' not in st.session_state:
 
 # Pip sizes for pairs
 pip_sizes = {
-    "BTC/USDT": 1,
     "ETH/USDT": 0.1,
     "BNB/USDT": 0.1,
     "XRP/USDT": 0.0001,
@@ -196,12 +204,11 @@ pip_sizes = {
 
 # Trading pairs
 trading_pairs = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT", "ADA/USDT"
+    "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT", "ADA/USDT"
 ]
 
-# Initial prices
+# Initial prices (fallback)
 initial_prices = {
-    "BTC/USDT": 60000,
     "ETH/USDT": 3000,
     "BNB/USDT": 500,
     "XRP/USDT": 0.5,
@@ -228,6 +235,26 @@ for pair in trading_pairs:
             'agreement': 'NONE'
         }
 
+# Function to fetch OHLC data from CoinGecko
+def fetch_ohlc_prices(coin_id, days=14):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
+    params = {"vs_currency": "usd", "days": days}
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
+        df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df[["date", "open", "high", "low", "close"]]
+        return df
+    except Exception as e:
+        st.warning(f"Failed to fetch data for {coin_id}: {e}. Using simulated data.")
+        # Fallback to simulated
+        pair = next((k for k, v in coin_map.items() if v == coin_id), None)
+        if pair:
+            return generate_simulated_historical(pair, 100)  # Approximate number of periods
+        return pd.DataFrame()
+
 # Function to reset trading system
 def reset_trading_system():
     st.session_state.bank_balance = st.session_state.trading_params['initial_bank']
@@ -252,7 +279,7 @@ def reset_trading_system():
             'agreement': 'NONE'
         }
 
-# Function to generate simulated historical prices
+# Function to generate simulated historical prices (fallback)
 def generate_simulated_historical(pair, periods=200):
     np.random.seed(hash(pair) % 10000)
     base_price = initial_prices[pair]
@@ -313,25 +340,31 @@ def scan_all_pairs_signals():
     params = st.session_state.trading_params
     
     for pair in trading_pairs:
-        if pair in st.session_state.price_history:
-            df = st.session_state.price_history[pair].copy()
-            df_with_indicators = calculate_indicators(df)
-            
-            signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
-            
-            all_signals[pair] = {
-                'signals': signals,
-                'buy_indicators': buy_indicators,
-                'sell_indicators': sell_indicators,
-                'time': datetime.now(),
-                'buy_count': len(buy_indicators),
-                'sell_count': len(sell_indicators),
-                'agreement': agreement,
-                'current_price': st.session_state.current_prices[pair],
-                'price_change': calculate_price_change(pair)
-            }
-            
-            st.session_state.signal_history[pair] = all_signals[pair]
+        coin_id = coin_map[pair]
+        df = fetch_ohlc_prices(coin_id, days=14)
+        if df.empty:
+            continue
+        st.session_state.price_history[pair] = df
+        df_with_indicators = calculate_indicators(df)
+        
+        signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
+        
+        current_price = df_with_indicators['close'].iloc[-1]
+        st.session_state.current_prices[pair] = current_price
+        
+        all_signals[pair] = {
+            'signals': signals,
+            'buy_indicators': buy_indicators,
+            'sell_indicators': sell_indicators,
+            'time': datetime.now(),
+            'buy_count': len(buy_indicators),
+            'sell_count': len(sell_indicators),
+            'agreement': agreement,
+            'current_price': current_price,
+            'price_change': calculate_price_change(pair)
+        }
+        
+        st.session_state.signal_history[pair] = all_signals[pair]
     
     return all_signals
 
@@ -439,12 +472,14 @@ def execute_auto_trades():
         
         for signal_type, count, indicators in signals:
             if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
-                if execute_trade(pair, 'BUY', st.session_state.current_prices[pair]):
+                current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
+                if execute_trade(pair, 'BUY', current_price):
                     auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
             
             elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
-                if execute_trade(pair, 'SELL', st.session_state.current_prices[pair]):
+                current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
+                if execute_trade(pair, 'SELL', current_price):
                     auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
     
@@ -475,44 +510,6 @@ def execute_trade(pair, direction, entry_price):
     except Exception as e:
         return False
 
-# Function to simulate price movement for ALL pairs
-def simulate_all_prices_movement():
-    for pair in trading_pairs:
-        try:
-            current_price = st.session_state.current_prices[pair]
-            
-            volatility = 0.0008
-            trend_bias = 0
-            if pair in st.session_state.signal_history:
-                signal_info = st.session_state.signal_history[pair]
-                agreement = signal_info.get('agreement', 'NONE')
-                if agreement == 'BUY':
-                    trend_bias += 0.0003
-                elif agreement == 'SELL':
-                    trend_bias -= 0.0003
-            
-            change = np.random.normal(trend_bias, volatility)
-            new_price = current_price * (1 + change)
-            st.session_state.current_prices[pair] = new_price
-            
-            if pair not in st.session_state.price_history:
-                st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
-            
-            new_row = pd.DataFrame([{
-                'date': datetime.now(),
-                'open': current_price,
-                'high': max(current_price, new_price),
-                'low': min(current_price, new_price),
-                'close': new_price
-            }])
-            
-            st.session_state.price_history[pair] = pd.concat([
-                st.session_state.price_history[pair], new_row
-            ]).tail(250)
-            
-        except Exception as e:
-            continue
-
 # Function to update open trades
 def update_trades():
     try:
@@ -525,8 +522,8 @@ def update_trades():
         trades_to_remove = []
         for i, trade in enumerate(st.session_state.open_trades):
             if trade['status'] == 'open':
-                current_price = st.session_state.current_prices[trade['pair']]
-                pip_size = pip_sizes[trade['pair']]
+                current_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+                pip_size = pip_sizes.get(trade['pair'], 0.0001)
                 
                 if trade['direction'] == 'BUY':
                     pips = (current_price - trade['entry_price']) / pip_size
@@ -558,11 +555,6 @@ def update_trades():
                 
     except Exception as e:
         pass
-
-# Initialize price history for all pairs
-for pair in trading_pairs:
-    if pair not in st.session_state.price_history:
-        st.session_state.price_history[pair] = generate_simulated_historical(pair, 200)
 
 # Main application layout
 st.markdown('<h1 class="main-header">🤖 Crypto 2 Indicator Agreement Strategy</h1>', unsafe_allow_html=True)
@@ -730,9 +722,11 @@ with st.sidebar:
     st.write("• **No same-direction duplicates** per pair")
     st.write("• **No maximum trades** per pair")
     st.write(f"• Risk/Reward: 1:{params['profit_target']/params['stop_loss']:.1f}")
+    
+    st.markdown("---")
+    st.markdown("**Note:** Using CoinGecko free API for real prices. Rate limit: ~50 calls/min. Consider increasing refresh interval if hitting limits.")
 
-# Update prices and execute auto trades
-simulate_all_prices_movement()
+# Fetch real data and execute auto trades
 st.session_state.all_signals = scan_all_pairs_signals()
 auto_trades_executed = execute_auto_trades()
 update_trades()
@@ -1001,9 +995,9 @@ with tab2:
     else:
         st.info("No open trades.")
 
-# Auto-refresh
+# Auto-refresh (increased to 30s to respect API rate limits)
 st.markdown("---")
-st.markdown("🔄 Auto-refreshing every 3 seconds...")
+st.markdown("🔄 Auto-refreshing every 30 seconds (to respect CoinGecko rate limits)...")
 
-time.sleep(3)
+time.sleep(30)
 st.rerun()
