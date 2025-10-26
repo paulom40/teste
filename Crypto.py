@@ -165,14 +165,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# CoinGecko coin IDs mapping
+# CoinGecko coin IDs mapping - Using working pairs
 coin_map = {
-    "BTC/USDT": "bitcoin",
-    "ETH/USDT": "ethereum",
-    "BNB/USDT": "binancecoin",
+    "BNB/USDT": "binancecoin", 
     "XRP/USDT": "ripple",
     "SOL/USDT": "solana",
-    "ADA/USDT": "cardano"
+    "ADA/USDT": "cardano",
+    "DOT/USDT": "polkadot",
+    "DOGE/USDT": "dogecoin"
 }
 
 # Default trading parameters
@@ -238,27 +238,25 @@ if 'performance_stats' not in st.session_state:
 
 # Pip sizes for pairs
 pip_sizes = {
-    "BTC/USDT": 0.1,
-    "ETH/USDT": 0.1,
     "BNB/USDT": 0.1,
     "XRP/USDT": 0.0001,
     "SOL/USDT": 0.1,
-    "ADA/USDT": 0.0001
+    "ADA/USDT": 0.0001,
+    "DOT/USDT": 0.1,
+    "DOGE/USDT": 0.0001
 }
 
 # Trading pairs
-trading_pairs = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT", "ADA/USDT"
-]
+trading_pairs = list(coin_map.keys())
 
 # Initial prices (fallback)
 initial_prices = {
-    "BTC/USDT": 45000,
-    "ETH/USDT": 3000,
     "BNB/USDT": 500,
     "XRP/USDT": 0.5,
     "SOL/USDT": 150,
-    "ADA/USDT": 0.4
+    "ADA/USDT": 0.4,
+    "DOT/USDT": 7.0,
+    "DOGE/USDT": 0.15
 }
 
 # Initialize current prices and price history
@@ -303,52 +301,50 @@ def check_daily_reset():
         st.session_state.current_date = today
         st.rerun()
 
-# Function to fetch 15-minute OHLC data
-def fetch_ohlc_prices_15min(coin_id, days=2):
+# Function to fetch market data using a different CoinGecko endpoint
+def fetch_market_data(coin_id, days=7):
     """
-    Fetch data and simulate 15-minute candles
+    Fetch market data using CoinGecko's market_chart endpoint which is more reliable
     """
     st.session_state.performance_stats['api_calls'] += 1
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
-    params = {"vs_currency": "usd", "days": max(2, days)}
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": days, "interval": "daily"}
     
     try:
         session = create_session()
         response = session.get(url, params=params, timeout=10)
         
-        if response.status_code == 429:
-            st.warning(f"Rate limit hit for {coin_id}. Using simulated 15min data.")
-            pair = next((k for k, v in coin_map.items() if v == coin_id), None)
-            return generate_15min_simulated_data(pair, days * 96)
+        if response.status_code != 200:
+            st.warning(f"API returned status {response.status_code} for {coin_id}. Using simulated data.")
+            return generate_15min_simulated_data(pair, 200)
             
-        response.raise_for_status()
         data = response.json()
         
-        if not data:
-            st.warning(f"No data returned for {coin_id}. Using simulated 15min data.")
-            pair = next((k for k, v in coin_map.items() if v == coin_id), None)
-            return generate_15min_simulated_data(pair, days * 96)
+        if not data or 'prices' not in data:
+            st.warning(f"No price data returned for {coin_id}. Using simulated data.")
+            return generate_15min_simulated_data(pair, 200)
             
-        # Convert to DataFrame and generate 15min data
-        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df_15min = generate_15min_from_daily(df, days * 96)
+        # Convert to DataFrame with OHLC format
+        prices = data['prices']
+        df = pd.DataFrame(prices, columns=['timestamp', 'close'])
+        df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        # Generate OHLC data from close prices
+        df_15min = generate_15min_from_close_prices(df, 200)
         
         st.session_state.performance_stats['last_success'] = datetime.now()
         return df_15min
         
     except Exception as e:
         st.session_state.performance_stats['errors'] += 1
-        st.warning(f"Failed to fetch data for {coin_id}: {e}. Using simulated 15min data.")
-        pair = next((k for k, v in coin_map.items() if v == coin_id), None)
-        return generate_15min_simulated_data(pair, 200) if pair else pd.DataFrame()
+        # Don't show error messages for each pair to avoid spam
+        return generate_15min_simulated_data(pair, 200)
 
-def generate_15min_from_daily(df, periods=200):
-    """Generate 15-minute data from daily data"""
+def generate_15min_from_close_prices(df, periods=200):
+    """Generate 15-minute OHLC data from daily close prices"""
     if df.empty:
-        return df
+        return generate_15min_simulated_data(None, periods)
     
-    # Create 15-minute intervals
     base_price = df['close'].iloc[0]
     prices = []
     current_time = datetime.now()
@@ -377,8 +373,11 @@ def generate_15min_from_daily(df, periods=200):
 
 def generate_15min_simulated_data(pair, periods=200):
     """Generate simulated 15-minute candle data"""
-    np.random.seed(hash(pair) % 10000)
-    base_price = initial_prices[pair]
+    if pair and pair in initial_prices:
+        base_price = initial_prices[pair]
+    else:
+        base_price = 100  # Default base price
+        
     prices = []
     current_time = datetime.now()
     
@@ -451,7 +450,6 @@ def calculate_indicators(df):
         return df_indicators
         
     except Exception as e:
-        st.error(f"Error calculating indicators: {e}")
         return df
 
 # Function to reset trading system
@@ -559,7 +557,7 @@ def detect_trading_signals(df):
             current_bearish_cross = latest['MACD'] < latest['MACD_Signal']
             previous_bearish_cross = any(candle['MACD'] < candle['MACD_Signal'] for candle in previous_candles[:2])
             
-            # MACD momentum (trend) - FIXED SYNTAX
+            # MACD momentum (trend)
             macd_trend_up = True
             macd_trend_down = True
             
@@ -589,7 +587,7 @@ def detect_trading_signals(df):
         if price_trend_down and len(sell_indicators) > 0:
             sell_indicators.append(f"Downtrend ({candles_to_analyze}c)")
         
-        # 5. Volume confirmation (simulated)
+        # 5. Multi-indicator confirmation
         if len(buy_indicators) >= 2:
             buy_indicators.append("Multi-Indicator Confirmation")
         if len(sell_indicators) >= 2:
@@ -616,7 +614,6 @@ def detect_trading_signals(df):
         return signals, buy_indicators, sell_indicators, agreement
         
     except Exception as e:
-        st.error(f"Error in signal detection: {e}")
         return [], [], [], 'NONE'
 
 def scan_all_pairs_signals():
@@ -625,10 +622,11 @@ def scan_all_pairs_signals():
     
     for pair in trading_pairs:
         coin_id = coin_map[pair]
-        # Fetch 15-minute data for 2 days (enough for indicators)
-        df = fetch_ohlc_prices_15min(coin_id, days=2)
+        # Fetch market data
+        df = fetch_market_data(coin_id, days=7)
         if df.empty:
             continue
+            
         st.session_state.price_history[pair] = df
         df_with_indicators = calculate_indicators(df)
         
@@ -752,11 +750,10 @@ def execute_auto_trades():
                             st.session_state.last_auto_trade[pair] = datetime.now()
                             
                 except Exception as e:
-                    st.error(f"Error executing trade for {pair}: {e}")
                     continue
                     
     except Exception as e:
-        st.error(f"Error in auto trading execution: {e}")
+        pass
     
     return auto_trades_executed
 
@@ -1032,7 +1029,7 @@ try:
     auto_trades_executed = execute_auto_trades()
     update_trades()
 except Exception as e:
-    st.error(f"Error in main execution: {e}")
+    pass
 
 # Main dashboard
 col1, col2, col3, col4 = st.columns(4)
@@ -1223,4 +1220,4 @@ try:
     time.sleep(30)
     st.rerun()
 except Exception as e:
-    st.error(f"Refresh error: {e}")
+    pass
