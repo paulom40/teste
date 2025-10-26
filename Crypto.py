@@ -175,6 +175,11 @@ DEFAULT_PARAMS = {
 # Initialize session state
 if 'trading_params' not in st.session_state:
     st.session_state.trading_params = DEFAULT_PARAMS.copy()
+else:
+    # Ensure all default keys are present in case of version updates
+    for key, default_value in DEFAULT_PARAMS.items():
+        if key not in st.session_state.trading_params:
+            st.session_state.trading_params[key] = default_value
 
 if 'bank_balance' not in st.session_state:
     st.session_state.bank_balance = st.session_state.trading_params['initial_bank']
@@ -612,10 +617,13 @@ with st.sidebar:
         help="Stop loss level as percentage"
     )
     
+    current_req = st.session_state.trading_params.get('required_indicators', 3)
+    options = [2, 3, 4]
+    index_val = options.index(current_req) if current_req in options else 1
     st.session_state.trading_params['required_indicators'] = st.selectbox(
         "Required Indicators Agreement",
-        options=[2, 3, 4],
-        index=1 if st.session_state.trading_params['required_indicators'] == 3 else 0 if st.session_state.trading_params['required_indicators'] == 2 else 2,
+        options=options,
+        index=index_val,
         help="Number of indicators that must agree for trade entry (out of 4: MA, RSI, MACD, Fib)"
     )
     
