@@ -559,9 +559,15 @@ def detect_trading_signals(df):
             current_bearish_cross = latest['MACD'] < latest['MACD_Signal']
             previous_bearish_cross = any(candle['MACD'] < candle['MACD_Signal'] for candle in previous_candles[:2])
             
-            # MACD momentum (trend)
-            macd_trend_up = all(candles[i]['MACD'] > candles[i+1]['MACD'] for i in range(min(3, len(candles)-1))
-            macd_trend_down = all(candles[i]['MACD'] < candles[i+1]['MACD'] for i in range(min(3, len(candles)-1))
+            # MACD momentum (trend) - FIXED SYNTAX
+            macd_trend_up = True
+            macd_trend_down = True
+            
+            for i in range(min(3, len(candles)-1)):
+                if candles[i]['MACD'] <= candles[i+1]['MACD']:
+                    macd_trend_up = False
+                if candles[i]['MACD'] >= candles[i+1]['MACD']:
+                    macd_trend_down = False
             
             if current_bullish_cross and not previous_bullish_cross and macd_trend_up:
                 buy_indicators.append(f"MACD Bullish Cross ({candles_to_analyze}c)")
@@ -569,8 +575,14 @@ def detect_trading_signals(df):
                 sell_indicators.append(f"MACD Bearish Cross ({candles_to_analyze}c)")
         
         # 4. Price Action Analysis
-        price_trend_up = all(candles[i]['close'] > candles[i+1]['close'] for i in range(len(candles)-1))
-        price_trend_down = all(candles[i]['close'] < candles[i+1]['close'] for i in range(len(candles)-1))
+        price_trend_up = True
+        price_trend_down = True
+        
+        for i in range(len(candles)-1):
+            if candles[i]['close'] <= candles[i+1]['close']:
+                price_trend_up = False
+            if candles[i]['close'] >= candles[i+1]['close']:
+                price_trend_down = False
         
         if price_trend_up and len(buy_indicators) > 0:
             buy_indicators.append(f"Uptrend ({candles_to_analyze}c)")
@@ -938,7 +950,7 @@ with st.sidebar:
             "RSI Period", 
             min_value=5, 
             max_value=30, 
-            value=st.session_state.trading_state.trading_params['rsi_period'],
+            value=st.session_state.trading_params['rsi_period'],
             step=1
         )
         
