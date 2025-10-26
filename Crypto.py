@@ -615,7 +615,7 @@ with st.sidebar:
     st.session_state.trading_params['required_indicators'] = st.selectbox(
         "Required Indicators Agreement",
         options=[2, 3, 4],
-        index=1 if st.session_state.trading_params['required_indicators'] == 3 else 0,
+        index=1 if st.session_state.trading_params['required_indicators'] == 3 else 0 if st.session_state.trading_params['required_indicators'] == 2 else 2,
         help="Number of indicators that must agree for trade entry (out of 4: MA, RSI, MACD, Fib)"
     )
     
@@ -714,7 +714,7 @@ with st.sidebar:
             help="MACD signal line period"
         )
     
-    st.write("**Fibonacci Retracement**")
+    st.write("**Fibonacci Retracement Settings**")
     col1, col2 = st.columns(2)
     with col1:
         st.session_state.trading_params['fib_swing'] = st.number_input(
@@ -723,7 +723,7 @@ with st.sidebar:
             min_value=10, 
             max_value=50,
             step=1,
-            help="Period to find swing high/low"
+            help="Period to find swing high/low for Fib levels"
         )
     with col2:
         st.session_state.trading_params['fib_tolerance'] = st.number_input(
@@ -732,7 +732,7 @@ with st.sidebar:
             min_value=0.1, 
             max_value=2.0,
             step=0.1,
-            help="Tolerance for price to hit Fib level"
+            help="Tolerance percentage for price to hit Fib level"
         )
     
     st.divider()
@@ -764,8 +764,8 @@ with st.sidebar:
     params = st.session_state.trading_params
     st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
     st.write(f"**Risk/Trade:** {params['max_risk_percent']}%")
-    st.write(f"**TP/SL:** ±{params['profit_target']}%")
-    st.write(f"**Indicators:** {params['required_indicators']}/4 required")
+    st.write(f"**TP/SL:** {params['profit_target']}% / {params['stop_loss']}%")
+    st.write(f"**Indicators:** {params['required_indicators']}/4 required (MA, RSI, MACD, Fib)")
     st.write(f"**Candles:** {params['candles_to_analyze']} analyzed")
     st.write(f"**Timeframe:** 15min")
     
@@ -796,7 +796,7 @@ with st.sidebar:
     st.subheader("🎯 Trading Rules")
     st.write(f"• **15-minute timeframe**")
     st.write(f"• **{params['candles_to_analyze']}-candle analysis**")
-    st.write(f"• **{params['required_indicators']} indicator agreement** required")
+    st.write(f"• **{params['required_indicators']} indicator agreement** required (out of MA, RSI, MACD, Fib)")
     st.write("• **No duplicate trades** per pair")
     st.write("• **Dynamic position sizing** based on risk %")
 
