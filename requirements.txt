@@ -1,7 +1,5 @@
 streamlit
 pandas
-openpyxl
-xlsxwriter
-matplotlib
-altair
+numpy
 requests
+plotly
