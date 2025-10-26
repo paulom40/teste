@@ -8,6 +8,9 @@ import ta  # Technical Analysis library
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -219,6 +222,14 @@ if 'daily_pnl' not in st.session_state:
 if 'risk_halt' not in st.session_state:
     st.session_state.risk_halt = False
 
+# Performance monitoring
+if 'performance_stats' not in st.session_state:
+    st.session_state.performance_stats = {
+        'api_calls': 0,
+        'errors': 0,
+        'last_success': None
+    }
+
 # Pip sizes for pairs
 pip_sizes = {
     "ETH/USDT": 0.1,
@@ -261,6 +272,19 @@ for pair in trading_pairs:
             'agreement': 'NONE'
         }
 
+# Create session with retry strategy
+def create_session():
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
 # Function to check and update daily reset
 def check_daily_reset():
     today = datetime.now().date()
@@ -272,23 +296,39 @@ def check_daily_reset():
 
 # Function to fetch OHLC data from CoinGecko
 def fetch_ohlc_prices(coin_id, days=14):
+    st.session_state.performance_stats['api_calls'] += 1
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
     params = {"vs_currency": "usd", "days": days}
+    
     try:
-        response = requests.get(url, params=params)
+        session = create_session()
+        response = session.get(url, params=params, timeout=10)
+        
+        if response.status_code == 429:
+            st.warning(f"Rate limit hit for {coin_id}. Using simulated data.")
+            pair = next((k for k, v in coin_map.items() if v == coin_id), None)
+            return generate_simulated_historical(pair, 100) if pair else pd.DataFrame()
+            
         response.raise_for_status()
         data = response.json()
+        
+        if not data:
+            st.warning(f"No data returned for {coin_id}. Using simulated data.")
+            pair = next((k for k, v in coin_map.items() if v == coin_id), None)
+            return generate_simulated_historical(pair, 100) if pair else pd.DataFrame()
+            
         df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
         df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
         df = df[["date", "open", "high", "low", "close"]]
+        
+        st.session_state.performance_stats['last_success'] = datetime.now()
         return df
+        
     except Exception as e:
+        st.session_state.performance_stats['errors'] += 1
         st.warning(f"Failed to fetch data for {coin_id}: {e}. Using simulated data.")
-        # Fallback to simulated
         pair = next((k for k, v in coin_map.items() if v == coin_id), None)
-        if pair:
-            return generate_simulated_historical(pair, 100)  # Approximate number of periods
-        return pd.DataFrame()
+        return generate_simulated_historical(pair, 100) if pair else pd.DataFrame()
 
 # Function to reset trading system
 def reset_trading_system():
@@ -348,11 +388,30 @@ def generate_simulated_historical(pair, periods=200):
     
     return pd.DataFrame(prices)
 
+# Function to validate DataFrame
+def validate_dataframe(df):
+    """Validate DataFrame before processing"""
+    if df.empty:
+        return False
+    if len(df) < 20:  # Minimum data points
+        return False
+    if df['close'].isna().any():
+        return False
+    return True
+
 # Function to calculate technical indicators using current parameters
 def calculate_indicators(df):
     try:
+        if not validate_dataframe(df):
+            return df
+            
         df_indicators = df.copy()
         params = st.session_state.trading_params
+        
+        # Check if we have enough data
+        min_required = max(params['ma_slow'], params['macd_slow'], params['rsi_period']) + 5
+        if len(df_indicators) < min_required:
+            return df_indicators
         
         # Moving Averages
         df_indicators['MA_Fast'] = ta.trend.sma_indicator(df_indicators['close'], window=params['ma_fast'])
@@ -373,6 +432,7 @@ def calculate_indicators(df):
         return df_indicators
         
     except Exception as e:
+        st.error(f"Error calculating indicators: {e}")
         return df
 
 # Function to detect trading signals for ALL pairs
@@ -492,7 +552,9 @@ def check_risk_rules():
         return False, f"Daily loss limit exceeded: {daily_loss_percent:.2f}%"
     
     # Max drawdown
-    drawdown = ((st.session_state.bank_balance - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
+    total_open_pnl = sum(t['profit_loss'] for t in st.session_state.open_trades)
+    current_equity = st.session_state.bank_balance + total_open_pnl
+    drawdown = ((current_equity - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
     if drawdown <= -params['max_drawdown']:
         return False, f"Max drawdown exceeded: {drawdown:.2f}%"
     
@@ -536,26 +598,44 @@ def execute_auto_trades():
     auto_trades_executed = []
     params = st.session_state.trading_params
     
-    all_signals = scan_all_pairs_signals()
-    
-    for pair, signal_info in all_signals.items():
-        signals = signal_info.get('signals', [])
-        agreement = signal_info.get('agreement', 'NONE')
+    try:
+        all_signals = scan_all_pairs_signals()
         
-        for signal_type, count, indicators in signals:
-            if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
-                current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
-                risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
-                if execute_trade(pair, 'BUY', current_price, risk_amount):
-                    auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
-                    st.session_state.last_auto_trade[pair] = datetime.now()
+        for pair, signal_info in all_signals.items():
+            signals = signal_info.get('signals', [])
+            agreement = signal_info.get('agreement', 'NONE')
             
-            elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
-                current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
-                risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
-                if execute_trade(pair, 'SELL', current_price, risk_amount):
-                    auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
-                    st.session_state.last_auto_trade[pair] = datetime.now()
+            for signal_type, count, indicators in signals:
+                try:
+                    if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
+                        current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
+                        risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                        
+                        # Minimum stake check
+                        if risk_amount < 1:  # Minimum $1 stake
+                            continue
+                            
+                        if execute_trade(pair, 'BUY', current_price, risk_amount):
+                            auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
+                            st.session_state.last_auto_trade[pair] = datetime.now()
+                    
+                    elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
+                        current_price = st.session_state.current_prices.get(pair, initial_prices[pair])
+                        risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                        
+                        if risk_amount < 1:  # Minimum $1 stake
+                            continue
+                            
+                        if execute_trade(pair, 'SELL', current_price, risk_amount):
+                            auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
+                            st.session_state.last_auto_trade[pair] = datetime.now()
+                            
+                except Exception as e:
+                    st.error(f"Error executing trade for {pair}: {e}")
+                    continue
+                    
+    except Exception as e:
+        st.error(f"Error in auto trading execution: {e}")
     
     return auto_trades_executed
 
@@ -654,12 +734,12 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Start Auto Trading", width='stretch', type="primary"):
+        if st.button("🚀 Start Auto Trading", use_container_width=True, type="primary"):
             st.session_state.auto_trading = True
             st.session_state.risk_halt = False
             st.success("Auto Trading Started!")
     with col2:
-        if st.button("🛑 Stop Auto Trading", width='stretch', type="secondary"):
+        if st.button("🛑 Stop Auto Trading", use_container_width=True, type="secondary"):
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
@@ -820,7 +900,7 @@ with st.sidebar:
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Apply Parameters Button
-    if st.button("🔄 Apply Parameters & Reset", type="primary", width='stretch'):
+    if st.button("🔄 Apply Parameters & Reset", type="primary", use_container_width=True):
         reset_trading_system()
         st.success("Parameters applied and system reset!")
     
@@ -836,6 +916,25 @@ with st.sidebar:
     st.write(f"**Max Drawdown:** {params['max_drawdown']}%")
     
     st.markdown("---")
+    
+    # Debug Information
+    with st.expander("🔧 Debug Info"):
+        st.write(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
+        st.write(f"API calls: {st.session_state.performance_stats['api_calls']}")
+        st.write(f"Errors: {st.session_state.performance_stats['errors']}")
+        if st.session_state.performance_stats['last_success']:
+            st.write(f"Last success: {st.session_state.performance_stats['last_success'].strftime('%H:%M:%S')}")
+        
+        st.write("**Data quality:**")
+        for pair in trading_pairs:
+            if pair in st.session_state.price_history:
+                df = st.session_state.price_history[pair]
+                st.write(f"- {pair}: {len(df)} rows, {df['close'].isna().sum()} NaN")
+        
+        if st.button("Force Refresh Data"):
+            st.session_state.all_signals = scan_all_pairs_signals()
+            st.rerun()
+    
     st.markdown("## 📈 Monitoring Crypto Pairs")
     for pair in trading_pairs:
         st.write(f"• {pair}")
@@ -847,10 +946,16 @@ with st.sidebar:
     st.write("• **Dynamic stake** based on risk %")
     st.write(f"• Risk/Reward: 1:{params['profit_target']/params['stop_loss']:.1f}")
 
-# Fetch real data and execute auto trades
-st.session_state.all_signals = scan_all_pairs_signals()
-auto_trades_executed = execute_auto_trades()
-update_trades()
+# Main execution with error handling
+try:
+    # Fetch real data and execute auto trades
+    st.session_state.all_signals = scan_all_pairs_signals()
+    auto_trades_executed = execute_auto_trades()
+    update_trades()
+    
+except Exception as e:
+    st.error(f"Error in main execution: {e}")
+    # Continue with existing data
 
 # Main dashboard
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -892,7 +997,9 @@ with col4:
     """, unsafe_allow_html=True)
 
 with col5:
-    drawdown = ((st.session_state.bank_balance - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
+    total_open_pnl = sum(t['profit_loss'] for t in st.session_state.open_trades)
+    current_equity = st.session_state.bank_balance + total_open_pnl
+    drawdown = ((current_equity - st.session_state.peak_balance) / st.session_state.peak_balance) * 100
     dd_class = "profit-negative" if drawdown < 0 else "profit-positive"
     st.markdown(f"""
     <div class="metric-card">
@@ -1102,7 +1209,7 @@ with tab1:
             'type': 'Type',
             'duration': 'Duration (hrs)'
         })
-        st.dataframe(closed_df_display, width='stretch', hide_index=True)
+        st.dataframe(closed_df_display, use_container_width=True, hide_index=True)
         
         # Total P&L summary
         total_pnl_closed = closed_df['profit_loss'].sum()
@@ -1132,7 +1239,7 @@ with tab2:
             'type': 'Type',
             'duration': 'Duration (hrs)'
         })
-        st.dataframe(open_df_display, width='stretch', hide_index=True)
+        st.dataframe(open_df_display, use_container_width=True, hide_index=True)
         
         # Total Unrealized P&L summary
         total_unrealized = open_df['profit_loss'].sum()
@@ -1140,9 +1247,12 @@ with tab2:
     else:
         st.info("No open trades.")
 
-# Auto-refresh (increased to 30s to respect API rate limits)
+# Auto-refresh (increased to 45s to respect API rate limits)
 st.markdown("---")
-st.markdown("🔄 Auto-refreshing every 30 seconds (to respect CoinGecko rate limits)...")
+st.markdown("🔄 Auto-refreshing every 45 seconds (to respect CoinGecko rate limits)...")
 
-time.sleep(30)
-st.rerun()
+try:
+    time.sleep(45)
+    st.rerun()
+except Exception as e:
+    st.error(f"Refresh error: {e}")
