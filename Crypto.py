@@ -162,7 +162,9 @@ DEFAULT_PARAMS = {
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
-    'required_indicators': 2,
+    'fib_swing': 20,
+    'fib_tolerance': 0.5,
+    'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 2.0,
     'daily_loss_limit': 5.0,
@@ -300,6 +302,26 @@ def detect_trading_signals(df):
                 buy_indicators.append("MACD Bullish")
             else:
                 sell_indicators.append("MACD Bearish")
+        
+        # 4. Fibonacci Retracement Signal
+        swing_period = params['fib_swing']
+        if len(df) >= swing_period:
+            recent = df.iloc[-swing_period:]
+            swing_high = recent['high'].max()
+            swing_low = recent['low'].min()
+            diff = swing_high - swing_low
+            if diff > 0:
+                tolerance = params['fib_tolerance'] / 100
+                # For buy: uptrend and price near 61.8% retracement support
+                if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']) and latest['MA_Fast'] > latest['MA_Slow']:
+                    fib_support_618 = swing_high - 0.618 * diff
+                    if abs(latest['close'] - fib_support_618) / latest['close'] < tolerance:
+                        buy_indicators.append("Fib 61.8% Support")
+                # For sell: downtrend and price near 38.2% retracement resistance
+                else:
+                    fib_resistance_382 = swing_low + 0.382 * diff
+                    if abs(latest['close'] - fib_resistance_382) / latest['close'] < tolerance:
+                        sell_indicators.append("Fib 38.2% Resistance")
         
         # Determine agreement
         total_buy = len(buy_indicators)
@@ -592,9 +614,9 @@ with st.sidebar:
     
     st.session_state.trading_params['required_indicators'] = st.selectbox(
         "Required Indicators Agreement",
-        options=[2, 3],
-        index=0 if st.session_state.trading_params['required_indicators'] == 2 else 1,
-        help="Number of indicators that must agree for trade entry"
+        options=[2, 3, 4],
+        index=1 if st.session_state.trading_params['required_indicators'] == 3 else 0,
+        help="Number of indicators that must agree for trade entry (out of 4: MA, RSI, MACD, Fib)"
     )
     
     st.session_state.trading_params['candles_to_analyze'] = st.number_input(
@@ -692,6 +714,27 @@ with st.sidebar:
             help="MACD signal line period"
         )
     
+    st.write("**Fibonacci Retracement**")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.trading_params['fib_swing'] = st.number_input(
+            "Swing Period", 
+            value=st.session_state.trading_params['fib_swing'],
+            min_value=10, 
+            max_value=50,
+            step=1,
+            help="Period to find swing high/low"
+        )
+    with col2:
+        st.session_state.trading_params['fib_tolerance'] = st.number_input(
+            "Tolerance (%)", 
+            value=st.session_state.trading_params['fib_tolerance'],
+            min_value=0.1, 
+            max_value=2.0,
+            step=0.1,
+            help="Tolerance for price to hit Fib level"
+        )
+    
     st.divider()
     
     # Risk Management - ALWAYS VISIBLE
@@ -722,7 +765,7 @@ with st.sidebar:
     st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
     st.write(f"**Risk/Trade:** {params['max_risk_percent']}%")
     st.write(f"**TP/SL:** ±{params['profit_target']}%")
-    st.write(f"**Indicators:** {params['required_indicators']}/3 required")
+    st.write(f"**Indicators:** {params['required_indicators']}/4 required")
     st.write(f"**Candles:** {params['candles_to_analyze']} analyzed")
     st.write(f"**Timeframe:** 15min")
     
@@ -815,7 +858,7 @@ if auto_trades_executed:
 
 # TRADING PAIRS SIGNALS
 st.subheader("🎯 Trading Signals - 15min Timeframe")
-st.write(f"**Required Agreement:** {st.session_state.trading_params['required_indicators']} out of 3 indicators")
+st.write(f"**Required Agreement:** {st.session_state.trading_params['required_indicators']} out of 4 indicators (MA, RSI, MACD, Fib)")
 
 # Display pairs in a grid
 cols = st.columns(3)
