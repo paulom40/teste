@@ -139,8 +139,8 @@ coin_map = {
 # Default trading parameters
 DEFAULT_PARAMS = {
     'initial_bank': 1000,
-    'profit_target': 15,
-    'stop_loss': 10,
+    'profit_target': 15.0,
+    'stop_loss': 10.0,
     'ma_fast': 9,
     'ma_slow': 21,
     'rsi_period': 14,
@@ -293,8 +293,6 @@ def detect_trading_signals(df):
         total_sell = len(sell_indicators)
         required = params['required_indicators']
         
-        st.write(f"🔍 DEBUG: {total_buy} buy indicators, {total_sell} sell indicators, required: {required}")
-        
         if total_buy >= required and total_sell == 0:
             agreement = 'BUY'
             signals = [("BUY", total_buy, buy_indicators)]
@@ -399,30 +397,22 @@ def execute_auto_trades():
             signals = signal_info.get('signals', [])
             agreement = signal_info.get('agreement', 'NONE')
             
-            st.write(f"🔍 Checking {pair}: Agreement = {agreement}, Signals = {len(signals)}")
-            
             for signal_type, count, indicators in signals:
                 if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
                     current_price = st.session_state.current_prices.get(pair, 100)
                     risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
                     
-                    st.write(f"🎯 Attempting BUY trade for {pair} at ${current_price:.2f}")
-                    
                     if execute_trade(pair, 'BUY', current_price, risk_amount):
                         auto_trades_executed.append(f"✅ AUTO BUY {pair} - {count} indicators: {', '.join(indicators)}")
                         st.session_state.last_auto_trade[pair] = datetime.now()
-                        st.success(f"✅ AUTO BUY executed for {pair}!")
                 
                 elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
                     current_price = st.session_state.current_prices.get(pair, 100)
                     risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
                     
-                    st.write(f"🎯 Attempting SELL trade for {pair} at ${current_price:.2f}")
-                    
                     if execute_trade(pair, 'SELL', current_price, risk_amount):
                         auto_trades_executed.append(f"❌ AUTO SELL {pair} - {count} indicators: {', '.join(indicators)}")
                         st.session_state.last_auto_trade[pair] = datetime.now()
-                        st.error(f"❌ AUTO SELL executed for {pair}!")
                         
     except Exception as e:
         st.error(f"Error in auto trading: {e}")
@@ -493,36 +483,234 @@ with st.sidebar:
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
+    # Show auto-trading status prominently
+    if st.session_state.auto_trading:
+        st.markdown('<div class="auto-trade-active">AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
+    else:
+        st.info("Auto Trading: INACTIVE")
+    
     st.divider()
     
-    # Trading Parameters
-    st.header("⚙️ Parameters")
+    # Trading Parameters - ALL VISIBLE
+    st.header("⚙️ Trading Parameters")
     
-    with st.expander("Money Management"):
-        st.session_state.trading_params['initial_bank'] = st.number_input(
-            "Initial Balance", value=1000, min_value=100, max_value=10000
+    # Money Management - ALWAYS VISIBLE
+    st.subheader("💰 Money Management")
+    st.session_state.trading_params['initial_bank'] = st.number_input(
+        "Initial Bank Balance (USDT)", 
+        value=st.session_state.trading_params['initial_bank'],
+        min_value=100, 
+        max_value=10000,
+        step=100,
+        help="Starting capital for trading"
+    )
+    
+    st.session_state.trading_params['max_risk_percent'] = st.number_input(
+        "Max Risk Per Trade (%)", 
+        value=st.session_state.trading_params['max_risk_percent'],
+        min_value=0.5, 
+        max_value=5.0,
+        step=0.5,
+        help="Maximum percentage of balance to risk per trade"
+    )
+    
+    st.session_state.trading_params['max_open_trades'] = st.number_input(
+        "Max Open Trades", 
+        value=st.session_state.trading_params['max_open_trades'],
+        min_value=1, 
+        max_value=10,
+        step=1,
+        help="Maximum number of concurrent open trades"
+    )
+    
+    st.divider()
+    
+    # Trade Settings - ALWAYS VISIBLE
+    st.subheader("🎯 Trade Settings")
+    st.session_state.trading_params['profit_target'] = st.number_input(
+        "Profit Target (%)", 
+        value=st.session_state.trading_params['profit_target'],
+        min_value=1.0, 
+        max_value=100.0,
+        step=1.0,
+        help="Take profit level as percentage"
+    )
+    
+    st.session_state.trading_params['stop_loss'] = st.number_input(
+        "Stop Loss (%)", 
+        value=st.session_state.trading_params['stop_loss'],
+        min_value=1.0, 
+        max_value=100.0,
+        step=1.0,
+        help="Stop loss level as percentage"
+    )
+    
+    st.session_state.trading_params['required_indicators'] = st.selectbox(
+        "Required Indicators Agreement",
+        options=[2, 3],
+        index=0 if st.session_state.trading_params['required_indicators'] == 2 else 1,
+        help="Number of indicators that must agree for trade entry"
+    )
+    
+    st.session_state.trading_params['candles_to_analyze'] = st.number_input(
+        "Candles to Analyze", 
+        value=st.session_state.trading_params['candles_to_analyze'],
+        min_value=2, 
+        max_value=10,
+        step=1,
+        help="Number of recent candles to analyze for signals"
+    )
+    
+    st.divider()
+    
+    # INDICATOR PARAMETERS - ALWAYS VISIBLE
+    st.subheader("📊 Indicator Parameters")
+    
+    st.write("**Moving Averages**")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.trading_params['ma_fast'] = st.number_input(
+            "MA Fast Period", 
+            value=st.session_state.trading_params['ma_fast'],
+            min_value=5, 
+            max_value=50,
+            step=1,
+            help="Fast Moving Average period"
         )
-        st.session_state.trading_params['max_risk_percent'] = st.number_input(
-            "Risk per Trade %", value=2.0, min_value=0.5, max_value=5.0
+    with col2:
+        st.session_state.trading_params['ma_slow'] = st.number_input(
+            "MA Slow Period", 
+            value=st.session_state.trading_params['ma_slow'],
+            min_value=10, 
+            max_value=100,
+            step=1,
+            help="Slow Moving Average period"
         )
     
-    with st.expander("Trade Settings"):
-        st.session_state.trading_params['profit_target'] = st.number_input(
-            "Profit Target %", value=15.0, min_value=1.0, max_value=100.0
+    st.write("**RSI Settings**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.session_state.trading_params['rsi_period'] = st.number_input(
+            "RSI Period", 
+            value=st.session_state.trading_params['rsi_period'],
+            min_value=5, 
+            max_value=30,
+            step=1,
+            help="RSI calculation period"
         )
-        st.session_state.trading_params['stop_loss'] = st.number_input(
-            "Stop Loss %", value=10.0, min_value=1.0, max_value=100.0
+    with col2:
+        st.session_state.trading_params['rsi_overbought'] = st.number_input(
+            "Overbought", 
+            value=st.session_state.trading_params['rsi_overbought'],
+            min_value=60, 
+            max_value=90,
+            step=1,
+            help="RSI overbought level"
         )
-        st.session_state.trading_params['required_indicators'] = st.selectbox(
-            "Required Indicators", options=[2, 3], index=0
-        )
-        st.session_state.trading_params['max_open_trades'] = st.number_input(
-            "Max Open Trades", value=3, min_value=1, max_value=10
+    with col3:
+        st.session_state.trading_params['rsi_oversold'] = st.number_input(
+            "Oversold", 
+            value=st.session_state.trading_params['rsi_oversold'],
+            min_value=10, 
+            max_value=40,
+            step=1,
+            help="RSI oversold level"
         )
     
-    if st.button("🔄 Reset System", use_container_width=True):
+    st.write("**MACD Settings**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.session_state.trading_params['macd_fast'] = st.number_input(
+            "MACD Fast", 
+            value=st.session_state.trading_params['macd_fast'],
+            min_value=5, 
+            max_value=20,
+            step=1,
+            help="MACD fast EMA period"
+        )
+    with col2:
+        st.session_state.trading_params['macd_slow'] = st.number_input(
+            "MACD Slow", 
+            value=st.session_state.trading_params['macd_slow'],
+            min_value=15, 
+            max_value=50,
+            step=1,
+            help="MACD slow EMA period"
+        )
+    with col3:
+        st.session_state.trading_params['macd_signal'] = st.number_input(
+            "MACD Signal", 
+            value=st.session_state.trading_params['macd_signal'],
+            min_value=5, 
+            max_value=20,
+            step=1,
+            help="MACD signal line period"
+        )
+    
+    st.divider()
+    
+    # Risk Management - ALWAYS VISIBLE
+    st.subheader("🛡️ Risk Management")
+    st.session_state.trading_params['daily_loss_limit'] = st.number_input(
+        "Daily Loss Limit (%)", 
+        value=st.session_state.trading_params['daily_loss_limit'],
+        min_value=1.0, 
+        max_value=20.0,
+        step=1.0,
+        help="Stop trading if daily losses exceed this percentage"
+    )
+    
+    st.session_state.trading_params['max_drawdown'] = st.number_input(
+        "Max Drawdown (%)", 
+        value=st.session_state.trading_params['max_drawdown'],
+        min_value=5.0, 
+        max_value=30.0,
+        step=1.0,
+        help="Pause trading if drawdown from peak exceeds this percentage"
+    )
+    
+    st.divider()
+    
+    # Current Parameters Summary
+    st.subheader("📈 Current Settings")
+    params = st.session_state.trading_params
+    st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
+    st.write(f"**Risk/Trade:** {params['max_risk_percent']}%")
+    st.write(f"**TP/SL:** ±{params['profit_target']}%")
+    st.write(f"**Indicators:** {params['required_indicators']}/3 required")
+    st.write(f"**Candles:** {params['candles_to_analyze']} analyzed")
+    st.write(f"**Timeframe:** 15min")
+    
+    st.divider()
+    
+    # System Controls
+    st.subheader("🔧 System Controls")
+    if st.button("🔄 Apply Parameters & Reset", use_container_width=True, type="primary"):
         reset_trading_system()
-        st.success("System Reset!")
+        st.success("Parameters applied and system reset!")
+    
+    if st.button("🗑️ Clear All Trades", use_container_width=True):
+        st.session_state.open_trades = []
+        st.session_state.trade_history = []
+        st.success("All trades cleared!")
+    
+    st.divider()
+    
+    # Trading Pairs Info
+    st.subheader("📊 Monitoring Pairs")
+    for pair in trading_pairs:
+        current_price = st.session_state.current_prices.get(pair, 0)
+        st.write(f"• {pair}: ${current_price:.4f}")
+    
+    st.divider()
+    
+    # Trading Rules
+    st.subheader("🎯 Trading Rules")
+    st.write(f"• **15-minute timeframe**")
+    st.write(f"• **{params['candles_to_analyze']}-candle analysis**")
+    st.write(f"• **{params['required_indicators']} indicator agreement** required")
+    st.write("• **No duplicate trades** per pair")
+    st.write("• **Dynamic position sizing** based on risk %")
 
 # Execute auto trading
 auto_trades_executed = execute_auto_trades()
