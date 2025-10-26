@@ -123,6 +123,19 @@ st.markdown("""
         border-radius: 4px;
         color: white;
     }
+    .trade-row {
+        background: rgba(248, 249, 250, 0.8);
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        border-radius: 5px;
+        border-left: 4px solid #667eea;
+    }
+    .trade-buy {
+        border-left: 4px solid #00ff88 !important;
+    }
+    .trade-sell {
+        border-left: 4px solid #ff4444 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -383,6 +396,37 @@ def execute_trade(pair, direction, entry_price, stake_amount):
     except Exception as e:
         return False
 
+def close_trade(trade_id, close_price=None):
+    """Close a specific trade manually"""
+    for i, trade in enumerate(st.session_state.open_trades):
+        if trade['id'] == trade_id and trade['status'] == 'open':
+            if close_price is None:
+                close_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+            
+            # Calculate final P&L
+            if trade['direction'] == 'BUY':
+                profit_loss = (close_price - trade['entry_price']) / trade['entry_price'] * 100
+            else:
+                profit_loss = (trade['entry_price'] - close_price) / trade['entry_price'] * 100
+            
+            profit_loss_dollar = profit_loss * trade['stake'] / 100
+            
+            # Update trade details
+            trade['status'] = 'closed'
+            trade['close_time'] = datetime.now()
+            trade['close_price'] = close_price
+            trade['profit_loss'] = profit_loss_dollar
+            trade['close_reason'] = 'MANUAL'
+            
+            # Move to trade history and return stake + P&L
+            st.session_state.trade_history.append(trade.copy())
+            st.session_state.bank_balance += trade['stake'] + profit_loss_dollar
+            
+            # Remove from open trades
+            st.session_state.open_trades.pop(i)
+            return True
+    return False
+
 def execute_auto_trades():
     if not st.session_state.auto_trading:
         return []
@@ -446,6 +490,7 @@ def update_trades():
                 trade['status'] = 'closed'
                 trade['close_time'] = datetime.now()
                 trade['close_price'] = current_price
+                trade['close_reason'] = 'TP/SL' if profit_loss >= profit_target else 'STOP LOSS'
                 st.session_state.bank_balance += trade['stake'] + profit_loss_dollar
                 st.session_state.trade_history.append(trade.copy())
                 trades_to_remove.append(i)
@@ -842,13 +887,53 @@ tab1, tab2 = st.tabs(["Open Trades", "Closed Trades"])
 
 with tab1:
     if st.session_state.open_trades:
+        # Display each open trade with a stop button
+        for trade in st.session_state.open_trades:
+            trade_class = "trade-buy" if trade['direction'] == 'BUY' else "trade-sell"
+            profit_class = "profit-positive" if trade['profit_loss'] >= 0 else "profit-negative"
+            
+            col1, col2, col3 = st.columns([3, 2, 1])
+            
+            with col1:
+                st.markdown(f"""
+                <div class="trade-row {trade_class}">
+                    <strong>{trade['pair']} {trade['direction']}</strong><br>
+                    Entry: ${trade['entry_price']:.4f} | Current: ${trade['current_price']:.4f}<br>
+                    P&L: <span class="{profit_class}">${trade['profit_loss']:.2f}</span> | Stake: ${trade['stake']:.2f}
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                # Calculate percentage P&L
+                if trade['direction'] == 'BUY':
+                    pnl_percent = (trade['current_price'] - trade['entry_price']) / trade['entry_price'] * 100
+                else:
+                    pnl_percent = (trade['entry_price'] - trade['current_price']) / trade['entry_price'] * 100
+                
+                st.metric(
+                    "P&L %", 
+                    f"{pnl_percent:+.2f}%",
+                    delta=f"{pnl_percent:+.2f}%"
+                )
+            
+            with col3:
+                # Stop trading button for this specific trade
+                if st.button(f"🛑 Stop", key=f"stop_{trade['id']}", use_container_width=True):
+                    if close_trade(trade['id']):
+                        st.success(f"Trade {trade['id']} closed manually!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to close trade")
+        
+        # Also show as dataframe for overview
+        st.subheader("Open Trades Overview")
         open_df = pd.DataFrame(st.session_state.open_trades)
-        # Format the display
-        display_df = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'stake', 'time']].copy()
-        display_df['profit_loss'] = display_df['profit_loss'].round(2)
-        display_df['entry_price'] = display_df['entry_price'].round(4)
-        display_df['current_price'] = display_df['current_price'].round(4)
-        st.dataframe(display_df, use_container_width=True)
+        if not open_df.empty:
+            display_df = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'stake', 'time']].copy()
+            display_df['profit_loss'] = display_df['profit_loss'].round(2)
+            display_df['entry_price'] = display_df['entry_price'].round(4)
+            display_df['current_price'] = display_df['current_price'].round(4)
+            st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No open trades")
 
@@ -856,7 +941,7 @@ with tab2:
     if st.session_state.trade_history:
         closed_df = pd.DataFrame(st.session_state.trade_history)
         # Format the display
-        display_df = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'stake', 'time', 'close_time']].copy()
+        display_df = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'stake', 'time', 'close_time', 'close_reason']].copy()
         display_df['profit_loss'] = display_df['profit_loss'].round(2)
         display_df['entry_price'] = display_df['entry_price'].round(4)
         display_df['close_price'] = display_df['close_price'].round(4)
