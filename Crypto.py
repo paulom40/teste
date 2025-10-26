@@ -107,6 +107,22 @@ st.markdown("""
     .no-agreement {
         border: 3px solid #ffaa00;
     }
+    .indicator-buy {
+        background: rgba(0, 255, 136, 0.2);
+        border-left: 4px solid #00ff88;
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        border-radius: 4px;
+        color: white;
+    }
+    .indicator-sell {
+        background: rgba(255, 68, 68, 0.2);
+        border-left: 4px solid #ff4444;
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        border-radius: 4px;
+        color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -160,6 +176,10 @@ if 'current_prices' not in st.session_state:
         "BNB/USDT": 500, "XRP/USDT": 0.5, "SOL/USDT": 150, 
         "ADA/USDT": 0.4, "DOT/USDT": 7.0, "DOGE/USDT": 0.15
     }
+if 'last_auto_trade' not in st.session_state:
+    st.session_state.last_auto_trade = {}
+if 'trade_counter' not in st.session_state:
+    st.session_state.trade_counter = 0
 
 # Trading pairs
 trading_pairs = list(coin_map.keys())
@@ -240,17 +260,12 @@ def detect_trading_signals(df):
     buy_indicators = []
     sell_indicators = []
     params = st.session_state.trading_params
-    candles_to_analyze = params['candles_to_analyze']
     
     try:
-        if len(df) < candles_to_analyze + 10:
+        if len(df) < 20:
             return [], [], [], 'NONE'
         
-        # Analyze last N candles
-        recent_data = df.tail(candles_to_analyze).reset_index(drop=True)
-        candles = [recent_data.iloc[i] for i in range(len(recent_data))]
-        
-        latest = candles[-1]
+        latest = df.iloc[-1]
         
         # 1. Moving Average Signals
         if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']):
@@ -277,6 +292,8 @@ def detect_trading_signals(df):
         total_buy = len(buy_indicators)
         total_sell = len(sell_indicators)
         required = params['required_indicators']
+        
+        st.write(f"🔍 DEBUG: {total_buy} buy indicators, {total_sell} sell indicators, required: {required}")
         
         if total_buy >= required and total_sell == 0:
             agreement = 'BUY'
@@ -328,6 +345,125 @@ def scan_all_pairs_signals():
     
     return all_signals
 
+def can_open_trade(pair, direction):
+    params = st.session_state.trading_params
+    
+    # Check if we already have a trade for this pair in the same direction
+    existing_trades = [t for t in st.session_state.open_trades if t['pair'] == pair and t['direction'] == direction]
+    if existing_trades:
+        return False
+    
+    # Check max open trades
+    if len(st.session_state.open_trades) >= params['max_open_trades']:
+        return False
+    
+    # Check bank balance
+    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+    if st.session_state.bank_balance < risk_amount:
+        return False
+    
+    return True
+
+def execute_trade(pair, direction, entry_price, stake_amount):
+    try:
+        st.session_state.trade_counter += 1
+        trade = {
+            'id': st.session_state.trade_counter,
+            'pair': pair,
+            'direction': direction,
+            'entry_price': entry_price,
+            'stake': stake_amount,
+            'time': datetime.now(),
+            'status': 'open',
+            'profit_loss': 0,
+            'current_price': entry_price,
+            'type': 'AUTO'
+        }
+        st.session_state.open_trades.append(trade)
+        st.session_state.bank_balance -= stake_amount
+        return True
+    except Exception as e:
+        return False
+
+def execute_auto_trades():
+    if not st.session_state.auto_trading:
+        return []
+    
+    auto_trades_executed = []
+    params = st.session_state.trading_params
+    
+    try:
+        all_signals = scan_all_pairs_signals()
+        
+        for pair, signal_info in all_signals.items():
+            signals = signal_info.get('signals', [])
+            agreement = signal_info.get('agreement', 'NONE')
+            
+            st.write(f"🔍 Checking {pair}: Agreement = {agreement}, Signals = {len(signals)}")
+            
+            for signal_type, count, indicators in signals:
+                if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
+                    current_price = st.session_state.current_prices.get(pair, 100)
+                    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                    
+                    st.write(f"🎯 Attempting BUY trade for {pair} at ${current_price:.2f}")
+                    
+                    if execute_trade(pair, 'BUY', current_price, risk_amount):
+                        auto_trades_executed.append(f"✅ AUTO BUY {pair} - {count} indicators: {', '.join(indicators)}")
+                        st.session_state.last_auto_trade[pair] = datetime.now()
+                        st.success(f"✅ AUTO BUY executed for {pair}!")
+                
+                elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
+                    current_price = st.session_state.current_prices.get(pair, 100)
+                    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+                    
+                    st.write(f"🎯 Attempting SELL trade for {pair} at ${current_price:.2f}")
+                    
+                    if execute_trade(pair, 'SELL', current_price, risk_amount):
+                        auto_trades_executed.append(f"❌ AUTO SELL {pair} - {count} indicators: {', '.join(indicators)}")
+                        st.session_state.last_auto_trade[pair] = datetime.now()
+                        st.error(f"❌ AUTO SELL executed for {pair}!")
+                        
+    except Exception as e:
+        st.error(f"Error in auto trading: {e}")
+    
+    return auto_trades_executed
+
+def update_trades():
+    params = st.session_state.trading_params
+    profit_target = params['profit_target']
+    stop_loss = params['stop_loss']
+    
+    trades_to_remove = []
+    for i, trade in enumerate(st.session_state.open_trades):
+        if trade['status'] == 'open':
+            current_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+            
+            # Calculate P&L based on price movement
+            if trade['direction'] == 'BUY':
+                profit_loss = (current_price - trade['entry_price']) / trade['entry_price'] * 100
+            else:
+                profit_loss = (trade['entry_price'] - current_price) / trade['entry_price'] * 100
+            
+            # Convert to dollar amount
+            profit_loss_dollar = profit_loss * trade['stake'] / 100
+            
+            trade['profit_loss'] = profit_loss_dollar
+            trade['current_price'] = current_price
+            
+            # Check if trade should be closed
+            if profit_loss >= profit_target or profit_loss <= -stop_loss:
+                trade['status'] = 'closed'
+                trade['close_time'] = datetime.now()
+                trade['close_price'] = current_price
+                st.session_state.bank_balance += trade['stake'] + profit_loss_dollar
+                st.session_state.trade_history.append(trade.copy())
+                trades_to_remove.append(i)
+    
+    # Remove closed trades
+    for i in sorted(trades_to_remove, reverse=True):
+        st.session_state.open_trades.pop(i)
+
 def reset_trading_system():
     st.session_state.bank_balance = st.session_state.trading_params['initial_bank']
     st.session_state.open_trades = []
@@ -338,6 +474,7 @@ def reset_trading_system():
         "BNB/USDT": 500, "XRP/USDT": 0.5, "SOL/USDT": 150, 
         "ADA/USDT": 0.4, "DOT/USDT": 7.0, "DOGE/USDT": 0.15
     }
+    st.session_state.trade_counter = 0
 
 # MAIN APP LAYOUT
 st.markdown('<h1 class="main-header">🤖 Crypto 15min Trading Bot</h1>', unsafe_allow_html=True)
@@ -348,11 +485,11 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Start Auto Trading", use_container_width=True):
+        if st.button("🚀 Start Auto Trading", use_container_width=True, type="primary"):
             st.session_state.auto_trading = True
             st.success("Auto Trading Started!")
     with col2:
-        if st.button("🛑 Stop Auto Trading", use_container_width=True):
+        if st.button("🛑 Stop Auto Trading", use_container_width=True, type="secondary"):
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
@@ -371,18 +508,25 @@ with st.sidebar:
     
     with st.expander("Trade Settings"):
         st.session_state.trading_params['profit_target'] = st.number_input(
-            "Profit Target (pips)", value=15, min_value=1, max_value=100
+            "Profit Target %", value=15.0, min_value=1.0, max_value=100.0
         )
         st.session_state.trading_params['stop_loss'] = st.number_input(
-            "Stop Loss (pips)", value=10, min_value=1, max_value=100
+            "Stop Loss %", value=10.0, min_value=1.0, max_value=100.0
         )
-        st.session_state.trading_params['candles_to_analyze'] = st.number_input(
-            "Candles to Analyze", value=4, min_value=2, max_value=10
+        st.session_state.trading_params['required_indicators'] = st.selectbox(
+            "Required Indicators", options=[2, 3], index=0
+        )
+        st.session_state.trading_params['max_open_trades'] = st.number_input(
+            "Max Open Trades", value=3, min_value=1, max_value=10
         )
     
     if st.button("🔄 Reset System", use_container_width=True):
         reset_trading_system()
         st.success("System Reset!")
+
+# Execute auto trading
+auto_trades_executed = execute_auto_trades()
+update_trades()
 
 # Scan for signals
 st.session_state.all_signals = scan_all_pairs_signals()
@@ -427,9 +571,18 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
+# Show auto trade executions
+if auto_trades_executed:
+    st.subheader("🤖 Auto Trade Executions")
+    for trade in auto_trades_executed:
+        if "BUY" in trade:
+            st.success(trade)
+        else:
+            st.error(trade)
+
 # TRADING PAIRS SIGNALS
 st.subheader("🎯 Trading Signals - 15min Timeframe")
-st.write(f"Analyzing last **{st.session_state.trading_params['candles_to_analyze']} candles** for each pair")
+st.write(f"**Required Agreement:** {st.session_state.trading_params['required_indicators']} out of 3 indicators")
 
 # Display pairs in a grid
 cols = st.columns(3)
@@ -441,6 +594,8 @@ for idx, pair in enumerate(trading_pairs):
         agreement = signal_info.get('agreement', 'NONE')
         current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
         price_change = signal_info.get('price_change', 0)
+        buy_indicators = signal_info.get('buy_indicators', [])
+        sell_indicators = signal_info.get('sell_indicators', [])
         
         if agreement == 'BUY':
             signal_class = "signal-strong-buy"
@@ -481,23 +636,16 @@ for idx, pair in enumerate(trading_pairs):
         </div>
         """, unsafe_allow_html=True)
         
-        # Show indicator details
-        with st.expander(f"View {pair} indicators"):
-            buy_indicators = signal_info.get('buy_indicators', [])
-            sell_indicators = signal_info.get('sell_indicators', [])
-            
-            if buy_indicators:
-                st.write("**Buy Indicators:**")
-                for indicator in buy_indicators:
-                    st.success(f"✅ {indicator}")
-            
-            if sell_indicators:
-                st.write("**Sell Indicators:**")
-                for indicator in sell_indicators:
-                    st.error(f"❌ {indicator}")
-            
-            if not buy_indicators and not sell_indicators:
-                st.info("No clear signals detected")
+        # Show indicators directly on the card
+        if buy_indicators:
+            st.write("**Buy Indicators:**")
+            for indicator in buy_indicators:
+                st.markdown(f'<div class="indicator-buy">✅ {indicator}</div>', unsafe_allow_html=True)
+        
+        if sell_indicators:
+            st.write("**Sell Indicators:**")
+            for indicator in sell_indicators:
+                st.markdown(f'<div class="indicator-sell">❌ {indicator}</div>', unsafe_allow_html=True)
 
 # TRADE HISTORY
 st.subheader("📋 Trade History")
@@ -507,48 +655,26 @@ tab1, tab2 = st.tabs(["Open Trades", "Closed Trades"])
 with tab1:
     if st.session_state.open_trades:
         open_df = pd.DataFrame(st.session_state.open_trades)
-        st.dataframe(open_df, use_container_width=True)
+        # Format the display
+        display_df = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'stake', 'time']].copy()
+        display_df['profit_loss'] = display_df['profit_loss'].round(2)
+        display_df['entry_price'] = display_df['entry_price'].round(4)
+        display_df['current_price'] = display_df['current_price'].round(4)
+        st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No open trades")
 
 with tab2:
     if st.session_state.trade_history:
         closed_df = pd.DataFrame(st.session_state.trade_history)
-        st.dataframe(closed_df, use_container_width=True)
+        # Format the display
+        display_df = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'stake', 'time', 'close_time']].copy()
+        display_df['profit_loss'] = display_df['profit_loss'].round(2)
+        display_df['entry_price'] = display_df['entry_price'].round(4)
+        display_df['close_price'] = display_df['close_price'].round(4)
+        st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No trade history")
-
-# Add some sample trades for demonstration
-if not st.session_state.trade_history and not st.session_state.open_trades:
-    st.info("💡 **Demo Mode**: Add some sample trades to see the interface")
-    if st.button("Add Sample Trades"):
-        # Add sample open trade
-        st.session_state.open_trades.append({
-            'id': 1,
-            'pair': 'BNB/USDT',
-            'direction': 'BUY',
-            'entry_price': 510.25,
-            'stake': 50,
-            'time': datetime.now(),
-            'status': 'open',
-            'profit_loss': 12.50,
-            'type': 'MANUAL'
-        })
-        # Add sample closed trade
-        st.session_state.trade_history.append({
-            'id': 1,
-            'pair': 'XRP/USDT',
-            'direction': 'SELL',
-            'entry_price': 0.52,
-            'close_price': 0.48,
-            'stake': 30,
-            'time': datetime.now() - timedelta(hours=2),
-            'close_time': datetime.now() - timedelta(hours=1),
-            'status': 'closed',
-            'profit_loss': 24.00,
-            'type': 'AUTO'
-        })
-        st.rerun()
 
 # Auto-refresh
 st.divider()
