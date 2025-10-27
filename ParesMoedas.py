@@ -114,6 +114,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Technical indicator functions
+def calculate_rsi(prices, period=14):
+    """Calculate RSI indicator"""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_moving_averages(prices, fast_period=20, slow_period=50):
+    """Calculate moving averages"""
+    ma_fast = prices.rolling(window=fast_period).mean()
+    ma_slow = prices.rolling(window=slow_period).mean()
+    return ma_fast, ma_slow
+
+def generate_sample_data(days=80, initial_price=100, volatility=2):
+    """Generate realistic sample price data"""
+    np.random.seed(42)  # For reproducible results
+    dates = pd.date_range(start=datetime.now() - timedelta(days=days), 
+                         end=datetime.now(), freq='D')
+    
+    # Generate more realistic price data with trends
+    returns = np.random.randn(len(dates)) * volatility / 100
+    prices = initial_price * (1 + returns).cumprod()
+    
+    return pd.DataFrame({'Date': dates, 'Price': prices})
+
 # Main application
 def main():
     # Header
@@ -141,12 +169,20 @@ def main():
         ["RSI + Moving Average Crossover", "MACD + Bollinger Bands", "Stochastic + Volume Profile"]
     )
     
+    # Generate sample data
+    df = generate_sample_data()
+    
+    # Calculate indicators
+    df['RSI'] = calculate_rsi(df['Price'], period=rsi_period)
+    df['MA_Fast'], df['MA_Slow'] = calculate_moving_averages(df['Price'], ma_fast, ma_slow)
+    
     # Main content area
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Current Balance", f"${initial_balance:,.2f}", delta="+2.3%")
+        current_price = df['Price'].iloc[-1]
+        st.metric("Current Price", f"${current_price:.2f}", delta="+2.3%")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -167,75 +203,101 @@ def main():
     # Trading signals section
     st.subheader("📊 Current Trading Signals")
     
+    # Determine current signal based on indicators
+    current_rsi = df['RSI'].iloc[-1]
+    current_ma_fast = df['MA_Fast'].iloc[-1]
+    current_ma_slow = df['MA_Slow'].iloc[-1]
+    current_price = df['Price'].iloc[-1]
+    
+    # Simple signal logic
+    if (current_rsi < 30 and current_price > current_ma_fast and current_ma_fast > current_ma_slow):
+        signal_class = "signal-strong-buy"
+        signal_text = "STRONG BUY"
+        signal_reason = "RSI Oversold + Bullish MA Alignment"
+    elif (current_rsi > 70 and current_price < current_ma_fast and current_ma_fast < current_ma_slow):
+        signal_class = "signal-strong-sell"
+        signal_text = "STRONG SELL"
+        signal_reason = "RSI Overbought + Bearish MA Alignment"
+    elif (current_rsi < 40 and current_price > current_ma_fast):
+        signal_class = "signal-buy"
+        signal_text = "BUY"
+        signal_reason = "RSI Approaching Oversold + Price above Fast MA"
+    elif (current_rsi > 60 and current_price < current_ma_fast):
+        signal_class = "signal-sell"
+        signal_text = "SELL"
+        signal_reason = "RSI Approaching Overbought + Price below Fast MA"
+    else:
+        signal_class = "signal-neutral"
+        signal_text = "NEUTRAL"
+        signal_reason = "Waiting for clearer signals"
+    
     signal_col1, signal_col2, signal_col3, signal_col4 = st.columns(4)
     
     with signal_col1:
-        st.markdown('<div class="signal-strong-buy">STRONG BUY</div>', unsafe_allow_html=True)
-        st.write("RSI: Oversold")
-        st.write("MA: Bullish Crossover")
+        st.markdown(f'<div class="{signal_class}">{signal_text}</div>', unsafe_allow_html=True)
+        st.write(signal_reason)
+        st.write(f"RSI: {current_rsi:.1f}")
     
     with signal_col2:
-        st.markdown('<div class="signal-buy">BUY</div>', unsafe_allow_html=True)
-        st.write("MACD: Positive")
-        st.write("Volume: Increasing")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("RSI", f"{current_rsi:.1f}", 
+                 delta="Oversold" if current_rsi < 30 else "Overbought" if current_rsi > 70 else "Neutral")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with signal_col3:
-        st.markdown('<div class="signal-neutral">NEUTRAL</div>', unsafe_allow_html=True)
-        st.write("Stochastic: Neutral")
-        st.write("Trend: Sideways")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        ma_signal = "Bullish" if current_ma_fast > current_ma_slow else "Bearish"
+        st.metric("MA Signal", ma_signal)
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with signal_col4:
-        st.markdown('<div class="signal-sell">SELL</div>', unsafe_allow_html=True)
-        st.write("Bollinger: Upper Band")
-        st.write("RSI: Overbought")
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        price_vs_ma = "Above MA" if current_price > current_ma_fast else "Below MA"
+        st.metric("Price Position", price_vs_ma)
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Charts section
     st.subheader("📈 Technical Analysis")
     
-    # Generate sample data for demonstration
-    dates = pd.date_range(start='2024-01-01', end='2024-03-20', freq='D')
-    prices = 100 + np.cumsum(np.random.randn(len(dates)) * 2)
-    
-    # Create sample DataFrame
-    df = pd.DataFrame({
-        'Date': dates,
-        'Price': prices,
-        'MA_Fast': prices.rolling(window=ma_fast).mean(),
-        'MA_Slow': prices.rolling(window=ma_slow).mean(),
-        'RSI': 50 + np.random.randn(len(dates)) * 10  # Sample RSI values
-    })
-    
     # Price chart with moving averages
     fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['Price'], mode='lines', name='Price', line=dict(color='#667eea')))
-    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['MA_Fast'], mode='lines', name=f'MA {ma_fast}', line=dict(color='#ff4444')))
-    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['MA_Slow'], mode='lines', name=f'MA {ma_slow}', line=dict(color='#00ff88')))
+    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['Price'], mode='lines', name='Price', line=dict(color='#667eea', width=2)))
+    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['MA_Fast'], mode='lines', name=f'MA {ma_fast}', line=dict(color='#ff4444', width=1.5)))
+    fig_price.add_trace(go.Scatter(x=df['Date'], y=df['MA_Slow'], mode='lines', name=f'MA {ma_slow}', line=dict(color='#00ff88', width=1.5)))
     
     fig_price.update_layout(
         title=f'{trading_pair} Price Chart with Moving Averages',
         xaxis_title='Date',
-        yaxis_title='Price',
+        yaxis_title='Price ($)',
         template='plotly_dark',
-        height=400
+        height=400,
+        showlegend=True
     )
     
     # RSI chart
     fig_rsi = go.Figure()
-    fig_rsi.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], mode='lines', name='RSI', line=dict(color='#ffa500')))
+    fig_rsi.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], mode='lines', name='RSI', line=dict(color='#ffa500', width=2)))
     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
     fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
+    fig_rsi.add_hline(y=50, line_dash="dot", line_color="gray")
     
     fig_rsi.update_layout(
         title='RSI Indicator',
         xaxis_title='Date',
         yaxis_title='RSI',
         template='plotly_dark',
-        height=300
+        height=300,
+        yaxis_range=[0, 100]
     )
     
     # Display charts
-    st.plotly_chart(fig_price, use_container_width=True)
-    st.plotly_chart(fig_rsi, use_container_width=True)
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.plotly_chart(fig_price, use_container_width=True)
+    
+    with col2:
+        st.plotly_chart(fig_rsi, use_container_width=True)
     
     # Trading history
     st.subheader("📋 Recent Trading Activity")
