@@ -244,7 +244,7 @@ if 'trade_history' not in st.session_state:
         'Entry Price': [],
         'Exit Price': [],
         'Quantity': [],
-        'P&L': [],
+        'P&L': [],  # This will store numeric values
         'Status': [],
         'Signal Strength': [],
         'Signal Count': []
@@ -271,7 +271,7 @@ def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl
         'Entry Price': [entry_price],
         'Exit Price': [exit_price],
         'Quantity': [quantity],
-        'P&L': [pnl],
+        'P&L': [pnl],  # Store as numeric value
         'Status': [status],
         'Signal Strength': [signal_strength],
         'Signal Count': [signal_count]
@@ -393,7 +393,7 @@ def execute_auto_trade(signal_data, lot_size, risk_percent):
         entry_price=current_price,
         exit_price=exit_price,
         quantity=quantity,
-        pnl=pnl,
+        pnl=pnl,  # Store as numeric value
         status="Closed",
         signal_strength=signal_data['strength'],
         signal_count=signal_count
@@ -432,6 +432,26 @@ def scan_all_pairs():
             trading_opportunities.append(signal_data)
     
     return trading_opportunities
+
+def calculate_trade_statistics():
+    """Calculate trade statistics from the trade history"""
+    if len(st.session_state.trade_history) == 0:
+        return 0, 0, 0, 0, 0
+    
+    # Ensure P&L column is numeric
+    trade_history = st.session_state.trade_history.copy()
+    
+    # Convert P&L to numeric if it's not already
+    if trade_history['P&L'].dtype == 'object':
+        trade_history['P&L'] = pd.to_numeric(trade_history['P&L'], errors='coerce')
+    
+    total_trades = len(trade_history)
+    winning_trades = len(trade_history[trade_history['P&L'] > 0])
+    losing_trades = len(trade_history[trade_history['P&L'] < 0])
+    total_pnl = trade_history['P&L'].sum()
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    
+    return total_trades, winning_trades, losing_trades, total_pnl, win_rate
 
 # Main application
 def main():
@@ -618,12 +638,8 @@ def main():
     st.subheader("📋 Trade History & Performance")
     
     if len(st.session_state.trade_history) > 0:
-        # Calculate summary statistics
-        total_trades = len(st.session_state.trade_history)
-        winning_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] > 0])
-        losing_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] < 0])
-        total_pnl = st.session_state.trade_history['P&L'].sum()
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        # Calculate summary statistics using the helper function
+        total_trades, winning_trades, losing_trades, total_pnl, win_rate = calculate_trade_statistics()
         
         # Display summary metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -638,17 +654,18 @@ def main():
             avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
             st.metric("Avg P&L per Trade", f"${avg_pnl:.2f}")
         
-        # Display the trade history table
+        # Display the trade history table with formatted values
         styled_history = st.session_state.trade_history.copy()
         styled_history = styled_history.sort_values('Date', ascending=False)
         
-        # Format numbers
-        styled_history['Entry Price'] = styled_history['Entry Price'].apply(lambda x: f"{x:.5f}")
-        styled_history['Exit Price'] = styled_history['Exit Price'].apply(lambda x: f"{x:.5f}")
-        styled_history['P&L'] = styled_history['P&L'].apply(lambda x: f"${x:.2f}")
+        # Create a copy for display with formatted values
+        display_history = styled_history.copy()
+        display_history['Entry Price'] = display_history['Entry Price'].apply(lambda x: f"{x:.5f}")
+        display_history['Exit Price'] = display_history['Exit Price'].apply(lambda x: f"{x:.5f}")
+        display_history['P&L'] = display_history['P&L'].apply(lambda x: f"${x:.2f}")
         
         st.dataframe(
-            styled_history,
+            display_history,
             width='stretch',
             height=400,
             use_container_width=True
