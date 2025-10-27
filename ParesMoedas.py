@@ -721,8 +721,7 @@ def main():
         st.dataframe(
             display_history,
             width='stretch',
-            height=400,
-            use_container_width=True
+            height=400
         )
         
         # Download button for trade history
