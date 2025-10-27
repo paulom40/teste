@@ -381,6 +381,10 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
     signal_count = signal_data['signal_count']
     current_price = signal_data['price']
     
+    # NEW: Check maximum simultaneous trades limit (3)
+    if len(st.session_state.open_positions) >= 3:
+        return f"❌ Maximum of 3 simultaneous trades reached. Cannot open new position for {pair}"
+    
     # Check if we already have an open position for this pair
     if pair in st.session_state.open_positions:
         return f"Position already open for {pair}"
@@ -912,6 +916,7 @@ def main():
         - **Advanced Risk Management**: Configurable target profit and stop loss
         - **Real-time Monitoring**: Live tracking of opportunities and positions
         - **Euro Stake Management**: Set your stake amount in euros for each trade
+        - **Maximum 3 Simultaneous Trades**: Limits risk by allowing only up to 3 open positions at once
         
         **Risk Management Features:**
         - **Target Profit**: Set your take profit level in pips
