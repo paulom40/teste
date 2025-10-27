@@ -245,9 +245,11 @@ if 'trade_history' not in st.session_state:
         'Exit Price': [],
         'Quantity': [],
         'P&L': [],  # This will store numeric values
+        'P&L (€)': [],  # New column for P&L in euros
         'Status': [],
         'Signal Strength': [],
-        'Signal Count': []
+        'Signal Count': [],
+        'Stake (€)': []  # New column for stake in euros
     })
 
 if 'auto_trading' not in st.session_state:
@@ -262,7 +264,10 @@ if 'open_positions' not in st.session_state:
 if 'scan_count' not in st.session_state:
     st.session_state.scan_count = 0
 
-def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, status, signal_strength, signal_count):
+if 'stake_euros' not in st.session_state:
+    st.session_state.stake_euros = 100.0  # Default stake in euros
+
+def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, pnl_eur, status, signal_strength, signal_count, stake_eur):
     """Add a new trade to the history - FIXED VERSION"""
     # Create a proper DataFrame for the new trade
     new_trade = pd.DataFrame({
@@ -273,9 +278,11 @@ def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl
         'Exit Price': [float(exit_price)],
         'Quantity': [float(quantity)],
         'P&L': [float(pnl)],  # Store as numeric value
+        'P&L (€)': [float(pnl_eur)],  # P&L in euros
         'Status': [status],
         'Signal Strength': [signal_strength],
-        'Signal Count': [int(signal_count)]
+        'Signal Count': [int(signal_count)],
+        'Stake (€)': [float(stake_eur)]  # Stake in euros
     })
     
     # Properly concatenate DataFrames
@@ -359,7 +366,7 @@ def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
             'signals': {}
         }
 
-def execute_auto_trade(signal_data, lot_size, risk_percent):
+def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur):
     """Execute an automated trade based on signal data"""
     pair = signal_data['pair']
     direction = signal_data['signal']
@@ -382,6 +389,11 @@ def execute_auto_trade(signal_data, lot_size, risk_percent):
     base_pnl = np.random.uniform(10, 100) if signal_data['strength'] == "Strong" else np.random.uniform(-20, 50)
     pnl = base_pnl * (1 if np.random.random() > 0.3 else -1)  # 70% win rate
     
+    # Calculate P&L in euros based on stake
+    # For demonstration, we'll scale the P&L based on the stake amount
+    # In real trading, this would be calculated based on actual position size and price movement
+    pnl_eur = pnl * (stake_eur / 100)  # Scale P&L based on stake
+    
     # Calculate exit price based on direction
     if direction == "BUY":
         exit_price = current_price * (1 + np.random.uniform(0.001, 0.005))
@@ -396,9 +408,11 @@ def execute_auto_trade(signal_data, lot_size, risk_percent):
         exit_price=exit_price,
         quantity=quantity,
         pnl=pnl,  # Store as numeric value
+        pnl_eur=pnl_eur,  # P&L in euros
         status="Closed",
         signal_strength=signal_data['strength'],
-        signal_count=signal_count
+        signal_count=signal_count,
+        stake_eur=stake_eur  # Stake in euros
     )
     
     # Add to open positions
@@ -406,10 +420,11 @@ def execute_auto_trade(signal_data, lot_size, risk_percent):
         'direction': direction,
         'entry_price': current_price,
         'quantity': quantity,
-        'entry_time': datetime.now()
+        'entry_time': datetime.now(),
+        'stake_eur': stake_eur
     }
     
-    return f"Auto trade executed: {direction} {pair} with {signal_count} signals"
+    return f"Auto trade executed: {direction} {pair} with {signal_count} signals (Stake: €{stake_eur:.2f})"
 
 def scan_all_pairs():
     """Scan all Forex pairs for trading opportunities"""
@@ -438,22 +453,25 @@ def scan_all_pairs():
 def calculate_trade_statistics():
     """Calculate trade statistics from the trade history"""
     if len(st.session_state.trade_history) == 0:
-        return 0, 0, 0, 0, 0
+        return 0, 0, 0, 0, 0, 0, 0
     
-    # Ensure P&L column is numeric
+    # Ensure P&L columns are numeric
     trade_history = st.session_state.trade_history.copy()
     
     # Convert P&L to numeric if it's not already
     if trade_history['P&L'].dtype == 'object':
         trade_history['P&L'] = pd.to_numeric(trade_history['P&L'], errors='coerce')
+    if trade_history['P&L (€)'].dtype == 'object':
+        trade_history['P&L (€)'] = pd.to_numeric(trade_history['P&L (€)'], errors='coerce')
     
     total_trades = len(trade_history)
     winning_trades = len(trade_history[trade_history['P&L'] > 0])
     losing_trades = len(trade_history[trade_history['P&L'] < 0])
     total_pnl = trade_history['P&L'].sum()
+    total_pnl_eur = trade_history['P&L (€)'].sum()
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     
-    return total_trades, winning_trades, losing_trades, total_pnl, win_rate
+    return total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate
 
 # Main application
 def main():
@@ -465,6 +483,17 @@ def main():
     st.sidebar.title("⚙️ Forex Trading Configuration")
     
     # Trading parameters
+    st.sidebar.subheader("💰 Stake Configuration")
+    stake_euros = st.sidebar.number_input(
+        "Stake Amount (€)", 
+        value=st.session_state.stake_euros, 
+        min_value=10.0, 
+        max_value=10000.0, 
+        step=50.0,
+        help="Enter the amount you want to stake per trade in euros"
+    )
+    st.session_state.stake_euros = stake_euros
+    
     st.sidebar.subheader("Trading Parameters")
     initial_balance = st.sidebar.number_input("Account Balance ($)", value=10000.0, min_value=1000.0, step=1000.0)
     risk_per_trade = st.sidebar.slider("Risk per Trade (%)", 0.5, 5.0, 1.0)
@@ -507,9 +536,11 @@ def main():
     if st.session_state.auto_trading:
         st.sidebar.markdown('<div class="auto-trading-active">🤖 AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
         st.sidebar.info(f"Scan count: {st.session_state.scan_count}")
+        st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
         st.sidebar.info("Click 'Refresh Scan' to check for new opportunities")
     else:
         st.sidebar.warning("Auto trading is currently OFF")
+        st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
     
     # Forex pairs selection for manual analysis
     forex_pairs = [
@@ -530,13 +561,15 @@ def main():
         st.markdown('<div class="auto-trading-active">🚀 AUTO TRADING ACTIVE - Scanning 12 Forex Pairs</div>', unsafe_allow_html=True)
         
         # Display scan information
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Scan Count", st.session_state.scan_count)
         with col2:
             st.metric("Last Scan", st.session_state.last_scan_time.strftime("%H:%M:%S"))
         with col3:
             st.metric("Open Positions", len(st.session_state.open_positions))
+        with col4:
+            st.metric("Current Stake", f"€{st.session_state.stake_euros:.2f}")
         
         # Scan all pairs for opportunities
         with st.spinner("Scanning all Forex pairs for trading opportunities..."):
@@ -565,7 +598,7 @@ def main():
                 
                 with col5:
                     if st.button(f"Trade {opportunity['pair']}", key=f"trade_{opportunity['pair']}"):
-                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade)
+                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade, st.session_state.stake_euros)
                         st.success(result)
                         st.rerun()
             
@@ -576,7 +609,7 @@ def main():
                 for opportunity in opportunities:
                     # Only execute if we don't already have a position
                     if opportunity['pair'] not in st.session_state.open_positions:
-                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade)
+                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade, st.session_state.stake_euros)
                         executed_trades.append(result)
                 
                 if executed_trades:
@@ -632,16 +665,18 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button(f"🚀 Execute {signal_data['signal']} Trade", type="primary"):
-                    result = execute_auto_trade(signal_data, lot_size, risk_per_trade)
+                    result = execute_auto_trade(signal_data, lot_size, risk_per_trade, st.session_state.stake_euros)
                     st.success(result)
                     st.rerun()
+            with col2:
+                st.info(f"Stake: €{st.session_state.stake_euros:.2f}")
     
     # Trade History Section (always visible)
     st.subheader("📋 Trade History & Performance")
     
     if len(st.session_state.trade_history) > 0:
         # Calculate summary statistics using the helper function
-        total_trades, winning_trades, losing_trades, total_pnl, win_rate = calculate_trade_statistics()
+        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate = calculate_trade_statistics()
         
         # Display summary metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -653,8 +688,23 @@ def main():
             pnl_color = "normal" if total_pnl >= 0 else "inverse"
             st.metric("Total P&L", f"${total_pnl:.2f}", delta_color=pnl_color)
         with col4:
+            pnl_eur_color = "normal" if total_pnl_eur >= 0 else "inverse"
+            st.metric("Total P&L (€)", f"€{total_pnl_eur:.2f}", delta_color=pnl_eur_color)
+        
+        # Additional metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
             avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
             st.metric("Avg P&L per Trade", f"${avg_pnl:.2f}")
+        with col2:
+            avg_pnl_eur = total_pnl_eur / total_trades if total_trades > 0 else 0
+            st.metric("Avg P&L (€) per Trade", f"€{avg_pnl_eur:.2f}")
+        with col3:
+            total_stake = st.session_state.trade_history['Stake (€)'].sum()
+            st.metric("Total Stake", f"€{total_stake:.2f}")
+        with col4:
+            roi = (total_pnl_eur / total_stake * 100) if total_stake > 0 else 0
+            st.metric("ROI", f"{roi:.1f}%")
         
         # Display the trade history table with formatted values
         styled_history = st.session_state.trade_history.copy()
@@ -665,6 +715,8 @@ def main():
         display_history['Entry Price'] = display_history['Entry Price'].apply(lambda x: f"{x:.5f}")
         display_history['Exit Price'] = display_history['Exit Price'].apply(lambda x: f"{x:.5f}")
         display_history['P&L'] = display_history['P&L'].apply(lambda x: f"${x:.2f}")
+        display_history['P&L (€)'] = display_history['P&L (€)'].apply(lambda x: f"€{x:.2f}")
+        display_history['Stake (€)'] = display_history['Stake (€)'].apply(lambda x: f"€{x:.2f}")
         
         st.dataframe(
             display_history,
@@ -692,9 +744,11 @@ def main():
                 'Exit Price': [],
                 'Quantity': [],
                 'P&L': [],
+                'P&L (€)': [],
                 'Status': [],
                 'Signal Strength': [],
-                'Signal Count': []
+                'Signal Count': [],
+                'Stake (€)': []
             })
             st.session_state.open_positions = {}
             st.success("Trade history cleared!")
@@ -707,7 +761,7 @@ def main():
     if st.session_state.open_positions:
         st.subheader("📈 Open Positions")
         for pair, position in st.session_state.open_positions.items():
-            col1, col2, col3, col4, col5 = st.columns([2,1,2,2,1])
+            col1, col2, col3, col4, col5, col6 = st.columns([2,1,2,2,2,1])
             with col1:
                 st.write(f"**{pair}**")
             with col2:
@@ -717,6 +771,8 @@ def main():
             with col4:
                 st.write(f"Qty: {position['quantity']}")
             with col5:
+                st.write(f"Stake: €{position['stake_eur']:.2f}")
+            with col6:
                 if st.button(f"Close {pair}", key=f"close_{pair}"):
                     del st.session_state.open_positions[pair]
                     st.success(f"Closed position for {pair}")
@@ -735,6 +791,7 @@ def main():
         - **Auto-Execution**: Automatically enters qualified trades
         - **Risk Management**: Position sizing based on account risk percentage
         - **Real-time Monitoring**: Live tracking of opportunities and positions
+        - **Euro Stake Management**: Set your stake amount in euros for each trade
         
         **Trading Pairs Monitored:**
         - EUR/USD, GBP/USD, USD/JPY, USD/CHF
@@ -742,18 +799,20 @@ def main():
         - EUR/JPY, GBP/JPY, AUD/JPY, USD/CNY
         
         **How to Use Auto Trading:**
-        1. Set your desired risk percentage (0.5%-5%)
-        2. Select lot size
-        3. Configure indicator parameters
-        4. Click "Start Auto Trading"
-        5. Click "Refresh Scan" to check for opportunities
-        6. Enable "Auto-execute" for fully automated trading
+        1. Set your desired stake amount in euros
+        2. Set your risk percentage (0.5%-5%)
+        3. Select lot size
+        4. Configure indicator parameters
+        5. Click "Start Auto Trading"
+        6. Click "Refresh Scan" to check for opportunities
+        7. Enable "Auto-execute" for fully automated trading
         
         **Risk Management:**
+        - Configurable stake amount per trade
         - Configurable risk per trade
         - Automatic position sizing
         - Stop loss protection
-        - Win rate tracking and performance analytics
+        - Win rate tracking and performance analytics in both USD and EUR
         """)
 
 if __name__ == "__main__":
