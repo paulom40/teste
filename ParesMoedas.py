@@ -171,6 +171,10 @@ DEFAULT_PARAMS = {
 if 'trading_params' not in st.session_state:
     st.session_state.trading_params = DEFAULT_PARAMS.copy()
 
+# Ensure all defaults are present in case of updates
+for key, val in DEFAULT_PARAMS.items():
+    st.session_state.trading_params.setdefault(key, val)
+
 if 'bank_balance' not in st.session_state:
     st.session_state.bank_balance = st.session_state.trading_params['initial_bank']
 if 'open_trades' not in st.session_state:
@@ -675,9 +679,7 @@ with st.sidebar:
         st.session_state.trading_params['required_indicators'] = st.selectbox(
             "Required Indicators Agreement",
             options=[2, 3, 4, 5],
-            index=0 if st.session_state.trading_params['required_indicators'] == 2 
-            else 1 if st.session_state.trading_params['required_indicators'] == 3 
-            else 2 if st.session_state.trading_params['required_indicators'] == 4 else 3,
+            value=st.session_state.trading_params['required_indicators'],
             help="Number of indicators that must agree for trade entry"
         )
         st.markdown('</div>', unsafe_allow_html=True)
