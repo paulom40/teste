@@ -279,9 +279,9 @@ def main():
     # Calculate signals (1 for buy, -1 for sell, 0 for neutral)
     signals = {
         'RSI': 1 if current_rsi < 30 else -1 if current_rsi > 70 else 0,
-        'MA_Crossover': 1 if current_ma_fast > current_ma_slow else -1,
+        'MACrossover': 1 if current_ma_fast > current_ma_slow else -1,
         'MACD': 1 if current_macd > current_macd_signal else -1,
-        'Bollinger_Bands': 1 if current_price < current_bb_lower else -1 if current_price > current_bb_upper else 0,
+        'Bollinger': 1 if current_price < current_bb_lower else -1 if current_price > current_bb_upper else 0,
         'Stochastic': 1 if current_stoch_k < 20 and current_stoch_k > current_stoch_d else -1 if current_stoch_k > 80 and current_stoch_k < current_stoch_d else 0
     }
     
@@ -343,6 +343,15 @@ def main():
     
     signal_cols = st.columns(5)
     
+    # Create a mapping between display names and signal keys
+    indicator_mapping = {
+        'RSI': 'RSI',
+        'MA Crossover': 'MACrossover', 
+        'MACD': 'MACD',
+        'Bollinger Bands': 'Bollinger',
+        'Stochastic': 'Stochastic'
+    }
+    
     signal_details = {
         'RSI': f"{current_rsi:.1f}",
         'MA Crossover': f"Fast: {current_ma_fast:.5f}\nSlow: {current_ma_slow:.5f}",
@@ -351,15 +360,18 @@ def main():
         'Stochastic': f"K: {current_stoch_k:.1f}\nD: {current_stoch_d:.1f}"
     }
     
-    for i, (indicator, value) in enumerate(signal_details.items()):
+    for i, (display_name, details) in enumerate(signal_details.items()):
         with signal_cols[i]:
-            signal_value = signals[indicator.split()[0].replace('_', '')]
+            # Get the correct key from the mapping
+            signal_key = indicator_mapping[display_name]
+            signal_value = signals[signal_key]
+            
             status_color = "🟢" if signal_value == 1 else "🔴" if signal_value == -1 else "⚪"
             status_text = "BUY" if signal_value == 1 else "SELL" if signal_value == -1 else "NEUTRAL"
             
-            st.markdown(f"**{indicator}**")
+            st.markdown(f"**{display_name}**")
             st.markdown(f"{status_color} {status_text}")
-            st.text(value)
+            st.text(details)
     
     # Charts section
     st.subheader("📈 Multi-Timeframe Analysis")
@@ -367,23 +379,25 @@ def main():
     # Price chart with indicators
     fig_price = go.Figure()
     
-    # Add price and indicators
+    # Add price and indicators (last 100 periods for better visualization)
+    plot_data = df.tail(100)
+    
     fig_price.add_trace(go.Candlestick(
-        x=df['Date'][-100:],  # Last 100 periods
-        open=df['Open'][-100:],
-        high=df['High'][-100:],
-        low=df['Low'][-100:],
-        close=df['Close'][-100:],
+        x=plot_data['Date'],
+        open=plot_data['Open'],
+        high=plot_data['High'],
+        low=plot_data['Low'],
+        close=plot_data['Close'],
         name='Price'
     ))
     
-    fig_price.add_trace(go.Scatter(x=df['Date'][-100:], y=df['MA_Fast'][-100:], 
+    fig_price.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['MA_Fast'], 
                                  mode='lines', name=f'MA {ma_fast}', line=dict(color='orange', width=1)))
-    fig_price.add_trace(go.Scatter(x=df['Date'][-100:], y=df['MA_Slow'][-100:], 
+    fig_price.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['MA_Slow'], 
                                  mode='lines', name=f'MA {ma_slow}', line=dict(color='blue', width=1)))
-    fig_price.add_trace(go.Scatter(x=df['Date'][-100:], y=df['BB_Upper'][-100:], 
+    fig_price.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['BB_Upper'], 
                                  mode='lines', name='BB Upper', line=dict(color='gray', width=1, dash='dash')))
-    fig_price.add_trace(go.Scatter(x=df['Date'][-100:], y=df['BB_Lower'][-100:], 
+    fig_price.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['BB_Lower'], 
                                  mode='lines', name='BB Lower', line=dict(color='gray', width=1, dash='dash')))
     
     fig_price.update_layout(
@@ -392,7 +406,8 @@ def main():
         yaxis_title='Price',
         template='plotly_dark',
         height=500,
-        showlegend=True
+        showlegend=True,
+        xaxis_rangeslider_visible=False
     )
     
     # Indicator subplots
@@ -405,7 +420,7 @@ def main():
     
     # RSI
     fig_indicators.add_trace(
-        go.Scatter(x=df['Date'][-100:], y=df['RSI'][-100:], mode='lines', name='RSI', line=dict(color='yellow')),
+        go.Scatter(x=plot_data['Date'], y=plot_data['RSI'], mode='lines', name='RSI', line=dict(color='yellow')),
         row=1, col=1
     )
     fig_indicators.add_hline(y=70, line_dash="dash", line_color="red", row=1, col=1)
@@ -413,21 +428,21 @@ def main():
     
     # MACD
     fig_indicators.add_trace(
-        go.Scatter(x=df['Date'][-100:], y=df['MACD'][-100:], mode='lines', name='MACD', line=dict(color='blue')),
+        go.Scatter(x=plot_data['Date'], y=plot_data['MACD'], mode='lines', name='MACD', line=dict(color='blue')),
         row=1, col=2
     )
     fig_indicators.add_trace(
-        go.Scatter(x=df['Date'][-100:], y=df['MACD_Signal'][-100:], mode='lines', name='MACD Signal', line=dict(color='red')),
+        go.Scatter(x=plot_data['Date'], y=plot_data['MACD_Signal'], mode='lines', name='MACD Signal', line=dict(color='red')),
         row=1, col=2
     )
     
     # Stochastic
     fig_indicators.add_trace(
-        go.Scatter(x=df['Date'][-100:], y=df['Stoch_K'][-100:], mode='lines', name='Stoch %K', line=dict(color='cyan')),
+        go.Scatter(x=plot_data['Date'], y=plot_data['Stoch_K'], mode='lines', name='Stoch %K', line=dict(color='cyan')),
         row=2, col=1
     )
     fig_indicators.add_trace(
-        go.Scatter(x=df['Date'][-100:], y=df['Stoch_D'][-100:], mode='lines', name='Stoch %D', line=dict(color='magenta')),
+        go.Scatter(x=plot_data['Date'], y=plot_data['Stoch_D'], mode='lines', name='Stoch %D', line=dict(color='magenta')),
         row=2, col=1
     )
     fig_indicators.add_hline(y=80, line_dash="dash", line_color="red", row=2, col=1)
@@ -448,8 +463,8 @@ def main():
     )
     
     # Display charts
-    st.plotly_chart(fig_price, use_container_width=True)
-    st.plotly_chart(fig_indicators, use_container_width=True)
+    st.plotly_chart(fig_price, width='stretch')
+    st.plotly_chart(fig_indicators, width='stretch')
     
     # Trading Recommendations
     st.subheader("💡 Trading Recommendation")
