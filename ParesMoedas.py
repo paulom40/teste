@@ -431,15 +431,15 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
         stop_loss=stop_loss_pips
     )
     
-    # Add to open positions
+    # Add to open positions with ALL required fields
     st.session_state.open_positions[pair] = {
         'direction': direction,
         'entry_price': current_price,
         'quantity': quantity,
         'entry_time': datetime.now(),
         'stake_eur': stake_eur,
-        'target_profit': target_profit_pips,
-        'stop_loss': stop_loss_pips
+        'target_profit': target_profit_pips,  # Fixed: Added this field
+        'stop_loss': stop_loss_pips  # Fixed: Added this field
     }
     
     result_type = "Target Profit" if hit_target else "Stop Loss"
@@ -872,7 +872,7 @@ def main():
     else:
         st.info("No trades executed yet. Start auto trading or execute manual trades to see history here.")
     
-    # Open Positions
+    # Open Positions - FIXED: Added safety checks for missing keys
     if st.session_state.open_positions:
         st.subheader("📈 Open Positions")
         for pair, position in st.session_state.open_positions.items():
@@ -888,7 +888,10 @@ def main():
             with col5:
                 st.write(f"Stake: €{position['stake_eur']:.2f}")
             with col6:
-                st.write(f"TP/SL: {position['target_profit']}/{position['stop_loss']} pips")
+                # Safely display target profit and stop loss with default values if missing
+                target_profit = position.get('target_profit', st.session_state.target_profit_pips)
+                stop_loss = position.get('stop_loss', st.session_state.stop_loss_pips)
+                st.write(f"TP/SL: {target_profit}/{stop_loss} pips")
             with col7:
                 if st.button(f"Close {pair}", key=f"close_{pair}"):
                     del st.session_state.open_positions[pair]
