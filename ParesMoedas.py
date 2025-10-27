@@ -161,6 +161,9 @@ DEFAULT_PARAMS = {
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
+    'fib_period': 50,
+    'bb_period': 20,
+    'bb_std': 2.0,
     'required_indicators': 2
 }
 
@@ -321,6 +324,13 @@ def calculate_indicators(df):
         df_indicators['MACD_Signal'] = signal_line
         df_indicators['MACD_Histogram'] = histogram
         
+        # Bollinger Bands
+        bb_middle = df_indicators['close'].rolling(window=params['bb_period']).mean()
+        bb_std = df_indicators['close'].rolling(window=params['bb_period']).std()
+        df_indicators['BB_Upper'] = bb_middle + (bb_std * params['bb_std'])
+        df_indicators['BB_Lower'] = bb_middle - (bb_std * params['bb_std'])
+        df_indicators['BB_Middle'] = bb_middle
+        
         return df_indicators
         
     except Exception as e:
@@ -371,14 +381,14 @@ def detect_trading_signals(df):
     params = st.session_state.trading_params
     
     try:
-        if len(df) < max(params['ma_slow'], params['macd_slow'], params['rsi_period']) + 5:
+        if len(df) < max(params['ma_slow'], params['macd_slow'], params['rsi_period'], params['fib_period'], params['bb_period']) + 5:
             return [], [], [], 'NONE'
             
         latest = df.iloc[-1]
         previous = df.iloc[-2]
         
         has_valid_data = all(pd.notna(latest.get(col, np.nan)) for col in 
-                           ['MA_Fast', 'MA_Slow', 'RSI', 'MACD', 'MACD_Signal'])
+                           ['MA_Fast', 'MA_Slow', 'RSI', 'MACD', 'MACD_Signal', 'BB_Upper', 'BB_Lower'])
         
         if not has_valid_data:
             return [], [], [], 'NONE'
@@ -404,15 +414,34 @@ def detect_trading_signals(df):
             elif latest['MACD'] < latest['MACD_Signal'] and previous['MACD'] >= previous['MACD_Signal']:
                 sell_indicators.append("MACD Bearish")
         
+        # 4. Fibonacci 50% Retracement Crossover Signal
+        if len(df) >= params['fib_period']:
+            recent_df = df.tail(params['fib_period'])
+            swing_high = recent_df['high'].max()
+            swing_low = recent_df['low'].min()
+            fib_50 = swing_low + 0.5 * (swing_high - swing_low)
+            
+            if latest['close'] > fib_50 and previous['close'] <= fib_50:
+                buy_indicators.append("Fib 50% Cross")
+            elif latest['close'] < fib_50 and previous['close'] >= fib_50:
+                sell_indicators.append("Fib 50% Cross")
+        
+        # 5. Bollinger Bands Signal
+        if pd.notna(latest['BB_Upper']) and pd.notna(latest['BB_Lower']):
+            if latest['close'] <= latest['BB_Lower'] and previous['close'] > previous['BB_Lower']:
+                buy_indicators.append("BB Lower Touch")
+            elif latest['close'] >= latest['BB_Upper'] and previous['close'] < previous['BB_Upper']:
+                sell_indicators.append("BB Upper Touch")
+        
         # Determine agreement type
         total_buy = len(buy_indicators)
         total_sell = len(sell_indicators)
         required = params['required_indicators']
         
-        if total_buy == required and total_sell == 0:
+        if total_buy >= required and total_sell == 0:
             agreement = 'BUY'
             signals = [("BUY", total_buy, buy_indicators)]
-        elif total_sell == required and total_buy == 0:
+        elif total_sell >= required and total_buy == 0:
             agreement = 'SELL'
             signals = [("SELL", total_sell, sell_indicators)]
         elif total_buy > 0 and total_sell > 0:
@@ -459,12 +488,12 @@ def execute_auto_trades():
         for signal_type, count, indicators in signals:
             if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
                 if execute_trade(pair, 'BUY', st.session_state.current_prices[pair]):
-                    auto_trades_executed.append(f"AUTO BUY {pair} (BOTH indicators agree: {', '.join(indicators)})")
+                    auto_trades_executed.append(f"AUTO BUY {pair} ({count} indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
             
             elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
                 if execute_trade(pair, 'SELL', st.session_state.current_prices[pair]):
-                    auto_trades_executed.append(f"AUTO SELL {pair} (BOTH indicators agree: {', '.join(indicators)})")
+                    auto_trades_executed.append(f"AUTO SELL {pair} ({count} indicators agree: {', '.join(indicators)})")
                     st.session_state.last_auto_trade[pair] = datetime.now()
     
     return auto_trades_executed
@@ -645,8 +674,10 @@ with st.sidebar:
         )
         st.session_state.trading_params['required_indicators'] = st.selectbox(
             "Required Indicators Agreement",
-            options=[2, 3],
-            index=0 if st.session_state.trading_params['required_indicators'] == 2 else 1,
+            options=[2, 3, 4, 5],
+            index=0 if st.session_state.trading_params['required_indicators'] == 2 
+            else 1 if st.session_state.trading_params['required_indicators'] == 3 
+            else 2 if st.session_state.trading_params['required_indicators'] == 4 else 3,
             help="Number of indicators that must agree for trade entry"
         )
         st.markdown('</div>', unsafe_allow_html=True)
@@ -723,6 +754,35 @@ with st.sidebar:
                 value=st.session_state.trading_params['macd_signal'],
                 step=1
             )
+        
+        st.session_state.trading_params['fib_period'] = st.number_input(
+            "Fib Period", 
+            min_value=20, 
+            max_value=100, 
+            value=st.session_state.trading_params['fib_period'],
+            step=5,
+            help="Period to look back for swing high/low in Fibonacci calculation"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.session_state.trading_params['bb_period'] = st.number_input(
+                "BB Period", 
+                min_value=10, 
+                max_value=50, 
+                value=st.session_state.trading_params['bb_period'],
+                step=1,
+                help="Period for Bollinger Bands"
+            )
+        with col2:
+            st.session_state.trading_params['bb_std'] = st.number_input(
+                "BB Std Dev", 
+                min_value=1.0, 
+                max_value=3.0, 
+                value=st.session_state.trading_params['bb_std'],
+                step=0.1,
+                help="Standard deviations for Bollinger Bands"
+            )
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Apply Parameters Button
@@ -736,7 +796,7 @@ with st.sidebar:
     st.write(f"**Bank:** €{st.session_state.bank_balance:.2f}")
     st.write(f"**Stake:** €{params['stake']}")
     st.write(f"**TP/SL:** ±{params['profit_target']} pips")
-    st.write(f"**Agreement:** {params['required_indicators']}/3 indicators")
+    st.write(f"**Agreement:** {params['required_indicators']}/5 indicators")
     
     st.markdown("---")
     st.markdown("## 📈 Monitoring Pairs")
@@ -833,12 +893,12 @@ for idx, pair in enumerate(trading_pairs):
         
         if agreement == 'BUY':
             signal_class = "signal-strong-buy"
-            signal_text = "BOTH SAY BUY"
+            signal_text = f"{buy_count} SAY BUY"
             signal_emoji = "🟢"
             border_class = "agreement-buy"
         elif agreement == 'SELL':
             signal_class = "signal-strong-sell"
-            signal_text = "BOTH SAY SELL"
+            signal_text = f"{sell_count} SAY SELL"
             signal_emoji = "🔴"
             border_class = "agreement-sell"
         elif agreement == 'MIXED':
@@ -860,7 +920,7 @@ for idx, pair in enumerate(trading_pairs):
             <h3>{pair} {signal_emoji}</h3>
             <div class="{signal_class}">
                 {signal_text}<br>
-                Buy: {buy_count}/{params['required_indicators']} • Sell: {sell_count}/{params['required_indicators']}
+                Buy: {buy_count}/5 • Sell: {sell_count}/5
             </div>
             <div style="margin-top: 0.5rem;">
                 <strong>Price: {price_display}</strong><br>
@@ -890,18 +950,18 @@ for idx, pair in enumerate(trading_pairs):
             
             if agreement == 'BUY':
                 if buy_trades == 0:
-                    st.success(f"🎯 **PERFECT BUY AGREEMENT** - Both indicators say BUY!")
+                    st.success(f"🎯 **STRONG BUY AGREEMENT** - {buy_count} indicators say BUY!")
                 else:
-                    st.info(f"📊 Already have BUY position - Both indicators still agree on BUY")
+                    st.info(f"📊 Already have BUY position - {buy_count} indicators still agree on BUY")
             elif agreement == 'SELL':
                 if sell_trades == 0:
-                    st.error(f"🎯 **PERFECT SELL AGREEMENT** - Both indicators say SELL!")
+                    st.error(f"🎯 **STRONG SELL AGREEMENT** - {sell_count} indicators say SELL!")
                 else:
-                    st.info(f"📊 Already have SELL position - Both indicators still agree on SELL")
+                    st.info(f"📊 Already have SELL position - {sell_count} indicators still agree on SELL")
             elif agreement == 'MIXED':
                 st.warning(f"⚠️ **MIXED SIGNALS** - Indicators disagree (BUY: {buy_count}, SELL: {sell_count})")
             else:
-                st.info("⏸️ **NO AGREEMENT** - Waiting for both indicators to agree")
+                st.info("⏸️ **NO AGREEMENT** - Waiting for indicators to agree")
 
 # Agreement Summary
 st.markdown("---")
@@ -922,26 +982,34 @@ tradable_sell_pairs = [p for p in perfect_sell_pairs
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("Perfect BUY Agreement", f"{len(tradable_buy_pairs)}/{len(perfect_buy_pairs)} tradable")
+    st.metric("Strong BUY Agreement", f"{len(tradable_buy_pairs)}/{len(perfect_buy_pairs)} tradable")
     if tradable_buy_pairs:
         st.write("**Ready to BUY:**")
         for pair in tradable_buy_pairs:
-            st.success(f"✅ {pair} - BOTH indicators say BUY")
+            signal_info = st.session_state.all_signals.get(pair, {})
+            count = signal_info.get('buy_count', 0)
+            st.success(f"✅ {pair} - {count} indicators say BUY")
     elif perfect_buy_pairs:
         st.write("**Already trading BUY:**")
         for pair in perfect_buy_pairs:
-            st.info(f"📊 {pair} - Already have BUY position")
+            signal_info = st.session_state.all_signals.get(pair, {})
+            count = signal_info.get('buy_count', 0)
+            st.info(f"📊 {pair} - Already have BUY position ({count} agreeing)")
 
 with col2:
-    st.metric("Perfect SELL Agreement", f"{len(tradable_sell_pairs)}/{len(perfect_sell_pairs)} tradable")
+    st.metric("Strong SELL Agreement", f"{len(tradable_sell_pairs)}/{len(perfect_sell_pairs)} tradable")
     if tradable_sell_pairs:
         st.write("**Ready to SELL:**")
         for pair in tradable_sell_pairs:
-            st.error(f"❌ {pair} - BOTH indicators say SELL")
+            signal_info = st.session_state.all_signals.get(pair, {})
+            count = signal_info.get('sell_count', 0)
+            st.error(f"❌ {pair} - {count} indicators say SELL")
     elif perfect_sell_pairs:
         st.write("**Already trading SELL:**")
         for pair in perfect_sell_pairs:
-            st.info(f"📊 {pair} - Already have SELL position")
+            signal_info = st.session_state.all_signals.get(pair, {})
+            count = signal_info.get('sell_count', 0)
+            st.info(f"📊 {pair} - Already have SELL position ({count} agreeing)")
 
 with col3:
     st.metric("Mixed Signals", len(mixed_pairs))
