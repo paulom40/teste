@@ -494,7 +494,15 @@ def calculate_trade_statistics():
     target_hits = len(trade_history[trade_history['P&L'] > 0])
     stop_loss_hits = len(trade_history[trade_history['P&L'] < 0])
     
-    return total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits
+    # Safely calculate average risk-reward ratio
+    if 'Target Profit' in trade_history.columns and 'Stop Loss' in trade_history.columns:
+        avg_target = trade_history['Target Profit'].mean()
+        avg_stop_loss = trade_history['Stop Loss'].mean()
+        avg_rr_ratio = avg_target / avg_stop_loss if avg_stop_loss > 0 else 0
+    else:
+        avg_rr_ratio = 0
+    
+    return total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits, avg_rr_ratio
 
 # Main application
 def main():
@@ -764,7 +772,7 @@ def main():
     
     if len(st.session_state.trade_history) > 0:
         # Calculate summary statistics using the helper function
-        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits = calculate_trade_statistics()
+        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits, avg_rr_ratio = calculate_trade_statistics()
         
         # Display summary metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -804,7 +812,6 @@ def main():
             target_rate = (target_hits / total_trades * 100) if total_trades > 0 else 0
             st.metric("Target Hit Rate", f"{target_rate:.1f}%")
         with col4:
-            avg_rr_ratio = st.session_state.trade_history['Target Profit'].mean() / st.session_state.trade_history['Stop Loss'].mean() if len(st.session_state.trade_history) > 0 else 0
             st.metric("Avg R:R Ratio", f"{avg_rr_ratio:.2f}:1")
         
         # Display the trade history table with formatted values
@@ -818,8 +825,12 @@ def main():
         display_history['P&L'] = display_history['P&L'].apply(lambda x: f"${x:.2f}")
         display_history['P&L (€)'] = display_history['P&L (€)'].apply(lambda x: f"€{x:.2f}")
         display_history['Stake (€)'] = display_history['Stake (€)'].apply(lambda x: f"€{x:.2f}")
-        display_history['Target Profit'] = display_history['Target Profit'].apply(lambda x: f"{int(x)} pips")
-        display_history['Stop Loss'] = display_history['Stop Loss'].apply(lambda x: f"{int(x)} pips")
+        
+        # Safely format target profit and stop loss columns if they exist
+        if 'Target Profit' in display_history.columns:
+            display_history['Target Profit'] = display_history['Target Profit'].apply(lambda x: f"{int(x)} pips")
+        if 'Stop Loss' in display_history.columns:
+            display_history['Stop Loss'] = display_history['Stop Loss'].apply(lambda x: f"{int(x)} pips")
         
         st.dataframe(
             display_history,
