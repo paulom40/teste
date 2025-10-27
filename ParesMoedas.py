@@ -7,8 +7,6 @@ from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import threading
-from streamlit_autorefresh import st_autorefresh
 
 st.markdown("""
     <style>
@@ -261,6 +259,9 @@ if 'last_scan_time' not in st.session_state:
 if 'open_positions' not in st.session_state:
     st.session_state.open_positions = {}
 
+if 'scan_count' not in st.session_state:
+    st.session_state.scan_count = 0
+
 def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, status, signal_strength, signal_count):
     """Add a new trade to the history"""
     new_trade = pd.DataFrame({
@@ -434,10 +435,6 @@ def scan_all_pairs():
 
 # Main application
 def main():
-    # Auto-refresh every 30 seconds when auto-trading is active
-    if st.session_state.auto_trading:
-        st_autorefresh(interval=30000, key="auto_refresh")
-    
     # Header
     st.markdown('<h1 class="main-header">🌍 Forex Auto Trading Bot</h1>', unsafe_allow_html=True)
     st.markdown('<h3 style="text-align: center; color: #666;">Fully Automated 3-Signal Agreement System</h3>', unsafe_allow_html=True)
@@ -468,17 +465,27 @@ def main():
                     type="primary" if not st.session_state.auto_trading else "secondary"):
             st.session_state.auto_trading = not st.session_state.auto_trading
             st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count = 0
             st.rerun()
     
     with col2:
         if st.button("🔍 Scan All Pairs"):
             st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count += 1
+            st.rerun()
+    
+    # Manual refresh button for auto trading
+    if st.session_state.auto_trading:
+        if st.sidebar.button("🔄 Refresh Scan"):
+            st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count += 1
             st.rerun()
     
     # Display auto trading status
     if st.session_state.auto_trading:
         st.sidebar.markdown('<div class="auto-trading-active">🤖 AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
-        st.sidebar.info("Scanning all pairs every 30 seconds for trading opportunities...")
+        st.sidebar.info(f"Scan count: {st.session_state.scan_count}")
+        st.sidebar.info("Click 'Refresh Scan' to check for new opportunities")
     else:
         st.sidebar.warning("Auto trading is currently OFF")
     
@@ -500,6 +507,15 @@ def main():
     if st.session_state.auto_trading:
         st.markdown('<div class="auto-trading-active">🚀 AUTO TRADING ACTIVE - Scanning 12 Forex Pairs</div>', unsafe_allow_html=True)
         
+        # Display scan information
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Scan Count", st.session_state.scan_count)
+        with col2:
+            st.metric("Last Scan", st.session_state.last_scan_time.strftime("%H:%M:%S"))
+        with col3:
+            st.metric("Open Positions", len(st.session_state.open_positions))
+        
         # Scan all pairs for opportunities
         with st.spinner("Scanning all Forex pairs for trading opportunities..."):
             opportunities = scan_all_pairs()
@@ -510,7 +526,7 @@ def main():
             st.subheader("🎯 Trading Opportunities Found")
             
             for opportunity in opportunities:
-                col1, col2, col3, col4 = st.columns([2,1,1,2])
+                col1, col2, col3, col4, col5 = st.columns([2,1,1,1,2])
                 
                 with col1:
                     st.write(f"**{opportunity['pair']}**")
@@ -523,23 +539,31 @@ def main():
                     st.write(f"**{opportunity['signal_count']}/5** signals")
                 
                 with col4:
+                    st.write(f"**{opportunity['strength']}**")
+                
+                with col5:
                     if st.button(f"Trade {opportunity['pair']}", key=f"trade_{opportunity['pair']}"):
                         result = execute_auto_trade(opportunity, lot_size, risk_per_trade)
                         st.success(result)
                         st.rerun()
             
             # Auto-execute trades if enabled
-            if st.checkbox("🤖 Auto-execute all qualified trades", value=True):
+            auto_execute = st.checkbox("🤖 Auto-execute all qualified trades", value=True)
+            if auto_execute:
+                executed_trades = []
                 for opportunity in opportunities:
                     # Only execute if we don't already have a position
                     if opportunity['pair'] not in st.session_state.open_positions:
                         result = execute_auto_trade(opportunity, lot_size, risk_per_trade)
-                        st.success(f"🤖 {result}")
+                        executed_trades.append(result)
+                
+                if executed_trades:
+                    st.success("🤖 Auto-execution completed!")
+                    for trade in executed_trades:
+                        st.write(f"✅ {trade}")
+                    st.rerun()
         else:
-            st.info("No trading opportunities found at the moment. The system will continue scanning...")
-        
-        # Show last scan time
-        st.write(f"**Last Scan:** {st.session_state.last_scan_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            st.info("No trading opportunities found at the moment. Click 'Refresh Scan' to check again.")
         
     else:
         # Manual analysis for selected pair
@@ -653,7 +677,7 @@ def main():
     if st.session_state.open_positions:
         st.subheader("📈 Open Positions")
         for pair, position in st.session_state.open_positions.items():
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns([2,1,2,2,1])
             with col1:
                 st.write(f"**{pair}**")
             with col2:
@@ -661,6 +685,8 @@ def main():
             with col3:
                 st.write(f"Entry: {position['entry_price']:.5f}")
             with col4:
+                st.write(f"Qty: {position['quantity']}")
+            with col5:
                 if st.button(f"Close {pair}", key=f"close_{pair}"):
                     del st.session_state.open_positions[pair]
                     st.success(f"Closed position for {pair}")
@@ -674,29 +700,30 @@ def main():
         This system automatically scans **12 major Forex pairs** and executes trades when **3+ signals agree**:
         
         **Auto Trading Features:**
-        - **Continuous Scanning**: Monitors all pairs every 30 seconds
-        - **Multi-Pair Analysis**: Simultaneously analyzes EUR/USD, GBP/USD, USD/JPY, etc.
-        - **Auto-Execution**: Automatically enters trades when criteria are met
-        - **Risk Management**: Position sizing based on account risk percentage
+        - **Multi-Pair Scanning**: Monitors all 12 major Forex pairs
         - **Signal Validation**: Requires minimum 3/5 indicator agreement
+        - **Auto-Execution**: Automatically enters qualified trades
+        - **Risk Management**: Position sizing based on account risk percentage
+        - **Real-time Monitoring**: Live tracking of opportunities and positions
         
         **Trading Pairs Monitored:**
         - EUR/USD, GBP/USD, USD/JPY, USD/CHF
         - AUD/USD, USD/CAD, NZD/USD, EUR/GBP
         - EUR/JPY, GBP/JPY, AUD/JPY, USD/CNY
         
-        **Risk Management:**
-        - Configurable risk per trade (0.5% - 5%)
-        - Automatic position sizing
-        - Stop loss protection
-        - Win rate tracking
-        
-        **To Start Auto Trading:**
-        1. Set your desired risk percentage
+        **How to Use Auto Trading:**
+        1. Set your desired risk percentage (0.5%-5%)
         2. Select lot size
         3. Configure indicator parameters
         4. Click "Start Auto Trading"
-        5. The system will automatically scan and execute qualified trades
+        5. Click "Refresh Scan" to check for opportunities
+        6. Enable "Auto-execute" for fully automated trading
+        
+        **Risk Management:**
+        - Configurable risk per trade
+        - Automatic position sizing
+        - Stop loss protection
+        - Win rate tracking and performance analytics
         """)
 
 if __name__ == "__main__":
