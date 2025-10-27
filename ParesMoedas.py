@@ -236,19 +236,23 @@ def generate_forex_data(pair, days=80, volatility=0.001):
     return df
 
 def fetch_real_forex_data(pair, days=80, api_key=''):
-    """Fetch real Forex data from Twelve Data API"""
+    """Fetch real Forex data from Alpha Vantage API (FX_INTRADAY - Premium required)"""
     if not api_key:
+        st.warning("No API key provided - using simulated data.")
         return generate_forex_data(pair, days)
     
-    url = "https://api.twelvedata.com/time_series"
-    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    end_date = datetime.now().strftime('%Y-%m-%d')
+    # Convert pair like 'EUR/USD' to 'EURUSD'
+    symbol_parts = pair.replace('/', '')
+    from_symbol = symbol_parts[:3]
+    to_symbol = symbol_parts[3:]
     
+    url = "https://www.alphavantage.co/query"
     params = {
-        'symbol': pair,
-        'interval': '1hour',
-        'start_date': start_date,
-        'end_date': end_date,
+        'function': 'FX_INTRADAY',
+        'from_symbol': from_symbol,
+        'to_symbol': to_symbol,
+        'interval': '60min',
+        'outputsize': 'full',
         'apikey': api_key
     }
     
@@ -256,26 +260,36 @@ def fetch_real_forex_data(pair, days=80, api_key=''):
         response = requests.get(url, params=params)
         data = response.json()
         
-        if response.status_code == 200 and 'values' in data:
-            values = data['values']
-            if values:
-                df = pd.DataFrame(values)
-                df['Date'] = pd.to_datetime(df['datetime'])
-                df = df.sort_values('Date').reset_index(drop=True)
-                df = df[['Date', 'open', 'high', 'low', 'close']].rename(
-                    columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
-                )
-                # Ensure at least some data
-                if len(df) > 50:
-                    return df
-                else:
-                    st.warning(f"Insufficient real data for {pair} ({len(df)} points), using simulated data.")
-            else:
-                st.warning(f"No data returned for {pair}, using simulated data.")
-        else:
-            st.warning(f"API error for {pair}: {data.get('message', 'Unknown error')}")
+        if "Error Message" in data:
+            st.warning(f"API Error for {pair}: {data['Error Message']}. Using simulated data.")
+            return generate_forex_data(pair, days)
         
-        return generate_forex_data(pair, days)
+        if "Note" in data and "Thank you" in data["Note"]:
+            st.warning(f"API Note for {pair}: {data['Note']}. Using simulated data.")
+            return generate_forex_data(pair, days)
+        
+        time_series_key = "Time Series FX (60min)"
+        if time_series_key not in data:
+            st.warning(f"No time series data for {pair}. Using simulated data.")
+            return generate_forex_data(pair, days)
+        
+        # Parse the time series
+        series = data[time_series_key]
+        df = pd.DataFrame.from_dict(series, orient='index')
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()  # Ascending order
+        df.columns = ['Open', 'High', 'Low', 'Close']
+        df = df.astype(float)
+        
+        # Filter to last 80 days if more data
+        cutoff_date = datetime.now() - timedelta(days=days)
+        df = df[df.index >= cutoff_date]
+        
+        if len(df) > 50:
+            return df
+        else:
+            st.warning(f"Insufficient real data for {pair} ({len(df)} points), using simulated data.")
+            return generate_forex_data(pair, days)
         
     except Exception as e:
         st.warning(f"Error fetching data for {pair}: {str(e)}, using simulated data.")
@@ -571,14 +585,14 @@ def main():
     # API Configuration
     st.sidebar.subheader("🌐 Real Data API")
     api_key = st.sidebar.text_input(
-        "Twelve Data API Key", 
+        "Alpha Vantage API Key", 
         type="password", 
         value=st.session_state.api_key, 
-        help="Get your free API key from https://twelvedata.com/signup to enable real Forex data."
+        help="Get your API key from https://www.alphavantage.co/support/#api-key (Premium required for intraday forex data)."
     )
     st.session_state.api_key = api_key
     if api_key:
-        st.sidebar.success("✅ Real data enabled")
+        st.sidebar.success("✅ Real data enabled (Premium intraday forex)")
     else:
         st.sidebar.warning("⚠️ No API key - Using simulated data")
     
@@ -986,7 +1000,7 @@ def main():
         - **Real-time Monitoring**: Live tracking of opportunities and positions
         - **Euro Stake Management**: Set your stake amount in euros for each trade
         - **Maximum 3 Simultaneous Trades**: Limits risk by allowing only up to 3 open positions at once
-        - **Real Data Integration**: Uses Twelve Data API for live hourly Forex data (free tier)
+        - **Real Data Integration**: Uses Alpha Vantage API for hourly Forex data (Premium tier required for intraday)
         
         **Risk Management Features:**
         - **Target Profit**: Set your take profit level in pips
@@ -1001,7 +1015,7 @@ def main():
         - EUR/JPY, GBP/JPY, AUD/JPY, USD/CNY
         
         **How to Use Auto Trading:**
-        1. Get free API key from https://twelvedata.com/signup
+        1. Get API key from https://www.alphavantage.co/support/#api-key (Premium for intraday forex)
         2. Set your desired stake amount in euros
         3. Configure target profit and stop loss levels
         4. Set your risk percentage (0.5%-5%)
