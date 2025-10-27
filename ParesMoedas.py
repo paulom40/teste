@@ -4,7 +4,6 @@ import numpy as np
 import requests
 import time
 from datetime import datetime, timedelta
-import ta  # Technical Analysis library
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -280,6 +279,26 @@ def generate_simulated_historical(pair, periods=200):
     
     return pd.DataFrame(prices)
 
+# Function to calculate RSI
+def calculate_rsi(prices, window):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=window, min_periods=1).mean()
+    avg_loss = loss.rolling(window=window, min_periods=1).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# Function to calculate MACD
+def calculate_macd(prices, fast, slow, signal):
+    ema_fast = prices.ewm(span=fast, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    macd_histogram = macd - macd_signal
+    return macd, macd_signal, macd_histogram
+
 # Function to calculate technical indicators using current parameters
 def calculate_indicators(df):
     try:
@@ -287,20 +306,20 @@ def calculate_indicators(df):
         params = st.session_state.trading_params
         
         # Moving Averages
-        df_indicators['MA_Fast'] = ta.trend.sma_indicator(df_indicators['close'], window=params['ma_fast'])
-        df_indicators['MA_Slow'] = ta.trend.sma_indicator(df_indicators['close'], window=params['ma_slow'])
+        df_indicators['MA_Fast'] = df_indicators['close'].rolling(window=params['ma_fast']).mean()
+        df_indicators['MA_Slow'] = df_indicators['close'].rolling(window=params['ma_slow']).mean()
         
         # RSI
-        df_indicators['RSI'] = ta.momentum.rsi(df_indicators['close'], window=params['rsi_period'])
+        df_indicators['RSI'] = calculate_rsi(df_indicators['close'], params['rsi_period'])
         
         # MACD
-        macd_indicator = ta.trend.MACD(df_indicators['close'], 
-                                     window_fast=params['macd_fast'], 
-                                     window_slow=params['macd_slow'], 
-                                     window_sign=params['macd_signal'])
-        df_indicators['MACD'] = macd_indicator.macd()
-        df_indicators['MACD_Signal'] = macd_indicator.macd_signal()
-        df_indicators['MACD_Histogram'] = macd_indicator.macd_diff()
+        macd_line, signal_line, histogram = calculate_macd(df_indicators['close'], 
+                                                          params['macd_fast'], 
+                                                          params['macd_slow'], 
+                                                          params['macd_signal'])
+        df_indicators['MACD'] = macd_line
+        df_indicators['MACD_Signal'] = signal_line
+        df_indicators['MACD_Histogram'] = histogram
         
         return df_indicators
         
