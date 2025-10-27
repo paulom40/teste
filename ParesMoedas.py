@@ -205,7 +205,7 @@ def generate_forex_data(pair, days=80, volatility=0.001):
     """Generate realistic Forex price data based on pair characteristics"""
     np.random.seed(42)
     dates = pd.date_range(start=datetime.now() - timedelta(days=days), 
-                         end=datetime.now(), freq='H')  # Hourly data for Forex
+                         end=datetime.now(), freq='h')  # Fixed: 'h' instead of 'H'
     
     # Base prices for different Forex pairs
     base_prices = {
@@ -263,20 +263,22 @@ if 'scan_count' not in st.session_state:
     st.session_state.scan_count = 0
 
 def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, status, signal_strength, signal_count):
-    """Add a new trade to the history"""
+    """Add a new trade to the history - FIXED VERSION"""
+    # Create a proper DataFrame for the new trade
     new_trade = pd.DataFrame({
         'Date': [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         'Pair': [pair],
         'Direction': [direction],
-        'Entry Price': [entry_price],
-        'Exit Price': [exit_price],
-        'Quantity': [quantity],
-        'P&L': [pnl],  # Store as numeric value
+        'Entry Price': [float(entry_price)],
+        'Exit Price': [float(exit_price)],
+        'Quantity': [float(quantity)],
+        'P&L': [float(pnl)],  # Store as numeric value
         'Status': [status],
         'Signal Strength': [signal_strength],
-        'Signal Count': [signal_count]
+        'Signal Count': [int(signal_count)]
     })
     
+    # Properly concatenate DataFrames
     st.session_state.trade_history = pd.concat([st.session_state.trade_history, new_trade], ignore_index=True)
 
 def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
@@ -682,7 +684,18 @@ def main():
         
         # Clear history button
         if st.button("🗑️ Clear Trade History"):
-            st.session_state.trade_history = st.session_state.trade_history.iloc[0:0]
+            st.session_state.trade_history = pd.DataFrame({
+                'Date': [],
+                'Pair': [],
+                'Direction': [],
+                'Entry Price': [],
+                'Exit Price': [],
+                'Quantity': [],
+                'P&L': [],
+                'Status': [],
+                'Signal Strength': [],
+                'Signal Count': []
+            })
             st.session_state.open_positions = {}
             st.success("Trade history cleared!")
             st.rerun()
