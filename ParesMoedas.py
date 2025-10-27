@@ -235,6 +235,52 @@ def generate_forex_data(pair, days=80, volatility=0.001):
     
     return df
 
+def fetch_real_forex_data(pair, days=80, api_key=''):
+    """Fetch real Forex data from Twelve Data API"""
+    if not api_key:
+        return generate_forex_data(pair, days)
+    
+    url = "https://api.twelvedata.com/time_series"
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    
+    params = {
+        'symbol': pair,
+        'interval': '1hour',
+        'start_date': start_date,
+        'end_date': end_date,
+        'apikey': api_key
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        if response.status_code == 200 and 'values' in data:
+            values = data['values']
+            if values:
+                df = pd.DataFrame(values)
+                df['Date'] = pd.to_datetime(df['datetime'])
+                df = df.sort_values('Date').reset_index(drop=True)
+                df = df[['Date', 'open', 'high', 'low', 'close']].rename(
+                    columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}
+                )
+                # Ensure at least some data
+                if len(df) > 50:
+                    return df
+                else:
+                    st.warning(f"Insufficient real data for {pair} ({len(df)} points), using simulated data.")
+            else:
+                st.warning(f"No data returned for {pair}, using simulated data.")
+        else:
+            st.warning(f"API error for {pair}: {data.get('message', 'Unknown error')}")
+        
+        return generate_forex_data(pair, days)
+        
+    except Exception as e:
+        st.warning(f"Error fetching data for {pair}: {str(e)}, using simulated data.")
+        return generate_forex_data(pair, days)
+
 # Initialize session state for trade history and auto trading
 if 'trade_history' not in st.session_state:
     st.session_state.trade_history = pd.DataFrame({
@@ -275,6 +321,9 @@ if 'target_profit_pips' not in st.session_state:
 if 'stop_loss_pips' not in st.session_state:
     st.session_state.stop_loss_pips = 20
 
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = ''
+
 def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, pnl_eur, status, signal_strength, signal_count, stake_eur, target_profit, stop_loss):
     """Add a new trade to the history"""
     new_trade = pd.DataFrame({
@@ -296,11 +345,11 @@ def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl
     
     st.session_state.trade_history = pd.concat([st.session_state.trade_history, new_trade], ignore_index=True)
 
-def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
+def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20, api_key=''):
     """Analyze a single Forex pair and return trading signals"""
     try:
-        # Generate data for the pair
-        df = generate_forex_data(pair)
+        # Fetch data (real or simulated)
+        df = fetch_real_forex_data(pair, days=80, api_key=api_key)
         
         # Calculate all indicators
         df['RSI'] = calculate_rsi(df['Close'], period=rsi_period)
@@ -365,6 +414,7 @@ def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
             }
             
     except Exception as e:
+        st.error(f"Error analyzing {pair}: {str(e)}")
         return {
             'pair': pair,
             'signal': 'ERROR',
@@ -381,7 +431,7 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
     signal_count = signal_data['signal_count']
     current_price = signal_data['price']
     
-    # NEW: Check maximum simultaneous trades limit (3)
+    # Check maximum simultaneous trades limit (3)
     if len(st.session_state.open_positions) >= 3:
         return f"❌ Maximum of 3 simultaneous trades reached. Cannot open new position for {pair}"
     
@@ -389,14 +439,14 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
     if pair in st.session_state.open_positions:
         return f"Position already open for {pair}"
     
-    # Calculate position size based on risk
-    risk_amount = (risk_percent / 100) * 10000
-    pip_value = 10 if 'JPY' not in pair else 0.1
+    # Determine pip size
+    pip_size = 0.01 if 'JPY' in pair else 0.0001
+    pip_value = 10  # Approximate USD per pip per standard lot
     
-    # Calculate quantity based on risk and stop loss
+    # Calculate position size based on risk
+    risk_amount = (risk_percent / 100) * 10000  # Using fixed 10000 as account balance proxy
     quantity = min(float(lot_size), risk_amount / (stop_loss_pips * pip_value))
     
-    # Calculate P&L based on target profit and stop loss
     # Simulate whether trade hits target profit or stop loss
     hit_target = np.random.random() > 0.3  # 70% chance to hit target
     
@@ -404,16 +454,16 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
         # Trade hits target profit
         pnl = target_profit_pips * pip_value * quantity
         if direction == "BUY":
-            exit_price = current_price + (target_profit_pips * 0.0001)
+            exit_price = current_price + (target_profit_pips * pip_size)
         else:
-            exit_price = current_price - (target_profit_pips * 0.0001)
+            exit_price = current_price - (target_profit_pips * pip_size)
     else:
         # Trade hits stop loss
         pnl = -stop_loss_pips * pip_value * quantity
         if direction == "BUY":
-            exit_price = current_price - (stop_loss_pips * 0.0001)
+            exit_price = current_price - (stop_loss_pips * pip_size)
         else:
-            exit_price = current_price + (stop_loss_pips * 0.0001)
+            exit_price = current_price + (stop_loss_pips * pip_size)
     
     # Calculate P&L in euros based on stake
     pnl_eur = pnl * (stake_eur / 100)
@@ -435,21 +485,21 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_pr
         stop_loss=stop_loss_pips
     )
     
-    # Add to open positions with ALL required fields
+    # Add to open positions
     st.session_state.open_positions[pair] = {
         'direction': direction,
         'entry_price': current_price,
         'quantity': quantity,
         'entry_time': datetime.now(),
         'stake_eur': stake_eur,
-        'target_profit': target_profit_pips,  # Fixed: Added this field
-        'stop_loss': stop_loss_pips  # Fixed: Added this field
+        'target_profit': target_profit_pips,
+        'stop_loss': stop_loss_pips
     }
     
     result_type = "Target Profit" if hit_target else "Stop Loss"
     return f"Auto trade executed: {direction} {pair} with {signal_count} signals (Stake: €{stake_eur:.2f}, {result_type})"
 
-def scan_all_pairs():
+def scan_all_pairs(api_key=''):
     """Scan all Forex pairs for trading opportunities"""
     forex_pairs = [
         "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", 
@@ -465,7 +515,8 @@ def scan_all_pairs():
             rsi_period=st.session_state.rsi_period,
             ma_fast=st.session_state.ma_fast,
             ma_slow=st.session_state.ma_slow,
-            bb_period=st.session_state.bb_period
+            bb_period=st.session_state.bb_period,
+            api_key=api_key
         )
         
         if signal_data['signal'] in ['BUY', 'SELL']:
@@ -516,6 +567,20 @@ def main():
     
     # Sidebar
     st.sidebar.title("⚙️ Forex Trading Configuration")
+    
+    # API Configuration
+    st.sidebar.subheader("🌐 Real Data API")
+    api_key = st.sidebar.text_input(
+        "Twelve Data API Key", 
+        type="password", 
+        value=st.session_state.api_key, 
+        help="Get your free API key from https://twelvedata.com/signup to enable real Forex data."
+    )
+    st.session_state.api_key = api_key
+    if api_key:
+        st.sidebar.success("✅ Real data enabled")
+    else:
+        st.sidebar.warning("⚠️ No API key - Using simulated data")
     
     # Trading parameters
     st.sidebar.subheader("💰 Stake Configuration")
@@ -650,7 +715,7 @@ def main():
         
         # Scan all pairs for opportunities
         with st.spinner("Scanning all Forex pairs for trading opportunities..."):
-            opportunities = scan_all_pairs()
+            opportunities = scan_all_pairs(api_key=st.session_state.api_key)
             st.session_state.last_scan_time = datetime.now()
         
         # Display trading opportunities
@@ -691,8 +756,8 @@ def main():
             if auto_execute:
                 executed_trades = []
                 for opportunity in opportunities:
-                    # Only execute if we don't already have a position
-                    if opportunity['pair'] not in st.session_state.open_positions:
+                    # Only execute if we don't already have a position and under limit
+                    if opportunity['pair'] not in st.session_state.open_positions and len(st.session_state.open_positions) < 3:
                         result = execute_auto_trade(
                             opportunity, 
                             lot_size, 
@@ -715,6 +780,8 @@ def main():
         # Manual analysis for selected pair
         if hasattr(st.session_state, 'manual_analysis_pair'):
             selected_pair = st.session_state.manual_analysis_pair
+        else:
+            selected_pair = forex_pairs[0]
         
         # Analyze selected pair
         signal_data = analyze_pair(
@@ -722,7 +789,8 @@ def main():
             rsi_period=st.session_state.rsi_period,
             ma_fast=st.session_state.ma_fast,
             ma_slow=st.session_state.ma_slow,
-            bb_period=st.session_state.bb_period
+            bb_period=st.session_state.bb_period,
+            api_key=st.session_state.api_key
         )
         
         # Display results for selected pair
@@ -750,7 +818,7 @@ def main():
             st.markdown('</div>', unsafe_allow_html=True)
         
         # Manual trade execution
-        if signal_data['signal'] in ['BUY', 'SELL']:
+        if signal_data['signal'] in ['BUY', 'SELL'] and len(st.session_state.open_positions) < 3:
             st.markdown(f'<div class="signal-agreement">🎯 TRADING OPPORTUNITY: {signal_data["signal"]} {selected_pair} with {signal_data["signal_count"]} signals</div>', unsafe_allow_html=True)
             
             col1, col2 = st.columns(2)
@@ -770,6 +838,8 @@ def main():
                 st.info(f"Stake: €{st.session_state.stake_euros:.2f}")
                 st.info(f"Target: {st.session_state.target_profit_pips} pips")
                 st.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
+        elif signal_data['signal'] in ['BUY', 'SELL']:
+            st.warning("Cannot execute: Maximum 3 open positions reached.")
     
     # Trade History Section (always visible)
     st.subheader("📋 Trade History & Performance")
@@ -876,7 +946,7 @@ def main():
     else:
         st.info("No trades executed yet. Start auto trading or execute manual trades to see history here.")
     
-    # Open Positions - FIXED: Added safety checks for missing keys
+    # Open Positions
     if st.session_state.open_positions:
         st.subheader("📈 Open Positions")
         for pair, position in st.session_state.open_positions.items():
@@ -892,7 +962,6 @@ def main():
             with col5:
                 st.write(f"Stake: €{position['stake_eur']:.2f}")
             with col6:
-                # Safely display target profit and stop loss with default values if missing
                 target_profit = position.get('target_profit', st.session_state.target_profit_pips)
                 stop_loss = position.get('stop_loss', st.session_state.stop_loss_pips)
                 st.write(f"TP/SL: {target_profit}/{stop_loss} pips")
@@ -917,6 +986,7 @@ def main():
         - **Real-time Monitoring**: Live tracking of opportunities and positions
         - **Euro Stake Management**: Set your stake amount in euros for each trade
         - **Maximum 3 Simultaneous Trades**: Limits risk by allowing only up to 3 open positions at once
+        - **Real Data Integration**: Uses Twelve Data API for live hourly Forex data (free tier)
         
         **Risk Management Features:**
         - **Target Profit**: Set your take profit level in pips
@@ -931,14 +1001,15 @@ def main():
         - EUR/JPY, GBP/JPY, AUD/JPY, USD/CNY
         
         **How to Use Auto Trading:**
-        1. Set your desired stake amount in euros
-        2. Configure target profit and stop loss levels
-        3. Set your risk percentage (0.5%-5%)
-        4. Select lot size
-        5. Configure indicator parameters
-        6. Click "Start Auto Trading"
-        7. Click "Refresh Scan" to check for opportunities
-        8. Enable "Auto-execute" for fully automated trading
+        1. Get free API key from https://twelvedata.com/signup
+        2. Set your desired stake amount in euros
+        3. Configure target profit and stop loss levels
+        4. Set your risk percentage (0.5%-5%)
+        5. Select lot size
+        6. Configure indicator parameters
+        7. Click "Start Auto Trading"
+        8. Click "Refresh Scan" to check for opportunities
+        9. Enable "Auto-execute" for fully automated trading
         
         **Recommended Settings:**
         - Target Profit: 30-50 pips
