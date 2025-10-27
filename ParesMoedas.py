@@ -342,42 +342,8 @@ def main():
     st.subheader("📊 Individual Signal Status")
     
     signal_cols = st.columns(5)
-    # Individual Signal Status
-st.subheader("📊 Individual Signal Status")
-
-signal_cols = st.columns(5)
-
-# PUT THE indicator_mapping DICTIONARY RIGHT HERE - between these two sections
-indicator_mapping = {
-    'RSI': 'RSI',
-    'MA Crossover': 'MACrossover', 
-    'MACD': 'MACD',
-    'Bollinger Bands': 'Bollinger',
-    'Stochastic': 'Stochastic'
-}
-
-signal_details = {
-    'RSI': f"{current_rsi:.1f}",
-    'MA Crossover': f"Fast: {current_ma_fast:.5f}\nSlow: {current_ma_slow:.5f}",
-    'MACD': f"MACD: {current_macd:.5f}\nSignal: {current_macd_signal:.5f}",
-    'Bollinger Bands': f"Price: {current_price:.5f}\nUpper: {current_bb_upper:.5f}\nLower: {current_bb_lower:.5f}",
-    'Stochastic': f"K: {current_stoch_k:.1f}\nD: {current_stoch_d:.1f}"
-}
-
-for i, (display_name, details) in enumerate(signal_details.items()):
-    with signal_cols[i]:
-        # Get the correct key from the mapping
-        signal_key = indicator_mapping[display_name]
-        signal_value = signals[signal_key]
-        
-        status_color = "🟢" if signal_value == 1 else "🔴" if signal_value == -1 else "⚪"
-        status_text = "BUY" if signal_value == 1 else "SELL" if signal_value == -1 else "NEUTRAL"
-        
-        st.markdown(f"**{display_name}**")
-        st.markdown(f"{status_color} {status_text}")
-        st.text(details)
     
-    # Create a mapping between display names and signal keys
+    # Indicator mapping dictionary
     indicator_mapping = {
         'RSI': 'RSI',
         'MA Crossover': 'MACrossover', 
