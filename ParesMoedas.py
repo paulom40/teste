@@ -205,7 +205,7 @@ def generate_forex_data(pair, days=80, volatility=0.001):
     """Generate realistic Forex price data based on pair characteristics"""
     np.random.seed(42)
     dates = pd.date_range(start=datetime.now() - timedelta(days=days), 
-                         end=datetime.now(), freq='h')  # Fixed: 'h' instead of 'H'
+                         end=datetime.now(), freq='h')
     
     # Base prices for different Forex pairs
     base_prices = {
@@ -244,12 +244,14 @@ if 'trade_history' not in st.session_state:
         'Entry Price': [],
         'Exit Price': [],
         'Quantity': [],
-        'P&L': [],  # This will store numeric values
-        'P&L (€)': [],  # New column for P&L in euros
+        'P&L': [],
+        'P&L (€)': [],
         'Status': [],
         'Signal Strength': [],
         'Signal Count': [],
-        'Stake (€)': []  # New column for stake in euros
+        'Stake (€)': [],
+        'Target Profit': [],
+        'Stop Loss': []
     })
 
 if 'auto_trading' not in st.session_state:
@@ -265,11 +267,16 @@ if 'scan_count' not in st.session_state:
     st.session_state.scan_count = 0
 
 if 'stake_euros' not in st.session_state:
-    st.session_state.stake_euros = 100.0  # Default stake in euros
+    st.session_state.stake_euros = 100.0
 
-def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, pnl_eur, status, signal_strength, signal_count, stake_eur):
-    """Add a new trade to the history - FIXED VERSION"""
-    # Create a proper DataFrame for the new trade
+if 'target_profit_pips' not in st.session_state:
+    st.session_state.target_profit_pips = 30
+
+if 'stop_loss_pips' not in st.session_state:
+    st.session_state.stop_loss_pips = 20
+
+def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, pnl_eur, status, signal_strength, signal_count, stake_eur, target_profit, stop_loss):
+    """Add a new trade to the history"""
     new_trade = pd.DataFrame({
         'Date': [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         'Pair': [pair],
@@ -277,15 +284,16 @@ def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl
         'Entry Price': [float(entry_price)],
         'Exit Price': [float(exit_price)],
         'Quantity': [float(quantity)],
-        'P&L': [float(pnl)],  # Store as numeric value
-        'P&L (€)': [float(pnl_eur)],  # P&L in euros
+        'P&L': [float(pnl)],
+        'P&L (€)': [float(pnl_eur)],
         'Status': [status],
         'Signal Strength': [signal_strength],
         'Signal Count': [int(signal_count)],
-        'Stake (€)': [float(stake_eur)]  # Stake in euros
+        'Stake (€)': [float(stake_eur)],
+        'Target Profit': [float(target_profit)],
+        'Stop Loss': [float(stop_loss)]
     })
     
-    # Properly concatenate DataFrames
     st.session_state.trade_history = pd.concat([st.session_state.trade_history, new_trade], ignore_index=True)
 
 def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
@@ -366,7 +374,7 @@ def analyze_pair(pair, rsi_period=14, ma_fast=20, ma_slow=50, bb_period=20):
             'signals': {}
         }
 
-def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur):
+def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur, target_profit_pips, stop_loss_pips):
     """Execute an automated trade based on signal data"""
     pair = signal_data['pair']
     direction = signal_data['signal']
@@ -378,27 +386,33 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur):
         return f"Position already open for {pair}"
     
     # Calculate position size based on risk
-    risk_amount = (risk_percent / 100) * 10000  # Assuming $10,000 account
-    stop_loss_pips = 20
-    pip_value = 10 if 'JPY' not in pair else 0.1  # Simplified pip value calculation
+    risk_amount = (risk_percent / 100) * 10000
+    pip_value = 10 if 'JPY' not in pair else 0.1
     
-    # Calculate quantity based on risk
+    # Calculate quantity based on risk and stop loss
     quantity = min(float(lot_size), risk_amount / (stop_loss_pips * pip_value))
     
-    # Calculate P&L (simulated - in real trading this would be actual market data)
-    base_pnl = np.random.uniform(10, 100) if signal_data['strength'] == "Strong" else np.random.uniform(-20, 50)
-    pnl = base_pnl * (1 if np.random.random() > 0.3 else -1)  # 70% win rate
+    # Calculate P&L based on target profit and stop loss
+    # Simulate whether trade hits target profit or stop loss
+    hit_target = np.random.random() > 0.3  # 70% chance to hit target
+    
+    if hit_target:
+        # Trade hits target profit
+        pnl = target_profit_pips * pip_value * quantity
+        if direction == "BUY":
+            exit_price = current_price + (target_profit_pips * 0.0001)
+        else:
+            exit_price = current_price - (target_profit_pips * 0.0001)
+    else:
+        # Trade hits stop loss
+        pnl = -stop_loss_pips * pip_value * quantity
+        if direction == "BUY":
+            exit_price = current_price - (stop_loss_pips * 0.0001)
+        else:
+            exit_price = current_price + (stop_loss_pips * 0.0001)
     
     # Calculate P&L in euros based on stake
-    # For demonstration, we'll scale the P&L based on the stake amount
-    # In real trading, this would be calculated based on actual position size and price movement
-    pnl_eur = pnl * (stake_eur / 100)  # Scale P&L based on stake
-    
-    # Calculate exit price based on direction
-    if direction == "BUY":
-        exit_price = current_price * (1 + np.random.uniform(0.001, 0.005))
-    else:
-        exit_price = current_price * (1 - np.random.uniform(0.001, 0.005))
+    pnl_eur = pnl * (stake_eur / 100)
     
     # Add trade to history
     add_trade_to_history(
@@ -407,12 +421,14 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur):
         entry_price=current_price,
         exit_price=exit_price,
         quantity=quantity,
-        pnl=pnl,  # Store as numeric value
-        pnl_eur=pnl_eur,  # P&L in euros
+        pnl=pnl,
+        pnl_eur=pnl_eur,
         status="Closed",
         signal_strength=signal_data['strength'],
         signal_count=signal_count,
-        stake_eur=stake_eur  # Stake in euros
+        stake_eur=stake_eur,
+        target_profit=target_profit_pips,
+        stop_loss=stop_loss_pips
     )
     
     # Add to open positions
@@ -421,10 +437,13 @@ def execute_auto_trade(signal_data, lot_size, risk_percent, stake_eur):
         'entry_price': current_price,
         'quantity': quantity,
         'entry_time': datetime.now(),
-        'stake_eur': stake_eur
+        'stake_eur': stake_eur,
+        'target_profit': target_profit_pips,
+        'stop_loss': stop_loss_pips
     }
     
-    return f"Auto trade executed: {direction} {pair} with {signal_count} signals (Stake: €{stake_eur:.2f})"
+    result_type = "Target Profit" if hit_target else "Stop Loss"
+    return f"Auto trade executed: {direction} {pair} with {signal_count} signals (Stake: €{stake_eur:.2f}, {result_type})"
 
 def scan_all_pairs():
     """Scan all Forex pairs for trading opportunities"""
@@ -453,7 +472,7 @@ def scan_all_pairs():
 def calculate_trade_statistics():
     """Calculate trade statistics from the trade history"""
     if len(st.session_state.trade_history) == 0:
-        return 0, 0, 0, 0, 0, 0, 0
+        return 0, 0, 0, 0, 0, 0, 0, 0, 0
     
     # Ensure P&L columns are numeric
     trade_history = st.session_state.trade_history.copy()
@@ -471,7 +490,11 @@ def calculate_trade_statistics():
     total_pnl_eur = trade_history['P&L (€)'].sum()
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     
-    return total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate
+    # Calculate risk management statistics
+    target_hits = len(trade_history[trade_history['P&L'] > 0])
+    stop_loss_hits = len(trade_history[trade_history['P&L'] < 0])
+    
+    return total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits
 
 # Main application
 def main():
@@ -493,6 +516,35 @@ def main():
         help="Enter the amount you want to stake per trade in euros"
     )
     st.session_state.stake_euros = stake_euros
+    
+    st.sidebar.subheader("🎯 Risk Management")
+    col1, col2 = st.sidebar.columns(2)
+    
+    with col1:
+        target_profit_pips = st.sidebar.number_input(
+            "Target Profit (pips)",
+            value=st.session_state.target_profit_pips,
+            min_value=5,
+            max_value=100,
+            step=5,
+            help="Take profit level in pips"
+        )
+        st.session_state.target_profit_pips = target_profit_pips
+    
+    with col2:
+        stop_loss_pips = st.sidebar.number_input(
+            "Stop Loss (pips)",
+            value=st.session_state.stop_loss_pips,
+            min_value=5,
+            max_value=50,
+            step=5,
+            help="Stop loss level in pips"
+        )
+        st.session_state.stop_loss_pips = stop_loss_pips
+    
+    # Display risk-reward ratio
+    risk_reward_ratio = target_profit_pips / stop_loss_pips if stop_loss_pips > 0 else 0
+    st.sidebar.metric("Risk/Reward Ratio", f"{risk_reward_ratio:.2f}:1")
     
     st.sidebar.subheader("Trading Parameters")
     initial_balance = st.sidebar.number_input("Account Balance ($)", value=10000.0, min_value=1000.0, step=1000.0)
@@ -537,10 +589,14 @@ def main():
         st.sidebar.markdown('<div class="auto-trading-active">🤖 AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
         st.sidebar.info(f"Scan count: {st.session_state.scan_count}")
         st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
+        st.sidebar.info(f"Target: {st.session_state.target_profit_pips} pips")
+        st.sidebar.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
         st.sidebar.info("Click 'Refresh Scan' to check for new opportunities")
     else:
         st.sidebar.warning("Auto trading is currently OFF")
         st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
+        st.sidebar.info(f"Target: {st.session_state.target_profit_pips} pips")
+        st.sidebar.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
     
     # Forex pairs selection for manual analysis
     forex_pairs = [
@@ -571,6 +627,15 @@ def main():
         with col4:
             st.metric("Current Stake", f"€{st.session_state.stake_euros:.2f}")
         
+        # Display risk management info
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Target Profit", f"{st.session_state.target_profit_pips} pips")
+        with col2:
+            st.metric("Stop Loss", f"{st.session_state.stop_loss_pips} pips")
+        with col3:
+            st.metric("Risk/Reward", f"{risk_reward_ratio:.2f}:1")
+        
         # Scan all pairs for opportunities
         with st.spinner("Scanning all Forex pairs for trading opportunities..."):
             opportunities = scan_all_pairs()
@@ -598,7 +663,14 @@ def main():
                 
                 with col5:
                     if st.button(f"Trade {opportunity['pair']}", key=f"trade_{opportunity['pair']}"):
-                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade, st.session_state.stake_euros)
+                        result = execute_auto_trade(
+                            opportunity, 
+                            lot_size, 
+                            risk_per_trade, 
+                            st.session_state.stake_euros,
+                            st.session_state.target_profit_pips,
+                            st.session_state.stop_loss_pips
+                        )
                         st.success(result)
                         st.rerun()
             
@@ -609,7 +681,14 @@ def main():
                 for opportunity in opportunities:
                     # Only execute if we don't already have a position
                     if opportunity['pair'] not in st.session_state.open_positions:
-                        result = execute_auto_trade(opportunity, lot_size, risk_per_trade, st.session_state.stake_euros)
+                        result = execute_auto_trade(
+                            opportunity, 
+                            lot_size, 
+                            risk_per_trade, 
+                            st.session_state.stake_euros,
+                            st.session_state.target_profit_pips,
+                            st.session_state.stop_loss_pips
+                        )
                         executed_trades.append(result)
                 
                 if executed_trades:
@@ -665,18 +744,27 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button(f"🚀 Execute {signal_data['signal']} Trade", type="primary"):
-                    result = execute_auto_trade(signal_data, lot_size, risk_per_trade, st.session_state.stake_euros)
+                    result = execute_auto_trade(
+                        signal_data, 
+                        lot_size, 
+                        risk_per_trade, 
+                        st.session_state.stake_euros,
+                        st.session_state.target_profit_pips,
+                        st.session_state.stop_loss_pips
+                    )
                     st.success(result)
                     st.rerun()
             with col2:
                 st.info(f"Stake: €{st.session_state.stake_euros:.2f}")
+                st.info(f"Target: {st.session_state.target_profit_pips} pips")
+                st.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
     
     # Trade History Section (always visible)
     st.subheader("📋 Trade History & Performance")
     
     if len(st.session_state.trade_history) > 0:
         # Calculate summary statistics using the helper function
-        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate = calculate_trade_statistics()
+        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits = calculate_trade_statistics()
         
         # Display summary metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -706,6 +794,19 @@ def main():
             roi = (total_pnl_eur / total_stake * 100) if total_stake > 0 else 0
             st.metric("ROI", f"{roi:.1f}%")
         
+        # Risk management statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Target Hits", target_hits)
+        with col2:
+            st.metric("Stop Loss Hits", stop_loss_hits)
+        with col3:
+            target_rate = (target_hits / total_trades * 100) if total_trades > 0 else 0
+            st.metric("Target Hit Rate", f"{target_rate:.1f}%")
+        with col4:
+            avg_rr_ratio = st.session_state.trade_history['Target Profit'].mean() / st.session_state.trade_history['Stop Loss'].mean() if len(st.session_state.trade_history) > 0 else 0
+            st.metric("Avg R:R Ratio", f"{avg_rr_ratio:.2f}:1")
+        
         # Display the trade history table with formatted values
         styled_history = st.session_state.trade_history.copy()
         styled_history = styled_history.sort_values('Date', ascending=False)
@@ -717,6 +818,8 @@ def main():
         display_history['P&L'] = display_history['P&L'].apply(lambda x: f"${x:.2f}")
         display_history['P&L (€)'] = display_history['P&L (€)'].apply(lambda x: f"€{x:.2f}")
         display_history['Stake (€)'] = display_history['Stake (€)'].apply(lambda x: f"€{x:.2f}")
+        display_history['Target Profit'] = display_history['Target Profit'].apply(lambda x: f"{int(x)} pips")
+        display_history['Stop Loss'] = display_history['Stop Loss'].apply(lambda x: f"{int(x)} pips")
         
         st.dataframe(
             display_history,
@@ -747,7 +850,9 @@ def main():
                 'Status': [],
                 'Signal Strength': [],
                 'Signal Count': [],
-                'Stake (€)': []
+                'Stake (€)': [],
+                'Target Profit': [],
+                'Stop Loss': []
             })
             st.session_state.open_positions = {}
             st.success("Trade history cleared!")
@@ -760,7 +865,7 @@ def main():
     if st.session_state.open_positions:
         st.subheader("📈 Open Positions")
         for pair, position in st.session_state.open_positions.items():
-            col1, col2, col3, col4, col5, col6 = st.columns([2,1,2,2,2,1])
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([2,1,2,2,2,2,1])
             with col1:
                 st.write(f"**{pair}**")
             with col2:
@@ -772,6 +877,8 @@ def main():
             with col5:
                 st.write(f"Stake: €{position['stake_eur']:.2f}")
             with col6:
+                st.write(f"TP/SL: {position['target_profit']}/{position['stop_loss']} pips")
+            with col7:
                 if st.button(f"Close {pair}", key=f"close_{pair}"):
                     del st.session_state.open_positions[pair]
                     st.success(f"Closed position for {pair}")
@@ -788,9 +895,16 @@ def main():
         - **Multi-Pair Scanning**: Monitors all 12 major Forex pairs
         - **Signal Validation**: Requires minimum 3/5 indicator agreement
         - **Auto-Execution**: Automatically enters qualified trades
-        - **Risk Management**: Position sizing based on account risk percentage
+        - **Advanced Risk Management**: Configurable target profit and stop loss
         - **Real-time Monitoring**: Live tracking of opportunities and positions
         - **Euro Stake Management**: Set your stake amount in euros for each trade
+        
+        **Risk Management Features:**
+        - **Target Profit**: Set your take profit level in pips
+        - **Stop Loss**: Set your stop loss level in pips  
+        - **Risk/Reward Ratio**: Automatic calculation of risk-reward ratio
+        - **Position Sizing**: Automatic calculation based on risk percentage
+        - **Performance Tracking**: Monitor target hit rate and stop loss frequency
         
         **Trading Pairs Monitored:**
         - EUR/USD, GBP/USD, USD/JPY, USD/CHF
@@ -799,19 +913,19 @@ def main():
         
         **How to Use Auto Trading:**
         1. Set your desired stake amount in euros
-        2. Set your risk percentage (0.5%-5%)
-        3. Select lot size
-        4. Configure indicator parameters
-        5. Click "Start Auto Trading"
-        6. Click "Refresh Scan" to check for opportunities
-        7. Enable "Auto-execute" for fully automated trading
+        2. Configure target profit and stop loss levels
+        3. Set your risk percentage (0.5%-5%)
+        4. Select lot size
+        5. Configure indicator parameters
+        6. Click "Start Auto Trading"
+        7. Click "Refresh Scan" to check for opportunities
+        8. Enable "Auto-execute" for fully automated trading
         
-        **Risk Management:**
-        - Configurable stake amount per trade
-        - Configurable risk per trade
-        - Automatic position sizing
-        - Stop loss protection
-        - Win rate tracking and performance analytics in both USD and EUR
+        **Recommended Settings:**
+        - Target Profit: 30-50 pips
+        - Stop Loss: 15-25 pips  
+        - Risk/Reward Ratio: 1:2 or better
+        - Stake: 1-2% of your account balance
         """)
 
 if __name__ == "__main__":
