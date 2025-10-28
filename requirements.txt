@@ -5,4 +5,4 @@ plotly
 yfinance
 requests
 ta 
-ZACYNJQZmDFZV0B92pErxGfiF60iUuZ_
+
