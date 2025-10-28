@@ -90,66 +90,33 @@ st.markdown("""
         cursor: pointer;
         font-weight: bold;
     }
-    .stake-button {
-        background-color: #2196F3;
+    .close-button {
+        background-color: #ff6b6b;
         color: white;
-        padding: 0.5rem 1rem;
+        padding: 0.3rem 0.8rem;
         border: none;
         border-radius: 4px;
         cursor: pointer;
         font-weight: bold;
-        width: 100%;
+        font-size: 0.8rem;
     }
-    .error-message {
-        background-color: #ffebee;
-        color: #c62828;
-        padding: 0.5rem;
-        border-radius: 5px;
-        text-align: center;
-        margin: 0.5rem 0;
+    .table-container {
+        background-color: white;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
-    .success-message {
-        background-color: #e8f5e9;
-        color: #2e7d32;
-        padding: 0.5rem;
-        border-radius: 5px;
-        text-align: center;
-        margin: 0.5rem 0;
+    .active-trade-row {
+        background-color: #e3f2fd !important;
     }
-    .warning-message {
-        background-color: #fff3e0;
-        color: #ef6c00;
-        padding: 0.5rem;
-        border-radius: 5px;
-        text-align: center;
-        margin: 0.5rem 0;
-    }
-    .connection-status {
-        padding: 0.5rem;
-        border-radius: 5px;
-        text-align: center;
-        margin: 0.5rem 0;
-        font-weight: bold;
-    }
-    .connection-good {
-        background-color: #e8f5e9;
-        color: #2e7d32;
-        border: 1px solid #2e7d32;
-    }
-    .connection-error {
-        background-color: #ffebee;
-        color: #c62828;
-        border: 1px solid #c62828;
-    }
-    .connection-warning {
-        background-color: #fff3e0;
-        color: #ef6c00;
-        border: 1px solid #ef6c00;
+    .closed-trade-row {
+        background-color: #f5f5f5 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state for connection management
+# Initialize session state
 if 'connection_errors' not in st.session_state:
     st.session_state.connection_errors = []
     
@@ -157,194 +124,126 @@ if 'last_data_update' not in st.session_state:
     st.session_state.last_data_update = datetime.now()
     
 if 'connection_status' not in st.session_state:
-    st.session_state.connection_status = "connected"  # connected, warning, error
-    
+    st.session_state.connection_status = "connected"
+
 if 'stake_amounts' not in st.session_state:
     st.session_state.stake_amounts = {
-        'USD/JPY': 10000,
-        'USD/CHF': 10000,
-        'USD/CAD': 10000,
-        'EUR/USD': 10000,
-        'GBP/USD': 10000,
-        'AUD/USD': 10000
+        'USD/JPY': 10000, 'USD/CHF': 10000, 'USD/CAD': 10000,
+        'EUR/USD': 10000, 'GBP/USD': 10000, 'AUD/USD': 10000
     }
+
+if 'active_trades' not in st.session_state:
+    st.session_state.active_trades = []
 
 if 'trade_history' not in st.session_state:
     st.session_state.trade_history = []
 
-# Connection management functions
-def check_connection_status():
-    """Check and update connection status"""
-    now = datetime.now()
-    time_since_update = (now - st.session_state.last_data_update).total_seconds()
+if 'next_trade_id' not in st.session_state:
+    st.session_state.next_trade_id = 1001
+
+# Trade management functions
+def open_trade(currency_pair, position, stake, entry_price):
+    """Open a new trade"""
+    trade = {
+        'trade_id': f"TR{st.session_state.next_trade_id}",
+        'currency_pair': currency_pair,
+        'position': position,
+        'stake': stake,
+        'entry_price': entry_price,
+        'current_price': entry_price,
+        'open_time': datetime.now(),
+        'status': 'ACTIVE'
+    }
+    st.session_state.active_trades.append(trade)
+    st.session_state.next_trade_id += 1
+    return trade
+
+def close_trade(trade_id, exit_price):
+    """Close an active trade"""
+    for i, trade in enumerate(st.session_state.active_trades):
+        if trade['trade_id'] == trade_id:
+            closed_trade = trade.copy()
+            closed_trade['exit_price'] = exit_price
+            closed_trade['close_time'] = datetime.now()
+            closed_trade['status'] = 'CLOSED'
+            
+            # Calculate P/L
+            if trade['position'] == 'LONG':
+                pnl = (exit_price - trade['entry_price']) * trade['stake']
+            else:  # SHORT
+                pnl = (trade['entry_price'] - exit_price) * trade['stake']
+            
+            closed_trade['pnl'] = pnl
+            closed_trade['pnl_percent'] = (pnl / trade['stake']) * 100
+            
+            # Move to history
+            st.session_state.trade_history.append(closed_trade)
+            st.session_state.active_trades.pop(i)
+            return closed_trade
+    return None
+
+def generate_sample_trades():
+    """Generate sample active and historical trades for demo"""
+    if not st.session_state.active_trades:
+        # Create some sample active trades
+        pairs = ['USD/JPY', 'EUR/USD', 'GBP/USD', 'USD/CAD']
+        for i in range(3):
+            pair = np.random.choice(pairs)
+            stake = st.session_state.stake_amounts.get(pair, 10000)
+            entry_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
+            
+            open_trade(
+                currency_pair=pair,
+                position=np.random.choice(['LONG', 'SHORT']),
+                stake=stake,
+                entry_price=round(entry_price, 5)
+            )
     
-    if time_since_update > 30:  # 30 seconds without update
-        st.session_state.connection_status = "error"
-        if len(st.session_state.connection_errors) < 2:
-            st.session_state.connection_errors.append({
-                'timestamp': now,
-                'message': 'Data feed timeout - No updates for 30+ seconds'
-            })
-    elif time_since_update > 15:  # 15 seconds without update
-        st.session_state.connection_status = "warning"
-    else:
-        st.session_state.connection_status = "connected"
+    if not st.session_state.trade_history:
+        # Create sample historical trades
+        pairs = ['USD/JPY', 'EUR/USD', 'GBP/USD', 'USD/CHF', 'AUD/USD']
+        for i in range(15):
+            pair = np.random.choice(pairs)
+            stake = np.random.choice([5000, 10000, 15000, 20000])
+            entry_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
+            exit_price = entry_price * np.random.uniform(0.95, 1.08)
+            
+            if np.random.choice(['LONG', 'SHORT']) == 'LONG':
+                pnl = (exit_price - entry_price) * stake
+            else:
+                pnl = (entry_price - exit_price) * stake
+            
+            historical_trade = {
+                'trade_id': f"TR{800 + i}",
+                'currency_pair': pair,
+                'position': np.random.choice(['LONG', 'SHORT']),
+                'stake': stake,
+                'entry_price': round(entry_price, 5),
+                'exit_price': round(exit_price, 5),
+                'pnl': round(pnl, 2),
+                'pnl_percent': round((pnl / stake) * 100, 2),
+                'open_time': datetime.now() - timedelta(days=np.random.randint(5, 60)),
+                'close_time': datetime.now() - timedelta(days=np.random.randint(1, 5)),
+                'status': 'CLOSED'
+            }
+            st.session_state.trade_history.append(historical_trade)
 
-def simulate_connection_issues():
-    """Simulate random connection issues for demo"""
-    if np.random.random() < 0.1:  # 10% chance of error
-        error_type = np.random.choice(['timeout', 'api_limit', 'authentication'])
-        error_messages = {
-            'timeout': 'Data feed timeout - Connection lost',
-            'api_limit': 'API rate limit exceeded - Please wait',
-            'authentication': 'Authentication failed - Reconnecting'
-        }
-        
-        if len(st.session_state.connection_errors) < 5:  # Limit errors stored
-            st.session_state.connection_errors.append({
-                'timestamp': datetime.now(),
-                'message': error_messages[error_type]
-            })
+# Generate sample data
+generate_sample_trades()
 
-def clear_errors():
-    """Clear connection errors"""
-    st.session_state.connection_errors = []
-    st.session_state.connection_status = "connected"
-    st.session_state.last_data_update = datetime.now()
+# Update current prices for active trades
+for trade in st.session_state.active_trades:
+    price_change = np.random.uniform(-0.02, 0.02)
+    trade['current_price'] = round(trade['entry_price'] * (1 + price_change), 5)
 
 # Header
 st.markdown('<div class="main-header">LIVE FOREX PRICES - PURE PYTHON ANALYSIS</div>', unsafe_allow_html=True)
 
-# Connection Status Banner
-check_connection_status()
-
+# Connection Status
 if st.session_state.connection_status == "error":
-    st.markdown('<div class="connection-status connection-error">🔴 CONNECTION ERROR - Trading Disabled</div>', unsafe_allow_html=True)
-elif st.session_state.connection_status == "warning":
-    st.markdown('<div class="connection-status connection-warning">🟡 CONNECTION WARNING - Limited Functionality</div>', unsafe_allow_html=True)
+    st.error("🔴 CONNECTION ERROR - Trading Disabled")
 else:
-    st.markdown('<div class="connection-status connection-good">🟢 CONNECTION STABLE - All Systems Operational</div>', unsafe_allow_html=True)
-
-# Error Details Section
-if st.session_state.connection_errors:
-    st.markdown("---")
-    st.subheader("🔧 Connection Issues & Solutions")
-    
-    with st.container():
-        st.markdown('<div class="error-card">', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.write("**Recent Connection Errors:**")
-            for i, error in enumerate(st.session_state.connection_errors[-3:]):  # Show last 3 errors
-                error_time = error['timestamp'].strftime('%H:%M:%S')
-                st.write(f"• **{error_time}**: {error['message']}")
-        
-        with col2:
-            st.write("**Quick Actions:**")
-            if st.button("🔄 Reconnect", use_container_width=True):
-                clear_errors()
-                st.rerun()
-            
-            if st.button("🗑️ Clear Errors", use_container_width=True):
-                st.session_state.connection_errors = []
-                st.rerun()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# Sample data generation functions with error simulation
-def generate_forex_data():
-    """Generate forex data with simulated connection issues"""
-    simulate_connection_issues()
-    
-    currencies = ['USD/JPY', 'USD/CHF', 'USD/CAD', 'EUR/USD', 'GBP/USD', 'AUD/USD']
-    data = []
-    
-    # Simulate data delay if there are connection issues
-    if st.session_state.connection_status == "error":
-        # Return stale data
-        for currency in currencies:
-            data.append({
-                'Currency': currency,
-                'Price': 0.00000,
-                'Change': 0.000,
-                'ChangePercent': 0.00,
-                'Signals': 0,
-                'Status': 'ERROR',
-                'DataStatus': 'STALE'
-            })
-    else:
-        # Generate fresh data
-        for currency in currencies:
-            base_price = np.random.uniform(0.8, 1.4) if 'USD' not in currency else np.random.uniform(1.0, 1.5)
-            change = np.random.uniform(-0.001, 0.001)
-            change_percent = change * 100
-            
-            data.append({
-                'Currency': currency,
-                'Price': base_price,
-                'Change': change,
-                'ChangePercent': change_percent,
-                'Signals': np.random.randint(0, 3),
-                'Status': 'HOLD' if abs(change_percent) < 0.05 else 'TRADE',
-                'DataStatus': 'LIVE'
-            })
-        
-        st.session_state.last_data_update = datetime.now()
-    
-    return pd.DataFrame(data)
-
-def generate_current_trades():
-    trades = []
-    currency_pairs = ['USD/JPY', 'EUR/USD', 'GBP/USD', 'USD/CAD', 'AUD/USD']
-    
-    for i in range(2):  # Reduced number for demo
-        pair = np.random.choice(currency_pairs)
-        entry_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
-        current_price = entry_price * np.random.uniform(0.98, 1.03)
-        pnl = (current_price - entry_price) * st.session_state.stake_amounts.get(pair, 10000)
-        
-        trades.append({
-            'Trade ID': f"TR{1000 + i}",
-            'Currency Pair': pair,
-            'Position': np.random.choice(['LONG', 'SHORT']),
-            'Stake': st.session_state.stake_amounts.get(pair, 10000),
-            'Entry Price': round(entry_price, 5),
-            'Current Price': round(current_price, 5),
-            'P/L ($)': round(pnl, 2),
-            'P/L (%)': round((current_price - entry_price) / entry_price * 100, 2),
-            'Open Time': (datetime.now() - timedelta(hours=np.random.randint(1, 72))).strftime('%Y-%m-%d %H:%M'),
-            'Status': 'ACTIVE'
-        })
-    
-    return pd.DataFrame(trades)
-
-def generate_past_trades():
-    trades = []
-    currency_pairs = ['USD/JPY', 'EUR/USD', 'GBP/USD', 'USD/CHF', 'USD/CAD', 'AUD/USD', 'NZD/USD']
-    
-    for i in range(8):
-        pair = np.random.choice(currency_pairs)
-        entry_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
-        exit_price = entry_price * np.random.uniform(0.95, 1.08)
-        stake = st.session_state.stake_amounts.get(pair, 10000)
-        pnl = (exit_price - entry_price) * stake
-        
-        trades.append({
-            'Trade ID': f"TR{800 + i}",
-            'Currency Pair': pair,
-            'Position': np.random.choice(['LONG', 'SHORT']),
-            'Stake': stake,
-            'Entry Price': round(entry_price, 5),
-            'Exit Price': round(exit_price, 5),
-            'P/L ($)': round(pnl, 2),
-            'P/L (%)': round((exit_price - entry_price) / entry_price * 100, 2),
-            'Open Time': (datetime.now() - timedelta(days=np.random.randint(5, 30))).strftime('%Y-%m-%d %H:%M'),
-            'Close Time': (datetime.now() - timedelta(days=np.random.randint(1, 5))).strftime('%Y-%m-%d %H:%M'),
-            'Status': 'CLOSED'
-        })
-    
-    return pd.DataFrame(trades)
+    st.success("🟢 CONNECTION STABLE - All Systems Operational")
 
 # Manual Stake Management Section
 st.markdown("---")
@@ -355,37 +254,28 @@ col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     st.markdown('<div class="stake-card">', unsafe_allow_html=True)
     st.write("**Quick Stake Presets**")
-    
     preset_col1, preset_col2 = st.columns(2)
     with preset_col1:
-        if st.button("$1,000", use_container_width=True, disabled=st.session_state.connection_status == "error"):
+        if st.button("$1,000", use_container_width=True):
             for pair in st.session_state.stake_amounts:
                 st.session_state.stake_amounts[pair] = 1000
-            st.success("Stake set to $1,000 for all pairs")
-        
-        if st.button("$5,000", use_container_width=True, disabled=st.session_state.connection_status == "error"):
+        if st.button("$5,000", use_container_width=True):
             for pair in st.session_state.stake_amounts:
                 st.session_state.stake_amounts[pair] = 5000
-            st.success("Stake set to $5,000 for all pairs")
-    
     with preset_col2:
-        if st.button("$10,000", use_container_width=True, disabled=st.session_state.connection_status == "error"):
+        if st.button("$10,000", use_container_width=True):
             for pair in st.session_state.stake_amounts:
                 st.session_state.stake_amounts[pair] = 10000
-            st.success("Stake set to $10,000 for all pairs")
-        
-        if st.button("$25,000", use_container_width=True, disabled=st.session_state.connection_status == "error"):
+        if st.button("$25,000", use_container_width=True):
             for pair in st.session_state.stake_amounts:
                 st.session_state.stake_amounts[pair] = 25000
-            st.success("Stake set to $25,000 for all pairs")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     st.markdown('<div class="stake-card">', unsafe_allow_html=True)
     st.write("**Individual Pair Stakes**")
-    
-    pairs = ['USD/JPY', 'USD/CHF', 'USD/CAD', 'EUR/USD', 'GBP/USD', 'AUD/USD']
-    for pair in pairs[:3]:
+    pairs = list(st.session_state.stake_amounts.keys())[:3]
+    for pair in pairs:
         current_stake = st.session_state.stake_amounts.get(pair, 10000)
         new_stake = st.number_input(
             f"{pair} Stake ($)",
@@ -393,8 +283,7 @@ with col2:
             max_value=100000,
             value=current_stake,
             step=1000,
-            key=f"stake_{pair}",
-            disabled=st.session_state.connection_status == "error"
+            key=f"stake_{pair}"
         )
         st.session_state.stake_amounts[pair] = new_stake
     st.markdown('</div>', unsafe_allow_html=True)
@@ -402,8 +291,8 @@ with col2:
 with col3:
     st.markdown('<div class="stake-card">', unsafe_allow_html=True)
     st.write("**Individual Pair Stakes (Cont.)**")
-    
-    for pair in pairs[3:]:
+    pairs = list(st.session_state.stake_amounts.keys())[3:]
+    for pair in pairs:
         current_stake = st.session_state.stake_amounts.get(pair, 10000)
         new_stake = st.number_input(
             f"{pair} Stake ($)",
@@ -411,230 +300,225 @@ with col3:
             max_value=100000,
             value=current_stake,
             step=1000,
-            key=f"stake_{pair}",
-            disabled=st.session_state.connection_status == "error"
+            key=f"stake_{pair}"
         )
         st.session_state.stake_amounts[pair] = new_stake
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Generate data with current stakes
-forex_data = generate_forex_data()
-current_trades = generate_current_trades()
-past_trades = generate_past_trades()
-
-# Create layout with columns
-col1, col2, col3 = st.columns([1, 2, 1])
-
-with col1:
-    st.subheader("Portfolio Overview")
-    
-    total_stake = sum(st.session_state.stake_amounts.values())
-    active_exposure = current_trades['Stake'].sum() if not current_trades.empty else 0
-    
-    st.metric(label="Total Stake", value=f"${total_stake:,}")
-    st.metric(label="Active Exposure", value=f"${active_exposure:,}")
-    st.metric(label="Available Balance", value=f"${total_stake - active_exposure:,}")
-    
-    st.subheader("Trading Signals")
-    for index, row in forex_data.iterrows():
-        signal_class = "signal-low" if row['Signals'] == 0 else "signal-high"
-        status_text = f"LOW - Signals: {row['Signals']}" if row['Signals'] == 0 else f"ACTIVE - Signals: {row['Signals']}"
-        
-        if st.session_state.connection_status == "error":
-            st.markdown(f'<div class="error-message">ERROR - No Data</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="{signal_class}">{status_text}</div>', unsafe_allow_html=True)
-
-with col2:
-    st.subheader("Currency Pairs")
-    
-    # Display currency cards with connection status
-    for index, row in forex_data.iterrows():
-        current_stake = st.session_state.stake_amounts.get(row['Currency'], 10000)
-        
-        if st.session_state.connection_status == "error":
-            # Show error state
-            with st.container():
-                st.markdown(f'<div class="error-card">', unsafe_allow_html=True)
-                st.write(f"**{row['Currency']}**")
-                st.markdown('<div class="error-message">🔴 CONNECTION ERROR - No live data</div>', unsafe_allow_html=True)
-                st.write(f"Last Stake: ${current_stake:,}")
-                st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            # Show normal state
-            change_color = "positive-change" if row['Change'] >= 0 else "negative-change"
-            change_symbol = "+" if row['Change'] >= 0 else ""
-            
-            with st.container():
-                st.markdown(f'<div class="currency-card">', unsafe_allow_html=True)
-                col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
-                
-                with col_a:
-                    st.write(f"**{row['Currency']}**")
-                    st.write(f"**{row['Price']:.5f}**")
-                    st.write(f"Stake: ${current_stake:,}")
-                
-                with col_b:
-                    st.markdown(f'<span class="{change_color}">{change_symbol}{row["ChangePercent"]:.2f}%</span>', unsafe_allow_html=True)
-                
-                with col_c:
-                    new_stake = st.number_input(
-                        "Adjust Stake",
-                        min_value=100,
-                        max_value=100000,
-                        value=current_stake,
-                        step=1000,
-                        key=f"quick_stake_{row['Currency']}",
-                        label_visibility="collapsed",
-                        disabled=st.session_state.connection_status == "error"
-                    )
-                    if new_stake != current_stake:
-                        st.session_state.stake_amounts[row['Currency']] = new_stake
-                        st.rerun()
-                
-                with col_d:
-                    if row['Status'] == 'TRADE' and st.session_state.connection_status != "error":
-                        if st.button("TRADE", key=f"trade_{index}", use_container_width=True):
-                            trade_data = {
-                                'timestamp': datetime.now(),
-                                'currency': row['Currency'],
-                                'action': 'OPEN',
-                                'stake': current_stake,
-                                'price': row['Price'],
-                                'position': 'LONG' if row['Change'] >= 0 else 'SHORT'
-                            }
-                            st.session_state.trade_history.append(trade_data)
-                            st.success(f"Trade executed: {row['Currency']} ${current_stake:,}")
-                    else:
-                        status_class = "error-message" if st.session_state.connection_status == "error" else "warning-message"
-                        status_text = "DISABLED" if st.session_state.connection_status == "error" else "HOLD"
-                        st.markdown(f'<div class="{status_class}">{status_text}</div>', unsafe_allow_html=True)
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-
-with col3:
-    st.subheader("Performance")
-    
-    # Create performance chart
-    dates = [datetime.now() - timedelta(days=x) for x in range(30, 0, -1)]
-    
-    if st.session_state.connection_status == "error":
-        # Show placeholder chart for error state
-        fig = go.Figure()
-        fig.add_annotation(
-            text="📡 Connection Error<br>Chart data unavailable",
-            xref="paper", yref="paper",
-            x=0.5, y=0.5,
-            showarrow=False,
-            font=dict(size=16, color="red")
-        )
-        fig.update_layout(
-            height=300,
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
-        )
-    else:
-        performance = [10000 + x * np.random.uniform(-50, 100) for x in range(30)]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=dates, 
-            y=performance,
-            mode='lines',
-            line=dict(color='#1f77b4', width=3),
-            name='Portfolio Value'
-        ))
-        fig.update_layout(
-            height=300,
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis_title="Date",
-            yaxis_title="Value ($)",
-            showlegend=False
-        )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Risk metrics
-    if st.session_state.connection_status == "error":
-        st.markdown('<div class="error-message">Risk Level: UNAVAILABLE</div>', unsafe_allow_html=True)
-        st.markdown('<div class="error-message">Today\'s P/L: UNAVAILABLE</div>', unsafe_allow_html=True)
-    else:
-        st.metric(label="Risk Level", value="MEDIUM", delta="-2%")
-        st.metric(label="Today's P/L", value="+$142", delta="+1.4%")
-
-# System Status Section
+# Current Active Trades Table
 st.markdown("---")
-st.subheader("🔧 System Status & Connection Management")
+st.subheader("📊 Current Active Trades")
 
-status_col1, status_col2, status_col3 = st.columns(3)
-
-with status_col1:
-    if st.session_state.connection_status == "error":
-        st.error("❌ Data Feed: DISCONNECTED")
-        st.error(f"❌ Connection: {len(st.session_state.connection_errors)} Active Errors")
-    elif st.session_state.connection_status == "warning":
-        st.warning("⚠️ Data Feed: UNSTABLE")
-        st.warning(f"⚠️ Connection: {len(st.session_state.connection_errors)} Warnings")
-    else:
-        st.success("✅ Data Feed: ACTIVE")
-        st.success("✅ Connection: STABLE")
-
-with status_col2:
-    if st.session_state.connection_status == "error":
-        st.error("⚠️ API Limit: UNAVAILABLE")
-    else:
-        st.warning("⚠️ API Limit: 78% Used")
+if st.session_state.active_trades:
+    # Calculate totals
+    total_exposure = sum(trade['stake'] for trade in st.session_state.active_trades)
+    total_unrealized_pnl = 0
     
-    time_since_update = (datetime.now() - st.session_state.last_data_update).total_seconds()
-    st.info(f"ℹ️ Last Update: {int(time_since_update)}s ago")
+    # Prepare data for display
+    active_trades_data = []
+    for trade in st.session_state.active_trades:
+        if trade['position'] == 'LONG':
+            unrealized_pnl = (trade['current_price'] - trade['entry_price']) * trade['stake']
+        else:  # SHORT
+            unrealized_pnl = (trade['entry_price'] - trade['current_price']) * trade['stake']
+        
+        unrealized_pnl_percent = (unrealized_pnl / trade['stake']) * 100
+        total_unrealized_pnl += unrealized_pnl
+        
+        active_trades_data.append({
+            'Trade ID': trade['trade_id'],
+            'Currency Pair': trade['currency_pair'],
+            'Position': trade['position'],
+            'Stake': f"${trade['stake']:,}",
+            'Entry Price': trade['entry_price'],
+            'Current Price': trade['current_price'],
+            'P/L ($)': f"${unrealized_pnl:,.2f}",
+            'P/L (%)': f"{unrealized_pnl_percent:.2f}%",
+            'Open Time': trade['open_time'].strftime('%Y-%m-%d %H:%M'),
+            'Actions': trade['trade_id']
+        })
+    
+    # Display summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Active Trades", len(st.session_state.active_trades))
+    with col2:
+        st.metric("Total Exposure", f"${total_exposure:,}")
+    with col3:
+        st.metric("Unrealized P/L", f"${total_unrealized_pnl:,.2f}")
+    with col4:
+        avg_holding = np.mean([(datetime.now() - trade['open_time']).days 
+                              for trade in st.session_state.active_trades])
+        st.metric("Avg Holding Time", f"{avg_holding:.1f} days")
+    
+    # Display the table
+    active_df = pd.DataFrame(active_trades_data)
+    
+    # Create a styled dataframe with close buttons
+    for i, trade in enumerate(st.session_state.active_trades):
+        col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
+        with col1:
+            st.write(f"**{trade['trade_id']}**")
+        with col2:
+            st.write(f"{trade['currency_pair']} - {trade['position']}")
+            st.write(f"Entry: {trade['entry_price']} | Current: {trade['current_price']}")
+        with col3:
+            if trade['position'] == 'LONG':
+                pnl = (trade['current_price'] - trade['entry_price']) * trade['stake']
+            else:
+                pnl = (trade['entry_price'] - trade['current_price']) * trade['stake']
+            
+            pnl_color = "positive-pnl" if pnl >= 0 else "negative-pnl"
+            st.markdown(f'<div class="{pnl_color}">${pnl:,.2f}</div>', unsafe_allow_html=True)
+        with col4:
+            if st.button("Close Trade", key=f"close_{trade['trade_id']}", use_container_width=True):
+                close_trade(trade['trade_id'], trade['current_price'])
+                st.rerun()
+    
+    # Detailed table view
+    with st.expander("Detailed Active Trades View"):
+        st.dataframe(
+            active_df,
+            use_container_width=True,
+            hide_index=True
+        )
+else:
+    st.info("No active trades currently open")
 
-with status_col3:
-    if st.session_state.connection_status == "error":
-        st.error("❌ Analysis: PAUSED")
-        st.error("❌ Alerts: DISABLED")
+# Trade History Table
+st.markdown("---")
+st.subheader("📈 Trade History")
+
+if st.session_state.trade_history:
+    # Calculate performance metrics
+    total_closed_pnl = sum(trade['pnl'] for trade in st.session_state.trade_history)
+    winning_trades = len([t for t in st.session_state.trade_history if t['pnl'] > 0])
+    total_trades = len(st.session_state.trade_history)
+    win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
+    
+    # Display summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Trades", total_trades)
+    with col2:
+        st.metric("Win Rate", f"{win_rate:.1f}%")
+    with col3:
+        st.metric("Total P/L", f"${total_closed_pnl:,.2f}")
+    with col4:
+        avg_trade_pnl = total_closed_pnl / total_trades if total_trades > 0 else 0
+        st.metric("Avg Trade P/L", f"${avg_trade_pnl:.2f}")
+    
+    # Prepare historical data for display
+    historical_trades_data = []
+    for trade in st.session_state.trade_history[-20:]:  # Show last 20 trades
+        historical_trades_data.append({
+            'Trade ID': trade['trade_id'],
+            'Currency Pair': trade['currency_pair'],
+            'Position': trade['position'],
+            'Stake': f"${trade['stake']:,}",
+            'Entry Price': trade['entry_price'],
+            'Exit Price': trade['exit_price'],
+            'P/L ($)': f"${trade['pnl']:,.2f}",
+            'P/L (%)': f"{trade['pnl_percent']:.2f}%",
+            'Open Time': trade['open_time'].strftime('%Y-%m-%d %H:%M'),
+            'Close Time': trade['close_time'].strftime('%Y-%m-%d %H:%M'),
+            'Duration': f"{(trade['close_time'] - trade['open_time']).days}d"
+        })
+    
+    # Display the historical trades table
+    historical_df = pd.DataFrame(historical_trades_data)
+    
+    # Add filters
+    col1, col2 = st.columns(2)
+    with col1:
+        show_count = st.selectbox("Show last trades:", [10, 20, 50, "All"])
+    with col2:
+        sort_by = st.selectbox("Sort by:", ["Most Recent", "Highest P/L", "Lowest P/L", "Largest Stake"])
+    
+    # Apply filters
+    if show_count != "All":
+        display_df = historical_df.head(show_count)
     else:
-        st.success("✅ Analysis: RUNNING")
-        st.warning("⚠️ Alerts: 1 Pending")
+        display_df = historical_df
+    
+    # Apply sorting
+    if sort_by == "Most Recent":
+        display_df = display_df.iloc[::-1]  # Reverse to show most recent first
+    elif sort_by == "Highest P/L":
+        display_df = display_df.iloc[display_df['P/L ($)'].str.replace('$', '').str.replace(',', '').astype(float).argsort()[::-1]]
+    elif sort_by == "Lowest P/L":
+        display_df = display_df.iloc[display_df['P/L ($)'].str.replace('$', '').str.replace(',', '').astype(float).argsort()]
+    
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Export functionality
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("Export Trade History to CSV"):
+            export_df = pd.DataFrame([{
+                'Trade ID': t['trade_id'],
+                'Currency Pair': t['currency_pair'],
+                'Position': t['position'],
+                'Stake': t['stake'],
+                'Entry Price': t['entry_price'],
+                'Exit Price': t['exit_price'],
+                'P/L ($)': t['pnl'],
+                'P/L (%)': t['pnl_percent'],
+                'Open Time': t['open_time'],
+                'Close Time': t['close_time']
+            } for t in st.session_state.trade_history])
+            
+            csv = export_df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name=f"trade_history_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+else:
+    st.info("No trade history available")
 
-# Connection Management Actions
-st.markdown("### Connection Controls")
+# Trading Interface
+st.markdown("---")
+st.subheader("🚀 Quick Trading")
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    if st.button("🔄 Force Reconnect", use_container_width=True):
-        clear_errors()
-        st.session_state.last_data_update = datetime.now()
-        st.rerun()
-
+    st.write("**Open New Trade**")
+    selected_pair = st.selectbox("Currency Pair", list(st.session_state.stake_amounts.keys()))
+    position = st.selectbox("Position", ["LONG", "SHORT"])
+    
 with col2:
-    if st.button("🗑️ Clear All Errors", use_container_width=True):
-        st.session_state.connection_errors = []
-        st.session_state.connection_status = "connected"
-        st.rerun()
-
+    stake = st.number_input(
+        "Stake Amount ($)",
+        min_value=100,
+        max_value=100000,
+        value=st.session_state.stake_amounts[selected_pair],
+        step=1000
+    )
+    current_price = np.random.uniform(1.0, 1.5) if 'USD' in selected_pair else np.random.uniform(0.8, 1.4)
+    st.write(f"Current Price: **{current_price:.5f}**")
+    
 with col3:
-    if st.button("📊 Test Data Feed", use_container_width=True):
-        st.session_state.last_data_update = datetime.now()
-        if np.random.random() < 0.7:  # 70% success rate
-            st.success("✅ Data feed test: SUCCESS")
-            st.session_state.connection_status = "connected"
-        else:
-            st.error("❌ Data feed test: FAILED")
-            st.session_state.connection_status = "error"
+    st.write("&nbsp;")  # Spacer
+    st.write("&nbsp;")
+    if st.button("🎯 Execute Trade", use_container_width=True, type="primary"):
+        new_trade = open_trade(selected_pair, position, stake, round(current_price, 5))
+        st.success(f"Trade opened: {new_trade['trade_id']} - {selected_pair} {position} ${stake:,}")
         st.rerun()
 
 # Footer
 st.markdown("---")
-col1, col2 = st.columns([3, 1])
-with col2:
-    if st.button("🔄 Refresh All Data", use_container_width=True):
-        st.session_state.last_data_update = datetime.now()
-        st.rerun()
+if st.button("🔄 Refresh All Data", use_container_width=True):
+    st.rerun()
 
-st.markdown(f"""
+st.markdown("""
 <div style="text-align: center; color: #666; margin-top: 2rem;">
-    Pure Python Forex Analysis Dashboard | 
-    Connection: <strong>{st.session_state.connection_status.upper()}</strong> | 
-    Last Update: {st.session_state.last_data_update.strftime('%H:%M:%S')}
+    Pure Python Forex Analysis Dashboard | Complete Trade Management System
 </div>
 """, unsafe_allow_html=True)
