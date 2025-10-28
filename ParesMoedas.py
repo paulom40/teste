@@ -142,17 +142,76 @@ if 'initialized' not in st.session_state:
     st.session_state.trade_history = []
     st.session_state.next_trade_id = 1001
     st.session_state.price_history = {}  # Fallback for sample data
+    st.session_state.volume_history = {}  # Fallback for sample volumes
+
+def detect_bullish_divergence(prices, rsi_values, window=20):
+    """Detect bullish RSI divergence: lower price low, higher RSI low"""
+    if len(prices) < window * 2:
+        return False
+    recent_prices = prices[-window:]
+    recent_rsi = rsi_values[-window:]
+    prev_prices = prices[-window*2:-window]
+    prev_rsi = rsi_values[-window*2:-window]
+    
+    min_price_idx_recent = np.argmin(recent_prices)
+    min_rsi_idx_recent = np.argmin(recent_rsi)
+    min_price_idx_prev = np.argmin(prev_prices)
+    min_rsi_idx_prev = np.argmin(prev_rsi)
+    
+    # Check if recent low is lower in price but higher in RSI
+    recent_low_price = recent_prices[min_price_idx_recent]
+    prev_low_price = prev_prices[min_price_idx_prev]
+    recent_low_rsi = recent_rsi[min_rsi_idx_recent]
+    prev_low_rsi = prev_rsi[min_rsi_idx_prev]
+    
+    return recent_low_price < prev_low_price and recent_low_rsi > prev_low_rsi
+
+def detect_bearish_divergence(prices, rsi_values, window=20):
+    """Detect bearish RSI divergence: higher price high, lower RSI high"""
+    if len(prices) < window * 2:
+        return False
+    recent_prices = prices[-window:]
+    recent_rsi = rsi_values[-window:]
+    prev_prices = prices[-window*2:-window]
+    prev_rsi = rsi_values[-window*2:-window]
+    
+    max_price_idx_recent = np.argmax(recent_prices)
+    max_rsi_idx_recent = np.argmax(recent_rsi)
+    max_price_idx_prev = np.argmax(prev_prices)
+    max_rsi_idx_prev = np.argmax(prev_rsi)
+    
+    # Check if recent high is higher in price but lower in RSI
+    recent_high_price = recent_prices[max_price_idx_recent]
+    prev_high_price = prev_prices[max_price_idx_prev]
+    recent_high_rsi = recent_rsi[max_rsi_idx_recent]
+    prev_high_rsi = prev_rsi[max_rsi_idx_prev]
+    
+    return recent_high_price > prev_high_price and recent_high_rsi < prev_high_rsi
+
+def calculate_obv(closes, volumes):
+    """Calculate On-Balance Volume"""
+    obv = [0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i-1]:
+            obv.append(obv[-1] + volumes[i])
+        elif closes[i] < closes[i-1]:
+            obv.append(obv[-1] - volumes[i])
+        else:
+            obv.append(obv[-1])
+    return pd.Series(obv)
 
 def get_prices(pair):
-    """Fetch recent prices using Polygon API"""
+    """Fetch recent prices and volumes using Polygon API"""
     if not client:
         # Fallback to sample data
         if pair not in st.session_state.price_history:
             # Generate sample prices if not present
             base_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
             prices = [base_price * (1 + np.random.uniform(-0.01, 0.01)) for _ in range(100)]
+            volumes = [np.random.randint(1000, 10000) for _ in range(100)]
             st.session_state.price_history[pair] = prices
-        return st.session_state.price_history[pair]
+            st.session_state.volume_history[pair] = volumes
+        return st.session_state.price_history[pair], st.session_state.volume_history[pair]
     
     symbol = pair.replace('/', '')
     try:
@@ -168,16 +227,17 @@ def get_prices(pair):
             sort="asc"
         )
         prices = [float(agg.close) for agg in aggs]
-        return prices[-100:]  # Keep last 100
+        volumes = [int(agg.volume) for agg in aggs]
+        return prices[-100:], volumes[-100:]  # Keep last 100
     except Exception as e:
         st.error(f"Error fetching data for {pair}: {e}")
-        return []
+        return [], []
 
 def get_current_price(pair):
     """Get the latest mid price"""
     if not client:
         # Fallback to sample
-        prices = get_prices(pair)
+        prices, _ = get_prices(pair)
         return prices[-1] if prices else None
     
     symbol = pair.replace('/', '')
@@ -189,13 +249,14 @@ def get_current_price(pair):
         return None
 
 # Technical Analysis Functions
-def calculate_technical_indicators(prices):
-    """Calculate various technical indicators"""
+def calculate_technical_indicators(prices, volumes):
+    """Calculate various technical indicators including volume"""
     if len(prices) < 20:  # Need enough data for indicators
         return {}
     
     # Convert to pandas Series for TA library
     price_series = pd.Series(prices)
+    volume_series = pd.Series(volumes)
     
     indicators = {}
     
@@ -206,7 +267,13 @@ def calculate_technical_indicators(prices):
     indicators['ema_26'] = ta.trend.ema_indicator(price_series, window=26).iloc[-1]
     
     # RSI
-    indicators['rsi'] = ta.momentum.rsi(price_series, window=14).iloc[-1]
+    rsi_series = ta.momentum.rsi(price_series, window=14)
+    indicators['rsi'] = rsi_series.iloc[-1]
+    rsi_list = rsi_series.tolist()
+    
+    # Detect RSI Divergence
+    indicators['bullish_div'] = detect_bullish_divergence(prices, rsi_list)
+    indicators['bearish_div'] = detect_bearish_divergence(prices, rsi_list)
     
     # MACD
     macd = ta.trend.MACD(price_series)
@@ -228,6 +295,19 @@ def calculate_technical_indicators(prices):
     # ADX for trend strength
     adx = ta.trend.ADXIndicator(high=price_series, low=price_series, close=price_series, window=14)
     indicators['adx'] = adx.adx().iloc[-1]
+    
+    # Volume Analysis
+    obv_series = calculate_obv(prices, volumes)
+    indicators['obv'] = obv_series.iloc[-1]
+    obv_trend = "BULLISH" if obv_series.iloc[-1] > obv_series.iloc[-10] else "BEARISH"
+    indicators['obv_trend'] = obv_trend
+    
+    avg_volume = volume_series.tail(20).mean()
+    indicators['avg_volume'] = avg_volume
+    high_volume = volumes[-1] > avg_volume * 1.5
+    indicators['high_volume'] = high_volume
+    volume_signal = "HIGH" if high_volume else "NORMAL"
+    indicators['volume_signal'] = volume_signal
     
     return indicators
 
@@ -289,6 +369,13 @@ def analyze_trend(indicators, current_price):
             bearish_signals += 1
         total_signals += 1
     
+    # OBV Analysis
+    if indicators.get('obv_trend') == 'BULLISH':
+        bullish_signals += 1
+    elif indicators.get('obv_trend') == 'BEARISH':
+        bearish_signals += 1
+    total_signals += 1
+    
     # ADX for trend strength adjustment
     if indicators.get('adx', 0) > 25:
         trend_strength_multiplier = 1.2  # Amplify strong trends
@@ -312,7 +399,7 @@ def analyze_trend(indicators, current_price):
     return "NEUTRAL", "Sideways Market"
 
 def generate_trading_signal(indicators, trend_direction):
-    """Generate trading signal based on technical analysis with multi-confirmation including Bollinger Bands"""
+    """Generate trading signal based on technical analysis with multi-confirmation including Bollinger Bands, RSI Divergence, and Volume"""
     if not indicators:
         return "HOLD", "Waiting for data"
     
@@ -328,6 +415,14 @@ def generate_trading_signal(indicators, trend_direction):
         elif indicators['rsi'] > 70:
             signals.append("RSI: OVERBOUGHT - Potential SELL")
             bearish_confirmations += 1
+    
+    # RSI Divergence
+    if indicators.get('bullish_div'):
+        signals.append("RSI: BULLISH DIVERGENCE")
+        bullish_confirmations += 1
+    if indicators.get('bearish_div'):
+        signals.append("RSI: BEARISH DIVERGENCE")
+        bearish_confirmations += 1
     
     # MACD Signal
     if indicators['macd'] and indicators['macd_signal']:
@@ -367,6 +462,21 @@ def generate_trading_signal(indicators, trend_direction):
             bearish_confirmations += 1
         elif indicators['bb_upper'] - indicators['bb_lower'] < indicators['bb_middle'] * 0.01:  # Band squeeze (low volatility)
             signals.append("BB: BAND SQUEEZE - Volatility Breakout Possible")
+    
+    # Volume Signals
+    if indicators.get('high_volume'):
+        signals.append("Volume: HIGH - Confirmation")
+        if trend_direction == "BULLISH":
+            bullish_confirmations += 1
+        else:
+            bearish_confirmations += 1
+    
+    if indicators.get('obv_trend') == 'BULLISH':
+        signals.append("OBV: Rising")
+        bullish_confirmations += 1
+    elif indicators.get('obv_trend') == 'BEARISH':
+        signals.append("OBV: Falling")
+        bearish_confirmations += 1
     
     # Require at least 2 confirmations for strong signals
     if trend_direction == "BULLISH" and bullish_confirmations >= 2:
@@ -419,11 +529,11 @@ def check_and_close_trade(trade):
         return None
     
     trade['current_price'] = current_price
-    prices = get_prices(pair)
+    prices, volumes = get_prices(pair)
     if len(prices) < 20:
         return None
     
-    indicators = calculate_technical_indicators(prices)
+    indicators = calculate_technical_indicators(prices, volumes)
     indicators['current_price'] = current_price
     trend_direction, _ = analyze_trend(indicators, current_price)
     signal, _ = generate_trading_signal(indicators, trend_direction)
@@ -496,7 +606,7 @@ def generate_sample_data():
         for i in range(8):
             pair = np.random.choice(currency_pairs)
             stake = 10  # Fixed 10€ stake
-            prices = get_prices(pair)
+            prices, _ = get_prices(pair)
             if len(prices) < 50:
                 continue
             entry_idx = np.random.randint(0, len(prices) - 10)
@@ -550,7 +660,7 @@ for trade in st.session_state.active_trades:
 for trade_id in trades_to_remove:
     st.session_state.active_trades = [t for t in st.session_state.active_trades if t['trade_id'] != trade_id]
 
-# Update sample prices if no client
+# Update sample prices and volumes if no client
 if not client:
     for pair in st.session_state.stake_amounts.keys():
         if pair in st.session_state.price_history:
@@ -559,9 +669,15 @@ if not client:
             bias = 0.0001 if 'JPY' not in pair else 0.001
             new_price = last_price * (1 + np.random.uniform(-0.0015, 0.0025) + bias)
             st.session_state.price_history[pair].append(new_price)
-            # Keep only last 100 prices
+            
+            # Add new volume
+            new_volume = np.random.randint(1000, 10000)
+            st.session_state.volume_history[pair].append(new_volume)
+            
+            # Keep only last 100
             if len(st.session_state.price_history[pair]) > 100:
                 st.session_state.price_history[pair] = st.session_state.price_history[pair][-100:]
+                st.session_state.volume_history[pair] = st.session_state.volume_history[pair][-100:]
 
 # Header
 st.markdown('<div class="main-header">LIVE FOREX PRICES - REAL API INTEGRATION</div>', unsafe_allow_html=True)
@@ -582,7 +698,7 @@ st.subheader("📊 Technical Analysis Overview")
 # Display technical analysis for each currency pair
 currency_pairs = list(st.session_state.stake_amounts.keys())
 for pair in currency_pairs:
-    prices = get_prices(pair)
+    prices, volumes = get_prices(pair)
     if not prices:
         st.warning(f"No data available for {pair}")
         continue
@@ -593,7 +709,7 @@ for pair in currency_pairs:
     price_change_percent = (price_change / previous_price) * 100
     
     # Calculate technical indicators
-    indicators = calculate_technical_indicators(prices)
+    indicators = calculate_technical_indicators(prices, volumes)
     indicators['current_price'] = current_price
     
     # Analyze trend
@@ -646,6 +762,12 @@ for pair in currency_pairs:
             if indicators.get('adx'):
                 adx_color = "indicator-bullish" if indicators['adx'] > 25 else "indicator-neutral"
                 st.markdown(f'<span class="{adx_color}">ADX: {indicators["adx"]:.1f}</span>', unsafe_allow_html=True)
+            
+            # RSI Divergence
+            if indicators.get('bullish_div'):
+                st.markdown('<span class="indicator-bullish">Bull Div</span>', unsafe_allow_html=True)
+            if indicators.get('bearish_div'):
+                st.markdown('<span class="indicator-bearish">Bear Div</span>', unsafe_allow_html=True)
         
         with col4:
             # Additional indicators
@@ -660,6 +782,12 @@ for pair in currency_pairs:
             if 'bb_lower' in indicators and 'bb_upper' in indicators:
                 bb_position = (current_price - indicators['bb_lower']) / (indicators['bb_upper'] - indicators['bb_lower']) * 100
                 st.caption(f"BB Pos: {bb_position:.0f}%")
+            
+            # Volume info
+            vol_color = "indicator-bullish" if indicators.get('high_volume') else "indicator-neutral"
+            st.markdown(f'<span class="{vol_color}">Vol: {indicators["volume_signal"]}</span>', unsafe_allow_html=True)
+            obv_color = "indicator-bullish" if indicators.get('obv_trend') == 'BULLISH' else "indicator-bearish"
+            st.markdown(f'<span class="{obv_color}">OBV: {indicators["obv_trend"]}</span>', unsafe_allow_html=True)
             
             st.caption(signal_reason)
         
@@ -825,6 +953,6 @@ if st.button("🔄 Refresh Data", use_container_width=True):
 
 st.markdown("""
 <div style="text-align: center; color: #666; margin-top: 2rem;">
-    Real Forex Analysis Dashboard via Polygon.io | Fixed €10 Stake | Enhanced Strategy: Multi-Confirmation Signals (incl. BB), ADX, Auto SL/TP & Reversal Close
+    Real Forex Analysis Dashboard via Polygon.io | Fixed €10 Stake | Enhanced Strategy: Multi-Confirmation Signals (incl. BB, RSI Div & Volume), ADX, Auto SL/TP & Reversal Close
 </div>
 """, unsafe_allow_html=True)
