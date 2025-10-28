@@ -99,6 +99,27 @@ st.markdown("""
         font-size: 0.9rem;
         border: 2px solid #FF0000;
     }
+    .active-trade-profit {
+        color: #00ff88;
+        font-weight: bold;
+        font-size: 1.1em;
+    }
+    .active-trade-loss {
+        color: #ff4444;
+        font-weight: bold;
+        font-size: 1.1em;
+    }
+    .active-trade-neutral {
+        color: #666666;
+        font-weight: bold;
+    }
+    .tab-container {
+        background: white;
+        border-radius: 10px;
+        padding: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -303,6 +324,184 @@ def execute_trade(signal_data, stake_eur):
     
     return f"✅ Trade executed: {direction} {pair} at {price:.5f}"
 
+def open_trade_position(signal_data, stake_eur):
+    """Open a new trade position (active trade)"""
+    pair = signal_data['pair']
+    
+    # Store active trade in open_positions
+    st.session_state.open_positions[pair] = {
+        'pair': pair,
+        'direction': signal_data['signal'],
+        'entry_price': signal_data['price'],
+        'entry_time': datetime.now(),
+        'stake_eur': stake_eur,
+        'target_profit': st.session_state.target_profit_pips,
+        'stop_loss': st.session_state.stop_loss_pips,
+        'signal_strength': signal_data['strength'],
+        'engulfing_pattern': signal_data['engulfing'],
+        'current_pnl': 0.0,
+        'current_pnl_percent': 0.0
+    }
+    
+    return f"🟢 Position opened: {signal_data['signal']} {pair} at {signal_data['price']:.5f}"
+
+def close_trade_position(pair, current_price):
+    """Close an active trade position"""
+    if pair in st.session_state.open_positions:
+        position = st.session_state.open_positions[pair]
+        
+        # Calculate final P&L
+        pip_value = 10
+        quantity = position['stake_eur'] / 100
+        
+        if position['direction'] == 'BUY':
+            pnl_pips = (current_price - position['entry_price']) / 0.0001
+        else:
+            pnl_pips = (position['entry_price'] - current_price) / 0.0001
+        
+        pnl = pnl_pips * pip_value * quantity
+        
+        # Add to trade history
+        new_trade = pd.DataFrame([{
+            'Date': datetime.now(),
+            'Pair': pair,
+            'Direction': position['direction'],
+            'Entry Price': position['entry_price'],
+            'Exit Price': current_price,
+            'Quantity': quantity,
+            'P&L': pnl,
+            'P&L (€)': pnl,
+            'Status': 'CLOSED',
+            'Signal Strength': position['signal_strength'],
+            'Signal Count': 4,  # Assuming 4 signals for active trades
+            'Stake (€)': position['stake_eur'],
+            'Target Profit': position['target_profit'],
+            'Stop Loss': position['stop_loss'],
+            'Engulfing Pattern': position['engulfing_pattern']
+        }])
+        
+        st.session_state.trade_history = pd.concat([st.session_state.trade_history, new_trade], ignore_index=True)
+        
+        # Remove from open positions
+        del st.session_state.open_positions[pair]
+        
+        return f"🔴 Position closed: {position['direction']} {pair} | P&L: €{pnl:.2f}"
+    
+    return f"❌ No active position found for {pair}"
+
+def update_active_trades_pnl():
+    """Update P&L for active trades based on current prices"""
+    for pair, position in st.session_state.open_positions.items():
+        # Get current price for the pair
+        current_price_data = next((p for p in get_realistic_price_data() if p['pair'] == pair), None)
+        if current_price_data:
+            current_price = current_price_data['price']
+            
+            # Calculate current P&L
+            pip_value = 10
+            quantity = position['stake_eur'] / 100
+            
+            if position['direction'] == 'BUY':
+                pnl_pips = (current_price - position['entry_price']) / 0.0001
+            else:
+                pnl_pips = (position['entry_price'] - current_price) / 0.0001
+            
+            pnl = pnl_pips * pip_value * quantity
+            pnl_percent = (pnl / position['stake_eur']) * 100
+            
+            # Update position
+            position['current_price'] = current_price
+            position['current_pnl'] = pnl
+            position['current_pnl_percent'] = pnl_percent
+            position['duration'] = datetime.now() - position['entry_time']
+
+def display_active_trades():
+    """Display active trades in a tab"""
+    update_active_trades_pnl()
+    
+    if not st.session_state.open_positions:
+        st.info("No active trades. Open positions will appear here.")
+        return
+    
+    st.subheader("🟢 ACTIVE TRADES")
+    
+    for pair, position in st.session_state.open_positions.items():
+        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1, 2, 2, 2, 2, 2, 2])
+        
+        with col1:
+            st.markdown(f"**{pair}**")
+            st.markdown(f"*{position['direction']}*")
+        
+        with col2:
+            if position['current_pnl'] > 0:
+                st.markdown(f"<div class='active-trade-profit'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-profit'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
+            elif position['current_pnl'] < 0:
+                st.markdown(f"<div class='active-trade-loss'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-loss'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='active-trade-neutral'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-neutral'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"**Entry**")
+            st.markdown(f"`{position['entry_price']:.5f}`")
+        
+        with col4:
+            st.markdown(f"**Current**")
+            st.markdown(f"`{position.get('current_price', position['entry_price']):.5f}`")
+        
+        with col5:
+            st.markdown(f"**Stake**")
+            st.markdown(f"€{position['stake_eur']:.0f}")
+        
+        with col6:
+            st.markdown(f"**TP/SL**")
+            st.markdown(f"{position['target_profit']}/{position['stop_loss']}")
+        
+        with col7:
+            st.markdown(f"**Duration**")
+            duration = position.get('duration', timedelta(0))
+            hours = duration.total_seconds() // 3600
+            minutes = (duration.total_seconds() % 3600) // 60
+            st.markdown(f"{int(hours)}h {int(minutes)}m")
+        
+        with col8:
+            if st.button("CLOSE", key=f"close_{pair}", use_container_width=True):
+                result = close_trade_position(pair, position.get('current_price', position['entry_price']))
+                st.success(result)
+                st.rerun()
+        
+        st.markdown("---")
+
+def display_trade_history():
+    """Display trade history in a tab"""
+    if st.session_state.trade_history.empty:
+        st.info("No trade history yet. Closed trades will appear here.")
+        return
+    
+    # Display summary metrics
+    total_trades = len(st.session_state.trade_history)
+    winning_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] > 0])
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    total_pnl = st.session_state.trade_history['P&L'].sum()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Trades", total_trades)
+    with col2:
+        st.metric("Win Rate", f"{win_rate:.1f}%")
+    with col3:
+        st.metric("Total P&L", f"€{total_pnl:.2f}")
+    with col4:
+        st.metric("Avg P&L/Trade", f"€{(total_pnl/total_trades):.2f}" if total_trades > 0 else "€0.00")
+    
+    # Display trade history table
+    st.dataframe(
+        st.session_state.trade_history.sort_values('Date', ascending=False).head(15),
+        use_container_width=True
+    )
+
 def main():
     # Header
     st.markdown('<h1 class="main-header">🌍 FOREX AUTO TRADING BOT</h1>', unsafe_allow_html=True)
@@ -356,11 +555,14 @@ def main():
         # Quick stats
         st.subheader("📈 Quick Stats")
         total_trades = len(st.session_state.trade_history)
-        if total_trades > 0:
+        active_trades = len(st.session_state.open_positions)
+        
+        if total_trades > 0 or active_trades > 0:
             winning_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] > 0])
-            win_rate = (winning_trades / total_trades) * 100
+            win_rate = (winning_trades / total_trades) * 100 if total_trades > 0 else 0
             total_pnl = st.session_state.trade_history['P&L'].sum()
             
+            st.metric("Active Trades", active_trades)
             st.metric("Total Trades", total_trades)
             st.metric("Win Rate", f"{win_rate:.1f}%")
             st.metric("Total P&L", f"€{total_pnl:.2f}")
@@ -378,7 +580,7 @@ def main():
         st.success(f"🎯 Found {len(trading_opportunities)} trading opportunities!")
         
         for opportunity in trading_opportunities:
-            col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 2])
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 1, 1, 1, 1, 2, 2])
             
             with col1:
                 st.write(f"**{opportunity['pair']}**")
@@ -406,65 +608,48 @@ def main():
                     st.write("No Pattern")
             
             with col6:
-                if st.button(f"TRADE NOW", key=f"quick_trade_{opportunity['pair']}", use_container_width=True):
+                if st.button(f"OPEN TRADE", key=f"open_{opportunity['pair']}", use_container_width=True):
+                    result = open_trade_position(opportunity, st.session_state.stake_euros)
+                    st.success(result)
+                    st.rerun()
+            
+            with col7:
+                if st.button(f"QUICK TRADE", key=f"quick_{opportunity['pair']}", use_container_width=True, type="primary"):
                     result = execute_trade(opportunity, st.session_state.stake_euros)
                     st.success(result)
                     st.rerun()
             
             st.markdown("---")
-        
-        # Auto-execute option
-        if st.checkbox("🤖 AUTO-EXECUTE ALL QUALIFIED TRADES", value=False):
-            executed = []
-            for opportunity in trading_opportunities:
-                if opportunity['pair'] not in st.session_state.open_positions:
-                    result = execute_trade(opportunity, st.session_state.stake_euros)
-                    executed.append(result)
-                    st.session_state.open_positions[opportunity['pair']] = opportunity
-            
-            if executed:
-                st.success("🤖 Auto-execution completed!")
-                for trade in executed:
-                    st.write(f"✅ {trade}")
-                st.rerun()
     else:
         st.info("No strong trading opportunities detected at the moment. The system will continue monitoring...")
     
-    # Trade History Section
+    # Trade History & Active Trades Section with Tabs
     st.markdown("---")
-    st.subheader("📋 TRADE HISTORY & PERFORMANCE")
+    st.subheader("📋 TRADE MANAGEMENT")
     
-    if not st.session_state.trade_history.empty:
-        # Display summary metrics
-        total_trades = len(st.session_state.trade_history)
-        winning_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] > 0])
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-        total_pnl = st.session_state.trade_history['P&L'].sum()
+    # Create tabs
+    tab1, tab2 = st.tabs(["🟢 ACTIVE TRADES", "📊 TRADE HISTORY"])
+    
+    with tab1:
+        display_active_trades()
         
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Trades", total_trades)
-        with col2:
-            st.metric("Win Rate", f"{win_rate:.1f}%")
-        with col3:
-            st.metric("Total P&L", f"€{total_pnl:.2f}")
-        with col4:
-            st.metric("Avg P&L/Trade", f"€{(total_pnl/total_trades):.2f}" if total_trades > 0 else "€0.00")
-        
-        # Display trade history table
-        st.dataframe(
-            st.session_state.trade_history.sort_values('Date', ascending=False).head(10),
-            use_container_width=True
-        )
+        # Clear all positions button
+        if st.session_state.open_positions:
+            if st.button("🗑️ Close All Positions", use_container_width=True, type="secondary"):
+                for pair in list(st.session_state.open_positions.keys()):
+                    close_trade_position(pair, FOREX_BASE_PRICES.get(pair, 1.0))
+                st.success("All positions closed!")
+                st.rerun()
+    
+    with tab2:
+        display_trade_history()
         
         # Clear history button
-        if st.button("🗑️ Clear Trade History", use_container_width=True):
-            st.session_state.trade_history = pd.DataFrame(columns=st.session_state.trade_history.columns)
-            st.session_state.open_positions = {}
-            st.success("Trade history cleared!")
-            st.rerun()
-    else:
-        st.info("No trades executed yet. Execute trades from the opportunities above to see history here.")
+        if not st.session_state.trade_history.empty:
+            if st.button("🗑️ Clear Trade History", use_container_width=True):
+                st.session_state.trade_history = pd.DataFrame(columns=st.session_state.trade_history.columns)
+                st.success("Trade history cleared!")
+                st.rerun()
 
 if __name__ == "__main__":
     main()
