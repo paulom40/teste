@@ -5,3 +5,4 @@ plotly
 yfinance
 requests
 ta 
+polygon-io-client ZACYNJQZmDFZV0B92pErxGfiF60iUuZ_
