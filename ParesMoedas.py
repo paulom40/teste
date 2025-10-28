@@ -33,13 +33,23 @@ st.markdown("""
         margin-bottom: 1rem;
         font-weight: bold;
     }
-    .pair-card {
+    .prices-table {
         background: white;
-        padding: 1rem;
         border-radius: 10px;
-        border-left: 4px solid #667eea;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        margin: 0.5rem 0;
+        padding: 1rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin: 1rem 0;
+    }
+    .price-up {
+        color: #00ff88;
+        font-weight: bold;
+    }
+    .price-down {
+        color: #ff4444;
+        font-weight: bold;
+    }
+    .price-neutral {
+        color: #666666;
     }
     .signal-buy {
         background: linear-gradient(135deg, #00ff88 0%, #00cc66 100%);
@@ -104,6 +114,15 @@ st.markdown("""
         font-weight: bold;
         animation: pulse 2s infinite;
     }
+    .refresh-button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        font-weight: bold;
+        margin: 0.5rem 0;
+    }
     @keyframes pulse {
         0% { transform: scale(1); }
         50% { transform: scale(1.02); }
@@ -131,6 +150,12 @@ if 'scan_count' not in st.session_state:
 
 if 'last_scan_time' not in st.session_state:
     st.session_state.last_scan_time = datetime.now()
+
+if 'last_prices' not in st.session_state:
+    st.session_state.last_prices = {}
+
+if 'price_changes' not in st.session_state:
+    st.session_state.price_changes = {}
 
 # Default settings
 if 'stake_euros' not in st.session_state:
@@ -188,7 +213,8 @@ def generate_forex_data(pair, days=60):
     base_prices = {
         'EUR/USD': 1.0800, 'GBP/USD': 1.2600, 'USD/JPY': 150.00,
         'USD/CHF': 0.8800, 'AUD/USD': 0.6500, 'USD/CAD': 1.3500,
-        'EUR/GBP': 0.8600, 'EUR/JPY': 162.00, 'GBP/JPY': 188.00
+        'EUR/GBP': 0.8600, 'EUR/JPY': 162.00, 'GBP/JPY': 188.00,
+        'AUD/JPY': 97.00, 'USD/CNY': 7.2500, 'NZD/USD': 0.5900
     }
     
     base_price = base_prices.get(pair, 1.0000)
@@ -223,6 +249,53 @@ def get_forex_data(pair):
         except:
             pass
     return generate_forex_data(pair)
+
+def get_current_price(pair):
+    """Get current price for a Forex pair"""
+    try:
+        df = get_forex_data(pair)
+        current_price = df['Close'].iloc[-1]
+        
+        # Calculate price change
+        if pair in st.session_state.last_prices:
+            previous_price = st.session_state.last_prices[pair]
+            change = ((current_price - previous_price) / previous_price) * 100
+            st.session_state.price_changes[pair] = change
+        
+        st.session_state.last_prices[pair] = current_price
+        return current_price
+    except:
+        # Fallback to base price
+        base_prices = {
+            'EUR/USD': 1.0800, 'GBP/USD': 1.2600, 'USD/JPY': 150.00,
+            'USD/CHF': 0.8800, 'AUD/USD': 0.6500, 'USD/CAD': 1.3500,
+            'EUR/GBP': 0.8600, 'EUR/JPY': 162.00, 'GBP/JPY': 188.00,
+            'AUD/JPY': 97.00, 'USD/CNY': 7.2500, 'NZD/USD': 0.5900
+        }
+        return base_prices.get(pair, 1.0000)
+
+def get_all_current_prices():
+    """Get current prices for all Forex pairs"""
+    forex_pairs = [
+        "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", 
+        "AUD/USD", "USD/CAD", "NZD/USD", "EUR/GBP", 
+        "EUR/JPY", "GBP/JPY", "AUD/JPY", "USD/CNY"
+    ]
+    
+    prices_data = []
+    for pair in forex_pairs:
+        current_price = get_current_price(pair)
+        change = st.session_state.price_changes.get(pair, 0)
+        
+        prices_data.append({
+            'Pair': pair,
+            'Current Price': current_price,
+            'Change %': change,
+            'Signal': 'Loading...',
+            'Engulfing': 'No'
+        })
+    
+    return pd.DataFrame(prices_data)
 
 def analyze_pair(pair):
     """Analyze a Forex pair and return trading signals"""
@@ -341,6 +414,154 @@ def execute_trade(signal_data, stake_eur):
     
     return f"Trade executed: {direction} {pair} at {price:.5f}"
 
+def display_prices_table():
+    """Display real-time prices table"""
+    st.markdown("### 📊 REAL-TIME FOREX PRICES")
+    
+    # Refresh button
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 Refresh Prices", use_container_width=True):
+            st.rerun()
+    
+    # Get current prices
+    prices_df = get_all_current_prices()
+    
+    # Analyze signals for all pairs
+    forex_pairs = prices_df['Pair'].tolist()
+    with st.spinner("Analyzing trading signals..."):
+        signals_data = [analyze_pair(pair) for pair in forex_pairs]
+    
+    # Update prices dataframe with signals
+    for signal in signals_data:
+        mask = prices_df['Pair'] == signal['pair']
+        if mask.any():
+            prices_df.loc[mask, 'Signal'] = signal['signal']
+            prices_df.loc[mask, 'Engulfing'] = signal['engulfing']
+            prices_df.loc[mask, 'Current Price'] = signal['price']
+    
+    # Display the prices table with styling
+    st.markdown('<div class="prices-table">', unsafe_allow_html=True)
+    
+    # Create a styled dataframe
+    styled_df = prices_df.copy()
+    
+    # Format the display
+    for i, row in styled_df.iterrows():
+        # Color code price changes
+        change = row['Change %']
+        if change > 0:
+            styled_df.at[i, 'Change %'] = f"<span class='price-up'>+{change:.2f}%</span>"
+        elif change < 0:
+            styled_df.at[i, 'Change %'] = f"<span class='price-down'>{change:.2f}%</span>"
+        else:
+            styled_df.at[i, 'Change %'] = f"<span class='price-neutral'>{change:.2f}%</span>"
+        
+        # Format price based on pair type
+        if 'JPY' in row['Pair'] or 'CNY' in row['Pair']:
+            styled_df.at[i, 'Current Price'] = f"{row['Current Price']:.2f}"
+        else:
+            styled_df.at[i, 'Current Price'] = f"{row['Current Price']:.5f}"
+    
+    # Display the table
+    st.write("""
+    <style>
+    .prices-table table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .prices-table th {
+        background: #667eea;
+        color: white;
+        padding: 12px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .prices-table td {
+        padding: 12px;
+        text-align: center;
+        border-bottom: 1px solid #ddd;
+    }
+    .prices-table tr:hover {
+        background-color: #f5f5f5;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Convert to HTML for custom styling
+    html_table = """
+    <table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">
+        <thead>
+            <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <th style="padding: 12px; text-align: center;">Forex Pair</th>
+                <th style="padding: 12px; text-align: center;">Current Price</th>
+                <th style="padding: 12px; text-align: center;">Change %</th>
+                <th style="padding: 12px; text-align: center;">Trading Signal</th>
+                <th style="padding: 12px; text-align: center;">Engulfing Pattern</th>
+                <th style="padding: 12px; text-align: center;">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    
+    for _, row in prices_df.iterrows():
+        # Determine signal styling
+        if row['Signal'] == 'BUY':
+            signal_html = '<span class="signal-buy">BUY</span>'
+        elif row['Signal'] == 'SELL':
+            signal_html = '<span class="signal-sell">SELL</span>'
+        else:
+            signal_html = '<span class="signal-hold">HOLD</span>'
+        
+        # Determine engulfing styling
+        if row['Engulfing'] == 'BULLISH':
+            engulfing_html = '<span class="engulfing-buy">BULLISH</span>'
+        elif row['Engulfing'] == 'BEARISH':
+            engulfing_html = '<span class="engulfing-sell">BEARISH</span>'
+        else:
+            engulfing_html = 'No Pattern'
+        
+        # Determine change styling
+        change = row['Change %']
+        if change > 0:
+            change_html = f'<span style="color: #00ff88; font-weight: bold;">+{change:.2f}%</span>'
+        elif change < 0:
+            change_html = f'<span style="color: #ff4444; font-weight: bold;">{change:.2f}%</span>'
+        else:
+            change_html = f'<span style="color: #666666;">{change:.2f}%</span>'
+        
+        # Format price
+        if 'JPY' in row['Pair'] or 'CNY' in row['Pair']:
+            price_str = f"{row['Current Price']:.2f}"
+        else:
+            price_str = f"{row['Current Price']:.5f}"
+        
+        html_table += f"""
+            <tr>
+                <td style="padding: 12px; text-align: center; font-weight: bold;">{row['Pair']}</td>
+                <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 1.1em;">{price_str}</td>
+                <td style="padding: 12px; text-align: center;">{change_html}</td>
+                <td style="padding: 12px; text-align: center;">{signal_html}</td>
+                <td style="padding: 12px; text-align: center;">{engulfing_html}</td>
+                <td style="padding: 12px; text-align: center;">
+                    <button onclick="alert('Trading {row['Pair']} at {price_str}')" 
+                            style="background: #667eea; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer;">
+                        Trade
+                    </button>
+                </td>
+            </tr>
+        """
+    
+    html_table += """
+        </tbody>
+    </table>
+    """
+    
+    st.markdown(html_table, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    return prices_df, signals_data
+
 def main():
     # Header
     st.markdown('<h1 class="main-header">🌍 FOREX AUTO TRADING BOT</h1>', unsafe_allow_html=True)
@@ -351,6 +572,9 @@ def main():
         st.success("✅ Connected to Yahoo Finance - Using Real Market Data")
     else:
         st.warning("⚠️ Using Simulated Data - Install yfinance for real market data: `pip install yfinance`")
+    
+    # Display real-time prices table
+    prices_df, signals_data = display_prices_table()
     
     # Sidebar
     with st.sidebar:
@@ -387,145 +611,77 @@ def main():
             st.info(f"Scans: {st.session_state.scan_count}")
         else:
             st.warning("Auto Trading: OFF")
-    
-    # Main content area
-    if st.session_state.auto_trading:
-        st.markdown("---")
-        st.subheader("📊 LIVE FOREX PAIRS ANALYSIS")
         
-        # Display scan info
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Scans", st.session_state.scan_count)
-        with col2:
-            st.metric("Last Scan", st.session_state.last_scan_time.strftime("%H:%M:%S"))
-        with col3:
-            st.metric("Open Positions", len(st.session_state.open_positions))
-        with col4:
-            st.metric("Current Stake", f"€{st.session_state.stake_euros:.0f}")
-        
-        # Analyze all pairs
-        forex_pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "EUR/GBP", "EUR/JPY", "GBP/JPY"]
-        
-        with st.spinner("🔄 Scanning Forex pairs for trading opportunities..."):
-            time.sleep(1)  # Simulate scanning
-            results = [analyze_pair(pair) for pair in forex_pairs]
-        
-        # Display trading opportunities
-        st.subheader("🎯 TRADING OPPORTUNITIES")
-        
-        # Filter only BUY/SELL signals
-        trading_opportunities = [r for r in results if r['signal'] in ['BUY', 'SELL']]
-        
-        if trading_opportunities:
-            for opportunity in trading_opportunities:
-                with st.container():
-                    col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 1, 1, 1, 1, 1, 2])
-                    
-                    with col1:
-                        st.write(f"**{opportunity['pair']}**")
-                        st.write(f"Price: {opportunity['price']:.5f}")
-                    
-                    with col2:
-                        if opportunity['signal'] == 'BUY':
-                            st.markdown('<div class="signal-buy">BUY</div>', unsafe_allow_html=True)
-                        else:
-                            st.markdown('<div class="signal-sell">SELL</div>', unsafe_allow_html=True)
-                    
-                    with col3:
-                        st.write(f"**{opportunity['strength']}**")
-                    
-                    with col4:
-                        st.write(f"Signals: {opportunity['signal_count']}/4")
-                    
-                    with col5:
-                        if opportunity['engulfing'] == 'BULLISH':
-                            st.markdown('<div class="engulfing-buy">ENGULFING</div>', unsafe_allow_html=True)
-                        elif opportunity['engulfing'] == 'BEARISH':
-                            st.markdown('<div class="engulfing-sell">ENGULFING</div>', unsafe_allow_html=True)
-                        else:
-                            st.write("No Pattern")
-                    
-                    with col6:
-                        st.write(f"Stake: €{st.session_state.stake_euros:.0f}")
-                    
-                    with col7:
-                        if st.button(f"TRADE {opportunity['pair']}", key=f"trade_{opportunity['pair']}"):
-                            result = execute_trade(opportunity, st.session_state.stake_euros)
-                            st.success(result)
-                            st.rerun()
-                    
-                    st.markdown("---")
+        # Quick stats
+        st.subheader("📈 Quick Stats")
+        total_trades = len(st.session_state.trade_history)
+        if total_trades > 0:
+            winning_trades = len(st.session_state.trade_history[st.session_state.trade_history['P&L'] > 0])
+            win_rate = (winning_trades / total_trades) * 100
+            total_pnl = st.session_state.trade_history['P&L'].sum()
             
-            # Auto-execute option
-            if st.checkbox("🤖 AUTO-EXECUTE ALL QUALIFIED TRADES", value=True):
-                executed = []
-                for opportunity in trading_opportunities:
-                    if opportunity['pair'] not in st.session_state.open_positions:
-                        result = execute_trade(opportunity, st.session_state.stake_euros)
-                        executed.append(result)
-                        st.session_state.open_positions[opportunity['pair']] = opportunity
-                
-                if executed:
-                    st.success("Auto-execution completed!")
-                    for trade in executed:
-                        st.write(f"✅ {trade}")
-        else:
-            st.info("No trading opportunities found at the moment. The system will continue scanning...")
+            st.metric("Total Trades", total_trades)
+            st.metric("Win Rate", f"{win_rate:.1f}%")
+            st.metric("Total P&L", f"€{total_pnl:.2f}")
     
+    # Trading Opportunities Section
+    st.markdown("---")
+    st.subheader("🎯 TRADING OPPORTUNITIES")
+    
+    # Filter only BUY/SELL signals
+    trading_opportunities = [s for s in signals_data if s['signal'] in ['BUY', 'SELL']]
+    
+    if trading_opportunities:
+        for opportunity in trading_opportunities:
+            col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 2])
+            
+            with col1:
+                st.write(f"**{opportunity['pair']}**")
+                st.write(f"Current Price: `{opportunity['price']:.5f}`")
+            
+            with col2:
+                if opportunity['signal'] == 'BUY':
+                    st.markdown('<div class="signal-buy">BUY</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="signal-sell">SELL</div>', unsafe_allow_html=True)
+            
+            with col3:
+                st.write(f"**{opportunity['strength']}**")
+            
+            with col4:
+                st.write(f"Signals: **{opportunity['signal_count']}/4**")
+            
+            with col5:
+                if opportunity['engulfing'] == 'BULLISH':
+                    st.markdown('<div class="engulfing-buy">ENGULFING</div>', unsafe_allow_html=True)
+                elif opportunity['engulfing'] == 'BEARISH':
+                    st.markdown('<div class="engulfing-sell">ENGULFING</div>', unsafe_allow_html=True)
+                else:
+                    st.write("No Pattern")
+            
+            with col6:
+                if st.button(f"TRADE {opportunity['pair']}", key=f"trade_{opportunity['pair']}", use_container_width=True):
+                    result = execute_trade(opportunity, st.session_state.stake_euros)
+                    st.success(result)
+                    st.rerun()
+            
+            st.markdown("---")
+        
+        # Auto-execute option
+        if st.checkbox("🤖 AUTO-EXECUTE ALL QUALIFIED TRADES", value=False):
+            executed = []
+            for opportunity in trading_opportunities:
+                if opportunity['pair'] not in st.session_state.open_positions:
+                    result = execute_trade(opportunity, st.session_state.stake_euros)
+                    executed.append(result)
+                    st.session_state.open_positions[opportunity['pair']] = opportunity
+            
+            if executed:
+                st.success("Auto-execution completed!")
+                for trade in executed:
+                    st.write(f"✅ {trade}")
     else:
-        # Manual trading interface
-        st.markdown("---")
-        st.subheader("🔍 MANUAL PAIR ANALYSIS")
-        
-        forex_pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "EUR/GBP", "EUR/JPY", "GBP/JPY"]
-        selected_pair = st.selectbox("Select Forex Pair to Analyze:", forex_pairs)
-        
-        if st.button("Analyze Selected Pair"):
-            with st.spinner(f"Analyzing {selected_pair}..."):
-                result = analyze_pair(selected_pair)
-                
-                # Display results
-                col1, col2, col3, col4, col5 = st.columns(5)
-                
-                with col1:
-                    st.metric("Pair", selected_pair)
-                with col2:
-                    st.metric("Current Price", f"{result['price']:.5f}")
-                with col3:
-                    if result['signal'] == 'BUY':
-                        st.markdown('<div class="signal-buy">BUY SIGNAL</div>', unsafe_allow_html=True)
-                    elif result['signal'] == 'SELL':
-                        st.markdown('<div class="signal-sell">SELL SIGNAL</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<div class="signal-hold">HOLD</div>', unsafe_allow_html=True)
-                with col4:
-                    st.metric("Strength", result['strength'])
-                with col5:
-                    st.metric("Signals", f"{result['signal_count']}/4")
-                
-                # Engulfing pattern display
-                if result['engulfing'] != 'NONE':
-                    col1, col2 = st.columns([1, 3])
-                    with col1:
-                        if result['engulfing'] == 'BULLISH':
-                            st.markdown('<div class="engulfing-buy">BULLISH ENGULFING PATTERN DETECTED</div>', unsafe_allow_html=True)
-                        else:
-                            st.markdown('<div class="engulfing-sell">BEARISH ENGULFING PATTERN DETECTED</div>', unsafe_allow_html=True)
-                    with col2:
-                        st.success("🎯 High probability trade with engulfing pattern!")
-                
-                # Trade execution button
-                if result['signal'] in ['BUY', 'SELL']:
-                    st.markdown("---")
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.info(f"**Trading Opportunity:** {result['signal']} {selected_pair} with {result['signal_count']} confirming signals")
-                    with col2:
-                        if st.button(f"🚀 EXECUTE {result['signal']} TRADE", type="primary", use_container_width=True):
-                            trade_result = execute_trade(result, st.session_state.stake_euros)
-                            st.success(trade_result)
-                            st.balloons()
+        st.info("No strong trading opportunities detected. Monitor the prices table for signal changes.")
     
     # Trade History Section
     st.markdown("---")
@@ -560,37 +716,7 @@ def main():
             st.session_state.open_positions = {}
             st.rerun()
     else:
-        st.info("No trades executed yet. Start auto trading or execute manual trades to see history here.")
-    
-    # Strategy Explanation
-    with st.expander("📚 TRADING STRATEGY EXPLANATION"):
-        st.markdown("""
-        **🎯 4-Signal Agreement System with Engulfing Patterns**
-        
-        This advanced trading system uses **4 technical indicators** and requires **minimum 3 agreeing signals** to execute trades:
-        
-        **Technical Indicators:**
-        1. **RSI (Relative Strength Index)** - Momentum indicator
-        2. **Moving Average Crossover** - Trend direction
-        3. **MACD** - Trend and momentum
-        4. **Engulfing Candlestick Patterns** - Price action reversal signals
-        
-        **🎯 Engulfing Pattern Priority:**
-        - **Bullish Engulfing**: Strong buy signal (counts as 2 signals)
-        - **Bearish Engulfing**: Strong sell signal (counts as 2 signals)
-        - **Higher Success Rate**: +15% success probability for engulfing patterns
-        
-        **Trading Rules:**
-        - ✅ **BUY**: 3+ buy signals with at least 1 strong signal
-        - ✅ **SELL**: 3+ sell signals with at least 1 strong signal  
-        - ❌ **HOLD**: Less than 3 agreeing signals
-        
-        **Risk Management:**
-        - Maximum 3 simultaneous trades
-        - Configurable stop loss and take profit
-        - Fixed stake amount per trade
-        - Real-time performance tracking
-        """)
+        st.info("No trades executed yet. Execute trades from the opportunities above to see history here.")
 
 if __name__ == "__main__":
     main()
