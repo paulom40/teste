@@ -5,10 +5,11 @@ from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
 import ta  # Technical analysis library
+from polygon import RESTClient
 
 # Configure the page
 st.set_page_config(
-    page_title="LIVE FOREX PRICES - PURE PYTHON ANALYSIS",
+    page_title="LIVE FOREX PRICES - REAL API INTEGRATION",
     page_icon="📈",
     layout="wide"
 )
@@ -112,6 +113,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# API Key Input
+api_key = st.sidebar.text_input("Polygon.io API Key", type="password", help="Get your free API key from https://polygon.io/dashboard")
+if not api_key:
+    st.warning("🔑 Please enter your Polygon.io API key in the sidebar to enable real data.")
+    client = None
+else:
+    client = RESTClient(api_key)
+
 # Initialize session state with proper data types
 if 'initialized' not in st.session_state:
     st.session_state.initialized = True
@@ -125,7 +134,41 @@ if 'initialized' not in st.session_state:
     st.session_state.active_trades = []
     st.session_state.trade_history = []
     st.session_state.next_trade_id = 1001
-    st.session_state.price_history = {}
+
+def get_prices(pair):
+    """Fetch recent prices using Polygon API"""
+    if not client:
+        return []
+    symbol = pair.replace('/', '')
+    try:
+        end = datetime.utcnow()
+        start = end - timedelta(hours=2)  # Fetch 2 hours to ensure 100+ points
+        aggs = client.get_aggs(
+            ticker=symbol,
+            multiplier=1,
+            timespan="minute",
+            from_=start.strftime("%Y-%m-%d"),
+            to=end.strftime("%Y-%m-%d"),
+            limit=500,
+            sort="asc"
+        )
+        prices = [float(agg.close) for agg in aggs]
+        return prices[-100:]  # Keep last 100
+    except Exception as e:
+        st.error(f"Error fetching data for {pair}: {e}")
+        return []
+
+def get_current_price(pair):
+    """Get the latest mid price"""
+    if not client:
+        return None
+    symbol = pair.replace('/', '')
+    try:
+        nbbo = client.get_last_nbbo(symbol)
+        return (nbbo.bid + nbbo.ask) / 2
+    except Exception as e:
+        st.error(f"Error fetching current price for {pair}: {e}")
+        return None
 
 # Technical Analysis Functions
 def calculate_technical_indicators(prices):
@@ -219,6 +262,15 @@ def analyze_trend(indicators, current_price):
             bearish_signals += 1  # Overbought
         total_signals += 1
     
+    # Bollinger Bands Analysis
+    if 'bb_lower' in indicators and 'bb_upper' in indicators:
+        bb_position = (current_price - indicators['bb_lower']) / (indicators['bb_upper'] - indicators['bb_lower'])
+        if bb_position < 0.2:  # Near lower band
+            bullish_signals += 1
+        elif bb_position > 0.8:  # Near upper band
+            bearish_signals += 1
+        total_signals += 1
+    
     # ADX for trend strength adjustment
     if indicators.get('adx', 0) > 25:
         trend_strength_multiplier = 1.2  # Amplify strong trends
@@ -242,7 +294,7 @@ def analyze_trend(indicators, current_price):
     return "NEUTRAL", "Sideways Market"
 
 def generate_trading_signal(indicators, trend_direction):
-    """Generate trading signal based on technical analysis with multi-confirmation"""
+    """Generate trading signal based on technical analysis with multi-confirmation including Bollinger Bands"""
     if not indicators:
         return "HOLD", "Waiting for data"
     
@@ -285,6 +337,18 @@ def generate_trading_signal(indicators, trend_direction):
         elif indicators['stoch_k'] > 80 and indicators['stoch_d'] > 80:
             signals.append("Stoch: OVERBOUGHT - Potential SELL")
             bearish_confirmations += 1
+    
+    # Bollinger Bands Signal
+    if 'bb_lower' in indicators and 'bb_upper' in indicators and 'current_price' in indicators:
+        current_price = indicators['current_price']
+        if current_price <= indicators['bb_lower']:
+            signals.append("BB: TOUCH LOWER BAND - Potential BUY")
+            bullish_confirmations += 1
+        elif current_price >= indicators['bb_upper']:
+            signals.append("BB: TOUCH UPPER BAND - Potential SELL")
+            bearish_confirmations += 1
+        elif indicators['bb_upper'] - indicators['bb_lower'] < indicators['bb_middle'] * 0.01:  # Band squeeze (low volatility)
+            signals.append("BB: BAND SQUEEZE - Volatility Breakout Possible")
     
     # Require at least 2 confirmations for strong signals
     if trend_direction == "BULLISH" and bullish_confirmations >= 2:
@@ -330,9 +394,14 @@ def open_trade(currency_pair, position, stake, entry_price):
 
 def check_and_close_trade(trade):
     """Check if trade should be auto-closed (SL/TP hit or signal reversal)"""
-    current_price = trade['current_price']
     pair = trade['currency_pair']
-    prices = st.session_state.price_history.get(pair, [])
+    current_price = get_current_price(pair)
+    if current_price is None:
+        trade['current_price'] = trade['entry_price']  # Fallback
+        return None
+    
+    trade['current_price'] = current_price
+    prices = get_prices(pair)
     if len(prices) < 20:
         return None
     
@@ -390,54 +459,47 @@ def close_trade(trade_id, exit_price, reason="Manual Close"):
     return None
 
 def generate_sample_data():
-    """Generate sample data only if empty"""
-    # Initialize price history
+    """Generate sample trades using real prices"""
     currency_pairs = ['USD/JPY', 'USD/CHF', 'USD/CAD', 'EUR/USD', 'GBP/USD', 'AUD/USD']
-    for pair in currency_pairs:
-        if pair not in st.session_state.price_history:
-            # Generate 100 historical prices for each pair with slight upward bias for demo
-            base_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
-            prices = [base_price]
-            for _ in range(99):
-                # Slight upward bias: mean +0.0005 for non-JPY, +0.005 for JPY
-                bias = 0.0005 if 'JPY' not in pair else 0.005
-                change = np.random.uniform(-0.001, 0.002) + (bias / base_price)
-                new_price = prices[-1] * (1 + change)
-                prices.append(new_price)
-            st.session_state.price_history[pair] = prices
     
     # Generate sample active trades if empty
     if len(st.session_state.active_trades) == 0:
         for i in range(2):
             pair = np.random.choice(currency_pairs)
+            current_price = get_current_price(pair)
+            if current_price is None:
+                continue
             stake = st.session_state.stake_amounts.get(pair, 10)
-            current_prices = st.session_state.price_history[pair]
-            entry_price = current_prices[-1]  # Use latest price
+            entry_price = current_price * (1 + np.random.uniform(-0.005, 0.005))  # Simulate recent entry
             open_trade(pair, np.random.choice(['LONG', 'SHORT']), stake, round(entry_price, 5))
     
     # Generate sample historical trades if empty (with more wins for demo)
     if len(st.session_state.trade_history) == 0:
         for i in range(8):
             pair = np.random.choice(currency_pairs)
+            symbol = pair.replace('/', '')
             stake = 10  # Fixed 10€ stake
-            current_prices = st.session_state.price_history[pair]
-            entry_price = current_prices[-50]  # Historical price
-            exit_price = current_prices[-1]    # Current price
+            prices = get_prices(pair)
+            if len(prices) < 50:
+                continue
+            entry_idx = np.random.randint(0, len(prices) - 10)
+            entry_price = prices[entry_idx]
+            exit_price = prices[-1]
             
             # Bias towards profitable trades
             if np.random.random() > 0.3:  # 70% win rate
                 if np.random.choice(['LONG', 'SHORT']) == 'LONG':
-                    exit_price = entry_price + np.random.uniform(0.001, 0.005)  # Profitable
+                    exit_price = entry_price + abs(np.random.uniform(0.001, 0.005))
                     pnl = (exit_price - entry_price) * stake
                 else:
-                    exit_price = entry_price - np.random.uniform(0.001, 0.005)  # Profitable
+                    exit_price = entry_price - abs(np.random.uniform(0.001, 0.005))
                     pnl = (entry_price - exit_price) * stake
             else:
                 if np.random.choice(['LONG', 'SHORT']) == 'LONG':
-                    exit_price = entry_price - np.random.uniform(0.0005, 0.002)  # Loss
+                    exit_price = entry_price - abs(np.random.uniform(0.0005, 0.002))
                     pnl = (exit_price - entry_price) * stake
                 else:
-                    exit_price = entry_price + np.random.uniform(0.0005, 0.002)  # Loss
+                    exit_price = entry_price + abs(np.random.uniform(0.0005, 0.002))
                     pnl = (entry_price - exit_price) * stake
             
             historical_trade = {
@@ -459,37 +521,26 @@ def generate_sample_data():
 # Generate sample data
 generate_sample_data()
 
-# Update current prices and technical analysis
-for pair in st.session_state.stake_amounts.keys():
-    if pair in st.session_state.price_history:
-        # Add new price movement with slight positive bias
-        last_price = st.session_state.price_history[pair][-1]
-        bias = 0.0001 if 'JPY' not in pair else 0.001
-        new_price = last_price * (1 + np.random.uniform(-0.0015, 0.0025) + bias)
-        st.session_state.price_history[pair].append(new_price)
-        # Keep only last 100 prices
-        if len(st.session_state.price_history[pair]) > 100:
-            st.session_state.price_history[pair] = st.session_state.price_history[pair][-100:]
-
 # Update active trades with current prices and auto-close logic
 trades_to_remove = []
 for trade in st.session_state.active_trades:
-    if trade['currency_pair'] in st.session_state.price_history:
-        trade['current_price'] = round(st.session_state.price_history[trade['currency_pair']][-1], 5)
-        closed = check_and_close_trade(trade)
-        if closed:
-            trades_to_remove.append(trade['trade_id'])
-            st.info(f"Auto-closed trade {closed['trade_id']}: {closed['close_reason']} | P/L: €{closed['pnl']:.2f}")
+    closed = check_and_close_trade(trade)
+    if closed:
+        trades_to_remove.append(trade['trade_id'])
+        st.info(f"Auto-closed trade {closed['trade_id']}: {closed['close_reason']} | P/L: €{closed['pnl']:.2f}")
 
 # Remove closed trades
 for trade_id in trades_to_remove:
     st.session_state.active_trades = [t for t in st.session_state.active_trades if t['trade_id'] != trade_id]
 
 # Header
-st.markdown('<div class="main-header">LIVE FOREX PRICES - PURE PYTHON ANALYSIS</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">LIVE FOREX PRICES - REAL API INTEGRATION</div>', unsafe_allow_html=True)
 
 # Connection Status
-st.success("🟢 CONNECTION STABLE - All Systems Operational")
+if client:
+    st.success("🟢 API CONNECTION STABLE - Real Data Streaming")
+else:
+    st.error("🔴 API KEY MISSING - Using Sample Data")
 
 # Fixed Stake Notice
 st.info("🎯 **Trading with Fixed 10€ Stake per Trade | Enhanced Strategy with SL/TP & Auto-Close**")
@@ -501,80 +552,88 @@ st.subheader("📊 Technical Analysis Overview")
 # Display technical analysis for each currency pair
 currency_pairs = list(st.session_state.stake_amounts.keys())
 for pair in currency_pairs:
-    if pair in st.session_state.price_history:
-        prices = st.session_state.price_history[pair]
-        current_price = prices[-1]
-        previous_price = prices[-2] if len(prices) > 1 else current_price
-        price_change = current_price - previous_price
-        price_change_percent = (price_change / previous_price) * 100
+    prices = get_prices(pair)
+    if not prices:
+        st.warning(f"No data available for {pair}")
+        continue
+    
+    current_price = prices[-1]
+    previous_price = prices[-2] if len(prices) > 1 else current_price
+    price_change = current_price - previous_price
+    price_change_percent = (price_change / previous_price) * 100
+    
+    # Calculate technical indicators
+    indicators = calculate_technical_indicators(prices)
+    indicators['current_price'] = current_price
+    
+    # Analyze trend
+    trend_direction, trend_strength = analyze_trend(indicators, current_price)
+    
+    # Generate trading signal
+    signal, signal_reason = generate_trading_signal(indicators, trend_direction)
+    
+    # Display analysis card
+    with st.container():
+        st.markdown(f'<div class="analysis-card">', unsafe_allow_html=True)
         
-        # Calculate technical indicators
-        indicators = calculate_technical_indicators(prices)
-        indicators['current_price'] = current_price
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
         
-        # Analyze trend
-        trend_direction, trend_strength = analyze_trend(indicators, current_price)
+        with col1:
+            st.write(f"**{pair}**")
+            st.write(f"**{current_price:.5f}**")
+            change_color = "positive-change" if price_change >= 0 else "negative-change"
+            change_symbol = "+" if price_change >= 0 else ""
+            st.markdown(f'<span class="{change_color}">{change_symbol}{price_change_percent:.2f}%</span>', unsafe_allow_html=True)
         
-        # Generate trading signal
-        signal, signal_reason = generate_trading_signal(indicators, trend_direction)
+        with col2:
+            # Trend analysis
+            if trend_direction == "BULLISH":
+                st.markdown(f'<div class="trend-up">📈 {trend_strength}</div>', unsafe_allow_html=True)
+            elif trend_direction == "BEARISH":
+                st.markdown(f'<div class="trend-down">📉 {trend_strength}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="trend-neutral">➡️ {trend_strength}</div>', unsafe_allow_html=True)
+            
+            # Trading signal
+            if signal == "BUY":
+                st.markdown(f'<div class="trend-up">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
+            elif signal == "SELL":
+                st.markdown(f'<div class="trend-down">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="trend-neutral">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
         
-        # Display analysis card
-        with st.container():
-            st.markdown(f'<div class="analysis-card">', unsafe_allow_html=True)
+        with col3:
+            # Key indicators
+            if indicators.get('rsi'):
+                rsi_color = "indicator-bullish" if indicators['rsi'] < 30 else "indicator-bearish" if indicators['rsi'] > 70 else "indicator-neutral"
+                st.markdown(f'<span class="{rsi_color}">RSI: {indicators["rsi"]:.1f}</span>', unsafe_allow_html=True)
             
-            col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+            if indicators.get('macd'):
+                macd_color = "indicator-bullish" if indicators['macd'] > indicators.get('macd_signal', 0) else "indicator-bearish"
+                st.markdown(f'<span class="{macd_color}">MACD: {indicators["macd"]:.4f}</span>', unsafe_allow_html=True)
             
-            with col1:
-                st.write(f"**{pair}**")
-                st.write(f"**{current_price:.5f}**")
-                change_color = "positive-change" if price_change >= 0 else "negative-change"
-                change_symbol = "+" if price_change >= 0 else ""
-                st.markdown(f'<span class="{change_color}">{change_symbol}{price_change_percent:.2f}%</span>', unsafe_allow_html=True)
+            # ADX
+            if indicators.get('adx'):
+                adx_color = "indicator-bullish" if indicators['adx'] > 25 else "indicator-neutral"
+                st.markdown(f'<span class="{adx_color}">ADX: {indicators["adx"]:.1f}</span>', unsafe_allow_html=True)
+        
+        with col4:
+            # Additional indicators
+            if indicators.get('sma_20'):
+                sma_relation = "Above" if current_price > indicators['sma_20'] else "Below"
+                st.write(f"Price {sma_relation} SMA20")
             
-            with col2:
-                # Trend analysis
-                if trend_direction == "BULLISH":
-                    st.markdown(f'<div class="trend-up">📈 {trend_strength}</div>', unsafe_allow_html=True)
-                elif trend_direction == "BEARISH":
-                    st.markdown(f'<div class="trend-down">📉 {trend_strength}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="trend-neutral">➡️ {trend_strength}</div>', unsafe_allow_html=True)
-                
-                # Trading signal
-                if signal == "BUY":
-                    st.markdown(f'<div class="trend-up">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
-                elif signal == "SELL":
-                    st.markdown(f'<div class="trend-down">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="trend-neutral">🎯 SIGNAL: {signal}</div>', unsafe_allow_html=True)
+            if indicators.get('stoch_k') and indicators.get('stoch_d'):
+                st.write(f"Stoch: K={indicators['stoch_k']:.1f}, D={indicators['stoch_d']:.1f}")
             
-            with col3:
-                # Key indicators
-                if indicators.get('rsi'):
-                    rsi_color = "indicator-bullish" if indicators['rsi'] < 30 else "indicator-bearish" if indicators['rsi'] > 70 else "indicator-neutral"
-                    st.markdown(f'<span class="{rsi_color}">RSI: {indicators["rsi"]:.1f}</span>', unsafe_allow_html=True)
-                
-                if indicators.get('macd'):
-                    macd_color = "indicator-bullish" if indicators['macd'] > indicators.get('macd_signal', 0) else "indicator-bearish"
-                    st.markdown(f'<span class="{macd_color}">MACD: {indicators["macd"]:.4f}</span>', unsafe_allow_html=True)
-                
-                # ADX
-                if indicators.get('adx'):
-                    adx_color = "indicator-bullish" if indicators['adx'] > 25 else "indicator-neutral"
-                    st.markdown(f'<span class="{adx_color}">ADX: {indicators["adx"]:.1f}</span>', unsafe_allow_html=True)
+            # Bollinger Bands position
+            if 'bb_lower' in indicators and 'bb_upper' in indicators:
+                bb_position = (current_price - indicators['bb_lower']) / (indicators['bb_upper'] - indicators['bb_lower']) * 100
+                st.caption(f"BB Pos: {bb_position:.0f}%")
             
-            with col4:
-                # Additional indicators
-                if indicators.get('sma_20'):
-                    sma_relation = "Above" if current_price > indicators['sma_20'] else "Below"
-                    st.write(f"Price {sma_relation} SMA20")
-                
-                if indicators.get('stoch_k') and indicators.get('stoch_d'):
-                    st.write(f"Stoch: K={indicators['stoch_k']:.1f}, D={indicators['stoch_d']:.1f}")
-                
-                st.caption(signal_reason)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.caption(signal_reason)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # Current Active Trades Table
 st.markdown("---")
@@ -593,6 +652,10 @@ if len(st.session_state.active_trades) > 0:
     
     # Display active trades
     for trade in st.session_state.active_trades:
+        current_price = get_current_price(trade['currency_pair'])
+        if current_price is not None:
+            trade['current_price'] = current_price
+        
         if trade['position'] == 'LONG':
             unrealized_pnl = (trade['current_price'] - trade['entry_price']) * trade['stake']
         else:  # SHORT
@@ -697,8 +760,8 @@ with col1:
 with col2:
     stake = 10  # Fixed 10€ stake
     st.write(f"**Stake: €{stake}** (Fixed)")
-    if selected_pair in st.session_state.price_history:
-        current_price = st.session_state.price_history[selected_pair][-1]
+    current_price = get_current_price(selected_pair)
+    if current_price:
         st.write(f"Current Price: **{current_price:.5f}**")
         
         # Show potential SL/TP
@@ -712,16 +775,18 @@ with col2:
             tp = current_price - tp_pips
             sl = current_price + sl_pips
         st.write(f"TP: {tp:.5f} | SL: {sl:.5f}")
+    else:
+        st.write("Current Price: N/A (Check API)")
     
 with col3:
     st.write("&nbsp;")
     st.write("&nbsp;")
-    if st.button("🎯 Execute Trade", use_container_width=True, type="primary"):
-        if selected_pair in st.session_state.price_history:
-            current_price = st.session_state.price_history[selected_pair][-1]
-            new_trade = open_trade(selected_pair, position, stake, round(current_price, 5))
-            st.success(f"Trade opened: {new_trade['trade_id']} - {selected_pair} {position} €{stake} | TP: {new_trade['take_profit']:.5f} | SL: {new_trade['stop_loss']:.5f}")
-            st.rerun()
+    if st.button("🎯 Execute Trade", use_container_width=True, type="primary") and current_price:
+        new_trade = open_trade(selected_pair, position, stake, round(current_price, 5))
+        st.success(f"Trade opened: {new_trade['trade_id']} - {selected_pair} {position} €{stake} | TP: {new_trade['take_profit']:.5f} | SL: {new_trade['stop_loss']:.5f}")
+        st.rerun()
+    elif current_price is None:
+        st.warning("Cannot execute: No current price available")
 
 # Footer
 st.markdown("---")
@@ -730,6 +795,6 @@ if st.button("🔄 Refresh Data", use_container_width=True):
 
 st.markdown("""
 <div style="text-align: center; color: #666; margin-top: 2rem;">
-    Pure Python Forex Analysis Dashboard | Fixed €10 Stake | Enhanced Strategy: Multi-Confirmation Signals, ADX, Auto SL/TP & Reversal Close
+    Real Forex Analysis Dashboard via Polygon.io | Fixed €10 Stake | Enhanced Strategy: Multi-Confirmation Signals (incl. BB), ADX, Auto SL/TP & Reversal Close
 </div>
 """, unsafe_allow_html=True)
