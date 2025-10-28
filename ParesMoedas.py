@@ -143,6 +143,14 @@ if 'scan_count' not in st.session_state:
 if 'last_scan_time' not in st.session_state:
     st.session_state.last_scan_time = datetime.now()
 
+# Default settings
+if 'stake_euros' not in st.session_state:
+    st.session_state.stake_euros = 100.0
+if 'target_profit_pips' not in st.session_state:
+    st.session_state.target_profit_pips = 30
+if 'stop_loss_pips' not in st.session_state:
+    st.session_state.stop_loss_pips = 20
+
 # Realistic base prices for Forex pairs with current variations
 FOREX_BASE_PRICES = {
     'EUR/USD': 1.08542, 'GBP/USD': 1.26518, 'USD/JPY': 148.53,
@@ -328,20 +336,24 @@ def open_trade_position(signal_data, stake_eur):
     """Open a new trade position (active trade)"""
     pair = signal_data['pair']
     
-    # Store active trade in open_positions
-    st.session_state.open_positions[pair] = {
+    # Ensure all required fields are present with default values
+    position_data = {
         'pair': pair,
-        'direction': signal_data['signal'],
-        'entry_price': signal_data['price'],
+        'direction': signal_data.get('signal', 'BUY'),
+        'entry_price': signal_data.get('price', 1.0),
         'entry_time': datetime.now(),
         'stake_eur': stake_eur,
         'target_profit': st.session_state.target_profit_pips,
         'stop_loss': st.session_state.stop_loss_pips,
-        'signal_strength': signal_data['strength'],
-        'engulfing_pattern': signal_data['engulfing'],
+        'signal_strength': signal_data.get('strength', 'MODERATE'),
+        'engulfing_pattern': signal_data.get('engulfing', 'NONE'),
         'current_pnl': 0.0,
-        'current_pnl_percent': 0.0
+        'current_pnl_percent': 0.0,
+        'current_price': signal_data.get('price', 1.0)
     }
+    
+    # Store active trade in open_positions
+    st.session_state.open_positions[pair] = position_data
     
     return f"🟢 Position opened: {signal_data['signal']} {pair} at {signal_data['price']:.5f}"
 
@@ -350,14 +362,19 @@ def close_trade_position(pair, current_price):
     if pair in st.session_state.open_positions:
         position = st.session_state.open_positions[pair]
         
+        # Ensure all required fields exist with safe defaults
+        stake_eur = position.get('stake_eur', st.session_state.stake_euros)
+        entry_price = position.get('entry_price', 1.0)
+        direction = position.get('direction', 'BUY')
+        
         # Calculate final P&L
         pip_value = 10
-        quantity = position['stake_eur'] / 100
+        quantity = stake_eur / 100
         
-        if position['direction'] == 'BUY':
-            pnl_pips = (current_price - position['entry_price']) / 0.0001
+        if direction == 'BUY':
+            pnl_pips = (current_price - entry_price) / 0.0001
         else:
-            pnl_pips = (position['entry_price'] - current_price) / 0.0001
+            pnl_pips = (entry_price - current_price) / 0.0001
         
         pnl = pnl_pips * pip_value * quantity
         
@@ -365,19 +382,19 @@ def close_trade_position(pair, current_price):
         new_trade = pd.DataFrame([{
             'Date': datetime.now(),
             'Pair': pair,
-            'Direction': position['direction'],
-            'Entry Price': position['entry_price'],
+            'Direction': direction,
+            'Entry Price': entry_price,
             'Exit Price': current_price,
             'Quantity': quantity,
             'P&L': pnl,
             'P&L (€)': pnl,
             'Status': 'CLOSED',
-            'Signal Strength': position['signal_strength'],
+            'Signal Strength': position.get('signal_strength', 'MODERATE'),
             'Signal Count': 4,  # Assuming 4 signals for active trades
-            'Stake (€)': position['stake_eur'],
-            'Target Profit': position['target_profit'],
-            'Stop Loss': position['stop_loss'],
-            'Engulfing Pattern': position['engulfing_pattern']
+            'Stake (€)': stake_eur,
+            'Target Profit': position.get('target_profit', st.session_state.target_profit_pips),
+            'Stop Loss': position.get('stop_loss', st.session_state.stop_loss_pips),
+            'Engulfing Pattern': position.get('engulfing_pattern', 'NONE')
         }])
         
         st.session_state.trade_history = pd.concat([st.session_state.trade_history, new_trade], ignore_index=True)
@@ -385,90 +402,117 @@ def close_trade_position(pair, current_price):
         # Remove from open positions
         del st.session_state.open_positions[pair]
         
-        return f"🔴 Position closed: {position['direction']} {pair} | P&L: €{pnl:.2f}"
+        return f"🔴 Position closed: {direction} {pair} | P&L: €{pnl:.2f}"
     
     return f"❌ No active position found for {pair}"
 
 def update_active_trades_pnl():
     """Update P&L for active trades based on current prices"""
     for pair, position in st.session_state.open_positions.items():
-        # Get current price for the pair
-        current_price_data = next((p for p in get_realistic_price_data() if p['pair'] == pair), None)
-        if current_price_data:
-            current_price = current_price_data['price']
-            
-            # Calculate current P&L
-            pip_value = 10
-            quantity = position['stake_eur'] / 100
-            
-            if position['direction'] == 'BUY':
-                pnl_pips = (current_price - position['entry_price']) / 0.0001
-            else:
-                pnl_pips = (position['entry_price'] - current_price) / 0.0001
-            
-            pnl = pnl_pips * pip_value * quantity
-            pnl_percent = (pnl / position['stake_eur']) * 100
-            
-            # Update position
-            position['current_price'] = current_price
-            position['current_pnl'] = pnl
-            position['current_pnl_percent'] = pnl_percent
-            position['duration'] = datetime.now() - position['entry_time']
+        try:
+            # Get current price for the pair
+            current_price_data = next((p for p in get_realistic_price_data() if p['pair'] == pair), None)
+            if current_price_data:
+                current_price = current_price_data['price']
+                
+                # Ensure all required fields exist with safe defaults
+                stake_eur = position.get('stake_eur', st.session_state.stake_euros)
+                entry_price = position.get('entry_price', 1.0)
+                direction = position.get('direction', 'BUY')
+                
+                # Calculate current P&L
+                pip_value = 10
+                quantity = stake_eur / 100
+                
+                if direction == 'BUY':
+                    pnl_pips = (current_price - entry_price) / 0.0001
+                else:
+                    pnl_pips = (entry_price - current_price) / 0.0001
+                
+                pnl = pnl_pips * pip_value * quantity
+                pnl_percent = (pnl / stake_eur) * 100 if stake_eur > 0 else 0
+                
+                # Update position with safe field access
+                position['current_price'] = current_price
+                position['current_pnl'] = pnl
+                position['current_pnl_percent'] = pnl_percent
+                position['duration'] = datetime.now() - position.get('entry_time', datetime.now())
+                
+                # Ensure stake_eur is set
+                if 'stake_eur' not in position:
+                    position['stake_eur'] = stake_eur
+                    
+        except Exception as e:
+            # If there's any error, set default values
+            position['current_pnl'] = 0.0
+            position['current_pnl_percent'] = 0.0
+            position['duration'] = timedelta(0)
+            continue
 
 def display_active_trades():
     """Display active trades in a tab"""
     update_active_trades_pnl()
     
     if not st.session_state.open_positions:
-        st.info("No active trades. Open positions will appear here.")
+        st.info("📭 No active trades. Open positions will appear here.")
         return
     
-    st.subheader("🟢 ACTIVE TRADES")
+    st.subheader(f"🟢 ACTIVE TRADES ({len(st.session_state.open_positions)})")
     
     for pair, position in st.session_state.open_positions.items():
+        # Use safe field access with defaults
+        direction = position.get('direction', 'BUY')
+        stake_eur = position.get('stake_eur', st.session_state.stake_euros)
+        entry_price = position.get('entry_price', 1.0)
+        current_price = position.get('current_price', entry_price)
+        current_pnl = position.get('current_pnl', 0.0)
+        current_pnl_percent = position.get('current_pnl_percent', 0.0)
+        target_profit = position.get('target_profit', st.session_state.target_profit_pips)
+        stop_loss = position.get('stop_loss', st.session_state.stop_loss_pips)
+        duration = position.get('duration', timedelta(0))
+        
         col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1, 2, 2, 2, 2, 2, 2])
         
         with col1:
             st.markdown(f"**{pair}**")
-            st.markdown(f"*{position['direction']}*")
+            st.markdown(f"*{direction}*")
         
         with col2:
-            if position['current_pnl'] > 0:
-                st.markdown(f"<div class='active-trade-profit'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='active-trade-profit'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
-            elif position['current_pnl'] < 0:
-                st.markdown(f"<div class='active-trade-loss'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='active-trade-loss'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
+            if current_pnl > 0:
+                st.markdown(f"<div class='active-trade-profit'>€{current_pnl:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-profit'>{current_pnl_percent:.1f}%</div>", unsafe_allow_html=True)
+            elif current_pnl < 0:
+                st.markdown(f"<div class='active-trade-loss'>€{current_pnl:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-loss'>{current_pnl_percent:.1f}%</div>", unsafe_allow_html=True)
             else:
-                st.markdown(f"<div class='active-trade-neutral'>€{position['current_pnl']:.2f}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div class='active-trade-neutral'>{position['current_pnl_percent']:.1f}%</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-neutral'>€{current_pnl:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='active-trade-neutral'>{current_pnl_percent:.1f}%</div>", unsafe_allow_html=True)
         
         with col3:
             st.markdown(f"**Entry**")
-            st.markdown(f"`{position['entry_price']:.5f}`")
+            st.markdown(f"`{entry_price:.5f}`")
         
         with col4:
             st.markdown(f"**Current**")
-            st.markdown(f"`{position.get('current_price', position['entry_price']):.5f}`")
+            st.markdown(f"`{current_price:.5f}`")
         
         with col5:
             st.markdown(f"**Stake**")
-            st.markdown(f"€{position['stake_eur']:.0f}")
+            st.markdown(f"€{stake_eur:.0f}")
         
         with col6:
             st.markdown(f"**TP/SL**")
-            st.markdown(f"{position['target_profit']}/{position['stop_loss']}")
+            st.markdown(f"{target_profit}/{stop_loss}")
         
         with col7:
             st.markdown(f"**Duration**")
-            duration = position.get('duration', timedelta(0))
             hours = duration.total_seconds() // 3600
             minutes = (duration.total_seconds() % 3600) // 60
             st.markdown(f"{int(hours)}h {int(minutes)}m")
         
         with col8:
             if st.button("CLOSE", key=f"close_{pair}", use_container_width=True):
-                result = close_trade_position(pair, position.get('current_price', position['entry_price']))
+                result = close_trade_position(pair, current_price)
                 st.success(result)
                 st.rerun()
         
@@ -477,7 +521,7 @@ def display_active_trades():
 def display_trade_history():
     """Display trade history in a tab"""
     if st.session_state.trade_history.empty:
-        st.info("No trade history yet. Closed trades will appear here.")
+        st.info("📊 No trade history yet. Closed trades will appear here.")
         return
     
     # Display summary metrics
@@ -637,7 +681,9 @@ def main():
         if st.session_state.open_positions:
             if st.button("🗑️ Close All Positions", use_container_width=True, type="secondary"):
                 for pair in list(st.session_state.open_positions.keys()):
-                    close_trade_position(pair, FOREX_BASE_PRICES.get(pair, 1.0))
+                    position = st.session_state.open_positions[pair]
+                    current_price = position.get('current_price', FOREX_BASE_PRICES.get(pair, 1.0))
+                    close_trade_position(pair, current_price)
                 st.success("All positions closed!")
                 st.rerun()
     
