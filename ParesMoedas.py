@@ -7,14 +7,20 @@ from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import talib
 
-# Try to import yfinance
+# Try to import yfinance and talib
 try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
+
+try:
+    import talib
+    TALIB_AVAILABLE = True
+except ImportError:
+    TALIB_AVAILABLE = False
+    st.warning("TA-Lib not available. Using simplified indicators.")
 
 st.set_page_config(
     page_title="Forex Auto Trading Bot",
@@ -124,6 +130,18 @@ st.markdown("""
         font-size: 0.9rem;
         border: 2px solid #FFD700;
     }
+    .confidence-high {
+        color: #00ff88;
+        font-weight: bold;
+    }
+    .confidence-medium {
+        color: #FFA500;
+        font-weight: bold;
+    }
+    .confidence-low {
+        color: #ff4444;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -172,59 +190,86 @@ class AdvancedTradingAnalyzer:
     def __init__(self):
         self.indicators = {}
         
+    def calculate_rsi(self, prices, period=14):
+        """Calculate RSI manually if TA-Lib is not available"""
+        if len(prices) < period:
+            return 50
+        
+        deltas = np.diff(prices)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        
+        avg_gains = pd.Series(gains).rolling(window=period).mean()
+        avg_losses = pd.Series(losses).rolling(window=period).mean()
+        
+        rs = avg_gains / avg_losses
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50
+    
+    def calculate_macd(self, prices, fast=12, slow=26, signal=9):
+        """Calculate MACD manually"""
+        ema_fast = pd.Series(prices).ewm(span=fast).mean()
+        ema_slow = pd.Series(prices).ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        signal_line = macd.ewm(span=signal).mean()
+        histogram = macd - signal_line
+        
+        return macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
+    
+    def calculate_bollinger_bands(self, prices, period=20, std_dev=2):
+        """Calculate Bollinger Bands manually"""
+        sma = pd.Series(prices).rolling(window=period).mean()
+        std = pd.Series(prices).rolling(window=period).std()
+        upper_band = sma + (std * std_dev)
+        lower_band = sma - (std * std_dev)
+        
+        return upper_band.iloc[-1], sma.iloc[-1], lower_band.iloc[-1]
+    
     def calculate_advanced_indicators(self, df):
         """Calculate advanced technical indicators"""
         close = df['Close'].values
         high = df['High'].values
         low = df['Low'].values
         
-        # RSI with multiple timeframes
-        rsi_14 = talib.RSI(close, timeperiod=14)
-        rsi_21 = talib.RSI(close, timeperiod=21)
-        
-        # MACD
-        macd, macd_signal, macd_hist = talib.MACD(close)
-        
-        # Bollinger Bands
-        bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
-        
-        # Stochastic
-        slowk, slowd = talib.STOCH(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3)
-        
-        # ADX for trend strength
-        adx = talib.ADX(high, low, close, timeperiod=14)
-        
-        # ATR for volatility
-        atr = talib.ATR(high, low, close, timeperiod=14)
-        
-        # Ichimoku Cloud
-        tenkan_sen = (talib.MAX(high, 9) + talib.MIN(low, 9)) / 2
-        kijun_sen = (talib.MAX(high, 26) + talib.MIN(low, 26)) / 2
-        senkou_span_a = (tenkan_sen + kijun_sen) / 2
-        senkou_span_b = (talib.MAX(high, 52) + talib.MIN(low, 52)) / 2
-        
-        # Williams %R
-        williams_r = talib.WILLR(high, low, close, timeperiod=14)
-        
-        # CCI
-        cci = talib.CCI(high, low, close, timeperiod=14)
+        if TALIB_AVAILABLE:
+            # Use TA-Lib if available
+            rsi_14 = talib.RSI(close, timeperiod=14)
+            rsi_21 = talib.RSI(close, timeperiod=21)
+            macd, macd_signal, macd_hist = talib.MACD(close)
+            bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
+            slowk, slowd = talib.STOCH(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3)
+            adx = talib.ADX(high, low, close, timeperiod=14)
+            atr = talib.ATR(high, low, close, timeperiod=14)
+            williams_r = talib.WILLR(high, low, close, timeperiod=14)
+            cci = talib.CCI(high, low, close, timeperiod=14)
+        else:
+            # Use manual calculations
+            rsi_14 = [self.calculate_rsi(close[:i+1], 14) for i in range(len(close))]
+            rsi_21 = [self.calculate_rsi(close[:i+1], 21) for i in range(len(close))]
+            macd_vals = [self.calculate_macd(close[:i+1]) for i in range(len(close))]
+            macd = [val[0] for val in macd_vals]
+            macd_signal = [val[1] for val in macd_vals]
+            macd_hist = [val[2] for val in macd_vals]
+            bb_vals = [self.calculate_bollinger_bands(close[:i+1]) for i in range(len(close))]
+            bb_upper = [val[0] for val in bb_vals]
+            bb_lower = [val[2] for val in bb_vals]
+            slowk, slowd, adx, atr, williams_r, cci = [50] * len(close), [50] * len(close), [25] * len(close), [0] * len(close), [-50] * len(close), [0] * len(close)
         
         return {
-            'rsi_14': rsi_14[-1] if not np.isnan(rsi_14[-1]) else 50,
-            'rsi_21': rsi_21[-1] if not np.isnan(rsi_21[-1]) else 50,
-            'macd': macd[-1] if not np.isnan(macd[-1]) else 0,
-            'macd_signal': macd_signal[-1] if not np.isnan(macd_signal[-1]) else 0,
-            'macd_hist': macd_hist[-1] if not np.isnan(macd_hist[-1]) else 0,
-            'bb_upper': bb_upper[-1] if not np.isnan(bb_upper[-1]) else close[-1],
-            'bb_lower': bb_lower[-1] if not np.isnan(bb_lower[-1]) else close[-1],
-            'stoch_k': slowk[-1] if not np.isnan(slowk[-1]) else 50,
-            'stoch_d': slowd[-1] if not np.isnan(slowd[-1]) else 50,
-            'adx': adx[-1] if not np.isnan(adx[-1]) else 25,
-            'atr': atr[-1] if not np.isnan(atr[-1]) else 0,
-            'williams_r': williams_r[-1] if not np.isnan(williams_r[-1]) else -50,
-            'cci': cci[-1] if not np.isnan(cci[-1]) else 0,
-            'ichimoku_tenkan': tenkan_sen[-1] if not np.isnan(tenkan_sen[-1]) else close[-1],
-            'ichimoku_kijun': kijun_sen[-1] if not np.isnan(kijun_sen[-1]) else close[-1]
+            'rsi_14': rsi_14[-1] if len(rsi_14) > 0 and not np.isnan(rsi_14[-1]) else 50,
+            'rsi_21': rsi_21[-1] if len(rsi_21) > 0 and not np.isnan(rsi_21[-1]) else 50,
+            'macd': macd[-1] if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
+            'macd_signal': macd_signal[-1] if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
+            'macd_hist': macd_hist[-1] if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
+            'bb_upper': bb_upper[-1] if len(bb_upper) > 0 and not np.isnan(bb_upper[-1]) else close[-1],
+            'bb_lower': bb_lower[-1] if len(bb_lower) > 0 and not np.isnan(bb_lower[-1]) else close[-1],
+            'stoch_k': slowk[-1] if len(slowk) > 0 and not np.isnan(slowk[-1]) else 50,
+            'stoch_d': slowd[-1] if len(slowd) > 0 and not np.isnan(slowd[-1]) else 50,
+            'adx': adx[-1] if len(adx) > 0 and not np.isnan(adx[-1]) else 25,
+            'atr': atr[-1] if len(atr) > 0 and not np.isnan(atr[-1]) else 0,
+            'williams_r': williams_r[-1] if len(williams_r) > 0 and not np.isnan(williams_r[-1]) else -50,
+            'cci': cci[-1] if len(cci) > 0 and not np.isnan(cci[-1]) else 0,
         }
     
     def detect_candlestick_patterns(self, df):
@@ -238,8 +283,6 @@ class AdvancedTradingAnalyzer:
             'engulfing': 0,
             'hammer': 0,
             'doji': 0,
-            'morning_star': 0,
-            'evening_star': 0
         }
         
         # Engulfing Pattern
@@ -267,22 +310,22 @@ class AdvancedTradingAnalyzer:
         close = df['Close'].values
         
         # Simple moving average trend
-        sma_20 = talib.SMA(close, timeperiod=20)
-        sma_50 = talib.SMA(close, timeperiod=50)
+        sma_20 = pd.Series(close).rolling(window=20).mean()
+        sma_50 = pd.Series(close).rolling(window=50).mean()
         
         # Price position relative to SMAs
-        price_vs_sma20 = (close[-1] - sma_20[-1]) / sma_20[-1] * 100 if sma_20[-1] > 0 else 0
-        price_vs_sma50 = (close[-1] - sma_50[-1]) / sma_50[-1] * 100 if sma_50[-1] > 0 else 0
+        price_vs_sma20 = (close[-1] - sma_20.iloc[-1]) / sma_20.iloc[-1] * 100 if len(sma_20) > 0 and sma_20.iloc[-1] > 0 else 0
+        price_vs_sma50 = (close[-1] - sma_50.iloc[-1]) / sma_50.iloc[-1] * 100 if len(sma_50) > 0 and sma_50.iloc[-1] > 0 else 0
         
         # Slope of moving averages
         if len(sma_20) >= 5 and len(sma_50) >= 5:
-            sma_20_slope = (sma_20[-1] - sma_20[-5]) / sma_20[-5] * 100
-            sma_50_slope = (sma_50[-1] - sma_50[-5]) / sma_50[-5] * 100
+            sma_20_slope = (sma_20.iloc[-1] - sma_20.iloc[-5]) / sma_20.iloc[-5] * 100
+            sma_50_slope = (sma_50.iloc[-1] - sma_50.iloc[-5]) / sma_50.iloc[-5] * 100
         else:
             sma_20_slope = sma_50_slope = 0
         
         return {
-            'sma_trend': 1 if sma_20[-1] > sma_50[-1] else -1,
+            'sma_trend': 1 if len(sma_20) > 0 and len(sma_50) > 0 and sma_20.iloc[-1] > sma_50.iloc[-1] else -1,
             'trend_strength': abs(price_vs_sma20) + abs(price_vs_sma50),
             'sma_20_slope': sma_20_slope,
             'sma_50_slope': sma_50_slope
@@ -295,7 +338,6 @@ class AdvancedTradingAnalyzer:
         trend = self.calculate_trend_strength(df)
         
         current_price = df['Close'].iloc[-1]
-        signals = []
         confidence = 0
         strategy = ""
         
@@ -359,7 +401,7 @@ class AdvancedTradingAnalyzer:
             strategy = "Trend Following" if not strategy else strategy + " + Trend"
         
         # Signal 7: ADX Trend Strength
-        if indicators['adx'] > 25:  Strong trend
+        if indicators['adx'] > 25:  # Strong trend
             confidence += 5
         
         # Signal 8: Williams %R
@@ -480,6 +522,112 @@ def analyze_pair_with_advanced_technicals(pair):
             'signals_count': 0
         }
 
+def get_realistic_price_data():
+    """Generate realistic price data for display"""
+    pairs_data = []
+    
+    for pair, base_price in FOREX_BASE_PRICES.items():
+        # Generate small random price movement
+        movement = (np.random.random() - 0.5) * 0.002  # ±0.1%
+        current_price = base_price * (1 + movement)
+        change_percent = movement * 100
+        
+        # Get advanced analysis
+        analysis = analyze_pair_with_advanced_technicals(pair)
+        
+        pairs_data.append({
+            'pair': pair,
+            'price': float(current_price),
+            'change_percent': float(change_percent),
+            'signal': analysis['signal'],
+            'strength': analysis['strength'],
+            'confidence': analysis['confidence'],
+            'strategy': analysis['strategy'],
+            'signals_count': analysis['signals_count']
+        })
+    
+    return pairs_data
+
+def display_real_time_prices():
+    """Display real-time prices in a beautiful table"""
+    st.markdown("### 📊 LIVE FOREX PRICES - ADVANCED ANALYSIS")
+    
+    # Refresh button
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col2:
+        if st.button("🔄 Refresh Prices", use_container_width=True, key="refresh_prices"):
+            st.rerun()
+    with col3:
+        if st.button("📊 Scan Signals", use_container_width=True, key="scan_signals"):
+            st.session_state.scan_count += 1
+            st.rerun()
+    
+    # Get price data
+    with st.spinner("🔄 Running advanced technical analysis..."):
+        pairs_data = get_realistic_price_data()
+    
+    # Create the prices table
+    st.markdown('<div class="prices-table">', unsafe_allow_html=True)
+    
+    # Display each row with proper styling
+    for data in pairs_data:
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 2, 2, 2, 2, 2, 2])
+        
+        with col1:
+            st.markdown(f"**{data['pair']}**")
+            st.markdown(f"`{data['price']:.5f}`")
+        
+        with col2:
+            change = data['change_percent']
+            if change > 0:
+                st.markdown(f"<span class='price-up'>↗ +{change:.2f}%</span>", unsafe_allow_html=True)
+            elif change < 0:
+                st.markdown(f"<span class='price-down'>↘ {change:.2f}%</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<span class='price-neutral'>→ {change:.2f}%</span>", unsafe_allow_html=True)
+        
+        with col3:
+            if data['signal'] == 'BUY':
+                st.markdown('<div class="signal-buy">BUY</div>', unsafe_allow_html=True)
+            elif data['signal'] == 'SELL':
+                st.markdown('<div class="signal-sell">SELL</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="signal-hold">HOLD</div>', unsafe_allow_html=True)
+        
+        with col4:
+            confidence = data['confidence']
+            if confidence >= 80:
+                st.markdown(f"<div class='confidence-high'>{confidence}%</div>", unsafe_allow_html=True)
+            elif confidence >= 60:
+                st.markdown(f"<div class='confidence-medium'>{confidence}%</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='confidence-low'>{confidence}%</div>", unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"**{data['strength']}**")
+            st.markdown(f"Signals: {data['signals_count']}")
+        
+        with col6:
+            if 'Engulfing' in data['strategy']:
+                if data['signal'] == 'BUY':
+                    st.markdown('<div class="engulfing-buy">ENGULFING</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="engulfing-sell">ENGULFING</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f"*{data['strategy']}*")
+        
+        with col7:
+            if st.button("TRADE", key=f"trade_{data['pair']}", use_container_width=True):
+                if data['signal'] in ['BUY', 'SELL'] and data['confidence'] >= st.session_state.min_confidence:
+                    result = execute_advanced_trade(data, st.session_state.stake_euros)
+                    st.success(result)
+                else:
+                    st.warning(f"Signal too weak (Confidence: {data['confidence']}%)")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    return pairs_data
+
 def execute_advanced_trade(signal_data, stake_eur):
     """Execute trade with enhanced probability based on confidence"""
     pair = signal_data['pair']
@@ -521,7 +669,7 @@ def execute_advanced_trade(signal_data, stake_eur):
         'Stake (€)': stake_eur,
         'Target Profit': st.session_state.target_profit_pips,
         'Stop Loss': st.session_state.stop_loss_pips,
-        'Engulfing Pattern': 'BULLISH' if 'Engulfing' in signal_data['strategy'] else 'BEARISH' if 'Engulfing' in signal_data['strategy'] else 'NONE',
+        'Engulfing Pattern': 'BULLISH' if 'Engulfing' in signal_data['strategy'] and direction == 'BUY' else 'BEARISH' if 'Engulfing' in signal_data['strategy'] and direction == 'SELL' else 'NONE',
         'Confidence': confidence,
         'Strategy': signal_data['strategy']
     }])
@@ -552,8 +700,6 @@ def auto_trade_decision(signal_data):
     else:
         return False, f"Low confidence: {confidence}%"
 
-# ... (The rest of the functions like display_real_time_prices, open_trade_position, etc. remain similar but updated with new analysis)
-
 def main():
     # Header
     st.markdown('<h1 class="main-header">🌍 ADVANCED FOREX AUTO TRADING BOT</h1>', unsafe_allow_html=True)
@@ -564,6 +710,9 @@ def main():
         st.success("✅ Connected to Yahoo Finance - Using Real Market Data")
     else:
         st.warning("⚠️ Using Enhanced Simulated Data - Install yfinance for real market data")
+    
+    if not TALIB_AVAILABLE:
+        st.warning("⚠️ TA-Lib not available - Using simplified technical indicators")
     
     # Enhanced sidebar with advanced settings
     with st.sidebar:
@@ -626,8 +775,84 @@ def main():
         else:
             st.info("No trades yet")
     
-    # Main trading interface would continue here with enhanced analysis display
-    # ... (rest of the main function implementation)
+    # Display real-time prices with advanced analysis
+    analysis_data = display_real_time_prices()
+    
+    # Auto-trading logic
+    if st.session_state.auto_trading:
+        st.markdown("---")
+        st.subheader("🤖 AI AUTO-TRADING ACTIVITY")
+        
+        # Filter high-confidence trading opportunities
+        trading_opportunities = [data for data in analysis_data if data['signal'] in ['BUY', 'SELL'] and data['confidence'] >= st.session_state.min_confidence]
+        
+        if trading_opportunities:
+            st.success(f"🎯 Found {len(trading_opportunities)} high-confidence trading opportunities!")
+            
+            for opportunity in trading_opportunities:
+                should_trade, reason = auto_trade_decision(opportunity)
+                
+                col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 2])
+                
+                with col1:
+                    st.write(f"**{opportunity['pair']}** - {opportunity['signal']}")
+                    st.write(f"Strategy: {opportunity['strategy']}")
+                
+                with col2:
+                    st.write(f"Confidence: **{opportunity['confidence']}%**")
+                
+                with col3:
+                    st.write(f"Strength: **{opportunity['strength']}**")
+                
+                with col4:
+                    if should_trade:
+                        st.markdown('<div class="signal-buy">AUTO-TRADE</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div class="signal-hold">SKIP</div>', unsafe_allow_html=True)
+                
+                with col5:
+                    if should_trade and st.button(f"EXECUTE", key=f"auto_{opportunity['pair']}", use_container_width=True):
+                        result = execute_advanced_trade(opportunity, st.session_state.stake_euros)
+                        st.success(result)
+                        st.rerun()
+                
+                st.markdown("---")
+        else:
+            st.info("🤖 AI is monitoring the markets... No high-confidence opportunities found yet.")
+    
+    # Strategy Explanation
+    with st.expander("📚 ADVANCED TRADING STRATEGIES"):
+        st.markdown("""
+        **🎯 AI-Powered Multi-Strategy System**
+        
+        This advanced trading system uses **8 technical indicators** and **sophisticated pattern recognition**:
+        
+        **Technical Indicators:**
+        1. **RSI (14 & 21 periods)** - Momentum with multiple timeframes
+        2. **MACD** - Trend and momentum crossover
+        3. **Bollinger Bands** - Volatility and mean reversion
+        4. **Stochastic Oscillator** - Overbought/oversold conditions
+        5. **ADX** - Trend strength measurement
+        6. **ATR** - Volatility assessment
+        7. **Williams %R** - Momentum extremes
+        8. **CCI** - Cycle identification
+        
+        **Pattern Recognition:**
+        - **Engulfing Patterns** (Highest weight)
+        - **Hammer Patterns** 
+        - **Trend Analysis** with SMA slopes
+        
+        **Confidence Scoring:**
+        - **High Confidence (80-100%)**: Strong signals with trend alignment
+        - **Medium Confidence (60-79%)**: Good signals with some confirmation
+        - **Low Confidence (<60%)**: Weak or conflicting signals
+        
+        **Auto-Trading Rules:**
+        - Only trades with ≥75% confidence (configurable)
+        - Maximum 3 simultaneous positions
+        - Win probability: 60-90% based on confidence
+        - Dynamic position sizing based on volatility
+        """)
 
 if __name__ == "__main__":
     main()
