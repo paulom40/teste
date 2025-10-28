@@ -442,6 +442,18 @@ if 'stop_loss_pips' not in st.session_state:
 if 'api_key' not in st.session_state:
     st.session_state.api_key = ''
 
+if 'rsi_period' not in st.session_state:
+    st.session_state.rsi_period = 14
+
+if 'ma_fast' not in st.session_state:
+    st.session_state.ma_fast = 20
+
+if 'ma_slow' not in st.session_state:
+    st.session_state.ma_slow = 50
+
+if 'bb_period' not in st.session_state:
+    st.session_state.bb_period = 20
+
 def add_trade_to_history(pair, direction, entry_price, exit_price, quantity, pnl, pnl_eur, status, signal_strength, signal_count, stake_eur, target_profit, stop_loss, engulfing_pattern):
     """Add a new trade to the history"""
     new_trade = pd.DataFrame({
@@ -792,4 +804,435 @@ def main():
     with col1:
         if st.button("🚀 Start Auto Trading" if not st.session_state.auto_trading else "🛑 Stop Auto Trading", 
                     type="primary" if not st.session_state.auto_trading else "secondary"):
-            st.session_state.auto_trading
+            st.session_state.auto_trading = not st.session_state.auto_trading
+            st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count = 0
+            st.rerun()
+    
+    with col2:
+        if st.button("🔍 Scan All Pairs"):
+            st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count += 1
+            st.rerun()
+    
+    # Manual refresh button for auto trading
+    if st.session_state.auto_trading:
+        if st.sidebar.button("🔄 Refresh Scan"):
+            st.session_state.last_scan_time = datetime.now()
+            st.session_state.scan_count += 1
+            st.rerun()
+    
+    # Display auto trading status
+    if st.session_state.auto_trading:
+        st.sidebar.markdown('<div class="auto-trading-active">🤖 AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
+        st.sidebar.info(f"Scan count: {st.session_state.scan_count}")
+        st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
+        st.sidebar.info(f"Target: {st.session_state.target_profit_pips} pips")
+        st.sidebar.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
+        st.sidebar.info("Click 'Refresh Scan' to check for new opportunities")
+    else:
+        st.sidebar.warning("Auto trading is currently OFF")
+        st.sidebar.info(f"Current Stake: €{st.session_state.stake_euros:.2f}")
+        st.sidebar.info(f"Target: {st.session_state.target_profit_pips} pips")
+        st.sidebar.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
+    
+    # Forex pairs selection for manual analysis
+    forex_pairs = [
+        "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", 
+        "AUD/USD", "USD/CAD", "NZD/USD", "EUR/GBP", 
+        "EUR/JPY", "GBP/JPY", "AUD/JPY", "USD/CNY"
+    ]
+    selected_pair = st.sidebar.selectbox("Manual Analysis Pair", forex_pairs)
+    
+    # Manual trading section
+    st.sidebar.subheader("🎮 Manual Trading")
+    if st.sidebar.button("📊 Analyze Selected Pair"):
+        st.session_state.manual_analysis_pair = selected_pair
+        st.rerun()
+    
+    # Main content area
+    if st.session_state.auto_trading:
+        st.markdown('<div class="auto-trading-active">🚀 AUTO TRADING ACTIVE - Scanning 12 Forex Pairs</div>', unsafe_allow_html=True)
+        
+        # Display scan information
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Scan Count", st.session_state.scan_count)
+        with col2:
+            st.metric("Last Scan", st.session_state.last_scan_time.strftime("%H:%M:%S"))
+        with col3:
+            st.metric("Open Positions", len(st.session_state.open_positions))
+        with col4:
+            st.metric("Current Stake", f"€{st.session_state.stake_euros:.2f}")
+        
+        # Display risk management info
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Target Profit", f"{st.session_state.target_profit_pips} pips")
+        with col2:
+            st.metric("Stop Loss", f"{st.session_state.stop_loss_pips} pips")
+        with col3:
+            st.metric("Risk/Reward", f"{risk_reward_ratio:.2f}:1")
+        
+        # Scan all pairs for opportunities
+        with st.spinner("Scanning all Forex pairs for trading opportunities..."):
+            opportunities = scan_all_pairs(api_key=st.session_state.api_key)
+            st.session_state.last_scan_time = datetime.now()
+        
+        # Display trading opportunities
+        if opportunities:
+            st.subheader("🎯 Trading Opportunities Found")
+            
+            for opportunity in opportunities:
+                col1, col2, col3, col4, col5, col6 = st.columns([2,1,1,1,1,2])
+                
+                with col1:
+                    st.write(f"**{opportunity['pair']}**")
+                
+                with col2:
+                    signal_color = "🟢" if opportunity['signal'] == 'BUY' else "🔴"
+                    st.write(f"{signal_color} **{opportunity['signal']}**")
+                
+                with col3:
+                    st.write(f"**{opportunity['signal_count']}/6** signals")
+                
+                with col4:
+                    st.write(f"**{opportunity['strength']}**")
+                
+                with col5:
+                    # Display engulfing pattern status
+                    if opportunity['engulfing_pattern'] == 'Bullish Engulfing':
+                        st.markdown('<div class="engulfing-buy">BULLISH ENGULFING</div>', unsafe_allow_html=True)
+                    elif opportunity['engulfing_pattern'] == 'Bearish Engulfing':
+                        st.markdown('<div class="engulfing-sell">BEARISH ENGULFING</div>', unsafe_allow_html=True)
+                    else:
+                        st.write("No Engulfing")
+                
+                with col6:
+                    if st.button(f"Trade {opportunity['pair']}", key=f"trade_{opportunity['pair']}"):
+                        result = execute_auto_trade(
+                            opportunity, 
+                            lot_size, 
+                            risk_per_trade, 
+                            st.session_state.stake_euros,
+                            st.session_state.target_profit_pips,
+                            st.session_state.stop_loss_pips
+                        )
+                        st.success(result)
+                        st.rerun()
+            
+            # Auto-execute trades if enabled
+            auto_execute = st.checkbox("🤖 Auto-execute all qualified trades", value=True)
+            if auto_execute:
+                executed_trades = []
+                for opportunity in opportunities:
+                    # Only execute if we don't already have a position and under limit
+                    if opportunity['pair'] not in st.session_state.open_positions and len(st.session_state.open_positions) < 3:
+                        result = execute_auto_trade(
+                            opportunity, 
+                            lot_size, 
+                            risk_per_trade, 
+                            st.session_state.stake_euros,
+                            st.session_state.target_profit_pips,
+                            st.session_state.stop_loss_pips
+                        )
+                        executed_trades.append(result)
+                
+                if executed_trades:
+                    st.success("🤖 Auto-execution completed!")
+                    for trade in executed_trades:
+                        st.write(f"✅ {trade}")
+                    st.rerun()
+        else:
+            st.info("No trading opportunities found at the moment. Click 'Refresh Scan' to check again.")
+        
+    else:
+        # Manual analysis for selected pair
+        if hasattr(st.session_state, 'manual_analysis_pair'):
+            selected_pair = st.session_state.manual_analysis_pair
+        else:
+            selected_pair = forex_pairs[0]
+        
+        # Analyze selected pair
+        signal_data = analyze_pair(
+            selected_pair, 
+            rsi_period=st.session_state.rsi_period,
+            ma_fast=st.session_state.ma_fast,
+            ma_slow=st.session_state.ma_slow,
+            bb_period=st.session_state.bb_period,
+            api_key=st.session_state.api_key
+        )
+        
+        # Display results for selected pair
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Selected Pair", selected_pair)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            signal_color = "🟢" if signal_data['signal'] == 'BUY' else "🔴" if signal_data['signal'] == 'SELL' else "⚪"
+            st.metric("Signal", f"{signal_color} {signal_data['signal']}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Signal Count", f"{signal_data['signal_count']}/6")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Current Price", f"{signal_data['price']:.5f}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            engulfing_status = signal_data['engulfing_pattern']
+            if engulfing_status == 'Bullish Engulfing':
+                st.markdown('<div class="engulfing-buy">BULLISH ENGULFING</div>', unsafe_allow_html=True)
+            elif engulfing_status == 'Bearish Engulfing':
+                st.markdown('<div class="engulfing-sell">BEARISH ENGULFING</div>', unsafe_allow_html=True)
+            else:
+                st.metric("Engulfing", "None")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Display individual signal details
+        st.subheader("📊 Signal Details")
+        signal_cols = st.columns(6)
+        indicators = ['RSI', 'MACrossover', 'MACD', 'Bollinger', 'Stochastic', 'Engulfing']
+        for i, indicator in enumerate(indicators):
+            with signal_cols[i]:
+                signal_value = signal_data['signals'].get(indicator, 0)
+                if signal_value == 1:
+                    st.markdown(f'<div class="signal-buy">{indicator}<br>BUY</div>', unsafe_allow_html=True)
+                elif signal_value == -1:
+                    st.markdown(f'<div class="signal-sell">{indicator}<br>SELL</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="signal-neutral">{indicator}<br>NEUTRAL</div>', unsafe_allow_html=True)
+        
+        # Manual trade execution
+        if signal_data['signal'] in ['BUY', 'SELL'] and len(st.session_state.open_positions) < 3:
+            st.markdown(f'<div class="signal-agreement">🎯 TRADING OPPORTUNITY: {signal_data["signal"]} {selected_pair} with {signal_data["signal_count"]} signals</div>', unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(f"🚀 Execute {signal_data['signal']} Trade", type="primary"):
+                    result = execute_auto_trade(
+                        signal_data, 
+                        lot_size, 
+                        risk_per_trade, 
+                        st.session_state.stake_euros,
+                        st.session_state.target_profit_pips,
+                        st.session_state.stop_loss_pips
+                    )
+                    st.success(result)
+                    st.rerun()
+            with col2:
+                st.info(f"Stake: €{st.session_state.stake_euros:.2f}")
+                st.info(f"Target: {st.session_state.target_profit_pips} pips")
+                st.info(f"Stop Loss: {st.session_state.stop_loss_pips} pips")
+                
+                # Show engulfing pattern advantage if present
+                if signal_data['engulfing_pattern'] != 'None':
+                    st.success(f"🎯 Engulfing Pattern Detected: {signal_data['engulfing_pattern']}")
+                    st.info("Higher probability trade with engulfing pattern!")
+        elif signal_data['signal'] in ['BUY', 'SELL']:
+            st.warning("Cannot execute: Maximum 3 open positions reached.")
+    
+    # Trade History Section (always visible)
+    st.subheader("📋 Trade History & Performance")
+    
+    if len(st.session_state.trade_history) > 0:
+        # Calculate summary statistics using the helper function
+        total_trades, winning_trades, losing_trades, total_pnl, total_pnl_eur, win_rate, target_hits, stop_loss_hits, avg_rr_ratio, engulfing_trade_count, engulfing_win_rate = calculate_trade_statistics()
+        
+        # Display summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Trades", total_trades)
+        with col2:
+            st.metric("Win Rate", f"{win_rate:.1f}%")
+        with col3:
+            pnl_color = "normal" if total_pnl >= 0 else "inverse"
+            st.metric("Total P&L", f"${total_pnl:.2f}", delta_color=pnl_color)
+        with col4:
+            pnl_eur_color = "normal" if total_pnl_eur >= 0 else "inverse"
+            st.metric("Total P&L (€)", f"€{total_pnl_eur:.2f}", delta_color=pnl_eur_color)
+        
+        # Additional metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+            st.metric("Avg P&L per Trade", f"${avg_pnl:.2f}")
+        with col2:
+            avg_pnl_eur = total_pnl_eur / total_trades if total_trades > 0 else 0
+            st.metric("Avg P&L (€) per Trade", f"€{avg_pnl_eur:.2f}")
+        with col3:
+            total_stake = st.session_state.trade_history['Stake (€)'].sum()
+            st.metric("Total Stake", f"€{total_stake:.2f}")
+        with col4:
+            roi = (total_pnl_eur / total_stake * 100) if total_stake > 0 else 0
+            st.metric("ROI", f"{roi:.1f}%")
+        
+        # Engulfing pattern statistics
+        if engulfing_trade_count > 0:
+            st.subheader("🎯 Engulfing Pattern Performance")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Engulfing Pattern Trades", engulfing_trade_count)
+            with col2:
+                st.metric("Engulfing Win Rate", f"{engulfing_win_rate:.1f}%")
+            with col3:
+                advantage = engulfing_win_rate - win_rate if total_trades > 0 else 0
+                st.metric("Engulfing Advantage", f"+{advantage:.1f}%")
+        
+        # Risk management statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Target Hits", target_hits)
+        with col2:
+            st.metric("Stop Loss Hits", stop_loss_hits)
+        with col3:
+            target_rate = (target_hits / total_trades * 100) if total_trades > 0 else 0
+            st.metric("Target Hit Rate", f"{target_rate:.1f}%")
+        with col4:
+            st.metric("Avg R:R Ratio", f"{avg_rr_ratio:.2f}:1")
+        
+        # Display the trade history table with formatted values
+        styled_history = st.session_state.trade_history.copy()
+        styled_history = styled_history.sort_values('Date', ascending=False)
+        
+        # Create a copy for display with formatted values
+        display_history = styled_history.copy()
+        display_history['Entry Price'] = display_history['Entry Price'].apply(lambda x: f"{x:.5f}")
+        display_history['Exit Price'] = display_history['Exit Price'].apply(lambda x: f"{x:.5f}")
+        display_history['P&L'] = display_history['P&L'].apply(lambda x: f"${x:.2f}")
+        display_history['P&L (€)'] = display_history['P&L (€)'].apply(lambda x: f"€{x:.2f}")
+        display_history['Stake (€)'] = display_history['Stake (€)'].apply(lambda x: f"€{x:.2f}")
+        
+        # Safely format target profit and stop loss columns if they exist
+        if 'Target Profit' in display_history.columns:
+            display_history['Target Profit'] = display_history['Target Profit'].apply(lambda x: f"{int(x)} pips")
+        if 'Stop Loss' in display_history.columns:
+            display_history['Stop Loss'] = display_history['Stop Loss'].apply(lambda x: f"{int(x)} pips")
+        
+        st.dataframe(
+            display_history,
+            width='stretch',
+            height=400
+        )
+        
+        # Download button for trade history
+        csv = st.session_state.trade_history.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Trade History CSV",
+            data=csv,
+            file_name=f"forex_trade_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+        
+        # Clear history button
+        if st.button("🗑️ Clear Trade History"):
+            st.session_state.trade_history = pd.DataFrame({
+                'Date': [],
+                'Pair': [],
+                'Direction': [],
+                'Entry Price': [],
+                'Exit Price': [],
+                'Quantity': [],
+                'P&L': [],
+                'P&L (€)': [],
+                'Status': [],
+                'Signal Strength': [],
+                'Signal Count': [],
+                'Stake (€)': [],
+                'Target Profit': [],
+                'Stop Loss': [],
+                'Engulfing Pattern': []
+            })
+            st.session_state.open_positions = {}
+            st.success("Trade history cleared!")
+            st.rerun()
+            
+    else:
+        st.info("No trades executed yet. Start auto trading or execute manual trades to see history here.")
+    
+    # Open Positions
+    if st.session_state.open_positions:
+        st.subheader("📈 Open Positions")
+        for pair, position in st.session_state.open_positions.items():
+            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2,1,2,2,2,2,2,1])
+            with col1:
+                st.write(f"**{pair}**")
+            with col2:
+                st.write(f"**{position['direction']}**")
+            with col3:
+                st.write(f"Entry: {position['entry_price']:.5f}")
+            with col4:
+                st.write(f"Qty: {position['quantity']}")
+            with col5:
+                st.write(f"Stake: €{position['stake_eur']:.2f}")
+            with col6:
+                target_profit = position.get('target_profit', st.session_state.target_profit_pips)
+                stop_loss = position.get('stop_loss', st.session_state.stop_loss_pips)
+                st.write(f"TP/SL: {target_profit}/{stop_loss} pips")
+            with col7:
+                engulfing = position.get('engulfing_pattern', 'None')
+                if engulfing != 'None':
+                    st.write(f"Pattern: {engulfing}")
+            with col8:
+                if st.button(f"Close {pair}", key=f"close_{pair}"):
+                    del st.session_state.open_positions[pair]
+                    st.success(f"Closed position for {pair}")
+                    st.rerun()
+    
+    # Strategy Explanation
+    with st.expander("📖 Automated Trading Strategy Explained"):
+        st.markdown("""
+        **🤖 Enhanced Forex Trading System with Engulfing Patterns**
+        
+        This advanced system now includes **Engulfing Candlestick Patterns** as the most important indicator and scans **12 major Forex pairs** with **4+ signal agreement**:
+
+        **🎯 Engulfing Pattern Priority:**
+        - **Bullish Engulfing**: Strong buy signal when a small red candle is followed by a larger green candle
+        - **Bearish Engulfing**: Strong sell signal when a small green candle is followed by a larger red candle  
+        - **Double Weight**: Engulfing patterns count as 2 signals due to their high reliability
+        - **Higher Success Rate**: Trades with engulfing patterns get +15% success probability
+
+        **Enhanced Auto Trading Features:**
+        - **6 Technical Indicators**: RSI, Moving Average Crossover, MACD, Bollinger Bands, Stochastic, and Engulfing Patterns
+        - **4+ Signal Agreement**: Requires minimum 4/6 indicator agreement (increased from 3/5)
+        - **Engulfing Priority**: Engulfing patterns are the most weighted indicator
+        - **Pattern Statistics**: Track performance of engulfing pattern trades separately
+        - **Enhanced Risk Management**: Higher success rates for pattern-based trades
+
+        **Risk Management Features:**
+        - **Target Profit**: Set your take profit level in pips
+        - **Stop Loss**: Set your stop loss level in pips  
+        - **Risk/Reward Ratio**: Automatic calculation of risk-reward ratio
+        - **Position Sizing**: Automatic calculation based on risk percentage
+        - **Performance Tracking**: Monitor target hit rate and stop loss frequency
+
+        **Trading Pairs Monitored:**
+        - EUR/USD, GBP/USD, USD/JPY, USD/CHF
+        - AUD/USD, USD/CAD, NZD/USD, EUR/GBP
+        - EUR/JPY, GBP/JPY, AUD/JPY, USD/CNY
+
+        **How Engulfing Patterns Work:**
+        1. **Bullish Engulfing**: Occurs at the bottom of a downtrend, signaling potential reversal up
+        2. **Bearish Engulfing**: Occurs at the top of an uptrend, signaling potential reversal down
+        3. **High Reliability**: These are among the most reliable candlestick reversal patterns
+        4. **Confirmation**: Works best when confirmed by other technical indicators
+
+        **Recommended Settings:**
+        - Target Profit: 30-50 pips
+        - Stop Loss: 15-25 pips  
+        - Risk/Reward Ratio: 1:2 or better
+        - Stake: 1-2% of your account balance
+        - Pay special attention to trades with Engulfing patterns
+        """)
+
+if __name__ == "__main__":
+    main()
