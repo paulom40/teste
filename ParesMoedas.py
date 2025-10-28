@@ -5,7 +5,6 @@ from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
 import ta  # Technical analysis library
-from polygon import RESTClient
 
 # Configure the page
 st.set_page_config(
@@ -115,11 +114,19 @@ st.markdown("""
 
 # API Key Input
 api_key = st.sidebar.text_input("Polygon.io API Key", type="password", help="Get your free API key from https://polygon.io/dashboard")
+client = None
 if not api_key:
     st.warning("🔑 Please enter your Polygon.io API key in the sidebar to enable real data.")
-    client = None
 else:
-    client = RESTClient(api_key)
+    try:
+        from polygon import RESTClient
+        client = RESTClient(api_key)
+    except ImportError:
+        st.error("❌ Polygon library not installed. Install with: `pip install polygon-io-client` (or add to requirements.txt for Streamlit Cloud)")
+        client = None
+    except Exception as e:
+        st.error(f"❌ API connection error: {e}")
+        client = None
 
 # Initialize session state with proper data types
 if 'initialized' not in st.session_state:
@@ -134,11 +141,19 @@ if 'initialized' not in st.session_state:
     st.session_state.active_trades = []
     st.session_state.trade_history = []
     st.session_state.next_trade_id = 1001
+    st.session_state.price_history = {}  # Fallback for sample data
 
 def get_prices(pair):
     """Fetch recent prices using Polygon API"""
     if not client:
-        return []
+        # Fallback to sample data
+        if pair not in st.session_state.price_history:
+            # Generate sample prices if not present
+            base_price = np.random.uniform(1.0, 1.5) if 'USD' in pair else np.random.uniform(0.8, 1.4)
+            prices = [base_price * (1 + np.random.uniform(-0.01, 0.01)) for _ in range(100)]
+            st.session_state.price_history[pair] = prices
+        return st.session_state.price_history[pair]
+    
     symbol = pair.replace('/', '')
     try:
         end = datetime.utcnow()
@@ -161,7 +176,10 @@ def get_prices(pair):
 def get_current_price(pair):
     """Get the latest mid price"""
     if not client:
-        return None
+        # Fallback to sample
+        prices = get_prices(pair)
+        return prices[-1] if prices else None
+    
     symbol = pair.replace('/', '')
     try:
         nbbo = client.get_last_nbbo(symbol)
@@ -459,7 +477,7 @@ def close_trade(trade_id, exit_price, reason="Manual Close"):
     return None
 
 def generate_sample_data():
-    """Generate sample trades using real prices"""
+    """Generate sample trades using real prices or fallback"""
     currency_pairs = ['USD/JPY', 'USD/CHF', 'USD/CAD', 'EUR/USD', 'GBP/USD', 'AUD/USD']
     
     # Generate sample active trades if empty
@@ -477,7 +495,6 @@ def generate_sample_data():
     if len(st.session_state.trade_history) == 0:
         for i in range(8):
             pair = np.random.choice(currency_pairs)
-            symbol = pair.replace('/', '')
             stake = 10  # Fixed 10€ stake
             prices = get_prices(pair)
             if len(prices) < 50:
@@ -533,6 +550,19 @@ for trade in st.session_state.active_trades:
 for trade_id in trades_to_remove:
     st.session_state.active_trades = [t for t in st.session_state.active_trades if t['trade_id'] != trade_id]
 
+# Update sample prices if no client
+if not client:
+    for pair in st.session_state.stake_amounts.keys():
+        if pair in st.session_state.price_history:
+            # Add new price movement with slight positive bias
+            last_price = st.session_state.price_history[pair][-1]
+            bias = 0.0001 if 'JPY' not in pair else 0.001
+            new_price = last_price * (1 + np.random.uniform(-0.0015, 0.0025) + bias)
+            st.session_state.price_history[pair].append(new_price)
+            # Keep only last 100 prices
+            if len(st.session_state.price_history[pair]) > 100:
+                st.session_state.price_history[pair] = st.session_state.price_history[pair][-100:]
+
 # Header
 st.markdown('<div class="main-header">LIVE FOREX PRICES - REAL API INTEGRATION</div>', unsafe_allow_html=True)
 
@@ -540,7 +570,7 @@ st.markdown('<div class="main-header">LIVE FOREX PRICES - REAL API INTEGRATION</
 if client:
     st.success("🟢 API CONNECTION STABLE - Real Data Streaming")
 else:
-    st.error("🔴 API KEY MISSING - Using Sample Data")
+    st.warning("🔴 API KEY MISSING or LIBRARY NOT INSTALLED - Using Sample Data")
 
 # Fixed Stake Notice
 st.info("🎯 **Trading with Fixed 10€ Stake per Trade | Enhanced Strategy with SL/TP & Auto-Close**")
