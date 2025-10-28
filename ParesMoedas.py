@@ -88,4 +88,30 @@ st.markdown("""
         font-weight: bold;
     }
     .negative-pnl {
-        background-color: #ffe
+        background-color: #ffebee;
+        color: #c62828;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .signal-low {
+        background-color: #ffebee;
+        color: #c62828;
+        padding: 0.5rem;
+        border-radius: 5px;
+        text-align: center;
+    }
+    .signal-high {
+        background-color: #e8f5e9;
+        color: #2e7d32;
+        padding: 0.5rem;
+        border-radius: 5px;
+        text-align: center;
+    }
+    .indicator-bullish {
+        color: #00cc96;
+        font-weight: bold;
+    }
+    .indicator-bearish {
+        color: #ef553b;
+        font-weight: bold
