@@ -266,4 +266,107 @@ def detect_doji(df):
 
 def detect_engulfing(df):
     if len(df) < 2:
-        return None
+        return None, 0.0
+    
+    prev = df.iloc[-2]
+    latest = df.iloc[-1]
+    O1 = prev['open']
+    C1 = prev['close']
+    H1 = prev['high']
+    L1 = prev['low']
+    avgh10_1 = prev.get('AVGH10', H1 - L1)
+    avgl10_1 = prev.get('AVGL10', 0)
+    
+    prev_range = H1 - L1
+    latest_range = latest['high'] - latest['low']
+    prev_body = abs(O1 - C1)
+    latest_body = abs(latest['close'] - latest['open'])
+    
+    # Bullish Engulfing
+    if (O1 > C1) and \
+       (10 * latest_body >= 7 * latest_range) and \
+       (latest['close'] > O1) and \
+       (C1 > latest['open']) and \
+       (10 * latest_range >= 12 * (avgh10_1 - avgl10_1)):
+        
+        # Confidence: based on engulfing ratio and range expansion
+        engulf_ratio = latest_body / prev_body if prev_body > 0 else 1.0
+        range_exp = latest_range / prev_range if prev_range > 0 else 1.0
+        confidence = min(1.0, (engulf_ratio * 0.6) + (range_exp * 0.4))
+        return 'bullish', confidence
+    
+    # Bearish Engulfing
+    if (O1 < C1) and \
+       (10 * latest_body >= 7 * latest_range) and \
+       (latest['open'] > C1) and \
+       (O1 > latest['close']) and \
+       (10 * latest_range >= 12 * (avgh10_1 - avgl10_1)):
+        
+        engulf_ratio = latest_body / prev_body if prev_body > 0 else 1.0
+        range_exp = latest_range / prev_range if prev_range > 0 else 1.0
+        confidence = min(1.0, (engulf_ratio * 0.6) + (range_exp * 0.4))
+        return 'bearish', confidence
+    
+    return None, 0.0
+
+def detect_hammer(df):
+    if len(df) < 1:
+        return None, 0.0
+    
+    latest = df.iloc[-1]
+    body = abs(latest['close'] - latest['open'])
+    total_range = latest['high'] - latest['low']
+    
+    if total_range == 0:
+        return None, 0.0
+    
+    lower_wick = min(latest['open'], latest['close']) - latest['low']
+    upper_wick = latest['high'] - max(latest['open'], latest['close'])
+    
+    # Enhanced Hammer
+    lower_wick_ratio = lower_wick / total_range
+    upper_wick_ratio = upper_wick / total_range
+    body_ratio = body / total_range
+    
+    if lower_wick_ratio >= 0.4 and upper_wick_ratio <= 0.1 and body_ratio <= 0.3:
+        # Confidence: longer lower wick and smaller body/upper wick = higher confidence
+        confidence = min(1.0, (lower_wick_ratio * 0.7) + (1 - body_ratio) * 0.3)
+        return 'bullish', confidence
+    # Enhanced Shooting Star
+    elif upper_wick_ratio >= 0.4 and lower_wick_ratio <= 0.1 and body_ratio <= 0.3:
+        confidence = min(1.0, (upper_wick_ratio * 0.7) + (1 - body_ratio) * 0.3)
+        return 'bearish', confidence
+    
+    return None, 0.0
+
+def detect_morning_star(df):
+    if len(df) < 3:
+        return None, 0.0
+    
+    c2 = df.iloc[-3]  # First candle
+    c1 = df.iloc[-2]  # Second
+    c0 = df.iloc[-1]  # Third
+    
+    O2, C2, H2, L2 = c2['open'], c2['close'], c2['high'], c2['low']
+    O1, C1, H1, L1 = c1['open'], c1['close'], c1['high'], c1['low']
+    O0, C0, H0, L0 = c0['open'], c0['close'], c0['high'], c0['low']
+    
+    # Detailed Morning Star
+    if (O2 > C2) and \
+       (5 * (O2 - C2) > 3 * (H2 - L2)) and \
+       (C2 > O1) and \
+       (2 * abs(O1 - C1) < abs(O2 - C2)) and \
+       (H1 - L1 > 3 * abs(C1 - O1)) and \
+       (C0 > O0) and \
+       (O0 > O1) and \
+       (O0 > C1):
+        
+        # Confidence: based on gap sizes and body ratios
+        first_body_ratio = abs(O2 - C2) / (H2 - L2)
+        gap_size = min((O0 - C1), (O1 - C2)) / (H2 - L2) if (H2 - L2) > 0 else 0
+        confidence = min(1.0, first_body_ratio * 0.5 + gap_size * 0.5)
+        return 'bullish', confidence
+    
+    # Evening Star
+    if (O2 < C2) and \
+       (5 * (C2 - O2) > 3 * (H2 - L2))
