@@ -156,12 +156,13 @@ st.markdown("## 🤖 Trader Automático com Price Action")
 if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_trading):
     st.session_state.auto_trading = True
     for pair in trading_pairs:
-        df = generate_15min_forex_data(pair)
-        df_ind = calculate_indicators(df)
-        buy, sell, signal = detect_trading_signals(df_ind)
-                padrao = detectar_padrao_price_action(df)
-        zonas = detectar_suporte_resistencia(df)
-        preco_atual = df.iloc[-1]["close"]
+    df = generate_15min_forex_data(pair)
+    df_ind = calculate_indicators(df)
+    buy, sell, signal = detect_trading_signals(df_ind)
+    padrao = detectar_padrao_price_action(df)
+
+    zonas = detectar_suporte_resistencia(df)
+    preco_atual = df.iloc[-1]["close"]
         breakout = detectar_breakout(df, zonas)
         confirmado = confirmar_padrao_por_candles(df, padrao, n=2)
         impulso = simular_volume_impulso(df)
