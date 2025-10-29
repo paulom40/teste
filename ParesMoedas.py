@@ -897,4 +897,172 @@ if st.session_state.open_trades:
                 P&L: <span class="{profit_class}">${trade['profit_loss']:.2f}</span> | Pips: {trade['profit_loss_pips']:.1f}<br>
                 <div class="sl-tp-indicator sl-indicator">SL: {trade['stop_loss_price']:.4f} ({distance_to_sl:.1f}p)</div>
                 <div class="sl-tp-indicator tp-indicator">TP: {trade['take_profit_price']:.4f} ({distance_to_tp:.1f}p)</div>
-                {
+                {f"<div style='color: #ffaa00;'>🚨 TRAILING STOP ACTIVE</div>" if trade['trailing_stop_active'] else ""}
+                {f"<div style='color: #00aaff;'>🛡️ BREAKEVEN ACTIVE</div>" if trade['breakeven_active'] else ""}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            # SL/TP Progress Bars
+            st.write("**Stop Loss Risk:**")
+            st.markdown(f'<div class="risk-meter" style="width: {sl_percentage}%;"></div>', unsafe_allow_html=True)
+            st.write(f"{sl_percentage:.1f}% to SL")
+            
+        with col3:
+            st.write("**Take Profit Progress:**")
+            st.markdown(f'<div class="risk-meter" style="width: {tp_percentage}%; background: linear-gradient(90deg, #00ff88 0%, #00cc66 100%);"></div>', unsafe_allow_html=True)
+            st.write(f"{tp_percentage:.1f}% to TP")
+        
+        with col4:
+            if st.button("🛑 Close", key=f"close_{trade['id']}", use_container_width=True):
+                if close_trade(trade['id']):
+                    st.success(f"Trade {trade['id']} closed!")
+                    st.rerun()
+    
+    # Open Trades Summary
+    st.subheader("📋 Open Trades Summary")
+    open_df = pd.DataFrame(st.session_state.open_trades)
+    if not open_df.empty:
+        display_df = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'profit_loss_pips', 'stop_loss_price', 'take_profit_price']].copy()
+        display_df['profit_loss'] = display_df['profit_loss'].round(2)
+        display_df['profit_loss_pips'] = display_df['profit_loss_pips'].round(1)
+        display_df['entry_price'] = display_df['entry_price'].round(4)
+        display_df['current_price'] = display_df['current_price'].round(4)
+        display_df['stop_loss_price'] = display_df['stop_loss_price'].round(4)
+        display_df['take_profit_price'] = display_df['take_profit_price'].round(4)
+        st.dataframe(display_df, use_container_width=True)
+else:
+    st.info("No open trades")
+
+# TRADE HISTORY
+st.subheader("📊 Trade History & Performance")
+
+if st.session_state.trade_history:
+    closed_df = pd.DataFrame(st.session_state.trade_history)
+    
+    # Format display
+    display_df = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'profit_loss_pips', 'close_reason', 'time', 'close_time']].copy()
+    display_df['profit_loss'] = display_df['profit_loss'].round(2)
+    display_df['profit_loss_pips'] = display_df['profit_loss_pips'].round(1)
+    display_df['entry_price'] = display_df['entry_price'].round(4)
+    display_df['close_price'] = display_df['close_price'].round(4)
+    
+    st.dataframe(display_df, use_container_width=True)
+    
+    # Performance Metrics
+    st.subheader("📈 Performance Summary")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    total_trades = len(closed_df)
+    winning_trades = len(closed_df[closed_df['profit_loss'] > 0])
+    losing_trades = len(closed_df[closed_df['profit_loss'] < 0])
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    total_profit = closed_df['profit_loss'].sum()
+    avg_profit = closed_df['profit_loss'].mean()
+    
+    # SL/TP Statistics
+    tp_trades = len(closed_df[closed_df['close_reason'] == 'TP'])
+    sl_trades = len(closed_df[closed_df['close_reason'] == 'SL'])
+    manual_trades = len(closed_df[closed_df['close_reason'] == 'MANUAL'])
+    
+    with col1:
+        st.metric("Total Trades", total_trades)
+    with col2:
+        st.metric("Win Rate", f"{win_rate:.1f}%")
+    with col3:
+        st.metric("Total P&L", f"${total_profit:.2f}")
+    with col4:
+        st.metric("TP Hits", tp_trades)
+    with col5:
+        st.metric("SL Hits", sl_trades)
+    
+    # SL/TP Efficiency
+    if total_trades > 0:
+        st.write("**SL/TP Efficiency:**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("TP Rate", f"{(tp_trades/total_trades*100):.1f}%")
+        with col2:
+            st.metric("SL Rate", f"{(sl_trades/total_trades*100):.1f}%")
+        with col3:
+            st.metric("Manual Close", f"{(manual_trades/total_trades*100):.1f}%")
+            
+else:
+    st.info("No trade history yet")
+
+# TRADING SIGNALS
+st.subheader("🎯 Live Trading Signals - 15min Timeframe")
+
+cols = st.columns(3)
+for idx, pair in enumerate(trading_pairs):
+    with cols[idx % 3]:
+        signal_info = st.session_state.all_signals.get(pair, {})
+        buy_count = signal_info.get('buy_count', 0)
+        sell_count = signal_info.get('sell_count', 0)
+        agreement = signal_info.get('agreement', 'NONE')
+        current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
+        price_change = signal_info.get('price_change', 0)
+        buy_indicators = signal_info.get('buy_indicators', [])
+        sell_indicators = signal_info.get('sell_indicators', [])
+        
+        if agreement == 'BUY':
+            signal_class = "signal-strong-buy"
+            signal_text = "BUY SIGNAL"
+            signal_emoji = "🟢"
+            border_class = "agreement-buy"
+        elif agreement == 'SELL':
+            signal_class = "signal-strong-sell"
+            signal_text = "SELL SIGNAL"
+            signal_emoji = "🔴"
+            border_class = "agreement-sell"
+        elif agreement == 'MIXED':
+            signal_class = "signal-mixed"
+            signal_text = "MIXED"
+            signal_emoji = "🟡"
+            border_class = "no-agreement"
+        else:
+            signal_class = "signal-no-trade"
+            signal_text = "NO SIGNAL"
+            signal_emoji = "⚪"
+            border_class = "no-agreement"
+        
+        change_color = "#00ff88" if price_change >= 0 else "#ff4444"
+        
+        # Format price based on pair type
+        if 'JPY' in pair:
+            price_format = f"{current_price:.2f}"
+        else:
+            price_format = f"{current_price:.4f}"
+        
+        st.markdown(f"""
+        <div class="pair-card {border_class}">
+            <h3>{pair} {signal_emoji}</h3>
+            <div class="{signal_class}">
+                {signal_text}<br>
+                Buy: {buy_count} | Sell: {sell_count}
+            </div>
+            <div style="margin-top: 0.5rem;">
+                <strong>Price: {price_format}</strong><br>
+                <span style="color: {change_color};">
+                    {price_change:+.2f}%
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show indicators
+        if buy_indicators:
+            st.write("**Buy Indicators:**")
+            for indicator in buy_indicators:
+                st.markdown(f'<div class="indicator-buy">✅ {indicator}</div>', unsafe_allow_html=True)
+        
+        if sell_indicators:
+            st.write("**Sell Indicators:**")
+            for indicator in sell_indicators:
+                st.markdown(f'<div class="indicator-sell">❌ {indicator}</div>', unsafe_allow_html=True)
+
+# Auto-refresh
+st.divider()
+st.write("🔄 Auto-refreshing every 30 seconds...")
+time.sleep(30)
+st.rerun()
