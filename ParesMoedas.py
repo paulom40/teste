@@ -178,7 +178,7 @@ def detect_trading_signals(df):
     if latest['RSI'] < params['rsi_oversold']:
         buy_indicators.append("RSI Oversold")
     elif latest['RSI'] > params['rsi_overbought']:
-    sell_indicators.append("RSI Overbought")
+        sell_indicators.append("RSI Overbought")
 
 
         media_mensal.reset_index().to_excel(writer, index=False, sheet_name="Média Mensal")
