@@ -180,16 +180,63 @@ st.markdown(f"### 📡 Sinal atual para `{selected_pair}`: **:blue[{signal}]**")
 st.write("📈 Indicadores de Compra:", buy_signals)
 st.write("📉 Indicadores de Venda:", sell_signals)
 
-# Botão de execução manual
-if st.button("🚀 Executar Trade Manual"):
-    trade = {
-        "id": st.session_state.trade_counter + 1,
-        "pair": selected_pair,
+st.markdown("## 🤖 Modo de Trade Automático")
+
+# Toggle para ativar/desativar
+auto_toggle = st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_trading)
+st.session_state.auto_trading = auto_toggle
+
+# Função de simulação de resultado
+def simular_resultado_trade(trade):
+    pair = trade["pair"]
+    direction = trade["signal"]
+    stake = trade["stake"]
+    params = st.session_state.trading_params
+    pip_value = FOREX_PAIRS[pair]["pip_value"]
+    movimento = np.random.choice(["profit", "loss"], p=[0.55, 0.45])
+
+    if movimento == "profit":
+        pips = params["profit_target_pips"]
+        resultado = stake * (pips * pip_value)
+        status = "✅ Lucro"
+    else:
+        pips = params["stop_loss_pips"]
+        resultado = -stake * (pips * pip_value)
+        status = "❌ Prejuízo"
+
+    return {
+        "pair": pair,
+        "direção": direction,
         "stake": stake,
-        "signal": signal,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "auto": False
+        "resultado (€)": round(resultado, 2),
+        "status": status,
+        "timestamp": trade["timestamp"]
     }
-    st.session_state.trade_counter += 1
-    st.session_state.open_trades.append(trade)
-    st.success(f"Trade manual executado para {selected_pair} com stake de €{stake:.2f} ({signal})")
+
+# Execução automática
+if st.session_state.auto_trading:
+    st.markdown("### 🔍 Analisando pares e executando trades...")
+
+    for pair in trading_pairs:
+        df = generate_15min_forex_data(pair)
+        df_ind = calculate_indicators(df)
+        buy_signals, sell_signals, signal = detect_trading_signals(df_ind)
+
+        if signal in ["BUY", "SELL"]:
+            trade = {
+                "id": st.session_state.trade_counter + 1,
+                "pair": pair,
+                "stake": st.session_state.trading_params['manual_stake_amount'],
+                "signal": signal,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "auto": True
+            }
+            st.session_state.trade_counter += 1
+            st.session_state.open_trades.append(trade)
+
+            resultado = simular_resultado_trade(trade)
+            st.session_state.trade_history.append(resultado)
+            st.session_state.bank_balance += resultado["resultado (€)"]
+
+            st.success(f"Auto trade: {pair} → {signal} → {resultado['status']} (€{resultado['resultado (€)']:.2f})")
+
