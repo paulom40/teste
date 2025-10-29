@@ -82,4 +82,188 @@ PRO_STRATEGIES = {
         "rsi_period": 14,
         "rsi_overbought": 70,
         "rsi_oversold": 30,
-        "macd
+        "macd_fast": 8,
+        "macd_slow": 17,
+        "macd_signal": 9,
+        "profit_target_pips": 15.0,
+        "stop_loss_pips": 10.0,
+        "required_indicators": 3
+    },
+    "PROFESSIONAL_COMBO": {
+        "name": "Professional Combo",
+        "description": "Multi-timeframe confirmed signals",
+        "timeframe": "15min",
+        "ma_fast": 7,
+        "ma_slow": 25,
+        "rsi_period": 14,
+        "rsi_overbought": 72,
+        "rsi_oversold": 28,
+        "macd_fast": 10,
+        "macd_slow": 22,
+        "macd_signal": 7,
+        "profit_target_pips": 20.0,
+        "stop_loss_pips": 12.0,
+        "required_indicators": 3
+    }
+}
+
+# Default trading parameters (added loss avoidance params)
+DEFAULT_PARAMS = {
+    'initial_bank': 10000.0,
+    'profit_target_pips': 20.0,
+    'stop_loss_pips': 12.0,
+    'ma_fast': 7,
+    'ma_slow': 25,
+    'rsi_period': 14,
+    'rsi_overbought': 72,
+    'rsi_oversold': 28,
+    'macd_fast': 10,
+    'macd_slow': 22,
+    'macd_signal': 7,
+    'required_indicators': 3,
+    'max_open_trades': 3,
+    'max_risk_percent': 1.5,
+    'max_daily_loss_percent': 2.0,  # New: Max daily loss as % of initial bank
+    'trailing_stop_enabled': True,   # New: Enable trailing stop
+    'trail_start_pips': 10.0,        # New: Pips in profit to start trailing
+    'trail_distance_pips': 5.0,      # New: Trailing distance in pips
+    'selected_strategy': 'PROFESSIONAL_COMBO',
+    'manual_stake_amount': 100.0,  # Default manual stake
+    'use_candlestick_patterns': True,  # New: Enable candlestick patterns
+    'min_pattern_confidence': 0.7  # New: Minimum confidence for patterns to count as indicators
+}
+
+# Initialize session state
+if 'trading_params' not in st.session_state:
+    st.session_state.trading_params = DEFAULT_PARAMS.copy()
+else:
+    for key, default_value in DEFAULT_PARAMS.items():
+        if key not in st.session_state.trading_params:
+            st.session_state.trading_params[key] = default_value
+
+if 'bank_balance' not in st.session_state:
+    st.session_state.bank_balance = float(st.session_state.trading_params['initial_bank'])
+if 'open_trades' not in st.session_state:
+    st.session_state.open_trades = []
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = []
+if 'auto_trading' not in st.session_state:
+    st.session_state.auto_trading = False
+if 'all_signals' not in st.session_state:
+    st.session_state.all_signals = {}
+if 'current_prices' not in st.session_state:
+    st.session_state.current_prices = {pair: data['base_price'] for pair, data in FOREX_PAIRS.items()}
+if 'trade_counter' not in st.session_state:
+    st.session_state.trade_counter = 0
+if 'use_manual_stake' not in st.session_state:
+    st.session_state.use_manual_stake = False
+# New for loss avoidance
+if 'last_reset_date' not in st.session_state:
+    st.session_state.last_reset_date = datetime.now().date()
+if 'daily_start_balance' not in st.session_state:
+    st.session_state.daily_start_balance = st.session_state.bank_balance
+
+# Trading pairs list (updated with new pairs)
+trading_pairs = list(FOREX_PAIRS.keys())
+
+# Technical Indicator Calculations
+def calculate_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    exp1 = prices.ewm(span=fast).mean()
+    exp2 = prices.ewm(span=slow).mean()
+    macd_line = exp1 - exp2
+    signal_line = macd_line.ewm(span=signal).mean()
+    return macd_line, signal_line
+
+def calculate_indicators(df):
+    try:
+        if df.empty or len(df) < 50:
+            return df
+            
+        df_indicators = df.copy()
+        params = st.session_state.trading_params
+        
+        df_indicators['MA_Fast'] = df_indicators['close'].rolling(window=params['ma_fast']).mean()
+        df_indicators['MA_Slow'] = df_indicators['close'].rolling(window=params['ma_slow']).mean()
+        df_indicators['RSI'] = calculate_rsi(df_indicators['close'], params['rsi_period'])
+        
+        macd_line, signal_line = calculate_macd(
+            df_indicators['close'], 
+            params['macd_fast'], 
+            params['macd_slow'], 
+            params['macd_signal']
+        )
+        df_indicators['MACD'] = macd_line
+        df_indicators['MACD_Signal'] = signal_line
+        
+        # Supporting metrics for patterns
+        df_indicators['AVGH10'] = df_indicators['high'].rolling(window=10).mean()
+        df_indicators['AVGL10'] = df_indicators['low'].rolling(window=10).mean()
+        df_indicators['MINL10'] = df_indicators['low'].rolling(window=10).min()
+        
+        return df_indicators
+        
+    except Exception as e:
+        return df
+
+def generate_15min_forex_data(pair, periods=200):
+    pair_data = FOREX_PAIRS[pair]
+    base_price = st.session_state.current_prices.get(pair, pair_data['base_price'])
+    volatility = pair_data['volatility']
+    prices = []
+    current_time = datetime.now()
+    
+    for i in range(periods):
+        date = current_time - timedelta(minutes=15 * (periods - i - 1))
+        
+        open_price = base_price
+        change = np.random.normal(0, volatility * 0.1)
+        close_price = base_price * (1 + change)
+        high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, volatility * 0.05)))
+        low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, volatility * 0.05)))
+        
+        prices.append({
+            "date": date,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price
+        })
+        
+        base_price = close_price
+    
+    return pd.DataFrame(prices)
+
+# Enhanced Candlestick Pattern Detections with Confidence Scores
+def detect_doji(df):
+    if len(df) < 1:
+        return None, 0.0
+    
+    latest = df.iloc[-1]
+    body = abs(latest['close'] - latest['open'])
+    total_range = latest['high'] - latest['low']
+    avgh10 = latest.get('AVGH10', total_range)
+    avgl10 = latest.get('AVGL10', 0)
+    
+    if total_range == 0:
+        return None, 0.0
+    
+    # Confidence based on body size relative to range (smaller body = higher confidence)
+    body_ratio = body / total_range
+    confidence = max(0.0, 1.0 - (body_ratio / 0.05)) if body_ratio <= 0.05 else 0.0
+    
+    if body_ratio <= 0.05 and (avgh10 - avgl10) > 0:
+        return 'neutral', confidence
+    
+    return None, 0.0
+
+def detect_engulfing(df):
+    if len(df) < 2:
+        return None
