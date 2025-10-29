@@ -92,19 +92,33 @@ st.download_button(
     file_name="volatilidade_diaria_alertas.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-# Dentro do loop de execução do bot
-volatilidade_ok = df_volatilidade[
-    (df_volatilidade["par"] == pair) &
-    (df_volatilidade["data"] == datetime.now().date())
-]["alerta_volatilidade"].values[0] == "Sim"
+for pair in PARES.keys():
+    df_hoje = df_volatilidade[
+        (df_volatilidade["par"] == pair) &
+        (df_volatilidade["data"] == datetime.now().date())
+    ]
 
-if not volatilidade_ok:
-    st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
-    continue
-log = {
-    "pair": pair,
-    "volatilidade_dia": round(volatilidade_dia, 5),
-    "alerta_volatilidade": "Sim" if volatilidade_ok else "Não",
-    # ... outros campos do log
-}
-st.session_state.logs_tecnicos.append(log)
+    if df_hoje.empty or df_hoje["alerta_volatilidade"].values[0] != "Sim":
+        st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
+        continue
+
+    # Aqui entra tua lógica de entrada no trade
+    st.success(f"{pair}: volatilidade OK, pronto para executar trade.")
+if "logs_tecnicos" not in st.session_state:
+    st.session_state.logs_tecnicos = []
+
+for pair in PARES.keys():
+    df_hoje = df_volatilidade[
+        (df_volatilidade["par"] == pair) &
+        (df_volatilidade["data"] == datetime.now().date())
+    ]
+    if df_hoje.empty:
+        continue
+
+    log = {
+        "pair": pair,
+        "data": str(datetime.now().date()),
+        "volatilidade_dia": df_hoje["volatilidade"].values[0],
+        "alerta_volatilidade": df_hoje["alerta_volatilidade"].values[0]
+    }
+    st.session_state.logs_tecnicos.append(log)
