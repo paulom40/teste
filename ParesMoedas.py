@@ -291,21 +291,65 @@ if not df_resultados.empty:
             st.warning(f"{pair}: Drawdown elevado (€{draw:.2f})")
         else:
             st.info(f"{pair}: Dentro dos parâmetros operacionais")
-st.subheader("🧾 Logs Técnicos")
-if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
-    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
-    par_log = st.selectbox("Filtrar por par", ["Todos"] + df_logs["pair"].unique().tolist())
-    if par_log != "Todos":
-        df_logs = df_logs[df_logs["pair"] == par_log]
-    st.dataframe(df_logs, use_container_width=True)
+st.subheader("📤 Exportar por Par com Métricas, Gráfico e Logs Técnicos")
 
-    output_logs = io.BytesIO()
-    with pd.ExcelWriter(output_logs, engine="xlsxwriter") as writer:
-        df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
-    st.download_button("📥 Baixar Logs Técnicos", output_logs.getvalue(), "logs_tecnicos_trader.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+if not df_resultados.empty:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # Aba geral
+        df_resultados.to_excel(writer, index=False, sheet_name="Resumo Geral")
 
-st.subheader("📤 Exportar por Par com Métricas e Gráfico")
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-    df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
+        # Exporta por par
+        for pair in df_resultados["pair"].unique():
+            df_par = df_resultados[df_resultados["pair"] == pair].copy()
+            df_par["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_par["resultado (€)"].cumsum()
+            df_par.to_excel(writer, index=False, sheet_name=pair.replace("/", "_"))
+
+            lucro_total = df_par["resultado (€)"].sum()
+            taxa_acerto = (df_par["resultado (€)"] > 0).mean() * 100
+            drawdown = (df_par["saldo"].cummax() - df_par["saldo"]).max()
+
+            worksheet = writer.sheets[pair.replace("/", "_")]
+            worksheet.write("H1", "Lucro Líquido (€)")
+            worksheet.write("H2", round(lucro_total, 2))
+            worksheet.write("H3", "Taxa de Acerto (%)")
+            worksheet.write("H4", round(taxa_acerto, 1))
+            worksheet.write("H5", "Drawdown Máximo (€)")
+            worksheet.write("H6", round(drawdown, 2))
+
+            # Alerta
+            META_LUCRO = 150.0
+            LIMITE_DRAW = 100.0
+            if lucro_total >= META_LUCRO:
+                alerta = f"Meta de lucro atingida (€{lucro_total:.2f})"
+            elif drawdown >= LIMITE_DRAW:
+                alerta = f"Drawdown elevado (€{drawdown:.2f})"
+            else:
+                alerta = "Dentro dos parâmetros operacionais"
+            worksheet.write("H8", "Alerta")
+            worksheet.write("H9", alerta)
+
+            # Gráfico de saldo
+            chart = writer.book.add_chart({'type': 'line'})
+            chart.add_series({
+                'name': 'Saldo',
+                'categories': [pair.replace("/", "_"), 1, df_par.columns.get_loc("timestamp"), len(df_par), df_par.columns.get_loc("timestamp")],
+                'values':     [pair.replace("/", "_"), 1, df_par.columns.get_loc("saldo"), len(df_par), df_par.columns.get_loc("saldo")],
+            })
+            chart.set_title({'name': f'Saldo - {pair}'})
+            worksheet.insert_chart('H11', chart)
+
+        # Aba de logs técnicos
+        if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
+            df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
+            df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
+
+    st.download_button(
+        label="📥 Baixar Excel Completo",
+        data=output.getvalue(),
+        file_name="trades_completos_e_logs.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    st.info("Nenhum resultado disponível para exportação.")
 
