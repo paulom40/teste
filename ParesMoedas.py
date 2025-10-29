@@ -202,6 +202,11 @@ def calculate_indicators(df):
         df_indicators['MACD'] = macd_line
         df_indicators['MACD_Signal'] = signal_line
         
+        # Supporting metrics for patterns
+        df_indicators['AVGH10'] = df_indicators['high'].rolling(window=10).mean()
+        df_indicators['AVGL10'] = df_indicators['low'].rolling(window=10).mean()
+        df_indicators['MINL10'] = df_indicators['low'].rolling(window=10).min()
+        
         return df_indicators
         
     except Exception as e:
@@ -235,25 +240,23 @@ def generate_15min_forex_data(pair, periods=200):
     
     return pd.DataFrame(prices)
 
-# Candlestick Pattern Detections
-def detect_pin_bar(df):
+# Enhanced Candlestick Pattern Detections with Detailed Logic
+def detect_doji(df):
     if len(df) < 1:
         return None
     
     latest = df.iloc[-1]
     body = abs(latest['close'] - latest['open'])
     total_range = latest['high'] - latest['low']
+    avgh10 = latest.get('AVGH10', total_range)
+    avgl10 = latest.get('AVGL10', 0)
     
     if total_range == 0:
         return None
     
-    lower_wick = min(latest['open'], latest['close']) - latest['low']
-    upper_wick = latest['high'] - max(latest['open'], latest['close'])
-    
-    if lower_wick >= (2/3 * total_range) and body <= (1/3 * total_range):
-        return 'bullish'
-    elif upper_wick >= (2/3 * total_range) and body <= (1/3 * total_range):
-        return 'bearish'
+    # Detailed: body <= 5% of range (stricter than 10%)
+    if body <= total_range * 0.05 and (avgh10 - avgl10) > 0:
+        return 'neutral'
     
     return None
 
@@ -263,15 +266,28 @@ def detect_engulfing(df):
     
     prev = df.iloc[-2]
     latest = df.iloc[-1]
+    O1 = prev['open']
+    C1 = prev['close']
+    H1 = prev['high']
+    L1 = prev['low']
+    avgh10_1 = prev.get('AVGH10', H1 - L1)
+    avgl10_1 = prev.get('AVGL10', 0)
     
-    prev_body = abs(prev['close'] - prev['open'])
-    latest_body = abs(latest['close'] - latest['open'])
+    # Bullish Engulfing
+    if (O1 > C1) and \
+       (10 * (latest['close'] - latest['open']) >= 7 * (latest['high'] - latest['low'])) and \
+       (latest['close'] > O1) and \
+       (C1 > latest['open']) and \
+       (10 * (latest['high'] - latest['low']) >= 12 * (avgh10_1 - avgl10_1)):
+        return 'bullish'
     
-    if latest_body > prev_body * 1.1:  # Latest body larger
-        if prev['close'] < prev['open'] and latest['close'] > latest['open'] and latest['open'] < prev['close'] and latest['close'] > prev['open']:
-            return 'bullish'
-        elif prev['close'] > prev['open'] and latest['close'] < latest['open'] and latest['open'] > prev['close'] and latest['close'] < prev['open']:
-            return 'bearish'
+    # Bearish Engulfing (mirrored)
+    if (O1 < C1) and \
+       (10 * (latest['open'] - latest['close']) >= 7 * (latest['high'] - latest['low'])) and \
+       (latest['open'] > C1) and \
+       (O1 > latest['close']) and \
+       (10 * (latest['high'] - latest['low']) >= 12 * (avgh10_1 - avgl10_1)):
+        return 'bearish'
     
     return None
 
@@ -289,16 +305,86 @@ def detect_hammer(df):
     lower_wick = min(latest['open'], latest['close']) - latest['low']
     upper_wick = latest['high'] - max(latest['open'], latest['close'])
     
-    # Hammer: small body, long lower wick, small upper wick
-    if lower_wick >= 2 * body and upper_wick <= body / 2 and body <= total_range / 3:
+    # Enhanced Hammer: lower wick >= 2 * body, upper wick <= 0.5 * body, body <= 1/3 range
+    if lower_wick >= 2 * body and upper_wick <= 0.5 * body and body <= total_range / 3:
         return 'bullish'
-    # Shooting Star: small body, long upper wick, small lower wick
-    elif upper_wick >= 2 * body and lower_wick <= body / 2 and body <= total_range / 3:
+    # Enhanced Shooting Star
+    elif upper_wick >= 2 * body and lower_wick <= 0.5 * body and body <= total_range / 3:
         return 'bearish'
     
     return None
 
-def detect_doji(df):
+def detect_morning_star(df):
+    if len(df) < 3:
+        return None
+    
+    c2 = df.iloc[-3]  # First candle
+    c1 = df.iloc[-2]  # Second
+    c0 = df.iloc[-1]  # Third
+    
+    O2, C2, H2, L2 = c2['open'], c2['close'], c2['high'], c2['low']
+    O1, C1, H1, L1 = c1['open'], c1['close'], c1['high'], c1['low']
+    O0, C0, H0, L0 = c0['open'], c0['close'], c0['high'], c0['low']
+    
+    # Detailed Morning Star
+    if (O2 > C2) and \
+       (5 * (O2 - C2) > 3 * (H2 - L2)) and \
+       (C2 > O1) and \
+       (2 * abs(O1 - C1) < abs(O2 - C2)) and \
+       (H1 - L1 > 3 * abs(C1 - O1)) and \
+       (C0 > O0) and \
+       (O0 > O1) and \
+       (O0 > C1):
+        return 'bullish'
+    
+    # Evening Star (bearish mirror)
+    if (O2 < C2) and \
+       (5 * (C2 - O2) > 3 * (H2 - L2)) and \
+       (C2 < O1) and \
+       (2 * abs(O1 - C1) < abs(O2 - C2)) and \
+       (H1 - L1 > 3 * abs(C1 - O1)) and \
+       (C0 < O0) and \
+       (O0 < O1) and \
+       (O0 < C1):
+        return 'bearish'
+    
+    return None
+
+def detect_harami(df):
+    if len(df) < 2:
+        return None
+    
+    prev = df.iloc[-2]
+    latest = df.iloc[-1]
+    O1 = prev['open']
+    C1 = prev['close']
+    H1 = prev['high']
+    L1 = prev['low']
+    avgh10_1 = prev.get('AVGH10', H1 - L1)
+    avgl10_1 = prev.get('AVGL10', 0)
+    
+    # Bullish Harami
+    if (10 * abs(O1 - C1) >= 7 * (H1 - L1)) and \
+       (H1 - L1 >= avgh10_1 - avgl10_1) and \
+       (latest['close'] > latest['open']) and \
+       (latest['open'] > C1) and \
+       (O1 > latest['close']) and \
+       (6 * abs(O1 - C1) >= 10 * (latest['close'] - latest['open'])):
+        return 'bullish'
+    
+    # Bearish Harami (mirrored)
+    if (10 * abs(O1 - C1) >= 7 * (H1 - L1)) and \
+       (H1 - L1 >= avgh10_1 - avgl10_1) and \
+       (latest['close'] < latest['open']) and \
+       (latest['open'] < C1) and \
+       (O1 < latest['close']) and \
+       (6 * abs(O1 - C1) >= 10 * (latest['open'] - latest['close'])):
+        return 'bearish'
+    
+    return None
+
+def detect_pin_bar(df):
+    # Enhanced Pin Bar (stricter than hammer)
     if len(df) < 1:
         return None
     
@@ -309,9 +395,14 @@ def detect_doji(df):
     if total_range == 0:
         return None
     
-    # Doji: very small body relative to range
-    if body <= total_range * 0.1:
-        return 'neutral'
+    lower_wick = min(latest['open'], latest['close']) - latest['low']
+    upper_wick = latest['high'] - max(latest['open'], latest['close'])
+    
+    # Pin Bar: wick >= 2/3 range, body <= 1/3 range
+    if lower_wick >= (2/3 * total_range) and body <= (1/3 * total_range) and upper_wick < body:
+        return 'bullish'
+    elif upper_wick >= (2/3 * total_range) and body <= (1/3 * total_range) and lower_wick < body:
+        return 'bearish'
     
     return None
 
@@ -348,8 +439,13 @@ def detect_trading_signals(df):
             else:
                 sell_indicators.append("MACD Bearish")
         
-        # Candlestick Patterns
+        # Enhanced Candlestick Patterns
         if params['use_candlestick_patterns']:
+            # Doji
+            doj_type = detect_doji(df)
+            if doj_type == 'neutral':
+                patterns['doji'] = 'neutral'
+            
             # Pin Bar
             pin_type = detect_pin_bar(df)
             if pin_type == 'bullish':
@@ -377,11 +473,23 @@ def detect_trading_signals(df):
                 sell_indicators.append("Shooting Star Bearish")
                 patterns['hammer'] = 'bearish'
             
-            # Doji
-            doj_type = detect_doji(df)
-            if doj_type == 'neutral':
-                patterns['doji'] = 'neutral'
-                # Doji alone is neutral, but can add to mixed
+            # Morning/Evening Star
+            star_type = detect_morning_star(df)
+            if star_type == 'bullish':
+                buy_indicators.append("Morning Star Bullish")
+                patterns['morning_star'] = 'bullish'
+            elif star_type == 'bearish':
+                sell_indicators.append("Evening Star Bearish")
+                patterns['morning_star'] = 'bearish'
+            
+            # Harami
+            har_type = detect_harami(df)
+            if har_type == 'bullish':
+                buy_indicators.append("Harami Bullish")
+                patterns['harami'] = 'bullish'
+            elif har_type == 'bearish':
+                sell_indicators.append("Harami Bearish")
+                patterns['harami'] = 'bearish'
         
         # Determine agreement
         total_buy = len(buy_indicators)
@@ -409,17 +517,19 @@ def detect_trading_signals(df):
 def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair, patterns=None):
     pip_value = FOREX_PAIRS[pair]['pip_value']
     
-    # Adjust SL based on patterns (e.g., tighter for strong patterns)
-    if patterns and 'hammer' in patterns and patterns['hammer'] == 'bullish' and direction == 'BUY':
-        sl_pips = min(sl_pips, 8.0)  # Tighter SL for hammer
-    elif patterns and 'hammer' in patterns and patterns['hammer'] == 'bearish' and direction == 'SELL':
-        sl_pips = min(sl_pips, 8.0)
+    # Adjust SL based on patterns (tighter for strong reversal patterns)
+    adjusted_sl = sl_pips
+    if patterns:
+        strong_bullish = any(p in patterns and patterns[p] == 'bullish' for p in ['engulfing', 'morning_star', 'hammer', 'pin_bar'])
+        strong_bearish = any(p in patterns and patterns[p] == 'bearish' for p in ['engulfing', 'morning_star', 'hammer', 'pin_bar'])
+        if (direction == 'BUY' and strong_bullish) or (direction == 'SELL' and strong_bearish):
+            adjusted_sl = max(5.0, sl_pips * 0.8)  # 20% tighter
     
     if direction == 'BUY':
-        stop_loss_price = entry_price - (sl_pips * pip_value)
+        stop_loss_price = entry_price - (adjusted_sl * pip_value)
         take_profit_price = entry_price + (tp_pips * pip_value)
     else:
-        stop_loss_price = entry_price + (sl_pips * pip_value)
+        stop_loss_price = entry_price + (adjusted_sl * pip_value)
         take_profit_price = entry_price - (tp_pips * pip_value)
     
     return stop_loss_price, take_profit_price
@@ -460,17 +570,14 @@ def execute_trade(pair, direction, entry_price, stake_amount=None, patterns=None
         st.session_state.trade_counter += 1
         params = st.session_state.trading_params
         
-        # Adjust entry for certain patterns (e.g., Pin Bar)
+        # Adjust entry for Pin Bar or Hammer
         pip_value = FOREX_PAIRS[pair]['pip_value']
-        if patterns and 'pin_bar' in patterns:
-            if patterns['pin_bar'] == 'bullish' and direction == 'BUY':
-                # Entry 2 pips above the body high
-                body_high = max(entry_price, st.session_state.current_prices.get(pair, entry_price))
-                entry_price = body_high + (2 * pip_value)
-            elif patterns['pin_bar'] == 'bearish' and direction == 'SELL':
-                # Entry 2 pips below the body low
-                body_low = min(entry_price, st.session_state.current_prices.get(pair, entry_price))
-                entry_price = body_low - (2 * pip_value)
+        if patterns and ('pin_bar' in patterns or 'hammer' in patterns):
+            pin_type = patterns.get('pin_bar') or patterns.get('hammer')
+            if pin_type == 'bullish' and direction == 'BUY':
+                entry_price += (2 * pip_value)  # Entry above high
+            elif pin_type == 'bearish' and direction == 'SELL':
+                entry_price -= (2 * pip_value)  # Entry below low
         
         # Determine stake amount
         if stake_amount is None:
@@ -510,7 +617,7 @@ def execute_trade(pair, direction, entry_price, stake_amount=None, patterns=None
             'close_reason': None,
             'stake_type': 'MANUAL' if st.session_state.use_manual_stake else 'AUTO',
             'trailing_sl': stop_loss_price,
-            'patterns': patterns  # Track patterns
+            'patterns': patterns or {}  # Track patterns
         }
         
         st.session_state.open_trades.append(trade)
@@ -768,9 +875,9 @@ with st.sidebar:
     # Candlestick Patterns
     st.subheader("🕯️ Candlestick Patterns")
     st.session_state.trading_params['use_candlestick_patterns'] = st.checkbox(
-        "Enable Candlestick Patterns (Pin Bar, Engulfing, Hammer, Doji)",
+        "Enable Advanced Candlestick Patterns (Pin Bar, Engulfing, Hammer, Doji, Morning Star, Harami)",
         value=st.session_state.trading_params['use_candlestick_patterns'],
-        help="Detect multiple candlestick patterns for enhanced signals"
+        help="Detect multiple candlestick patterns with detailed logic for enhanced signals"
     )
     
     st.divider()
@@ -842,9 +949,9 @@ with col4:
     current_price = st.session_state.current_prices.get(manual_pair, FOREX_PAIRS[manual_pair]['base_price'])
     st.write(f"**Current Price:** {current_price:.4f}")
     # Manual pattern selection for demo
-    manual_pattern = st.selectbox("Select Pattern", [None, "Pin Bar Bullish", "Engulfing Bullish", "Hammer Bullish"], index=0)
+    manual_pattern = st.selectbox("Select Pattern", [None, "Pin Bar Bullish", "Engulfing Bullish", "Hammer Bullish", "Morning Star Bullish", "Harami Bullish"], index=0)
     if st.button("🎯 Execute Manual Trade", use_container_width=True, type="primary"):
-        patterns = {'manual': manual_pattern.lower().replace(' ', '_').replace('bar-', 'bar_')} if manual_pattern else None
+        patterns = {'manual': manual_pattern.lower().replace(' ', '_').replace('bar-', 'bar_').replace('star-', 'star_')} if manual_pattern else None
         if execute_trade(manual_pair, manual_direction, current_price, manual_stake, patterns):
             st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f} (Pattern: {manual_pattern})")
         else:
