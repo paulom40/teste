@@ -208,7 +208,7 @@ if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trad
     st.session_state.auto_trading = True
 
     for pair in trading_pairs:
-        df, origem_dados = obter_dados_polygon(pair, api_key="ZACYNJQZmDFZV0B92pErxGfiF60iUuZ_")
+        df, origem_dados = obter_dados_polygon(pair, api_key="pQApb6HvnO5pqOyufo23oS6BfW7EpdtB")
         df_ind = calculate_indicators(df)
         buy, sell, signal = detect_trading_signals(df_ind)
         indicadores_ativos = buy if signal == "BUY" else sell if signal == "SELL" else []
