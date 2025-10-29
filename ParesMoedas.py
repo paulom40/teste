@@ -5,12 +5,6 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import io
 
-st.subheader("🤖 Iniciar Trade Automático")
-
-if st.button("🚀 Executar Trades com Volatilidade Alta"):
-    executar_trades_automaticos()
-
-
 # Limites de volatilidade por par
 LIMITE_VOLATILIDADE = {
     "EUR/USD": 0.0020,
@@ -26,6 +20,8 @@ PARES = {
     "USD/JPY": {"base": 148.0, "vol": 0.004},
     "AUD/USD": {"base": 0.66, "vol": 0.007}
 }
+
+# Simula candles diários
 def simular_high_low(par, base, vol):
     dias = [datetime.now().date() - timedelta(days=i) for i in range(6, -1, -1)]
     dados = []
@@ -44,49 +40,14 @@ def simular_high_low(par, base, vol):
             "alerta_volatilidade": "Sim" if alerta else "Não"
         })
     return pd.DataFrame(dados)
-def executar_trades_automaticos():
-    st.success("🔄 Iniciando execução automática de trades...")
-
-    for pair in PARES.keys():
-        df_hoje = df_volatilidade[
-            (df_volatilidade["par"] == pair) &
-            (df_volatilidade["data"] == datetime.now().date())
-        ]
-
-        if df_hoje.empty or df_hoje["alerta_volatilidade"].values[0] != "Sim":
-            st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
-            continue
-
-        # Simula condições de entrada (substitui por tua lógica real)
-        entrada_valida = np.random.choice([True, False], p=[0.7, 0.3])
-
-        if entrada_valida:
-            st.success(f"{pair}: trade executado com volatilidade {df_hoje['volatilidade'].values[0]:.5f}")
-            log = {
-                "pair": pair,
-                "data": str(datetime.now().date()),
-                "volatilidade_dia": df_hoje["volatilidade"].values[0],
-                "alerta_volatilidade": "Sim",
-                "trade_executado": "Sim"
-            }
-        else:
-            st.warning(f"{pair}: condições de entrada não atendidas.")
-            log = {
-                "pair": pair,
-                "data": str(datetime.now().date()),
-                "volatilidade_dia": df_hoje["volatilidade"].values[0],
-                "alerta_volatilidade": "Sim",
-                "trade_executado": "Não"
-            }
-
-        st.session_state.logs_tecnicos.append(log)
-
 
 # Junta todos os pares
 df_volatilidade = pd.concat([
     simular_high_low(par, info["base"], info["vol"])
     for par, info in PARES.items()
 ])
+
+# Painel de destaque
 st.subheader("🚨 Pares com Volatilidade Diária Elevada")
 pares_alerta = df_volatilidade[df_volatilidade["alerta_volatilidade"] == "Sim"]["par"].unique()
 
@@ -96,6 +57,8 @@ if len(pares_alerta) > 0:
         st.warning(f"{par}: {df_par['volatilidade'].max():.5f} de volatilidade máxima")
 else:
     st.info("Nenhum par excedeu o limite de volatilidade nos últimos 7 dias.")
+
+# Gráfico
 st.subheader("📈 Gráfico de Volatilidade Diária (Apenas Alertas)")
 fig, ax = plt.subplots(figsize=(10, 6))
 cores = {"EUR/USD": "blue", "GBP/USD": "green", "USD/JPY": "red", "AUD/USD": "purple"}
@@ -110,6 +73,8 @@ ax.set_ylabel("Volatilidade")
 ax.legend()
 ax.grid(True)
 st.pyplot(fig)
+
+# Exportação para Excel
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
     df_volatilidade.to_excel(writer, index=False, sheet_name="Volatilidade Diária")
@@ -129,39 +94,55 @@ with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
     chart.set_x_axis({'name': 'Data'})
     chart.set_y_axis({'name': 'Volatilidade'})
     worksheet.insert_chart('G2', chart)
+
 st.download_button(
     label="📥 Baixar Excel com Volatilidade",
     data=output.getvalue(),
     file_name="volatilidade_diaria_alertas.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-for pair in PARES.keys():
-    df_hoje = df_volatilidade[
-        (df_volatilidade["par"] == pair) &
-        (df_volatilidade["data"] == datetime.now().date())
-    ]
 
-    if df_hoje.empty or df_hoje["alerta_volatilidade"].values[0] != "Sim":
-        st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
-        continue
-
-    # Aqui entra tua lógica de entrada no trade
-    st.success(f"{pair}: volatilidade OK, pronto para executar trade.")
+# Inicializa logs técnicos
 if "logs_tecnicos" not in st.session_state:
     st.session_state.logs_tecnicos = []
 
-for pair in PARES.keys():
-    df_hoje = df_volatilidade[
-        (df_volatilidade["par"] == pair) &
-        (df_volatilidade["data"] == datetime.now().date())
-    ]
-    if df_hoje.empty:
-        continue
+# Botão para iniciar trade automático
+st.subheader("🤖 Iniciar Trade Automático")
+if st.button("🚀 Executar Trades com Volatilidade Alta"):
+    def executar_trades_automaticos():
+        st.success("🔄 Iniciando execução automática de trades...")
 
-    log = {
-        "pair": pair,
-        "data": str(datetime.now().date()),
-        "volatilidade_dia": df_hoje["volatilidade"].values[0],
-        "alerta_volatilidade": df_hoje["alerta_volatilidade"].values[0]
-    }
-    st.session_state.logs_tecnicos.append(log)
+        for pair in PARES.keys():
+            df_hoje = df_volatilidade[
+                (df_volatilidade["par"] == pair) &
+                (df_volatilidade["data"] == datetime.now().date())
+            ]
+
+            if df_hoje.empty or df_hoje["alerta_volatilidade"].values[0] != "Sim":
+                st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
+                continue
+
+            entrada_valida = np.random.choice([True, False], p=[0.7, 0.3])
+
+            if entrada_valida:
+                st.success(f"{pair}: trade executado com volatilidade {df_hoje['volatilidade'].values[0]:.5f}")
+                log = {
+                    "pair": pair,
+                    "data": str(datetime.now().date()),
+                    "volatilidade_dia": df_hoje["volatilidade"].values[0],
+                    "alerta_volatilidade": "Sim",
+                    "trade_executado": "Sim"
+                }
+            else:
+                st.warning(f"{pair}: condições de entrada não atendidas.")
+                log = {
+                    "pair": pair,
+                    "data": str(datetime.now().date()),
+                    "volatilidade_dia": df_hoje["volatilidade"].values[0],
+                    "alerta_volatilidade": "Sim",
+                    "trade_executado": "Não"
+                }
+
+            st.session_state.logs_tecnicos.append(log)
+
+    executar_trades_automaticos()
