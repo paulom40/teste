@@ -6,3 +6,4 @@ yfinance
 requests
 ta 
 XlsxWriter
+matplotlib
