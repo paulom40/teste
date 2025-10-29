@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 st.set_page_config(
-    page_title="Forex Pro Bot - Complete Trading",
+    page_title="Forex Pro Bot - Manual Stake",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -22,73 +22,21 @@ st.markdown("""
         margin-bottom: 2rem;
         font-weight: bold;
     }
-    .trade-table {
-        background: white;
-        border-radius: 10px;
+    .stake-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
         padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .manual-trade-card {
+        background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
         margin: 1rem 0;
-    }
-    .profit-positive {
-        color: #00ff88;
-        font-weight: bold;
-    }
-    .profit-negative {
-        color: #ff4444;
-        font-weight: bold;
-    }
-    .status-open {
-        background: #e3f2fd;
-        color: #1976d2;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .status-closed {
-        background: #e8f5e9;
-        color: #2e7d32;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .direction-buy {
-        background: #e8f5e9;
-        color: #2e7d32;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .direction-sell {
-        background: #ffebee;
-        color: #c62828;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .reason-tp {
-        background: #e8f5e9;
-        color: #2e7d32;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-    }
-    .reason-sl {
-        background: #ffebee;
-        color: #c62828;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-    }
-    .reason-manual {
-        background: #fff3e0;
-        color: #ef6c00;
-        padding: 0.3rem 0.8rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -160,10 +108,6 @@ DEFAULT_PARAMS = {
     'initial_bank': 10000,
     'profit_target_pips': 20.0,
     'stop_loss_pips': 12.0,
-    'trailing_stop': True,
-    'trailing_stop_activation': 8.0,
-    'break_even': True,
-    'break_even_activation': 10.0,
     'ma_fast': 7,
     'ma_slow': 25,
     'rsi_period': 14,
@@ -175,7 +119,8 @@ DEFAULT_PARAMS = {
     'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 1.5,
-    'selected_strategy': 'PROFESSIONAL_COMBO'
+    'selected_strategy': 'PROFESSIONAL_COMBO',
+    'manual_stake_amount': 100  # Default manual stake
 }
 
 # Initialize session state
@@ -200,6 +145,8 @@ if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {pair: data['base_price'] for pair, data in FOREX_PAIRS.items()}
 if 'trade_counter' not in st.session_state:
     st.session_state.trade_counter = 0
+if 'use_manual_stake' not in st.session_state:
+    st.session_state.use_manual_stake = False
 
 # Trading pairs list
 trading_pairs = list(FOREX_PAIRS.keys())
@@ -341,13 +288,35 @@ def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair):
     
     return stop_loss_price, take_profit_price
 
-def execute_trade(pair, direction, entry_price):
+def calculate_position_size(stake_amount, sl_pips, pair):
+    """Calculate position size based on stake and stop loss"""
+    pip_value = FOREX_PAIRS[pair]['pip_value']
+    
+    if pip_value > 0 and sl_pips > 0:
+        # Position size = Stake / (Stop loss in pips * Pip value)
+        position_size = stake_amount / (sl_pips * pip_value)
+        return min(position_size, 100000)  # Cap at 10 lots
+    return 10000  # Default to 1 lot
+
+def execute_trade(pair, direction, entry_price, stake_amount=None):
     try:
         st.session_state.trade_counter += 1
         params = st.session_state.trading_params
         
-        # Calculate risk amount
-        risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        # Determine stake amount
+        if stake_amount is None:
+            if st.session_state.use_manual_stake:
+                stake_amount = params['manual_stake_amount']
+            else:
+                stake_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        
+        # Check if we have enough balance
+        if stake_amount > st.session_state.bank_balance:
+            st.error(f"Insufficient balance! Available: ${st.session_state.bank_balance:.2f}, Required: ${stake_amount:.2f}")
+            return False
+        
+        # Calculate position size
+        position_size = calculate_position_size(stake_amount, params['stop_loss_pips'], pair)
         
         # Calculate SL and TP prices
         stop_loss_price, take_profit_price = calculate_sl_tp_prices(
@@ -361,20 +330,23 @@ def execute_trade(pair, direction, entry_price):
             'entry_price': entry_price,
             'stop_loss_price': stop_loss_price,
             'take_profit_price': take_profit_price,
-            'stake': risk_amount,
+            'stake': stake_amount,
+            'position_size': position_size,
             'time': datetime.now(),
             'status': 'open',
             'profit_loss': 0,
             'profit_loss_pips': 0,
             'current_price': entry_price,
-            'type': 'AUTO',
-            'close_reason': None
+            'type': 'MANUAL' if stake_amount else 'AUTO',
+            'close_reason': None,
+            'stake_type': 'MANUAL' if st.session_state.use_manual_stake else 'AUTO'
         }
         
         st.session_state.open_trades.append(trade)
-        st.session_state.bank_balance -= risk_amount
+        st.session_state.bank_balance -= stake_amount
         return True
     except Exception as e:
+        st.error(f"Error executing trade: {e}")
         return False
 
 def close_trade(trade_id, close_price=None, reason='MANUAL'):
@@ -391,8 +363,8 @@ def close_trade(trade_id, close_price=None, reason='MANUAL'):
             else:
                 pips = (trade['entry_price'] - close_price) / pip_value
             
-            # Calculate dollar P&L
-            profit_loss_dollar = pips * pip_value * 10000  # Simplified calculation
+            # Calculate dollar P&L (simplified calculation)
+            profit_loss_dollar = pips * pip_value * trade['position_size']
             
             # Update trade details
             trade['status'] = 'closed'
@@ -425,7 +397,7 @@ def update_trades():
             else:
                 pips = (trade['entry_price'] - current_price) / pip_value
             
-            profit_loss_dollar = pips * pip_value * 10000
+            profit_loss_dollar = pips * pip_value * trade['position_size']
             
             trade['profit_loss'] = profit_loss_dollar
             trade['profit_loss_pips'] = pips
@@ -487,13 +459,15 @@ def execute_auto_trades():
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
                     if execute_trade(pair, 'BUY', current_price):
-                        auto_trades_executed.append(f"✅ BUY {pair} - {count} indicators")
+                        stake_type = "Manual" if st.session_state.use_manual_stake else "Auto"
+                        auto_trades_executed.append(f"✅ BUY {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators")
                 
                 elif agreement == 'SELL' and signal_type == "SELL" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
                     if execute_trade(pair, 'SELL', current_price):
-                        auto_trades_executed.append(f"❌ SELL {pair} - {count} indicators")
+                        stake_type = "Manual" if st.session_state.use_manual_stake else "Auto"
+                        auto_trades_executed.append(f"❌ SELL {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators")
                         
     except Exception as e:
         st.error(f"Error in auto trading: {e}")
@@ -511,13 +485,52 @@ def apply_strategy(strategy_name):
     return False
 
 # MAIN APP LAYOUT
-st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Complete Trading</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Manual Stake Control</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
-    st.header("🎯 Trading Controls")
+    st.header("💰 Stake Management")
+    
+    # Stake Type Selection
+    st.subheader("🎯 Stake Type")
+    stake_type = st.radio(
+        "Choose Stake Method",
+        ["Auto Risk %", "Manual Fixed Amount"],
+        index=1 if st.session_state.use_manual_stake else 0
+    )
+    
+    st.session_state.use_manual_stake = (stake_type == "Manual Fixed Amount")
+    
+    if st.session_state.use_manual_stake:
+        st.markdown('<div class="stake-card">', unsafe_allow_html=True)
+        st.session_state.trading_params['manual_stake_amount'] = st.number_input(
+            "Manual Stake Amount ($)",
+            min_value=10,
+            max_value=10000,
+            value=st.session_state.trading_params['manual_stake_amount'],
+            step=50,
+            help="Fixed amount to risk per trade"
+        )
+        st.write(f"**Stake per trade:** ${st.session_state.trading_params['manual_stake_amount']:.2f}")
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="stake-card">', unsafe_allow_html=True)
+        st.session_state.trading_params['max_risk_percent'] = st.slider(
+            "Risk Per Trade (%)",
+            min_value=0.5,
+            max_value=5.0,
+            value=st.session_state.trading_params['max_risk_percent'],
+            step=0.5,
+            help="Percentage of balance to risk per trade"
+        )
+        risk_amount = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        st.write(f"**Risk per trade:** ${risk_amount:.2f}")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.divider()
     
     # Strategy Selection
+    st.subheader("🎯 Trading Strategy")
     strategy_options = {name: strategy['name'] for name, strategy in PRO_STRATEGIES.items()}
     selected_strategy = st.selectbox(
         "Choose Strategy",
@@ -533,6 +546,7 @@ with st.sidebar:
     st.divider()
     
     # Trading Controls
+    st.subheader("🎮 Trading Controls")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🚀 Start Auto", use_container_width=True, type="primary"):
@@ -543,14 +557,49 @@ with st.sidebar:
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
+    if st.session_state.auto_trading:
+        st.success("**Auto Trading: ACTIVE**")
+    else:
+        st.info("Auto Trading: INACTIVE")
+    
     st.divider()
     
     # Quick Stats
     total_profit = sum(trade.get('profit_loss', 0) for trade in st.session_state.trade_history)
-    st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
+    st.write(f"**Bank Balance:** ${st.session_state.bank_balance:.2f}")
     st.write(f"**Total P&L:** ${total_profit:.2f}")
     st.write(f"**Open Trades:** {len(st.session_state.open_trades)}")
     st.write(f"**Total Trades:** {len(st.session_state.trade_history)}")
+
+# MANUAL TRADING SECTION
+st.subheader("🎯 Manual Trading")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    manual_pair = st.selectbox("Currency Pair", trading_pairs)
+with col2:
+    manual_direction = st.selectbox("Direction", ["BUY", "SELL"])
+with col3:
+    if st.session_state.use_manual_stake:
+        manual_stake = st.number_input(
+            "Stake Amount ($)",
+            min_value=10,
+            max_value=10000,
+            value=st.session_state.trading_params['manual_stake_amount'],
+            step=50
+        )
+    else:
+        manual_stake = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        st.write(f"**Auto Stake:** ${manual_stake:.2f}")
+with col4:
+    current_price = st.session_state.current_prices.get(manual_pair, FOREX_PAIRS[manual_pair]['base_price'])
+    st.write(f"**Current Price:** {current_price:.4f}")
+    if st.button("🎯 Execute Manual Trade", use_container_width=True, type="primary"):
+        if execute_trade(manual_pair, manual_direction, current_price, manual_stake):
+            st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f}")
+        else:
+            st.error("Failed to execute trade!")
 
 # Execute trading logic
 auto_trades_executed = execute_auto_trades()
@@ -568,36 +617,18 @@ if st.session_state.open_trades:
             'ID': trade['id'],
             'Pair': trade['pair'],
             'Direction': trade['direction'],
+            'Stake': f"${trade['stake']:.2f}",
+            'Stake Type': trade.get('stake_type', 'AUTO'),
             'Entry Price': f"{trade['entry_price']:.4f}",
             'Current Price': f"{trade['current_price']:.4f}",
             'Stop Loss': f"{trade['stop_loss_price']:.4f}",
             'Take Profit': f"{trade['take_profit_price']:.4f}",
             'P&L ($)': f"${trade['profit_loss']:.2f}",
             'P&L (Pips)': f"{trade['profit_loss_pips']:.1f}",
-            'Time Opened': trade['time'].strftime('%H:%M:%S'),
-            'Actions': trade['id']
+            'Time Opened': trade['time'].strftime('%H:%M:%S')
         })
     
     open_df = pd.DataFrame(open_trades_data)
-    
-    # Display the table with custom formatting
-    st.markdown('<div class="trade-table">', unsafe_allow_html=True)
-    
-    # Convert DataFrame to HTML with custom styling
-    def style_trade_dataframe(df):
-        styled_df = df.copy()
-        
-        # Apply styling
-        styles = []
-        for _, row in styled_df.iterrows():
-            # Color P&L column
-            pnl_value = float(row['P&L ($)'].replace('$', ''))
-            pnl_color = 'color: #00ff88;' if pnl_value >= 0 else 'color: #ff4444;'
-            styles.append(['', '', '', '', '', '', '', pnl_color, '', '', ''])
-        
-        return styled_df.style.apply(lambda x: styles[df.index.get_loc(x.name)] if df.index.get_loc(x.name) < len(styles) else [''] * len(x), axis=1)
-    
-    # Display styled dataframe
     st.dataframe(open_df, use_container_width=True, hide_index=True)
     
     # Close trade buttons
@@ -609,8 +640,6 @@ if st.session_state.open_trades:
                 close_trade(trade['id'])
                 st.success(f"Trade {trade['id']} closed!")
                 st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
 else:
     st.info("No open trades currently")
 
@@ -621,116 +650,83 @@ if st.session_state.trade_history:
     # Create DataFrame for trade history
     history_data = []
     for trade in st.session_state.trade_history:
-        # Determine close reason styling
-        if trade['close_reason'] == 'TP':
-            reason_class = "reason-tp"
-            reason_text = "TAKE PROFIT"
-        elif trade['close_reason'] == 'SL':
-            reason_class = "reason-sl"
-            reason_text = "STOP LOSS"
-        else:
-            reason_class = "reason-manual"
-            reason_text = "MANUAL"
-        
         history_data.append({
             'ID': trade['id'],
             'Pair': trade['pair'],
             'Direction': trade['direction'],
+            'Stake': f"${trade['stake']:.2f}",
+            'Stake Type': trade.get('stake_type', 'AUTO'),
             'Entry Price': f"{trade['entry_price']:.4f}",
-            'Exit Price': f"{trade['close_price']:.4f}",
+            'Exit Price': f"{trade.get('close_price', 0):.4f}",
             'P&L ($)': f"${trade['profit_loss']:.2f}",
             'P&L (Pips)': f"{trade['profit_loss_pips']:.1f}",
-            'Close Reason': trade['close_reason'],
-            'Duration': f"{(trade['close_time'] - trade['time']).seconds // 60}min",
+            'Close Reason': trade.get('close_reason', ''),
             'Open Time': trade['time'].strftime('%H:%M'),
-            'Close Time': trade['close_time'].strftime('%H:%M')
+            'Close Time': trade.get('close_time', '').strftime('%H:%M') if trade.get('close_time') else ''
         })
     
     history_df = pd.DataFrame(history_data)
     
-    st.markdown('<div class="trade-table">', unsafe_allow_html=True)
-    
-    # Display trade history with filters
-    col1, col2, col3 = st.columns(3)
+    # Display with filters
+    col1, col2 = st.columns(2)
     with col1:
         show_trades = st.selectbox("Show", ["All Trades", "Winning Trades", "Losing Trades"])
     with col2:
-        sort_by = st.selectbox("Sort By", ["Most Recent", "Highest Profit", "Lowest Profit"])
-    with col3:
-        items_per_page = st.selectbox("Items per page", [10, 25, 50])
+        stake_type_filter = st.selectbox("Stake Type", ["All Types", "Manual", "Auto"])
     
     # Apply filters
     filtered_df = history_df.copy()
     
     if show_trades == "Winning Trades":
-        filtered_df = filtered_df[filtered_df['P&L ($)'].str.contains(r'\$[0-9]', regex=True)]
         filtered_df = filtered_df[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')) > 0]
     elif show_trades == "Losing Trades":
-        filtered_df = filtered_df[filtered_df['P&L ($)'].str.contains(r'\$[0-9]', regex=True)]
         filtered_df = filtered_df[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')) < 0]
     
-    # Apply sorting
-    if sort_by == "Most Recent":
-        filtered_df = filtered_df.iloc[::-1]
-    elif sort_by == "Highest Profit":
-        filtered_df = filtered_df.iloc[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')).argsort()[::-1]]
-    elif sort_by == "Lowest Profit":
-        filtered_df = filtered_df.iloc[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')).argsort()]
+    if stake_type_filter == "Manual":
+        filtered_df = filtered_df[filtered_df['Stake Type'] == 'MANUAL']
+    elif stake_type_filter == "Auto":
+        filtered_df = filtered_df[filtered_df['Stake Type'] == 'AUTO']
     
-    # Pagination
-    total_trades = len(filtered_df)
-    page_number = st.number_input("Page", min_value=1, max_value=max(1, (total_trades // items_per_page) + 1), value=1)
-    start_idx = (page_number - 1) * items_per_page
-    end_idx = min(start_idx + items_per_page, total_trades)
-    
-    st.write(f"Showing {start_idx + 1}-{end_idx} of {total_trades} trades")
-    
-    # Display the table
-    st.dataframe(filtered_df.iloc[start_idx:end_idx], use_container_width=True, hide_index=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
     
     # PERFORMANCE SUMMARY
     st.subheader("📊 Performance Summary")
     
-    total_trades_count = len(st.session_state.trade_history)
+    total_trades = len(st.session_state.trade_history)
     winning_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] > 0])
     losing_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] < 0])
-    win_rate = (winning_trades / total_trades_count * 100) if total_trades_count > 0 else 0
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     
     total_profit = sum(trade['profit_loss'] for trade in st.session_state.trade_history)
-    avg_profit = total_profit / total_trades_count if total_trades_count > 0 else 0
+    avg_profit = total_profit / total_trades if total_trades > 0 else 0
     
-    # SL/TP Statistics
-    tp_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'TP'])
-    sl_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'SL'])
-    manual_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'MANUAL'])
+    # Manual vs Auto performance
+    manual_trades = [t for t in st.session_state.trade_history if t.get('stake_type') == 'MANUAL']
+    auto_trades = [t for t in st.session_state.trade_history if t.get('stake_type') == 'AUTO']
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    manual_profit = sum(t['profit_loss'] for t in manual_trades)
+    auto_profit = sum(t['profit_loss'] for t in auto_trades)
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Trades", total_trades_count)
+        st.metric("Total Trades", total_trades)
     with col2:
         st.metric("Win Rate", f"{win_rate:.1f}%")
     with col3:
         st.metric("Total P&L", f"${total_profit:.2f}")
     with col4:
         st.metric("Avg Trade", f"${avg_profit:.2f}")
-    with col5:
-        st.metric("Best Trade", f"${max([t['profit_loss'] for t in st.session_state.trade_history], default=0):.2f}")
     
-    # Detailed Statistics
-    st.write("**Detailed Breakdown:**")
-    col1, col2, col3 = st.columns(3)
+    # Stake Type Breakdown
+    st.write("**Stake Type Performance:**")
+    col1, col2 = st.columns(2)
     with col1:
-        st.write(f"**Winning Trades:** {winning_trades}")
-        st.write(f"**Losing Trades:** {losing_trades}")
+        st.write(f"**Manual Trades:** {len(manual_trades)}")
+        st.write(f"**Manual P&L:** ${manual_profit:.2f}")
     with col2:
-        st.write(f"**TP Hits:** {tp_trades} ({tp_trades/total_trades_count*100:.1f}%)")
-        st.write(f"**SL Hits:** {sl_trades} ({sl_trades/total_trades_count*100:.1f}%)")
-    with col3:
-        st.write(f"**Manual Closes:** {manual_trades} ({manual_trades/total_trades_count*100:.1f}%)")
-        st.write(f"**Largest Win:** ${max([t['profit_loss'] for t in st.session_state.trade_history if t['profit_loss'] > 0], default=0):.2f}")
+        st.write(f"**Auto Trades:** {len(auto_trades)}")
+        st.write(f"**Auto P&L:** ${auto_profit:.2f}")
     
 else:
     st.info("No trade history yet. Trades will appear here once they are closed.")
@@ -738,10 +734,10 @@ else:
 # TRADING ACTIVITY
 st.subheader("🎯 Recent Trading Activity")
 
-# Show recent auto trade executions
+# Show recent trade executions
 if auto_trades_executed:
     st.write("**Recent Auto Trades:**")
-    for trade in auto_trades_executed[-5:]:  # Show last 5
+    for trade in auto_trades_executed[-5:]:
         if "BUY" in trade:
             st.success(trade)
         else:
@@ -750,7 +746,7 @@ if auto_trades_executed:
 # Current signals
 st.write("**Current Market Signals:**")
 cols = st.columns(3)
-for idx, pair in enumerate(trading_pairs[:3]):  # Show first 3 pairs
+for idx, pair in enumerate(trading_pairs[:3]):
     with cols[idx]:
         signal_info = st.session_state.all_signals.get(pair, {})
         agreement = signal_info.get('agreement', 'NONE')
@@ -773,41 +769,6 @@ for idx, pair in enumerate(trading_pairs[:3]):  # Show first 3 pairs
             <p>Price: {current_price:.4f}</p>
         </div>
         """, unsafe_allow_html=True)
-
-# Export functionality
-if st.session_state.trade_history:
-    st.divider()
-    st.subheader("💾 Export Trade Data")
-    
-    # Convert trade history to CSV
-    export_data = []
-    for trade in st.session_state.trade_history:
-        export_data.append({
-            'Trade ID': trade['id'],
-            'Pair': trade['pair'],
-            'Direction': trade['direction'],
-            'Entry Price': trade['entry_price'],
-            'Exit Price': trade.get('close_price', ''),
-            'P&L ($)': trade['profit_loss'],
-            'P&L (Pips)': trade['profit_loss_pips'],
-            'Stop Loss': trade['stop_loss_price'],
-            'Take Profit': trade['take_profit_price'],
-            'Open Time': trade['time'],
-            'Close Time': trade.get('close_time', ''),
-            'Close Reason': trade.get('close_reason', ''),
-            'Status': trade['status']
-        })
-    
-    export_df = pd.DataFrame(export_data)
-    csv = export_df.to_csv(index=False)
-    
-    st.download_button(
-        label="📥 Download Trade History as CSV",
-        data=csv,
-        file_name=f"forex_trade_history_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
 
 # Auto-refresh
 st.divider()
