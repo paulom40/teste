@@ -306,4 +306,6 @@ if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
 
 st.subheader("📤 Exportar por Par com Métricas e Gráfico")
 output = io.BytesIO()
-with pd.ExcelWriter
+with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
+
