@@ -484,3 +484,42 @@ def detect_trading_signals(df):
                 sell_indicators.append("RSI Overbought")
         
         # MACD Signals
+        # MACD Signals
+        if pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']):
+            if latest['MACD'] > latest['MACD_Signal']:
+                buy_indicators.append("MACD Bullish Crossover")
+            elif latest['MACD'] < latest['MACD_Signal']:
+                sell_indicators.append("MACD Bearish Crossover")
+
+        # Candlestick Patterns (if enabled)
+        if params.get('use_candlestick_patterns', False):
+            patterns_detected = []
+
+            for name, detector in [
+                ("Doji", detect_doji),
+                ("Engulfing", detect_engulfing),
+                ("Hammer", detect_hammer),
+                ("Morning Star", detect_morning_star),
+                ("Harami", detect_harami),
+                ("Pin Bar", detect_pin_bar)
+            ]:
+                signal, confidence = detector(df)
+                if signal and confidence >= min_conf:
+                    patterns[name] = {"signal": signal, "confidence": round(confidence, 2)}
+                    if signal == "bullish":
+                        buy_indicators.append(f"{name} ({int(confidence * 100)}%)")
+                    elif signal == "bearish":
+                        sell_indicators.append(f"{name} ({int(confidence * 100)}%)")
+
+        # Final signal decision
+        total_signals = len(buy_indicators) + len(sell_indicators)
+        if len(buy_indicators) >= params['required_indicators']:
+            return buy_indicators, sell_indicators, patterns, 'BUY', patterns
+        elif len(sell_indicators) >= params['required_indicators']:
+            return buy_indicators, sell_indicators, patterns, 'SELL', patterns
+        else:
+            return buy_indicators, sell_indicators, patterns, 'HOLD', patterns
+
+    except Exception as e:
+        return [], [], [], 'ERROR', {}
+
