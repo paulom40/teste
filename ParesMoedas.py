@@ -129,7 +129,8 @@ DEFAULT_PARAMS = {
     'trail_distance_pips': 5.0,      # New: Trailing distance in pips
     'selected_strategy': 'PROFESSIONAL_COMBO',
     'manual_stake_amount': 100,  # Default manual stake
-    'use_candlestick_patterns': True  # New: Enable candlestick patterns
+    'use_candlestick_patterns': True,  # New: Enable candlestick patterns
+    'min_pattern_confidence': 0.7  # New: Minimum confidence for patterns to count as indicators
 }
 
 # Initialize session state
@@ -240,10 +241,10 @@ def generate_15min_forex_data(pair, periods=200):
     
     return pd.DataFrame(prices)
 
-# Enhanced Candlestick Pattern Detections with Detailed Logic
+# Enhanced Candlestick Pattern Detections with Confidence Scores
 def detect_doji(df):
     if len(df) < 1:
-        return None
+        return None, 0.0
     
     latest = df.iloc[-1]
     body = abs(latest['close'] - latest['open'])
@@ -252,17 +253,20 @@ def detect_doji(df):
     avgl10 = latest.get('AVGL10', 0)
     
     if total_range == 0:
-        return None
+        return None, 0.0
     
-    # Detailed: body <= 5% of range (stricter than 10%)
-    if body <= total_range * 0.05 and (avgh10 - avgl10) > 0:
-        return 'neutral'
+    # Confidence based on body size relative to range (smaller body = higher confidence)
+    body_ratio = body / total_range
+    confidence = max(0.0, 1.0 - (body_ratio / 0.05)) if body_ratio <= 0.05 else 0.0
     
-    return None
+    if body_ratio <= 0.05 and (avgh10 - avgl10) > 0:
+        return 'neutral', confidence
+    
+    return None, 0.0
 
 def detect_engulfing(df):
     if len(df) < 2:
-        return None
+        return None, 0.0
     
     prev = df.iloc[-2]
     latest = df.iloc[-1]
@@ -273,50 +277,71 @@ def detect_engulfing(df):
     avgh10_1 = prev.get('AVGH10', H1 - L1)
     avgl10_1 = prev.get('AVGL10', 0)
     
+    prev_range = H1 - L1
+    latest_range = latest['high'] - latest['low']
+    prev_body = abs(O1 - C1)
+    latest_body = abs(latest['close'] - latest['open'])
+    
     # Bullish Engulfing
     if (O1 > C1) and \
-       (10 * (latest['close'] - latest['open']) >= 7 * (latest['high'] - latest['low'])) and \
+       (10 * latest_body >= 7 * latest_range) and \
        (latest['close'] > O1) and \
        (C1 > latest['open']) and \
-       (10 * (latest['high'] - latest['low']) >= 12 * (avgh10_1 - avgl10_1)):
-        return 'bullish'
+       (10 * latest_range >= 12 * (avgh10_1 - avgl10_1)):
+        
+        # Confidence: based on engulfing ratio and range expansion
+        engulf_ratio = latest_body / prev_body if prev_body > 0 else 1.0
+        range_exp = latest_range / prev_range if prev_range > 0 else 1.0
+        confidence = min(1.0, (engulf_ratio * 0.6) + (range_exp * 0.4))
+        return 'bullish', confidence
     
-    # Bearish Engulfing (mirrored)
+    # Bearish Engulfing
     if (O1 < C1) and \
-       (10 * (latest['open'] - latest['close']) >= 7 * (latest['high'] - latest['low'])) and \
+       (10 * latest_body >= 7 * latest_range) and \
        (latest['open'] > C1) and \
        (O1 > latest['close']) and \
-       (10 * (latest['high'] - latest['low']) >= 12 * (avgh10_1 - avgl10_1)):
-        return 'bearish'
+       (10 * latest_range >= 12 * (avgh10_1 - avgl10_1)):
+        
+        engulf_ratio = latest_body / prev_body if prev_body > 0 else 1.0
+        range_exp = latest_range / prev_range if prev_range > 0 else 1.0
+        confidence = min(1.0, (engulf_ratio * 0.6) + (range_exp * 0.4))
+        return 'bearish', confidence
     
-    return None
+    return None, 0.0
 
 def detect_hammer(df):
     if len(df) < 1:
-        return None
+        return None, 0.0
     
     latest = df.iloc[-1]
     body = abs(latest['close'] - latest['open'])
     total_range = latest['high'] - latest['low']
     
     if total_range == 0:
-        return None
+        return None, 0.0
     
     lower_wick = min(latest['open'], latest['close']) - latest['low']
     upper_wick = latest['high'] - max(latest['open'], latest['close'])
     
-    # Enhanced Hammer: lower wick >= 2 * body, upper wick <= 0.5 * body, body <= 1/3 range
-    if lower_wick >= 2 * body and upper_wick <= 0.5 * body and body <= total_range / 3:
-        return 'bullish'
-    # Enhanced Shooting Star
-    elif upper_wick >= 2 * body and lower_wick <= 0.5 * body and body <= total_range / 3:
-        return 'bearish'
+    # Enhanced Hammer
+    lower_wick_ratio = lower_wick / total_range
+    upper_wick_ratio = upper_wick / total_range
+    body_ratio = body / total_range
     
-    return None
+    if lower_wick_ratio >= 0.4 and upper_wick_ratio <= 0.1 and body_ratio <= 0.3:
+        # Confidence: longer lower wick and smaller body/upper wick = higher confidence
+        confidence = min(1.0, (lower_wick_ratio * 0.7) + (1 - body_ratio) * 0.3)
+        return 'bullish', confidence
+    # Enhanced Shooting Star
+    elif upper_wick_ratio >= 0.4 and lower_wick_ratio <= 0.1 and body_ratio <= 0.3:
+        confidence = min(1.0, (upper_wick_ratio * 0.7) + (1 - body_ratio) * 0.3)
+        return 'bearish', confidence
+    
+    return None, 0.0
 
 def detect_morning_star(df):
     if len(df) < 3:
-        return None
+        return None, 0.0
     
     c2 = df.iloc[-3]  # First candle
     c1 = df.iloc[-2]  # Second
@@ -335,9 +360,14 @@ def detect_morning_star(df):
        (C0 > O0) and \
        (O0 > O1) and \
        (O0 > C1):
-        return 'bullish'
+        
+        # Confidence: based on gap sizes and body ratios
+        first_body_ratio = abs(O2 - C2) / (H2 - L2)
+        gap_size = min((O0 - C1), (O1 - C2)) / (H2 - L2) if (H2 - L2) > 0 else 0
+        confidence = min(1.0, first_body_ratio * 0.5 + gap_size * 0.5)
+        return 'bullish', confidence
     
-    # Evening Star (bearish mirror)
+    # Evening Star
     if (O2 < C2) and \
        (5 * (C2 - O2) > 3 * (H2 - L2)) and \
        (C2 < O1) and \
@@ -346,13 +376,17 @@ def detect_morning_star(df):
        (C0 < O0) and \
        (O0 < O1) and \
        (O0 < C1):
-        return 'bearish'
+        
+        first_body_ratio = abs(O2 - C2) / (H2 - L2)
+        gap_size = min((C1 - O0), (C2 - O1)) / (H2 - L2) if (H2 - L2) > 0 else 0
+        confidence = min(1.0, first_body_ratio * 0.5 + gap_size * 0.5)
+        return 'bearish', confidence
     
-    return None
+    return None, 0.0
 
 def detect_harami(df):
     if len(df) < 2:
-        return None
+        return None, 0.0
     
     prev = df.iloc[-2]
     latest = df.iloc[-1]
@@ -363,54 +397,72 @@ def detect_harami(df):
     avgh10_1 = prev.get('AVGH10', H1 - L1)
     avgl10_1 = prev.get('AVGL10', 0)
     
+    prev_range = H1 - L1
+    prev_body = abs(O1 - C1)
+    latest_body = abs(latest['close'] - latest['open'])
+    
     # Bullish Harami
-    if (10 * abs(O1 - C1) >= 7 * (H1 - L1)) and \
-       (H1 - L1 >= avgh10_1 - avgl10_1) and \
+    if (10 * prev_body >= 7 * prev_range) and \
+       (prev_range >= avgh10_1 - avgl10_1) and \
        (latest['close'] > latest['open']) and \
        (latest['open'] > C1) and \
        (O1 > latest['close']) and \
-       (6 * abs(O1 - C1) >= 10 * (latest['close'] - latest['open'])):
-        return 'bullish'
+       (6 * prev_body >= 10 * latest_body):
+        
+        # Confidence: larger prev body and smaller latest body
+        body_ratio = latest_body / prev_body if prev_body > 0 else 0
+        confidence = min(1.0, 1.0 - body_ratio)
+        return 'bullish', confidence
     
-    # Bearish Harami (mirrored)
-    if (10 * abs(O1 - C1) >= 7 * (H1 - L1)) and \
-       (H1 - L1 >= avgh10_1 - avgl10_1) and \
+    # Bearish Harami
+    if (10 * prev_body >= 7 * prev_range) and \
+       (prev_range >= avgh10_1 - avgl10_1) and \
        (latest['close'] < latest['open']) and \
        (latest['open'] < C1) and \
        (O1 < latest['close']) and \
-       (6 * abs(O1 - C1) >= 10 * (latest['open'] - latest['close'])):
-        return 'bearish'
+       (6 * prev_body >= 10 * latest_body):
+        
+        body_ratio = latest_body / prev_body if prev_body > 0 else 0
+        confidence = min(1.0, 1.0 - body_ratio)
+        return 'bearish', confidence
     
-    return None
+    return None, 0.0
 
 def detect_pin_bar(df):
-    # Enhanced Pin Bar (stricter than hammer)
+    # Enhanced Pin Bar
     if len(df) < 1:
-        return None
+        return None, 0.0
     
     latest = df.iloc[-1]
     body = abs(latest['close'] - latest['open'])
     total_range = latest['high'] - latest['low']
     
     if total_range == 0:
-        return None
+        return None, 0.0
     
     lower_wick = min(latest['open'], latest['close']) - latest['low']
     upper_wick = latest['high'] - max(latest['open'], latest['close'])
     
-    # Pin Bar: wick >= 2/3 range, body <= 1/3 range
-    if lower_wick >= (2/3 * total_range) and body <= (1/3 * total_range) and upper_wick < body:
-        return 'bullish'
-    elif upper_wick >= (2/3 * total_range) and body <= (1/3 * total_range) and lower_wick < body:
-        return 'bearish'
+    lower_wick_ratio = lower_wick / total_range
+    upper_wick_ratio = upper_wick / total_range
+    body_ratio = body / total_range
     
-    return None
+    if lower_wick_ratio >= 0.6 and body_ratio <= 0.2 and upper_wick_ratio < 0.1:
+        # Confidence: longer wick and smaller body
+        confidence = min(1.0, lower_wick_ratio * 0.8 + (1 - body_ratio) * 0.2)
+        return 'bullish', confidence
+    elif upper_wick_ratio >= 0.6 and body_ratio <= 0.2 and lower_wick_ratio < 0.1:
+        confidence = min(1.0, upper_wick_ratio * 0.8 + (1 - body_ratio) * 0.2)
+        return 'bearish', confidence
+    
+    return None, 0.0
 
 def detect_trading_signals(df):
     buy_indicators = []
     sell_indicators = []
-    patterns = {}  # Track detected patterns
+    patterns = {}  # Track detected patterns with confidence
     params = st.session_state.trading_params
+    min_conf = params['min_pattern_confidence']
     
     try:
         if len(df) < 20:
@@ -439,57 +491,57 @@ def detect_trading_signals(df):
             else:
                 sell_indicators.append("MACD Bearish")
         
-        # Enhanced Candlestick Patterns
+        # Enhanced Candlestick Patterns with Confidence
         if params['use_candlestick_patterns']:
             # Doji
-            doj_type = detect_doji(df)
-            if doj_type == 'neutral':
-                patterns['doji'] = 'neutral'
+            doj_type, doj_conf = detect_doji(df)
+            if doj_type == 'neutral' and doj_conf > 0:
+                patterns['doji'] = {'type': 'neutral', 'confidence': doj_conf}
             
             # Pin Bar
-            pin_type = detect_pin_bar(df)
-            if pin_type == 'bullish':
-                buy_indicators.append("Pin Bar Bullish")
-                patterns['pin_bar'] = 'bullish'
-            elif pin_type == 'bearish':
-                sell_indicators.append("Pin Bar Bearish")
-                patterns['pin_bar'] = 'bearish'
+            pin_type, pin_conf = detect_pin_bar(df)
+            if pin_type == 'bullish' and pin_conf >= min_conf:
+                buy_indicators.append(f"Pin Bar Bullish ({pin_conf:.2f})")
+                patterns['pin_bar'] = {'type': 'bullish', 'confidence': pin_conf}
+            elif pin_type == 'bearish' and pin_conf >= min_conf:
+                sell_indicators.append(f"Pin Bar Bearish ({pin_conf:.2f})")
+                patterns['pin_bar'] = {'type': 'bearish', 'confidence': pin_conf}
             
             # Engulfing
-            eng_type = detect_engulfing(df)
-            if eng_type == 'bullish':
-                buy_indicators.append("Engulfing Bullish")
-                patterns['engulfing'] = 'bullish'
-            elif eng_type == 'bearish':
-                sell_indicators.append("Engulfing Bearish")
-                patterns['engulfing'] = 'bearish'
+            eng_type, eng_conf = detect_engulfing(df)
+            if eng_type == 'bullish' and eng_conf >= min_conf:
+                buy_indicators.append(f"Engulfing Bullish ({eng_conf:.2f})")
+                patterns['engulfing'] = {'type': 'bullish', 'confidence': eng_conf}
+            elif eng_type == 'bearish' and eng_conf >= min_conf:
+                sell_indicators.append(f"Engulfing Bearish ({eng_conf:.2f})")
+                patterns['engulfing'] = {'type': 'bearish', 'confidence': eng_conf}
             
             # Hammer/Shooting Star
-            ham_type = detect_hammer(df)
-            if ham_type == 'bullish':
-                buy_indicators.append("Hammer Bullish")
-                patterns['hammer'] = 'bullish'
-            elif ham_type == 'bearish':
-                sell_indicators.append("Shooting Star Bearish")
-                patterns['hammer'] = 'bearish'
+            ham_type, ham_conf = detect_hammer(df)
+            if ham_type == 'bullish' and ham_conf >= min_conf:
+                buy_indicators.append(f"Hammer Bullish ({ham_conf:.2f})")
+                patterns['hammer'] = {'type': 'bullish', 'confidence': ham_conf}
+            elif ham_type == 'bearish' and ham_conf >= min_conf:
+                sell_indicators.append(f"Shooting Star Bearish ({ham_conf:.2f})")
+                patterns['hammer'] = {'type': 'bearish', 'confidence': ham_conf}
             
             # Morning/Evening Star
-            star_type = detect_morning_star(df)
-            if star_type == 'bullish':
-                buy_indicators.append("Morning Star Bullish")
-                patterns['morning_star'] = 'bullish'
-            elif star_type == 'bearish':
-                sell_indicators.append("Evening Star Bearish")
-                patterns['morning_star'] = 'bearish'
+            star_type, star_conf = detect_morning_star(df)
+            if star_type == 'bullish' and star_conf >= min_conf:
+                buy_indicators.append(f"Morning Star Bullish ({star_conf:.2f})")
+                patterns['morning_star'] = {'type': 'bullish', 'confidence': star_conf}
+            elif star_type == 'bearish' and star_conf >= min_conf:
+                sell_indicators.append(f"Evening Star Bearish ({star_conf:.2f})")
+                patterns['morning_star'] = {'type': 'bearish', 'confidence': star_conf}
             
             # Harami
-            har_type = detect_harami(df)
-            if har_type == 'bullish':
-                buy_indicators.append("Harami Bullish")
-                patterns['harami'] = 'bullish'
-            elif har_type == 'bearish':
-                sell_indicators.append("Harami Bearish")
-                patterns['harami'] = 'bearish'
+            har_type, har_conf = detect_harami(df)
+            if har_type == 'bullish' and har_conf >= min_conf:
+                buy_indicators.append(f"Harami Bullish ({har_conf:.2f})")
+                patterns['harami'] = {'type': 'bullish', 'confidence': har_conf}
+            elif har_type == 'bearish' and har_conf >= min_conf:
+                sell_indicators.append(f"Harami Bearish ({har_conf:.2f})")
+                patterns['harami'] = {'type': 'bearish', 'confidence': har_conf}
         
         # Determine agreement
         total_buy = len(buy_indicators)
@@ -517,13 +569,13 @@ def detect_trading_signals(df):
 def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair, patterns=None):
     pip_value = FOREX_PAIRS[pair]['pip_value']
     
-    # Adjust SL based on patterns (tighter for strong reversal patterns)
+    # Adjust SL based on average pattern confidence (higher conf = tighter SL)
     adjusted_sl = sl_pips
     if patterns:
-        strong_bullish = any(p in patterns and patterns[p] == 'bullish' for p in ['engulfing', 'morning_star', 'hammer', 'pin_bar'])
-        strong_bearish = any(p in patterns and patterns[p] == 'bearish' for p in ['engulfing', 'morning_star', 'hammer', 'pin_bar'])
-        if (direction == 'BUY' and strong_bullish) or (direction == 'SELL' and strong_bearish):
-            adjusted_sl = max(5.0, sl_pips * 0.8)  # 20% tighter
+        confidences = [p['confidence'] for p in patterns.values() if isinstance(p, dict) and 'confidence' in p]
+        if confidences:
+            avg_conf = np.mean(confidences)
+            adjusted_sl = max(5.0, sl_pips * (1 - avg_conf * 0.3))  # Up to 30% tighter based on conf
     
     if direction == 'BUY':
         stop_loss_price = entry_price - (adjusted_sl * pip_value)
@@ -573,7 +625,7 @@ def execute_trade(pair, direction, entry_price, stake_amount=None, patterns=None
         # Adjust entry for Pin Bar or Hammer
         pip_value = FOREX_PAIRS[pair]['pip_value']
         if patterns and ('pin_bar' in patterns or 'hammer' in patterns):
-            pin_type = patterns.get('pin_bar') or patterns.get('hammer')
+            pin_type = patterns.get('pin_bar', {}).get('type') or patterns.get('hammer', {}).get('type')
             if pin_type == 'bullish' and direction == 'BUY':
                 entry_price += (2 * pip_value)  # Entry above high
             elif pin_type == 'bearish' and direction == 'SELL':
@@ -617,7 +669,7 @@ def execute_trade(pair, direction, entry_price, stake_amount=None, patterns=None
             'close_reason': None,
             'stake_type': 'MANUAL' if st.session_state.use_manual_stake else 'AUTO',
             'trailing_sl': stop_loss_price,
-            'patterns': patterns or {}  # Track patterns
+            'patterns': patterns or {}  # Track patterns with confidence
         }
         
         st.session_state.open_trades.append(trade)
@@ -760,14 +812,14 @@ def execute_auto_trades():
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
                     if execute_trade(pair, 'BUY', current_price, patterns=patterns):
-                        pattern_str = ', '.join([f"{k}:{v}" for k, v in patterns.items()]) if patterns else 'None'
+                        pattern_str = ', '.join([f"{k}:{v['type']}({v['confidence']:.2f})" for k, v in patterns.items() if isinstance(v, dict)]) if patterns else 'None'
                         auto_trades_executed.append(f"✅ BUY {pair} - {count} indicators (Patterns: {pattern_str})")
                 
                 elif agreement == 'SELL' and signal_type == "SELL" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
                     if execute_trade(pair, 'SELL', current_price, patterns=patterns):
-                        pattern_str = ', '.join([f"{k}:{v}" for k, v in patterns.items()]) if patterns else 'None'
+                        pattern_str = ', '.join([f"{k}:{v['type']}({v['confidence']:.2f})" for k, v in patterns.items() if isinstance(v, dict)]) if patterns else 'None'
                         auto_trades_executed.append(f"❌ SELL {pair} - {count} indicators (Patterns: {pattern_str})")
                         
     except Exception as e:
@@ -786,7 +838,7 @@ def apply_strategy(strategy_name):
     return False
 
 # MAIN APP LAYOUT
-st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Manual Stake Control with Advanced Candlesticks</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Manual Stake Control with Advanced Candlesticks & Confidence</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -879,6 +931,14 @@ with st.sidebar:
         value=st.session_state.trading_params['use_candlestick_patterns'],
         help="Detect multiple candlestick patterns with detailed logic for enhanced signals"
     )
+    st.session_state.trading_params['min_pattern_confidence'] = st.slider(
+        "Min Pattern Confidence",
+        min_value=0.5,
+        max_value=1.0,
+        value=st.session_state.trading_params['min_pattern_confidence'],
+        step=0.1,
+        help="Minimum confidence score for patterns to count as signals (0-1)"
+    )
     
     st.divider()
     
@@ -950,10 +1010,11 @@ with col4:
     st.write(f"**Current Price:** {current_price:.4f}")
     # Manual pattern selection for demo
     manual_pattern = st.selectbox("Select Pattern", [None, "Pin Bar Bullish", "Engulfing Bullish", "Hammer Bullish", "Morning Star Bullish", "Harami Bullish"], index=0)
+    manual_conf = st.slider("Manual Confidence", 0.0, 1.0, 0.8, 0.1) if manual_pattern else 0.0
     if st.button("🎯 Execute Manual Trade", use_container_width=True, type="primary"):
-        patterns = {'manual': manual_pattern.lower().replace(' ', '_').replace('bar-', 'bar_').replace('star-', 'star_')} if manual_pattern else None
+        patterns = {manual_pattern.lower().replace(' ', '_').replace('bar-', 'bar_').replace('star-', 'star_'): {'type': 'bullish', 'confidence': manual_conf}} if manual_pattern else None
         if execute_trade(manual_pair, manual_direction, current_price, manual_stake, patterns):
-            st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f} (Pattern: {manual_pattern})")
+            st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f} (Pattern: {manual_pattern}, Conf: {manual_conf:.2f})")
         else:
             st.error("Failed to execute trade!")
 
@@ -969,7 +1030,7 @@ if st.session_state.open_trades:
     # Create DataFrame for open trades
     open_trades_data = []
     for trade in st.session_state.open_trades:
-        pattern_str = ', '.join([f"{k}:{v}" for k, v in trade.get('patterns', {}).items()]) if trade.get('patterns') else 'None'
+        pattern_str = ', '.join([f"{k}:{v['type']}({v['confidence']:.2f})" for k, v in trade.get('patterns', {}).items() if isinstance(v, dict)]) if trade.get('patterns') else 'None'
         open_trades_data.append({
             'ID': trade['id'],
             'Pair': trade['pair'],
@@ -1008,7 +1069,7 @@ if st.session_state.trade_history:
     # Create DataFrame for trade history
     history_data = []
     for trade in st.session_state.trade_history:
-        pattern_str = ', '.join([f"{k}:{v}" for k, v in trade.get('patterns', {}).items()]) if trade.get('patterns') else 'None'
+        pattern_str = ', '.join([f"{k}:{v['type']}({v['confidence']:.2f})" for k, v in trade.get('patterns', {}).items() if isinstance(v, dict)]) if trade.get('patterns') else 'None'
         history_data.append({
             'ID': trade['id'],
             'Pair': trade['pair'],
@@ -1123,7 +1184,7 @@ for idx, pair in enumerate(trading_pairs):
             color = "#666666"
             text = "HOLD"
         
-        pattern_str = ', '.join([f"{k}:{v}" for k, v in patterns.items()]) if patterns else "None"
+        pattern_str = ', '.join([f"{k}:{v['type']}({v['confidence']:.2f})" for k, v in patterns.items() if isinstance(v, dict)]) if patterns else "None"
         
         st.markdown(f"""
         <div style="border: 2px solid {color}; border-radius: 10px; padding: 0.5rem; text-align: center; font-size: 0.8rem;">
