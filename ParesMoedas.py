@@ -123,14 +123,14 @@ DEFAULT_PARAMS = {
     'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 1.5,
-    'max_daily_loss_percent': 2.0,  # New: Max daily loss as % of initial bank
-    'trailing_stop_enabled': True,   # New: Enable trailing stop
-    'trail_start_pips': 10.0,        # New: Pips in profit to start trailing
-    'trail_distance_pips': 5.0,      # New: Trailing distance in pips
+    'max_daily_loss_percent': 2.0,
+    'trailing_stop_enabled': True,
+    'trail_start_pips': 10.0,
+    'trail_distance_pips': 5.0,
     'selected_strategy': 'PROFESSIONAL_COMBO',
-    'manual_stake_amount': 100.0,  # Default manual stake
-    'use_candlestick_patterns': True,  # New: Enable candlestick patterns
-    'min_pattern_confidence': 0.7  # New: Minimum confidence for patterns to count as indicators
+    'manual_stake_amount': 100.0,
+    'use_candlestick_patterns': True,
+    'min_pattern_confidence': 0.7
 }
 
 # Initialize session state
@@ -157,13 +157,12 @@ if 'trade_counter' not in st.session_state:
     st.session_state.trade_counter = 0
 if 'use_manual_stake' not in st.session_state:
     st.session_state.use_manual_stake = False
-# New for loss avoidance
 if 'last_reset_date' not in st.session_state:
     st.session_state.last_reset_date = datetime.now().date()
 if 'daily_start_balance' not in st.session_state:
     st.session_state.daily_start_balance = st.session_state.bank_balance
 
-# Trading pairs list (updated with new pairs)
+# Trading pairs list
 trading_pairs = list(FOREX_PAIRS.keys())
 
 # Technical Indicator Calculations
@@ -369,4 +368,119 @@ def detect_morning_star(df):
     
     # Evening Star
     if (O2 < C2) and \
-       (5 * (C2 - O2) > 3 * (H2 - L2))
+       (5 * (C2 - O2) > 3 * (H2 - L2)) and \
+       (C2 < O1) and \
+       (2 * abs(O1 - C1) < abs(O2 - C2)) and \
+       (H1 - L1 > 3 * abs(C1 - O1)) and \
+       (C0 < O0) and \
+       (O0 < O1) and \
+       (O0 < C1):
+        
+        first_body_ratio = abs(O2 - C2) / (H2 - L2)
+        gap_size = min((C1 - O0), (C2 - O1)) / (H2 - L2) if (H2 - L2) > 0 else 0
+        confidence = min(1.0, first_body_ratio * 0.5 + gap_size * 0.5)
+        return 'bearish', confidence
+    
+    return None, 0.0
+
+def detect_harami(df):
+    if len(df) < 2:
+        return None, 0.0
+    
+    prev = df.iloc[-2]
+    latest = df.iloc[-1]
+    O1 = prev['open']
+    C1 = prev['close']
+    H1 = prev['high']
+    L1 = prev['low']
+    avgh10_1 = prev.get('AVGH10', H1 - L1)
+    avgl10_1 = prev.get('AVGL10', 0)
+    
+    prev_range = H1 - L1
+    prev_body = abs(O1 - C1)
+    latest_body = abs(latest['close'] - latest['open'])
+    
+    # Bullish Harami
+    if (10 * prev_body >= 7 * prev_range) and \
+       (prev_range >= avgh10_1 - avgl10_1) and \
+       (latest['close'] > latest['open']) and \
+       (latest['open'] > C1) and \
+       (O1 > latest['close']) and \
+       (6 * prev_body >= 10 * latest_body):
+        
+        # Confidence: larger prev body and smaller latest body
+        body_ratio = latest_body / prev_body if prev_body > 0 else 0
+        confidence = min(1.0, 1.0 - body_ratio)
+        return 'bullish', confidence
+    
+    # Bearish Harami
+    if (10 * prev_body >= 7 * prev_range) and \
+       (prev_range >= avgh10_1 - avgl10_1) and \
+       (latest['close'] < latest['open']) and \
+       (latest['open'] < C1) and \
+       (O1 < latest['close']) and \
+       (6 * prev_body >= 10 * latest_body):
+        
+        body_ratio = latest_body / prev_body if prev_body > 0 else 0
+        confidence = min(1.0, 1.0 - body_ratio)
+        return 'bearish', confidence
+    
+    return None, 0.0
+
+def detect_pin_bar(df):
+    # Enhanced Pin Bar
+    if len(df) < 1:
+        return None, 0.0
+    
+    latest = df.iloc[-1]
+    body = abs(latest['close'] - latest['open'])
+    total_range = latest['high'] - latest['low']
+    
+    if total_range == 0:
+        return None, 0.0
+    
+    lower_wick = min(latest['open'], latest['close']) - latest['low']
+    upper_wick = latest['high'] - max(latest['open'], latest['close'])
+    
+    lower_wick_ratio = lower_wick / total_range
+    upper_wick_ratio = upper_wick / total_range
+    body_ratio = body / total_range
+    
+    if lower_wick_ratio >= 0.6 and body_ratio <= 0.2 and upper_wick_ratio < 0.1:
+        # Confidence: longer wick and smaller body
+        confidence = min(1.0, lower_wick_ratio * 0.8 + (1 - body_ratio) * 0.2)
+        return 'bullish', confidence
+    elif upper_wick_ratio >= 0.6 and body_ratio <= 0.2 and lower_wick_ratio < 0.1:
+        confidence = min(1.0, upper_wick_ratio * 0.8 + (1 - body_ratio) * 0.2)
+        return 'bearish', confidence
+    
+    return None, 0.0
+
+def detect_trading_signals(df):
+    buy_indicators = []
+    sell_indicators = []
+    patterns = {}  # Track detected patterns with confidence
+    params = st.session_state.trading_params
+    min_conf = params['min_pattern_confidence']
+    
+    try:
+        if len(df) < 20:
+            return [], [], [], 'NONE', patterns
+        
+        latest = df.iloc[-1]
+        
+        # Moving Average Signals
+        if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']):
+            if latest['MA_Fast'] > latest['MA_Slow']:
+                buy_indicators.append("MA Bullish Crossover")
+            else:
+                sell_indicators.append("MA Bearish Crossover")
+        
+        # RSI Signals
+        if pd.notna(latest['RSI']):
+            if latest['RSI'] < params['rsi_oversold']:
+                buy_indicators.append("RSI Oversold")
+            elif latest['RSI'] > params['rsi_overbought']:
+                sell_indicators.append("RSI Overbought")
+        
+        # MACD Signals
