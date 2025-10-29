@@ -987,30 +987,29 @@ with st.sidebar:
 # MANUAL TRADING SECTION
 st.subheader("🎯 Manual Trading")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     manual_pair = st.selectbox("Currency Pair", trading_pairs)
 with col2:
     manual_direction = st.selectbox("Direction", ["BUY", "SELL"])
 with col3:
-    if st.session_state.use_manual_stake:
-        manual_stake = st.number_input(
-            "Stake Amount ($)",
-            min_value=10,
-            max_value=10000,
-            value=st.session_state.trading_params['manual_stake_amount'],
-            step=50
-        )
-    else:
-        manual_stake = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
-        st.write(f"**Auto Stake:** ${manual_stake:.2f}")
+    default_stake = st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
+    manual_stake = st.number_input(
+        "Stake Amount ($)",
+        min_value=10.0,
+        max_value=st.session_state.bank_balance,
+        value=default_stake,
+        step=10.0,
+        help="Enter custom stake amount for this trade (overrides default)"
+    )
 with col4:
     current_price = st.session_state.current_prices.get(manual_pair, FOREX_PAIRS[manual_pair]['base_price'])
     st.write(f"**Current Price:** {current_price:.4f}")
+with col5:
     # Manual pattern selection for demo
     manual_pattern = st.selectbox("Select Pattern", [None, "Pin Bar Bullish", "Engulfing Bullish", "Hammer Bullish", "Morning Star Bullish", "Harami Bullish"], index=0)
-    manual_conf = st.slider("Manual Confidence", 0.0, 1.0, 0.8, 0.1) if manual_pattern else 0.0
+    manual_conf = st.slider("Manual Confidence", 0.0, 1.0, 0.8, 0.1, disabled=manual_pattern is None) if manual_pattern else 0.0
     if st.button("🎯 Execute Manual Trade", use_container_width=True, type="primary"):
         patterns = {manual_pattern.lower().replace(' ', '_').replace('bar-', 'bar_').replace('star-', 'star_'): {'type': 'bullish', 'confidence': manual_conf}} if manual_pattern else None
         if execute_trade(manual_pair, manual_direction, current_price, manual_stake, patterns):
