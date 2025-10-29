@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 st.set_page_config(
-    page_title="Forex Auto Trading Bot - 15min Strategy",
+    page_title="Forex Auto Trading Bot - Advanced SL/TP",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -133,9 +133,45 @@ st.markdown("""
     .trade-sell {
         border-left: 4px solid #ff4444 !important;
     }
-    .forex-pip {
+    .sl-tp-indicator {
         font-size: 0.8em;
-        color: #ccc;
+        padding: 0.2rem 0.5rem;
+        border-radius: 3px;
+        margin: 0.1rem;
+    }
+    .sl-indicator {
+        background: rgba(255, 68, 68, 0.3);
+        color: #ff4444;
+        border: 1px solid #ff4444;
+    }
+    .tp-indicator {
+        background: rgba(0, 255, 136, 0.3);
+        color: #00ff88;
+        border: 1px solid #00ff88;
+    }
+    .close-to-tp {
+        background: linear-gradient(135deg, #00ff88 0%, #00cc66 100%);
+        color: white;
+        animation: glow-green 1s infinite alternate;
+    }
+    .close-to-sl {
+        background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        color: white;
+        animation: glow-red 1s infinite alternate;
+    }
+    @keyframes glow-green {
+        from { box-shadow: 0 0 5px #00ff88; }
+        to { box-shadow: 0 0 15px #00ff88; }
+    }
+    @keyframes glow-red {
+        from { box-shadow: 0 0 5px #ff4444; }
+        to { box-shadow: 0 0 15px #ff4444; }
+    }
+    .risk-meter {
+        height: 10px;
+        border-radius: 5px;
+        margin: 0.2rem 0;
+        background: linear-gradient(90deg, #00ff88 0%, #ffaa00 50%, #ff4444 100%);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -147,16 +183,19 @@ FOREX_PAIRS = {
     "USD/JPY": {"base_price": 148.50, "volatility": 0.15, "pip_value": 0.01},
     "USD/CHF": {"base_price": 0.8800, "volatility": 0.0009, "pip_value": 0.0001},
     "USD/CAD": {"base_price": 1.3550, "volatility": 0.0010, "pip_value": 0.0001},
-    "AUD/USD": {"base_price": 0.6550, "volatility": 0.0012, "pip_value": 0.0001},
-    "NZD/USD": {"base_price": 0.6100, "volatility": 0.0012, "pip_value": 0.0001},
-    "EUR/GBP": {"base_price": 0.8570, "volatility": 0.0007, "pip_value": 0.0001}
+    "AUD/USD": {"base_price": 0.6550, "volatility": 0.0012, "pip_value": 0.0001}
 }
 
-# Default trading parameters for Forex
+# Default trading parameters for Forex with advanced SL/TP
 DEFAULT_PARAMS = {
-    'initial_bank': 10000,  # Higher for Forex
-    'profit_target': 0.8,   # In pips
-    'stop_loss': 0.5,      # In pips
+    'initial_bank': 10000,
+    'profit_target_pips': 15.0,      # Take Profit in pips
+    'stop_loss_pips': 10.0,          # Stop Loss in pips
+    'trailing_stop': False,          # Trailing stop feature
+    'trailing_stop_activation': 5.0, # Activate trailing after X pips profit
+    'break_even': False,             # Move SL to breakeven
+    'break_even_activation': 8.0,    # Move SL to breakeven after X pips
+    'risk_reward_ratio': 1.5,        # Minimum R:R ratio
     'ma_fast': 9,
     'ma_slow': 21,
     'rsi_period': 14,
@@ -165,23 +204,20 @@ DEFAULT_PARAMS = {
     'macd_fast': 12,
     'macd_slow': 26,
     'macd_signal': 9,
-    'fib_swing': 20,
-    'fib_tolerance': 0.5,
     'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 2.0,
     'daily_loss_limit': 5.0,
     'max_drawdown': 10.0,
     'candles_to_analyze': 4,
-    'lot_size': 10000,     # Mini lots
-    'leverage': 30         # Common Forex leverage
+    'lot_size': 10000,
+    'leverage': 30
 }
 
 # Initialize session state
 if 'trading_params' not in st.session_state:
     st.session_state.trading_params = DEFAULT_PARAMS.copy()
 else:
-    # Ensure all default keys are present in case of version updates
     for key, default_value in DEFAULT_PARAMS.items():
         if key not in st.session_state.trading_params:
             st.session_state.trading_params[key] = default_value
@@ -206,7 +242,7 @@ if 'trade_counter' not in st.session_state:
 # Trading pairs list
 trading_pairs = list(FOREX_PAIRS.keys())
 
-# Technical Indicator Calculations for Forex
+# Technical Indicator Calculations
 def calculate_rsi(prices, period=14):
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -230,14 +266,10 @@ def calculate_indicators(df):
         df_indicators = df.copy()
         params = st.session_state.trading_params
         
-        # Moving Averages
         df_indicators['MA_Fast'] = df_indicators['close'].rolling(window=params['ma_fast']).mean()
         df_indicators['MA_Slow'] = df_indicators['close'].rolling(window=params['ma_slow']).mean()
-        
-        # RSI
         df_indicators['RSI'] = calculate_rsi(df_indicators['close'], params['rsi_period'])
         
-        # MACD
         macd_line, signal_line = calculate_macd(
             df_indicators['close'], 
             params['macd_fast'], 
@@ -263,11 +295,8 @@ def generate_15min_forex_data(pair, periods=200):
         date = current_time - timedelta(minutes=15 * (periods - i - 1))
         
         open_price = base_price
-        # More realistic Forex price movements
-        change = np.random.normal(0, volatility * 0.1)  # Smaller intra-15min moves
+        change = np.random.normal(0, volatility * 0.1)
         close_price = base_price * (1 + change)
-        
-        # Ensure realistic high/low based on typical Forex spreads
         high_price = max(open_price, close_price) * (1 + abs(np.random.normal(0, volatility * 0.05)))
         low_price = min(open_price, close_price) * (1 - abs(np.random.normal(0, volatility * 0.05)))
         
@@ -294,38 +323,36 @@ def detect_trading_signals(df):
         
         latest = df.iloc[-1]
         
-        # 1. Moving Average Signals
+        # Moving Average Signals
         if pd.notna(latest['MA_Fast']) and pd.notna(latest['MA_Slow']):
             if latest['MA_Fast'] > latest['MA_Slow']:
                 buy_indicators.append("MA Bullish")
             else:
                 sell_indicators.append("MA Bearish")
         
-        # 2. RSI Signals
+        # RSI Signals
         if pd.notna(latest['RSI']):
             if latest['RSI'] < params['rsi_oversold']:
                 buy_indicators.append("RSI Oversold")
             elif latest['RSI'] > params['rsi_overbought']:
                 sell_indicators.append("RSI Overbought")
         
-        # 3. MACD Signals
+        # MACD Signals
         if pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']):
             if latest['MACD'] > latest['MACD_Signal']:
                 buy_indicators.append("MACD Bullish")
             else:
                 sell_indicators.append("MACD Bearish")
         
-        # 4. Price Action Signal (Support/Resistance)
+        # Price Action Signal
         if len(df) >= 20:
             recent_high = df['high'].tail(20).max()
             recent_low = df['low'].tail(20).min()
             current_close = latest['close']
             
-            # If price is near recent high, potential resistance
-            if abs(current_close - recent_high) / current_close < 0.001:  # 0.1% tolerance
+            if abs(current_close - recent_high) / current_close < 0.001:
                 sell_indicators.append("Near Resistance")
-            # If price is near recent low, potential support
-            elif abs(current_close - recent_low) / current_close < 0.001:  # 0.1% tolerance
+            elif abs(current_close - recent_low) / current_close < 0.001:
                 buy_indicators.append("Near Support")
         
         # Determine agreement
@@ -351,56 +378,33 @@ def detect_trading_signals(df):
     except Exception as e:
         return [], [], [], 'NONE'
 
-def scan_all_pairs_signals():
-    all_signals = {}
+def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair):
+    """Calculate Stop Loss and Take Profit prices"""
+    pip_value = FOREX_PAIRS[pair]['pip_value']
     
-    for pair in trading_pairs:
-        # Generate simulated Forex data
-        df = generate_15min_forex_data(pair, 200)
-        df_with_indicators = calculate_indicators(df)
-        
-        signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
-        
-        current_price = df_with_indicators['close'].iloc[-1]
-        st.session_state.current_prices[pair] = current_price
-        
-        # Simulate realistic Forex price movement
-        volatility = FOREX_PAIRS[pair]['volatility']
-        price_change = np.random.normal(0, volatility) * 100  # Convert to percentage
-        
-        all_signals[pair] = {
-            'signals': signals,
-            'buy_indicators': buy_indicators,
-            'sell_indicators': sell_indicators,
-            'time': datetime.now(),
-            'buy_count': len(buy_indicators),
-            'sell_count': len(sell_indicators),
-            'agreement': agreement,
-            'current_price': current_price,
-            'price_change': price_change,
-            'timeframe': '15min',
-            'candles_analyzed': st.session_state.trading_params['candles_to_analyze'],
-            'pip_value': FOREX_PAIRS[pair]['pip_value']
-        }
+    if direction == 'BUY':
+        stop_loss_price = entry_price - (sl_pips * pip_value)
+        take_profit_price = entry_price + (tp_pips * pip_value)
+    else:  # SELL
+        stop_loss_price = entry_price + (sl_pips * pip_value)
+        take_profit_price = entry_price - (tp_pips * pip_value)
     
-    return all_signals
+    return stop_loss_price, take_profit_price
 
-def calculate_position_size(pair, risk_amount):
+def calculate_position_size(pair, risk_amount, sl_pips):
     """Calculate position size based on risk and stop loss"""
     params = st.session_state.trading_params
     pip_value = FOREX_PAIRS[pair]['pip_value']
-    stop_loss_pips = params['stop_loss']
     
-    # Position size = Risk amount / (Stop loss in pips * Pip value)
-    if pip_value > 0 and stop_loss_pips > 0:
-        position_size = risk_amount / (stop_loss_pips * pip_value * 100)  # Adjusted for lot size
-        return min(position_size, params['lot_size'])  # Don't exceed lot size
+    if pip_value > 0 and sl_pips > 0:
+        position_size = risk_amount / (sl_pips * pip_value)
+        return min(position_size, params['lot_size'] * 3)  # Allow up to 3 lots
     return params['lot_size']
 
 def can_open_trade(pair, direction):
     params = st.session_state.trading_params
     
-    # Check if we already have a trade for this pair in the same direction
+    # Check existing trades
     existing_trades = [t for t in st.session_state.open_trades if t['pair'] == pair and t['direction'] == direction]
     if existing_trades:
         return False
@@ -416,20 +420,31 @@ def can_open_trade(pair, direction):
     
     return True
 
-def execute_trade(pair, direction, entry_price, stake_amount):
+def execute_trade(pair, direction, entry_price):
     try:
         st.session_state.trade_counter += 1
+        params = st.session_state.trading_params
         
-        # Calculate position size based on risk
-        risk_amount = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
-        position_size = calculate_position_size(pair, risk_amount)
+        # Calculate risk amount
+        risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        
+        # Calculate position size
+        position_size = calculate_position_size(pair, risk_amount, params['stop_loss_pips'])
+        
+        # Calculate SL and TP prices
+        stop_loss_price, take_profit_price = calculate_sl_tp_prices(
+            entry_price, direction, params['stop_loss_pips'], params['profit_target_pips'], pair
+        )
         
         trade = {
             'id': st.session_state.trade_counter,
             'pair': pair,
             'direction': direction,
             'entry_price': entry_price,
-            'stake': stake_amount,
+            'stop_loss_price': stop_loss_price,
+            'take_profit_price': take_profit_price,
+            'original_sl_price': stop_loss_price,  # Keep original for trailing stop
+            'stake': risk_amount,
             'position_size': position_size,
             'time': datetime.now(),
             'status': 'open',
@@ -437,16 +452,78 @@ def execute_trade(pair, direction, entry_price, stake_amount):
             'profit_loss_pips': 0,
             'current_price': entry_price,
             'type': 'AUTO',
-            'leverage': st.session_state.trading_params['leverage']
+            'leverage': params['leverage'],
+            'sl_pips': params['stop_loss_pips'],
+            'tp_pips': params['profit_target_pips'],
+            'trailing_stop_active': False,
+            'breakeven_active': False,
+            'max_profit_pips': 0,  # Track maximum profit for trailing stop
+            'close_reason': None
         }
+        
         st.session_state.open_trades.append(trade)
-        st.session_state.bank_balance -= stake_amount
+        st.session_state.bank_balance -= risk_amount
         return True
     except Exception as e:
         return False
 
-def close_trade(trade_id, close_price=None):
-    """Close a specific trade manually"""
+def update_trailing_stop(trade, current_price):
+    """Update trailing stop loss"""
+    params = st.session_state.trading_params
+    pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+    
+    if trade['direction'] == 'BUY':
+        current_pips = (current_price - trade['entry_price']) / pip_value
+    else:
+        current_pips = (trade['entry_price'] - current_price) / pip_value
+    
+    # Update max profit
+    trade['max_profit_pips'] = max(trade['max_profit_pips'], current_pips)
+    
+    # Activate trailing stop if conditions met
+    if params['trailing_stop'] and current_pips >= params['trailing_stop_activation']:
+        trade['trailing_stop_active'] = True
+        
+        # Calculate new stop loss (trailing by activation distance)
+        trailing_distance = params['trailing_stop_activation']
+        if trade['direction'] == 'BUY':
+            new_sl = current_price - (trailing_distance * pip_value)
+            trade['stop_loss_price'] = max(trade['stop_loss_price'], new_sl)
+        else:
+            new_sl = current_price + (trailing_distance * pip_value)
+            trade['stop_loss_price'] = min(trade['stop_loss_price'], new_sl)
+    
+    # Move to breakeven if conditions met
+    if params['break_even'] and not trade['breakeven_active'] and current_pips >= params['break_even_activation']:
+        trade['breakeven_active'] = True
+        if trade['direction'] == 'BUY':
+            trade['stop_loss_price'] = trade['entry_price']  # Move SL to entry
+        else:
+            trade['stop_loss_price'] = trade['entry_price']
+
+def check_sl_tp(trade, current_price):
+    """Check if Stop Loss or Take Profit is hit"""
+    pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+    
+    if trade['direction'] == 'BUY':
+        # Check Take Profit
+        if current_price >= trade['take_profit_price']:
+            return 'TP'
+        # Check Stop Loss
+        elif current_price <= trade['stop_loss_price']:
+            return 'SL'
+    else:  # SELL
+        # Check Take Profit
+        if current_price <= trade['take_profit_price']:
+            return 'TP'
+        # Check Stop Loss
+        elif current_price >= trade['stop_loss_price']:
+            return 'SL'
+    
+    return None
+
+def close_trade(trade_id, close_price=None, reason='MANUAL'):
+    """Close a specific trade"""
     for i, trade in enumerate(st.session_state.open_trades):
         if trade['id'] == trade_id and trade['status'] == 'open':
             if close_price is None:
@@ -460,8 +537,8 @@ def close_trade(trade_id, close_price=None):
             else:
                 pips = (trade['entry_price'] - close_price) / pip_value
             
-            # Calculate dollar P&L (simplified)
-            profit_loss_dollar = pips * pip_value * trade['position_size'] * 0.1  # Simplified calculation
+            # Calculate dollar P&L
+            profit_loss_dollar = pips * pip_value * trade['position_size']
             
             # Update trade details
             trade['status'] = 'closed'
@@ -469,7 +546,7 @@ def close_trade(trade_id, close_price=None):
             trade['close_price'] = close_price
             trade['profit_loss'] = profit_loss_dollar
             trade['profit_loss_pips'] = pips
-            trade['close_reason'] = 'MANUAL'
+            trade['close_reason'] = reason
             
             # Move to trade history and return stake + P&L
             st.session_state.trade_history.append(trade.copy())
@@ -480,12 +557,72 @@ def close_trade(trade_id, close_price=None):
             return True
     return False
 
+def update_trades():
+    """Update all open trades and check SL/TP"""
+    trades_to_remove = []
+    
+    for i, trade in enumerate(st.session_state.open_trades):
+        if trade['status'] == 'open':
+            current_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+            pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+            
+            # Calculate current P&L
+            if trade['direction'] == 'BUY':
+                pips = (current_price - trade['entry_price']) / pip_value
+            else:
+                pips = (trade['entry_price'] - current_price) / pip_value
+            
+            profit_loss_dollar = pips * pip_value * trade['position_size']
+            
+            trade['profit_loss'] = profit_loss_dollar
+            trade['profit_loss_pips'] = pips
+            trade['current_price'] = current_price
+            
+            # Update trailing stop and breakeven
+            update_trailing_stop(trade, current_price)
+            
+            # Check SL/TP
+            sl_tp_hit = check_sl_tp(trade, current_price)
+            if sl_tp_hit:
+                close_trade(trade['id'], current_price, sl_tp_hit)
+                trades_to_remove.append(i)
+
+def scan_all_pairs_signals():
+    all_signals = {}
+    
+    for pair in trading_pairs:
+        df = generate_15min_forex_data(pair, 200)
+        df_with_indicators = calculate_indicators(df)
+        
+        signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
+        
+        current_price = df_with_indicators['close'].iloc[-1]
+        st.session_state.current_prices[pair] = current_price
+        
+        volatility = FOREX_PAIRS[pair]['volatility']
+        price_change = np.random.normal(0, volatility) * 100
+        
+        all_signals[pair] = {
+            'signals': signals,
+            'buy_indicators': buy_indicators,
+            'sell_indicators': sell_indicators,
+            'time': datetime.now(),
+            'buy_count': len(buy_indicators),
+            'sell_count': len(sell_indicators),
+            'agreement': agreement,
+            'current_price': current_price,
+            'price_change': price_change,
+            'timeframe': '15min',
+            'pip_value': FOREX_PAIRS[pair]['pip_value']
+        }
+    
+    return all_signals
+
 def execute_auto_trades():
     if not st.session_state.auto_trading:
         return []
     
     auto_trades_executed = []
-    params = st.session_state.trading_params
     
     try:
         all_signals = scan_all_pairs_signals()
@@ -497,62 +634,34 @@ def execute_auto_trades():
             for signal_type, count, indicators in signals:
                 if agreement == 'BUY' and signal_type == "BUY" and can_open_trade(pair, 'BUY'):
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
-                    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
                     
-                    if execute_trade(pair, 'BUY', current_price, risk_amount):
-                        auto_trades_executed.append(f"✅ AUTO BUY {pair} - {count} indicators: {', '.join(indicators)}")
+                    if execute_trade(pair, 'BUY', current_price):
+                        sl_price, tp_price = calculate_sl_tp_prices(
+                            current_price, 'BUY', 
+                            st.session_state.trading_params['stop_loss_pips'],
+                            st.session_state.trading_params['profit_target_pips'],
+                            pair
+                        )
+                        auto_trades_executed.append(f"✅ BUY {pair} | SL: {sl_price:.4f} | TP: {tp_price:.4f}")
                         st.session_state.last_auto_trade[pair] = datetime.now()
                 
                 elif agreement == 'SELL' and signal_type == "SELL" and can_open_trade(pair, 'SELL'):
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
-                    risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
                     
-                    if execute_trade(pair, 'SELL', current_price, risk_amount):
-                        auto_trades_executed.append(f"❌ AUTO SELL {pair} - {count} indicators: {', '.join(indicators)}")
+                    if execute_trade(pair, 'SELL', current_price):
+                        sl_price, tp_price = calculate_sl_tp_prices(
+                            current_price, 'SELL', 
+                            st.session_state.trading_params['stop_loss_pips'],
+                            st.session_state.trading_params['profit_target_pips'],
+                            pair
+                        )
+                        auto_trades_executed.append(f"❌ SELL {pair} | SL: {sl_price:.4f} | TP: {tp_price:.4f}")
                         st.session_state.last_auto_trade[pair] = datetime.now()
                         
     except Exception as e:
         st.error(f"Error in auto trading: {e}")
     
     return auto_trades_executed
-
-def update_trades():
-    params = st.session_state.trading_params
-    profit_target_pips = params['profit_target']
-    stop_loss_pips = params['stop_loss']
-    
-    trades_to_remove = []
-    for i, trade in enumerate(st.session_state.open_trades):
-        if trade['status'] == 'open':
-            current_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
-            pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
-            
-            # Calculate P&L in pips
-            if trade['direction'] == 'BUY':
-                pips = (current_price - trade['entry_price']) / pip_value
-            else:
-                pips = (trade['entry_price'] - current_price) / pip_value
-            
-            # Calculate dollar P&L (simplified)
-            profit_loss_dollar = pips * pip_value * trade['position_size'] * 0.1
-            
-            trade['profit_loss'] = profit_loss_dollar
-            trade['profit_loss_pips'] = pips
-            trade['current_price'] = current_price
-            
-            # Check if trade should be closed
-            if pips >= profit_target_pips or pips <= -stop_loss_pips:
-                trade['status'] = 'closed'
-                trade['close_time'] = datetime.now()
-                trade['close_price'] = current_price
-                trade['close_reason'] = 'TP' if pips >= profit_target_pips else 'SL'
-                st.session_state.bank_balance += trade['stake'] + profit_loss_dollar
-                st.session_state.trade_history.append(trade.copy())
-                trades_to_remove.append(i)
-    
-    # Remove closed trades
-    for i in sorted(trades_to_remove, reverse=True):
-        st.session_state.open_trades.pop(i)
 
 def reset_trading_system():
     st.session_state.bank_balance = st.session_state.trading_params['initial_bank']
@@ -564,7 +673,7 @@ def reset_trading_system():
     st.session_state.trade_counter = 0
 
 # MAIN APP LAYOUT
-st.markdown('<h1 class="main-header">🤖 Forex 15min Trading Bot</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Forex Bot - Advanced SL/TP</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -580,7 +689,6 @@ with st.sidebar:
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
-    # Show auto-trading status prominently
     if st.session_state.auto_trading:
         st.markdown('<div class="auto-trade-active">AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
     else:
@@ -588,18 +696,86 @@ with st.sidebar:
     
     st.divider()
     
-    # Trading Parameters
-    st.header("⚙️ Forex Trading Parameters")
+    # STOP LOSS & TAKE PROFIT SETTINGS
+    st.header("🛡️ Stop Loss & Take Profit")
     
-    # Money Management
+    st.subheader("🎯 Basic SL/TP Settings")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.trading_params['stop_loss_pips'] = st.number_input(
+            "Stop Loss (Pips)", 
+            value=st.session_state.trading_params['stop_loss_pips'],
+            min_value=1.0, 
+            max_value=50.0,
+            step=1.0,
+            help="Stop loss distance in pips"
+        )
+    with col2:
+        st.session_state.trading_params['profit_target_pips'] = st.number_input(
+            "Take Profit (Pips)", 
+            value=st.session_state.trading_params['profit_target_pips'],
+            min_value=1.0, 
+            max_value=100.0,
+            step=1.0,
+            help="Take profit distance in pips"
+        )
+    
+    # Risk Reward Ratio
+    current_rr = st.session_state.trading_params['profit_target_pips'] / st.session_state.trading_params['stop_loss_pips']
+    st.write(f"**Risk/Reward Ratio:** {current_rr:.2f}:1")
+    
+    if current_rr < 1:
+        st.warning("⚠️ Risk/Reward ratio below 1:1")
+    elif current_rr >= 1.5:
+        st.success("✅ Good Risk/Reward ratio")
+    
+    st.divider()
+    
+    # ADVANCED SL/TP FEATURES
+    st.subheader("⚡ Advanced Features")
+    
+    st.session_state.trading_params['trailing_stop'] = st.checkbox(
+        "Enable Trailing Stop",
+        value=st.session_state.trading_params['trailing_stop'],
+        help="Stop loss follows price when in profit"
+    )
+    
+    if st.session_state.trading_params['trailing_stop']:
+        st.session_state.trading_params['trailing_stop_activation'] = st.number_input(
+            "Trailing Stop Activation (Pips)", 
+            value=st.session_state.trading_params['trailing_stop_activation'],
+            min_value=1.0, 
+            max_value=20.0,
+            step=1.0,
+            help="Profit level to activate trailing stop"
+        )
+    
+    st.session_state.trading_params['break_even'] = st.checkbox(
+        "Enable Break-Even Stop",
+        value=st.session_state.trading_params['break_even'],
+        help="Move SL to entry price when in profit"
+    )
+    
+    if st.session_state.trading_params['break_even']:
+        st.session_state.trading_params['break_even_activation'] = st.number_input(
+            "Break-Even Activation (Pips)", 
+            value=st.session_state.trading_params['break_even_activation'],
+            min_value=1.0, 
+            max_value=20.0,
+            step=1.0,
+            help="Profit level to move SL to breakeven"
+        )
+    
+    st.divider()
+    
+    # MONEY MANAGEMENT
     st.subheader("💰 Money Management")
     st.session_state.trading_params['initial_bank'] = st.number_input(
         "Initial Bank Balance (USD)", 
         value=st.session_state.trading_params['initial_bank'],
         min_value=1000, 
         max_value=50000,
-        step=1000,
-        help="Starting capital for trading"
+        step=1000
     )
     
     st.session_state.trading_params['max_risk_percent'] = st.number_input(
@@ -607,219 +783,33 @@ with st.sidebar:
         value=st.session_state.trading_params['max_risk_percent'],
         min_value=0.5, 
         max_value=5.0,
-        step=0.5,
-        help="Maximum percentage of balance to risk per trade"
+        step=0.5
     )
     
-    st.session_state.trading_params['lot_size'] = st.number_input(
-        "Lot Size", 
-        value=st.session_state.trading_params['lot_size'],
-        min_value=1000, 
-        max_value=100000,
-        step=1000,
-        help="Standard lot size (10000 = mini lot)"
-    )
-    
-    st.session_state.trading_params['leverage'] = st.number_input(
-        "Leverage", 
-        value=st.session_state.trading_params['leverage'],
-        min_value=1, 
-        max_value=100,
-        step=1,
-        help="Trading leverage ratio"
-    )
-    
-    st.session_state.trading_params['max_open_trades'] = st.number_input(
-        "Max Open Trades", 
-        value=st.session_state.trading_params['max_open_trades'],
-        min_value=1, 
-        max_value=10,
-        step=1,
-        help="Maximum number of concurrent open trades"
-    )
+    # Risk per trade calculation
+    risk_per_trade = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
+    st.write(f"**Risk per trade:** ${risk_per_trade:.2f}")
     
     st.divider()
     
-    # Trade Settings
-    st.subheader("🎯 Trade Settings (Pips)")
-    st.session_state.trading_params['profit_target'] = st.number_input(
-        "Profit Target (Pips)", 
-        value=st.session_state.trading_params['profit_target'],
-        min_value=0.1, 
-        max_value=10.0,
-        step=0.1,
-        help="Take profit level in pips"
-    )
-    
-    st.session_state.trading_params['stop_loss'] = st.number_input(
-        "Stop Loss (Pips)", 
-        value=st.session_state.trading_params['stop_loss'],
-        min_value=0.1, 
-        max_value=10.0,
-        step=0.1,
-        help="Stop loss level in pips"
-    )
-    
-    current_req = st.session_state.trading_params.get('required_indicators', 3)
-    options = [2, 3, 4]
-    index_val = options.index(current_req) if current_req in options else 1
-    st.session_state.trading_params['required_indicators'] = st.selectbox(
-        "Required Indicators Agreement",
-        options=options,
-        index=index_val,
-        help="Number of indicators that must agree for trade entry"
-    )
-    
-    st.session_state.trading_params['candles_to_analyze'] = st.number_input(
-        "Candles to Analyze", 
-        value=st.session_state.trading_params['candles_to_analyze'],
-        min_value=2, 
-        max_value=10,
-        step=1,
-        help="Number of recent candles to analyze for signals"
-    )
-    
-    st.divider()
-    
-    # INDICATOR PARAMETERS
-    st.subheader("📊 Indicator Parameters")
-    
-    st.write("**Moving Averages**")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.session_state.trading_params['ma_fast'] = st.number_input(
-            "MA Fast Period", 
-            value=st.session_state.trading_params['ma_fast'],
-            min_value=5, 
-            max_value=50,
-            step=1
-        )
-    with col2:
-        st.session_state.trading_params['ma_slow'] = st.number_input(
-            "MA Slow Period", 
-            value=st.session_state.trading_params['ma_slow'],
-            min_value=10, 
-            max_value=100,
-            step=1
-        )
-    
-    st.write("**RSI Settings**")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.session_state.trading_params['rsi_period'] = st.number_input(
-            "RSI Period", 
-            value=st.session_state.trading_params['rsi_period'],
-            min_value=5, 
-            max_value=30,
-            step=1
-        )
-    with col2:
-        st.session_state.trading_params['rsi_overbought'] = st.number_input(
-            "Overbought", 
-            value=st.session_state.trading_params['rsi_overbought'],
-            min_value=60, 
-            max_value=90,
-            step=1
-        )
-    with col3:
-        st.session_state.trading_params['rsi_oversold'] = st.number_input(
-            "Oversold", 
-            value=st.session_state.trading_params['rsi_oversold'],
-            min_value=10, 
-            max_value=40,
-            step=1
-        )
-    
-    st.write("**MACD Settings**")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.session_state.trading_params['macd_fast'] = st.number_input(
-            "MACD Fast", 
-            value=st.session_state.trading_params['macd_fast'],
-            min_value=5, 
-            max_value=20,
-            step=1
-        )
-    with col2:
-        st.session_state.trading_params['macd_slow'] = st.number_input(
-            "MACD Slow", 
-            value=st.session_state.trading_params['macd_slow'],
-            min_value=15, 
-            max_value=50,
-            step=1
-        )
-    with col3:
-        st.session_state.trading_params['macd_signal'] = st.number_input(
-            "MACD Signal", 
-            value=st.session_state.trading_params['macd_signal'],
-            min_value=5, 
-            max_value=20,
-            step=1
-        )
-    
-    st.divider()
-    
-    # Risk Management
-    st.subheader("🛡️ Risk Management")
-    st.session_state.trading_params['daily_loss_limit'] = st.number_input(
-        "Daily Loss Limit (%)", 
-        value=st.session_state.trading_params['daily_loss_limit'],
-        min_value=1.0, 
-        max_value=20.0,
-        step=1.0
-    )
-    
-    st.session_state.trading_params['max_drawdown'] = st.number_input(
-        "Max Drawdown (%)", 
-        value=st.session_state.trading_params['max_drawdown'],
-        min_value=5.0, 
-        max_value=30.0,
-        step=1.0
-    )
-    
-    st.divider()
-    
-    # Current Parameters Summary
-    st.subheader("📈 Current Settings")
-    params = st.session_state.trading_params
-    st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
-    st.write(f"**Risk/Trade:** {params['max_risk_percent']}%")
-    st.write(f"**TP/SL:** {params['profit_target']}p / {params['stop_loss']}p")
-    st.write(f"**Leverage:** {params['leverage']}:1")
-    st.write(f"**Lot Size:** {params['lot_size']:,.0f}")
-    st.write(f"**Indicators:** {params['required_indicators']}/4 required")
-    
-    st.divider()
-    
-    # System Controls
+    # SYSTEM CONTROLS
     st.subheader("🔧 System Controls")
-    if st.button("🔄 Apply Parameters & Reset", use_container_width=True, type="primary"):
+    if st.button("🔄 Apply & Reset", use_container_width=True, type="primary"):
         reset_trading_system()
-        st.success("Parameters applied and system reset!")
+        st.success("System reset with new parameters!")
     
-    if st.button("🗑️ Clear All Trades", use_container_width=True):
+    if st.button("🗑️ Clear Trades", use_container_width=True):
         st.session_state.open_trades = []
         st.session_state.trade_history = []
         st.success("All trades cleared!")
-    
-    st.divider()
-    
-    # Forex Pairs Info
-    st.subheader("💱 Monitoring Pairs")
-    for pair in trading_pairs[:4]:  # Show first 4 pairs
-        current_price = st.session_state.current_prices.get(pair, 0)
-        pip_value = FOREX_PAIRS[pair]['pip_value']
-        st.write(f"• {pair}: {current_price:.4f}")
 
-# Execute auto trading
+# Execute trading logic
 auto_trades_executed = execute_auto_trades()
 update_trades()
-
-# Scan for signals
 st.session_state.all_signals = scan_all_pairs_signals()
 
-# Main Dashboard - TOP METRICS
-st.subheader("📊 Forex Trading Dashboard")
+# Main Dashboard
+st.subheader("📊 Trading Dashboard")
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -867,172 +857,44 @@ if auto_trades_executed:
         else:
             st.error(trade)
 
-# TRADING PAIRS SIGNALS
-st.subheader("🎯 Forex Trading Signals - 15min Timeframe")
-st.write(f"**Required Agreement:** {st.session_state.trading_params['required_indicators']} out of 4 indicators (MA, RSI, MACD, Price Action)")
+# OPEN TRADES WITH SL/TP VISUALIZATION
+st.subheader("📈 Open Trades - SL/TP Monitoring")
 
-# Display pairs in a grid
-cols = st.columns(3)
-for idx, pair in enumerate(trading_pairs):
-    with cols[idx % 3]:
-        signal_info = st.session_state.all_signals.get(pair, {})
-        buy_count = signal_info.get('buy_count', 0)
-        sell_count = signal_info.get('sell_count', 0)
-        agreement = signal_info.get('agreement', 'NONE')
-        current_price = signal_info.get('current_price', st.session_state.current_prices.get(pair, 0))
-        price_change = signal_info.get('price_change', 0)
-        buy_indicators = signal_info.get('buy_indicators', [])
-        sell_indicators = signal_info.get('sell_indicators', [])
-        pip_value = signal_info.get('pip_value', 0.0001)
+if st.session_state.open_trades:
+    for trade in st.session_state.open_trades:
+        # Calculate distance to SL/TP
+        pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+        current_price = trade['current_price']
         
-        if agreement == 'BUY':
-            signal_class = "signal-strong-buy"
-            signal_text = "BUY SIGNAL"
-            signal_emoji = "🟢"
-            border_class = "agreement-buy"
-        elif agreement == 'SELL':
-            signal_class = "signal-strong-sell"
-            signal_text = "SELL SIGNAL"
-            signal_emoji = "🔴"
-            border_class = "agreement-sell"
-        elif agreement == 'MIXED':
-            signal_class = "signal-mixed"
-            signal_text = "MIXED"
-            signal_emoji = "🟡"
-            border_class = "no-agreement"
+        if trade['direction'] == 'BUY':
+            distance_to_sl = (current_price - trade['stop_loss_price']) / pip_value
+            distance_to_tp = (trade['take_profit_price'] - current_price) / pip_value
+            sl_percentage = (distance_to_sl / trade['sl_pips']) * 100
+            tp_percentage = (distance_to_tp / trade['tp_pips']) * 100
         else:
-            signal_class = "signal-no-trade"
-            signal_text = "NO SIGNAL"
-            signal_emoji = "⚪"
-            border_class = "no-agreement"
+            distance_to_sl = (trade['stop_loss_price'] - current_price) / pip_value
+            distance_to_tp = (current_price - trade['take_profit_price']) / pip_value
+            sl_percentage = (distance_to_sl / trade['sl_pips']) * 100
+            tp_percentage = (distance_to_tp / trade['tp_pips']) * 100
         
-        change_color = "#00ff88" if price_change >= 0 else "#ff4444"
+        # Determine if close to SL/TP
+        row_class = ""
+        if tp_percentage < 20:  # Within 20% of TP
+            row_class = "close-to-tp"
+        elif sl_percentage < 20:  # Within 20% of SL
+            row_class = "close-to-sl"
         
-        # Format price based on pair type
-        if 'JPY' in pair:
-            price_format = f"{current_price:.2f}"
-        else:
-            price_format = f"{current_price:.4f}"
+        trade_class = "trade-buy" if trade['direction'] == 'BUY' else "trade-sell"
+        profit_class = "profit-positive" if trade['profit_loss'] >= 0 else "profit-negative"
         
-        st.markdown(f"""
-        <div class="pair-card {border_class}">
-            <h3>{pair} {signal_emoji}</h3>
-            <div class="{signal_class}">
-                {signal_text}<br>
-                Buy: {buy_count} | Sell: {sell_count}
-            </div>
-            <div style="margin-top: 0.5rem;">
-                <strong>Price: {price_format}</strong><br>
-                <span style="color: {change_color};">
-                    {price_change:+.2f}%
-                </span>
-                <div class="forex-pip">Pip: {pip_value:.4f}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Show indicators directly on the card
-        if buy_indicators:
-            st.write("**Buy Indicators:**")
-            for indicator in buy_indicators:
-                st.markdown(f'<div class="indicator-buy">✅ {indicator}</div>', unsafe_allow_html=True)
-        
-        if sell_indicators:
-            st.write("**Sell Indicators:**")
-            for indicator in sell_indicators:
-                st.markdown(f'<div class="indicator-sell">❌ {indicator}</div>', unsafe_allow_html=True)
-
-# TRADE HISTORY
-st.subheader("📋 Trade History")
-
-tab1, tab2 = st.tabs(["Open Trades", "Closed Trades"])
-
-with tab1:
-    if st.session_state.open_trades:
-        # Display each open trade with a stop button
-        for trade in st.session_state.open_trades:
-            trade_class = "trade-buy" if trade['direction'] == 'BUY' else "trade-sell"
-            profit_class = "profit-positive" if trade['profit_loss'] >= 0 else "profit-negative"
-            
-            col1, col2, col3 = st.columns([3, 2, 1])
-            
-            with col1:
-                pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
-                current_pips = trade['profit_loss_pips']
-                
-                st.markdown(f"""
-                <div class="trade-row {trade_class}">
-                    <strong>{trade['pair']} {trade['direction']}</strong><br>
-                    Entry: {trade['entry_price']:.4f} | Current: {trade['current_price']:.4f}<br>
-                    P&L: <span class="{profit_class}">${trade['profit_loss']:.2f}</span> | Pips: {current_pips:.1f}<br>
-                    Size: {trade['position_size']:,.0f} | Leverage: {trade['leverage']}:1
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                st.metric(
-                    "P&L Pips", 
-                    f"{current_pips:.1f}",
-                    delta=f"{current_pips:+.1f}pips"
-                )
-            
-            with col3:
-                # Stop trading button for this specific trade
-                if st.button(f"🛑 Stop", key=f"stop_{trade['id']}", use_container_width=True):
-                    if close_trade(trade['id']):
-                        st.success(f"Trade {trade['id']} closed manually!")
-                        st.rerun()
-                    else:
-                        st.error("Failed to close trade")
-        
-        # Also show as dataframe for overview
-        st.subheader("Open Trades Overview")
-        open_df = pd.DataFrame(st.session_state.open_trades)
-        if not open_df.empty:
-            display_df = open_df[['id', 'pair', 'direction', 'entry_price', 'current_price', 'profit_loss', 'profit_loss_pips', 'position_size', 'time']].copy()
-            display_df['profit_loss'] = display_df['profit_loss'].round(2)
-            display_df['profit_loss_pips'] = display_df['profit_loss_pips'].round(1)
-            display_df['entry_price'] = display_df['entry_price'].round(4)
-            display_df['current_price'] = display_df['current_price'].round(4)
-            st.dataframe(display_df, use_container_width=True)
-    else:
-        st.info("No open trades")
-
-with tab2:
-    if st.session_state.trade_history:
-        closed_df = pd.DataFrame(st.session_state.trade_history)
-        # Format the display
-        display_df = closed_df[['id', 'pair', 'direction', 'entry_price', 'close_price', 'profit_loss', 'profit_loss_pips', 'position_size', 'time', 'close_time', 'close_reason']].copy()
-        display_df['profit_loss'] = display_df['profit_loss'].round(2)
-        display_df['profit_loss_pips'] = display_df['profit_loss_pips'].round(1)
-        display_df['entry_price'] = display_df['entry_price'].round(4)
-        display_df['close_price'] = display_df['close_price'].round(4)
-        st.dataframe(display_df, use_container_width=True)
-        
-        # Performance summary
-        st.subheader("📊 Performance Summary")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        total_trades = len(closed_df)
-        winning_trades = len(closed_df[closed_df['profit_loss'] > 0])
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-        total_profit = closed_df['profit_loss'].sum()
-        avg_profit = closed_df['profit_loss'].mean()
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
         
         with col1:
-            st.metric("Total Trades", total_trades)
-        with col2:
-            st.metric("Win Rate", f"{win_rate:.1f}%")
-        with col3:
-            st.metric("Total P&L", f"${total_profit:.2f}")
-        with col4:
-            st.metric("Avg P&L", f"${avg_profit:.2f}")
-            
-    else:
-        st.info("No trade history")
-
-# Auto-refresh
-st.divider()
-st.write("🔄 Auto-refreshing every 30 seconds...")
-time.sleep(30)
-st.rerun()
+            st.markdown(f"""
+            <div class="trade-row {trade_class} {row_class}">
+                <strong>{trade['pair']} {trade['direction']}</strong><br>
+                Entry: {trade['entry_price']:.4f} | Current: {trade['current_price']:.4f}<br>
+                P&L: <span class="{profit_class}">${trade['profit_loss']:.2f}</span> | Pips: {trade['profit_loss_pips']:.1f}<br>
+                <div class="sl-tp-indicator sl-indicator">SL: {trade['stop_loss_price']:.4f} ({distance_to_sl:.1f}p)</div>
+                <div class="sl-tp-indicator tp-indicator">TP: {trade['take_profit_price']:.4f} ({distance_to_tp:.1f}p)</div>
+                {
