@@ -131,7 +131,7 @@ def generate_15min_forex_data(pair, periods=200):
         close = base * (1 + change)
         high = max(base, close) * (1 + abs(np.random.normal(0, vol * 0.05)))
         low = min(base, close) * (1 - abs(np.random.normal(0, vol * 0.05)))
-        data.append({"date": t, "open": base, "high": high, "low": low, "close": close})
+        data.append({"timestamp": t, "open": base, "high": high, "low": low, "close": close})
         base = close
     return pd.DataFrame(data)
 
@@ -150,7 +150,7 @@ def detect_trading_signals(df):
     return buy, sell, 'HOLD'
 st.markdown("## 🤖 Trader Automático com Price Action")
 
-if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_trading):
+if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trading):
     st.session_state.auto_trading = True
 
     for pair in trading_pairs:
@@ -185,15 +185,9 @@ if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_tradin
             st.session_state.open_trades.append(trade)
             pip_value = FOREX_PAIRS[pair]["pip_value"]
             movimento = np.random.choice(["profit", "loss"], p=[0.55, 0.45])
-
-            if movimento == "profit":
-                pips = DEFAULT_PARAMS["profit_target_pips"]
-                resultado = trade["stake"] * (pips * pip_value)
-                status = "✅ Lucro"
-            else:
-                pips = DEFAULT_PARAMS["stop_loss_pips"]
-                resultado = -trade["stake"] * (pips * pip_value)
-                status = "❌ Prejuízo"
+            pips = DEFAULT_PARAMS["profit_target_pips"] if movimento == "profit" else DEFAULT_PARAMS["stop_loss_pips"]
+            resultado = trade["stake"] * (pips * pip_value) * (1 if movimento == "profit" else -1)
+            status = "Lucro" if resultado > 0 else "Prejuízo"
 
             resultado_trade = {
                 "pair": pair,
@@ -206,4 +200,83 @@ if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_tradin
 
             st.session_state.trade_history.append(resultado_trade)
             st.session_state.bank_balance += resultado
-            st.success(f"{pair} → {signal} → {padrao or breakout} → {status} (€{resultado:.2f})")
+
+st.markdown("## 📊 Painel de Performance")
+df_resultados = pd.DataFrame(st.session_state.trade_history)
+if not df_resultados.empty:
+    df_resultados["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_resultados["resultado (€)"].cumsum()
+    lucro_total = df_resultados["resultado (€)"].sum()
+    taxa_acerto = (df_resultados["resultado (€)"] > 0).mean() * 100
+    drawdown = (df_resultados["saldo"].cummax() - df_resultados["saldo"]).max()
+
+    st.write(f"Lucro Líquido: €{lucro_total:.2f}")
+    st.write(f"Taxa de Acerto: {taxa_acerto:.1f}%")
+    st.write(f"Drawdown Máximo: €{drawdown:.2f}")
+    st.line_chart(df_resultados.set_index("timestamp")["saldo"])
+st.subheader("🔍 Filtrar Histórico")
+if not df_resultados.empty:
+    pares = df_resultados["pair"].unique().tolist()
+    par_selecionado = st.selectbox("Par de moeda", ["Todos"] + pares)
+    data_inicio = st.date_input("Data inicial", value=pd.to_datetime(df_resultados["timestamp"]).min().date())
+    data_fim = st.date_input("Data final", value=pd.to_datetime(df_resultados["timestamp"]).max().date())
+
+    df_filtrado = df_resultados.copy()
+    df_filtrado["timestamp"] = pd.to_datetime(df_filtrado["timestamp"])
+    df_filtrado = df_filtrado[
+        (df_filtrado["timestamp"].dt.date >= data_inicio) &
+        (df_filtrado["timestamp"].dt.date <= data_fim)
+    ]
+    if par_selecionado != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["pair"] == par_selecionado]
+
+    st.dataframe(df_filtrado, use_container_width=True)
+
+    # Exportação por par com gráfico e métricas
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_resultados.to_excel(writer, index=False, sheet_name="Resumo Geral")
+        for pair in df_resultados["pair"].unique():
+            df_par = df_resultados[df_resultados["pair"] == pair].copy()
+            df_par["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_par["resultado (€)"].cumsum()
+            df_par.to_excel(writer, index=False, sheet_name=pair.replace("/", "_"))
+
+            lucro_total = df_par["resultado (€)"].sum()
+            taxa_acerto = (df_par["resultado (€)"] > 0).mean() * 100
+            drawdown = (df_par["saldo"].cummax() - df_par["saldo"]).max()
+
+            worksheet = writer.sheets[pair.replace("/", "_")]
+            worksheet.write("H1", "Lucro Líquido (€)")
+            worksheet.write("H2", round(lucro_total, 2))
+            worksheet.write("H3", "Taxa de Acerto (%)")
+            worksheet.write("H4", round(taxa_acerto, 1))
+            worksheet.write("H5", "Drawdown Máximo (€)")
+            worksheet.write("H6", round(drawdown, 2))
+
+            # Alerta
+            META_LUCRO = 150.0
+            LIMITE_DRAW = 100.0
+            if lucro_total >= META_LUCRO:
+                alerta = f"Meta de lucro atingida (€{lucro_total:.2f})"
+            elif drawdown >= LIMITE_DRAW:
+                alerta = f"Drawdown elevado (€{drawdown:.2f})"
+            else:
+                alerta = "Dentro dos parâmetros operacionais"
+            worksheet.write("H8", "Alerta")
+            worksheet.write("H9", alerta)
+
+            # Gráfico
+            chart = writer.book.add_chart({'type': 'line'})
+            chart.add_series({
+                'name': 'Saldo',
+                'categories': [pair.replace("/", "_"), 1, df_par.columns.get_loc("timestamp"), len(df_par), df_par.columns.get_loc("timestamp")],
+                'values':     [pair.replace("/", "_"), 1, df_par.columns.get_loc("saldo"), len(df_par), df_par.columns.get_loc("saldo")],
+            })
+            chart.set_title({'name': f'Saldo - {pair}'})
+            worksheet.insert_chart('H11', chart)
+
+    st.download_button(
+        label="📥 Baixar Excel por Par com Métricas e Gráfico",
+        data=output.getvalue(),
+        file_name="trades_por_par_completo.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
