@@ -172,4 +172,5 @@ with col2:
                             value=st.session_state.trading_params['manual_stake_amount'], step=10.0)
 
 df_pair = generate_15min_forex_data(selected_pair)
-df
+df = generate_15min_forex_data(selected_pair)
+
