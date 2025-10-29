@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 from datetime import datetime, timedelta
+import io
 
 st.set_page_config(
     page_title="Forex Pro Bot - Manual Stake",
@@ -35,33 +35,13 @@ st.markdown("""
         color: white;
         padding: 1rem;
         border-radius: 10px;
-
-        import io
-
-# Exportação para Excel
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-    # Exporte os DataFrames desejados
-    df_ind.to_excel(writer, index=False, sheet_name="Indicadores Técnicos")
-    pd.DataFrame(buy_signals, columns=["Indicadores de Compra"]).to_excel(writer, index=False, sheet_name="Sinais de Compra")
-    pd.DataFrame(sell_signals, columns=["Indicadores de Venda"]).to_excel(writer, index=False, sheet_name="Sinais de Venda")
-    pd.DataFrame.from_dict(patterns, orient="index").to_excel(writer, sheet_name="Padrões Detectados")
-
-# Botão de download
-st.download_button(
-    label="📥 Baixar Excel com Indicadores",
-    data=output.getvalue(),
-    file_name="forex_indicadores.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
         margin: 1rem 0;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Pares de Forex e estratégias
+# Pares de Forex
 FOREX_PAIRS = {
     "EUR/USD": {"base_price": 1.0850, "volatility": 0.0008, "pip_value": 0.0001},
     "GBP/USD": {"base_price": 1.2650, "volatility": 0.0010, "pip_value": 0.0001},
@@ -75,25 +55,7 @@ FOREX_PAIRS = {
     "GBP/JPY": {"base_price": 188.50, "volatility": 0.25, "pip_value": 0.01}
 }
 
-PRO_STRATEGIES = {
-    "PROFESSIONAL_COMBO": {
-        "name": "Professional Combo",
-        "description": "Multi-timeframe confirmed signals",
-        "timeframe": "15min",
-        "ma_fast": 7,
-        "ma_slow": 25,
-        "rsi_period": 14,
-        "rsi_overbought": 72,
-        "rsi_oversold": 28,
-        "macd_fast": 10,
-        "macd_slow": 22,
-        "macd_signal": 7,
-        "profit_target_pips": 20.0,
-        "stop_loss_pips": 12.0,
-        "required_indicators": 3
-    }
-}
-
+# Parâmetros padrão
 DEFAULT_PARAMS = {
     'initial_bank': 10000.0,
     'profit_target_pips': 20.0,
@@ -107,13 +69,6 @@ DEFAULT_PARAMS = {
     'macd_slow': 22,
     'macd_signal': 7,
     'required_indicators': 3,
-    'max_open_trades': 3,
-    'max_risk_percent': 1.5,
-    'max_daily_loss_percent': 2.0,
-    'trailing_stop_enabled': True,
-    'trail_start_pips': 10.0,
-    'trail_distance_pips': 5.0,
-    'selected_strategy': 'PROFESSIONAL_COMBO',
     'manual_stake_amount': 100.0,
     'use_candlestick_patterns': True,
     'min_pattern_confidence': 0.7
@@ -125,13 +80,8 @@ for key, value in DEFAULT_PARAMS.items():
 st.session_state.setdefault('bank_balance', DEFAULT_PARAMS['initial_bank'])
 st.session_state.setdefault('open_trades', [])
 st.session_state.setdefault('trade_history', [])
-st.session_state.setdefault('auto_trading', False)
-st.session_state.setdefault('all_signals', {})
 st.session_state.setdefault('current_prices', {pair: data['base_price'] for pair, data in FOREX_PAIRS.items()})
 st.session_state.setdefault('trade_counter', 0)
-st.session_state.setdefault('use_manual_stake', False)
-st.session_state.setdefault('last_reset_date', datetime.now().date())
-st.session_state.setdefault('daily_start_balance', st.session_state.bank_balance)
 
 trading_pairs = list(FOREX_PAIRS.keys())
 
@@ -200,21 +150,17 @@ def detect_trading_signals(df):
     elif latest['RSI'] > params['rsi_overbought']:
         sell_indicators.append("RSI Overbought")
 
+    if latest['MACD'] > latest['MACD_Signal']:
+        buy_indicators.append("MACD Bullish Crossover")
+    elif latest['MACD'] < latest['MACD_Signal']:
+        sell_indicators.append("MACD Bearish Crossover")
 
-        media_mensal.reset_index().to_excel(writer, index=False, sheet_name="Média Mensal")
-    sazonalidade.reset_index().to_excel(writer, index=False, sheet_name="Sazonalidade")
-
-# Botão de download
-st.download_button(
-    label="📥 Baixar Indicadores Técnicos (Excel)",
-    data=output.getvalue(),
-    file_name="indicadores_tecnicos_forex.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-# ================================
-# 🎯 Execução Manual de Trade
-# ================================
+    if len(buy_indicators) >= params['required_indicators']:
+        return buy_indicators, sell_indicators, 'BUY'
+    elif len(sell_indicators) >= params['required_indicators']:
+        return buy_indicators, sell_indicators, 'SELL'
+    else:
+        return buy_indicators, sell_indicators, 'HOLD'
 st.markdown("## 🎯 Execução Manual de Trade")
 
 col1, col2 = st.columns([2, 1])
@@ -225,30 +171,5 @@ with col2:
     stake = st.number_input("💰 Valor do stake manual (€)", min_value=10.0, max_value=10000.0,
                             value=st.session_state.trading_params['manual_stake_amount'], step=10.0)
 
-# Gerar dados e indicadores
 df_pair = generate_15min_forex_data(selected_pair)
-df_ind = calculate_indicators(df_pair)
-buy_signals, sell_signals, patterns, signal, _ = detect_trading_signals(df_ind)
-
-# Exibir sinal atual
-st.markdown(f"### 📡 Sinal atual para `{selected_pair}`: **:blue[{signal}]**")
-st.write("📈 Indicadores de Compra:", buy_signals)
-st.write("📉 Indicadores de Venda:", sell_signals)
-
-# Botão de execução
-if st.button("🚀 Executar Trade Manual"):
-    trade = {
-        "id": st.session_state.trade_counter + 1,
-        "pair": selected_pair,
-        "stake": stake,
-        "signal": signal,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    st.session_state.trade_counter += 1
-    st.session_state.open_trades.append(trade)
-    st.success(f"Trade manual executado para {selected_pair} com stake de €{stake:.2f} ({signal})")
-
-# Histórico de execuções
-if st.session_state.open_trades:
-    st.markdown("### 📋 Trades Executados")
-    st.dataframe(pd.DataFrame(st.session_state.open_trades))
+df
