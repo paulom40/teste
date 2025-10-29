@@ -240,3 +240,51 @@ if st.session_state.auto_trading:
 
             st.success(f"Auto trade: {pair} → {signal} → {resultado['status']} (€{resultado['resultado (€)']:.2f})")
 
+st.markdown("## 📊 Painel de Performance")
+
+df_resultados = pd.DataFrame(st.session_state.trade_history)
+if not df_resultados.empty:
+    df_resultados["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_resultados["resultado (€)"].cumsum()
+    lucro_total = df_resultados["resultado (€)"].sum()
+    acertos = df_resultados["resultado (€)"] > 0
+    taxa_acerto = acertos.mean() * 100
+    drawdown = (df_resultados["saldo"].cummax() - df_resultados["saldo"]).max()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💹 Lucro Líquido", f"€ {lucro_total:,.2f}")
+    col2.metric("✅ Taxa de Acerto", f"{taxa_acerto:.1f}%")
+    col3.metric("📉 Drawdown Máximo", f"€ {drawdown:,.2f}")
+
+    st.markdown("### 📈 Evolução do Saldo")
+    st.line_chart(df_resultados.set_index("timestamp")["saldo"])
+
+    # Exportação com cores
+    st.markdown("### 📤 Exportar Resultados com Cores")
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        pd.DataFrame(st.session_state.open_trades).to_excel(writer, index=False, sheet_name="Trades Executados")
+        df_resultados.to_excel(writer, index=False, sheet_name="Resultados Simulados")
+        df_resultados[["timestamp", "saldo"]].to_excel(writer, index=False, sheet_name="Evolução do Saldo")
+
+        workbook = writer.book
+        worksheet = writer.sheets["Resultados Simulados"]
+        lucro_fmt = workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
+        preju_fmt = workbook.add_format({"bg_color": "#F4CCCC", "font_color": "#9C0006"})
+
+        col_index = df_resultados.columns.get_loc("resultado (€)")
+        col_letter = chr(65 + col_index)
+
+        worksheet.conditional_format(f"{col_letter}2:{col_letter}{len(df_resultados)+1}", {
+            "type": "cell", "criteria": ">", "value": 0, "format": lucro_fmt
+        })
+        worksheet.conditional_format(f"{col_letter}2:{col_letter}{len(df_resultados)+1}", {
+            "type": "cell", "criteria": "<", "value": 0, "format": preju_fmt
+        })
+
+    st.download_button(
+        label="📥 Baixar Excel com Resultados",
+        data=output.getvalue(),
+        file_name="forex_resultados_coloridos.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
