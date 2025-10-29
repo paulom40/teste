@@ -130,6 +130,45 @@ if st.session_state.logs_tecnicos:
     ax2.set_ylabel("Lucro (€)")
     st.pyplot(fig2)
 
+    st.subheader("📋 Tabela de Trades Ativos e Concluídos")
+
+if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
+    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
+    df_logs["Data"] = pd.to_datetime(df_logs["data"]).dt.date
+
+    # Separar por status
+    df_ativos = df_logs[df_logs["status"] == "Ativo"]
+    df_fechados = df_logs[df_logs["status"] == "Fechado"]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### ✅ Trades Ativos")
+        if not df_ativos.empty:
+            st.dataframe(df_ativos[["Data", "pair", "volatilidade_dia", "log_stake", "log_lucro_estimado"]].rename(columns={
+                "pair": "Par",
+                "volatilidade_dia": "Volatilidade",
+                "log_stake": "Stake (€)",
+                "log_lucro_estimado": "Lucro Estimado (€)"
+            }), use_container_width=True)
+        else:
+            st.info("Nenhum trade ativo no momento.")
+
+    with col2:
+        st.markdown("### 📦 Trades Concluídos")
+        if not df_fechados.empty:
+            st.dataframe(df_fechados[["Data", "pair", "volatilidade_dia", "log_stake", "log_lucro_estimado"]].rename(columns={
+                "pair": "Par",
+                "volatilidade_dia": "Volatilidade",
+                "log_stake": "Stake (€)",
+                "log_lucro_estimado": "Lucro Estimado (€)"
+            }), use_container_width=True)
+        else:
+            st.info("Nenhum trade concluído ainda.")
+else:
+    st.info("Nenhum trade registrado ainda.")
+
+    
     # Exportar Excel
     export_buffer = io.BytesIO()
     with pd.ExcelWriter(export_buffer, engine="xlsxwriter") as writer:
