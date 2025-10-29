@@ -35,6 +35,26 @@ st.markdown("""
         color: white;
         padding: 1rem;
         border-radius: 10px;
+
+        import io
+
+# Exportação para Excel
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    # Exporte os DataFrames desejados
+    df_ind.to_excel(writer, index=False, sheet_name="Indicadores Técnicos")
+    pd.DataFrame(buy_signals, columns=["Indicadores de Compra"]).to_excel(writer, index=False, sheet_name="Sinais de Compra")
+    pd.DataFrame(sell_signals, columns=["Indicadores de Venda"]).to_excel(writer, index=False, sheet_name="Sinais de Venda")
+    pd.DataFrame.from_dict(patterns, orient="index").to_excel(writer, sheet_name="Padrões Detectados")
+
+# Botão de download
+st.download_button(
+    label="📥 Baixar Excel com Indicadores",
+    data=output.getvalue(),
+    file_name="forex_indicadores.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
         margin: 1rem 0;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
