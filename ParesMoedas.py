@@ -339,7 +339,7 @@ if not df_resultados.empty:
             chart.set_title({'name': f'Saldo - {pair}'})
             worksheet.insert_chart('H11', chart)
 
-        # Aba de logs técnicos
+        # Aba de logs técnicos (somente se existirem)
         if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
             df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
             df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
@@ -352,4 +352,3 @@ if not df_resultados.empty:
     )
 else:
     st.info("Nenhum resultado disponível para exportação.")
-
