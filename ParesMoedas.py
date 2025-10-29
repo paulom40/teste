@@ -55,7 +55,6 @@ FOREX_PAIRS = {
     "GBP/JPY": {"base_price": 188.50, "volatility": 0.25, "pip_value": 0.01}
 }
 
-# Parâmetros padrão
 DEFAULT_PARAMS = {
     'initial_bank': 10000.0,
     'profit_target_pips': 20.0,
@@ -82,6 +81,7 @@ st.session_state.setdefault('open_trades', [])
 st.session_state.setdefault('trade_history', [])
 st.session_state.setdefault('current_prices', {pair: data['base_price'] for pair, data in FOREX_PAIRS.items()})
 st.session_state.setdefault('trade_counter', 0)
+st.session_state.setdefault('auto_trading', False)
 
 trading_pairs = list(FOREX_PAIRS.keys())
 
@@ -166,11 +166,30 @@ st.markdown("## 🎯 Execução Manual de Trade")
 col1, col2 = st.columns([2, 1])
 with col1:
     selected_pair = st.selectbox("📌 Selecione o par para análise", trading_pairs)
-
 with col2:
     stake = st.number_input("💰 Valor do stake manual (€)", min_value=10.0, max_value=10000.0,
                             value=st.session_state.trading_params['manual_stake_amount'], step=10.0)
 
+# Gerar dados e calcular indicadores
 df_pair = generate_15min_forex_data(selected_pair)
-df = generate_15min_forex_data(selected_pair)
+df_ind = calculate_indicators(df_pair)
+buy_signals, sell_signals, signal = detect_trading_signals(df_ind)
 
+# Exibir sinais
+st.markdown(f"### 📡 Sinal atual para `{selected_pair}`: **:blue[{signal}]**")
+st.write("📈 Indicadores de Compra:", buy_signals)
+st.write("📉 Indicadores de Venda:", sell_signals)
+
+# Botão de execução manual
+if st.button("🚀 Executar Trade Manual"):
+    trade = {
+        "id": st.session_state.trade_counter + 1,
+        "pair": selected_pair,
+        "stake": stake,
+        "signal": signal,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "auto": False
+    }
+    st.session_state.trade_counter += 1
+    st.session_state.open_trades.append(trade)
+    st.success(f"Trade manual executado para {selected_pair} com stake de €{stake:.2f} ({signal})")
