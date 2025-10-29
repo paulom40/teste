@@ -5,6 +5,12 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import io
 
+st.subheader("🤖 Iniciar Trade Automático")
+
+if st.button("🚀 Executar Trades com Volatilidade Alta"):
+    executar_trades_automaticos()
+
+
 # Limites de volatilidade por par
 LIMITE_VOLATILIDADE = {
     "EUR/USD": 0.0020,
@@ -38,6 +44,43 @@ def simular_high_low(par, base, vol):
             "alerta_volatilidade": "Sim" if alerta else "Não"
         })
     return pd.DataFrame(dados)
+def executar_trades_automaticos():
+    st.success("🔄 Iniciando execução automática de trades...")
+
+    for pair in PARES.keys():
+        df_hoje = df_volatilidade[
+            (df_volatilidade["par"] == pair) &
+            (df_volatilidade["data"] == datetime.now().date())
+        ]
+
+        if df_hoje.empty or df_hoje["alerta_volatilidade"].values[0] != "Sim":
+            st.info(f"{pair}: volatilidade insuficiente hoje, trade ignorado.")
+            continue
+
+        # Simula condições de entrada (substitui por tua lógica real)
+        entrada_valida = np.random.choice([True, False], p=[0.7, 0.3])
+
+        if entrada_valida:
+            st.success(f"{pair}: trade executado com volatilidade {df_hoje['volatilidade'].values[0]:.5f}")
+            log = {
+                "pair": pair,
+                "data": str(datetime.now().date()),
+                "volatilidade_dia": df_hoje["volatilidade"].values[0],
+                "alerta_volatilidade": "Sim",
+                "trade_executado": "Sim"
+            }
+        else:
+            st.warning(f"{pair}: condições de entrada não atendidas.")
+            log = {
+                "pair": pair,
+                "data": str(datetime.now().date()),
+                "volatilidade_dia": df_hoje["volatilidade"].values[0],
+                "alerta_volatilidade": "Sim",
+                "trade_executado": "Não"
+            }
+
+        st.session_state.logs_tecnicos.append(log)
+
 
 # Junta todos os pares
 df_volatilidade = pd.concat([
