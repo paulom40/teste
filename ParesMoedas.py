@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 st.set_page_config(
-    page_title="Forex Pro Bot - Optimized Indicators",
+    page_title="Forex Pro Bot - Complete Trading",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -22,30 +22,73 @@ st.markdown("""
         margin-bottom: 2rem;
         font-weight: bold;
     }
-    .pro-tip {
-        background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
-        color: #2d3748;
-        padding: 1rem;
+    .trade-table {
+        background: white;
         border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #d4af37;
-    }
-    .strategy-card {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        color: white;
         padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin: 1rem 0;
     }
-    .indicator-optimal {
-        background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
-        color: white;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.2rem 0;
-        text-align: center;
+    .profit-positive {
+        color: #00ff88;
         font-weight: bold;
+    }
+    .profit-negative {
+        color: #ff4444;
+        font-weight: bold;
+    }
+    .status-open {
+        background: #e3f2fd;
+        color: #1976d2;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .status-closed {
+        background: #e8f5e9;
+        color: #2e7d32;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .direction-buy {
+        background: #e8f5e9;
+        color: #2e7d32;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .direction-sell {
+        background: #ffebee;
+        color: #c62828;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .reason-tp {
+        background: #e8f5e9;
+        color: #2e7d32;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+    }
+    .reason-sl {
+        background: #ffebee;
+        color: #c62828;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
+    }
+    .reason-manual {
+        background: #fff3e0;
+        color: #ef6c00;
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -60,7 +103,7 @@ FOREX_PAIRS = {
     "AUD/USD": {"base_price": 0.6550, "volatility": 0.0012, "pip_value": 0.0001}
 }
 
-# PROVEN TRADING STRATEGIES - Based on extensive backtesting and professional use
+# PROVEN TRADING STRATEGIES
 PRO_STRATEGIES = {
     "SCALPING_5MIN": {
         "name": "5-Minute Scalping",
@@ -94,22 +137,6 @@ PRO_STRATEGIES = {
         "stop_loss_pips": 10.0,
         "required_indicators": 3
     },
-    "TREND_1H": {
-        "name": "1-Hour Trend Following",
-        "description": "Capture larger moves with wider stops",
-        "timeframe": "1h",
-        "ma_fast": 9,
-        "ma_slow": 26,
-        "rsi_period": 21,
-        "rsi_overbought": 75,
-        "rsi_oversold": 25,
-        "macd_fast": 12,
-        "macd_slow": 26,
-        "macd_signal": 9,
-        "profit_target_pips": 25.0,
-        "stop_loss_pips": 15.0,
-        "required_indicators": 3
-    },
     "PROFESSIONAL_COMBO": {
         "name": "Professional Combo",
         "description": "Multi-timeframe confirmed signals",
@@ -128,42 +155,7 @@ PRO_STRATEGIES = {
     }
 }
 
-# OPTIMAL INDICATOR SETTINGS - Based on extensive research
-OPTIMAL_SETTINGS = {
-    # Moving Averages - Most effective combinations
-    "MA_COMBINATIONS": [
-        {"fast": 5, "slow": 20, "use": "Scalping"},
-        {"fast": 8, "slow": 21, "use": "Intraday"},
-        {"fast": 9, "slow": 26, "use": "Swing Trading"},
-        {"fast": 12, "slow": 50, "use": "Trend Following"},
-        {"fast": 7, "slow": 25, "use": "Professional Default"}
-    ],
-    
-    # RSI - Most reliable settings
-    "RSI_SETTINGS": [
-        {"period": 14, "overbought": 70, "oversold": 30, "use": "Standard"},
-        {"period": 14, "overbought": 65, "oversold": 35, "use": "Conservative"},
-        {"period": 21, "overbought": 75, "oversold": 25, "use": "Less False Signals"},
-        {"period": 9, "overbought": 80, "oversold": 20, "use": "More Sensitive"}
-    ],
-    
-    # MACD - Best performing parameters
-    "MACD_SETTINGS": [
-        {"fast": 8, "slow": 17, "signal": 9, "use": "Fast MACD"},
-        {"fast": 12, "slow": 26, "signal": 9, "use": "Standard"},
-        {"fast": 6, "slow": 13, "signal": 5, "use": "Very Fast"},
-        {"fast": 10, "slow": 22, "signal": 7, "use": "Balanced"}
-    ],
-    
-    # Risk Management - Proven ratios
-    "RISK_SETTINGS": [
-        {"rr_ratio": 1.5, "win_rate": "40%+", "use": "Minimum Viable"},
-        {"rr_ratio": 2.0, "win_rate": "35%+", "use": "Professional"},
-        {"rr_ratio": 3.0, "win_rate": "30%+", "use": "Conservative"}
-    ]
-}
-
-# Default trading parameters using PROVEN settings
+# Default trading parameters
 DEFAULT_PARAMS = {
     'initial_bank': 10000,
     'profit_target_pips': 20.0,
@@ -172,7 +164,6 @@ DEFAULT_PARAMS = {
     'trailing_stop_activation': 8.0,
     'break_even': True,
     'break_even_activation': 10.0,
-    'risk_reward_ratio': 1.67,
     'ma_fast': 7,
     'ma_slow': 25,
     'rsi_period': 14,
@@ -184,11 +175,6 @@ DEFAULT_PARAMS = {
     'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 1.5,
-    'daily_loss_limit': 3.0,
-    'max_drawdown': 8.0,
-    'candles_to_analyze': 5,
-    'lot_size': 10000,
-    'leverage': 30,
     'selected_strategy': 'PROFESSIONAL_COMBO'
 }
 
@@ -212,8 +198,6 @@ if 'all_signals' not in st.session_state:
     st.session_state.all_signals = {}
 if 'current_prices' not in st.session_state:
     st.session_state.current_prices = {pair: data['base_price'] for pair, data in FOREX_PAIRS.items()}
-if 'last_auto_trade' not in st.session_state:
-    st.session_state.last_auto_trade = {}
 if 'trade_counter' not in st.session_state:
     st.session_state.trade_counter = 0
 
@@ -314,10 +298,6 @@ def detect_trading_signals(df):
                 buy_indicators.append("RSI Oversold")
             elif latest['RSI'] > params['rsi_overbought']:
                 sell_indicators.append("RSI Overbought")
-            elif latest['RSI'] > 50 and latest['RSI'] < params['rsi_overbought']:
-                buy_indicators.append("RSI Bullish")
-            elif latest['RSI'] < 50 and latest['RSI'] > params['rsi_oversold']:
-                sell_indicators.append("RSI Bearish")
         
         # MACD Signals
         if pd.notna(latest['MACD']) and pd.notna(latest['MACD_Signal']):
@@ -325,25 +305,6 @@ def detect_trading_signals(df):
                 buy_indicators.append("MACD Bullish")
             else:
                 sell_indicators.append("MACD Bearish")
-            
-            # MACD Histogram momentum
-            if len(df) > 1:
-                prev_macd = df.iloc[-2]['MACD']
-                if latest['MACD'] > prev_macd:
-                    buy_indicators.append("MACD Momentum Up")
-                else:
-                    sell_indicators.append("MACD Momentum Down")
-        
-        # Price Action Signal
-        if len(df) >= 20:
-            recent_high = df['high'].tail(20).max()
-            recent_low = df['low'].tail(20).min()
-            current_close = latest['close']
-            
-            if abs(current_close - recent_high) / current_close < 0.001:
-                sell_indicators.append("Price at Resistance")
-            elif abs(current_close - recent_low) / current_close < 0.001:
-                buy_indicators.append("Price at Support")
         
         # Determine agreement
         total_buy = len(buy_indicators)
@@ -368,8 +329,178 @@ def detect_trading_signals(df):
     except Exception as e:
         return [], [], [], 'NONE'
 
+def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair):
+    pip_value = FOREX_PAIRS[pair]['pip_value']
+    
+    if direction == 'BUY':
+        stop_loss_price = entry_price - (sl_pips * pip_value)
+        take_profit_price = entry_price + (tp_pips * pip_value)
+    else:
+        stop_loss_price = entry_price + (sl_pips * pip_value)
+        take_profit_price = entry_price - (tp_pips * pip_value)
+    
+    return stop_loss_price, take_profit_price
+
+def execute_trade(pair, direction, entry_price):
+    try:
+        st.session_state.trade_counter += 1
+        params = st.session_state.trading_params
+        
+        # Calculate risk amount
+        risk_amount = (params['max_risk_percent'] / 100) * st.session_state.bank_balance
+        
+        # Calculate SL and TP prices
+        stop_loss_price, take_profit_price = calculate_sl_tp_prices(
+            entry_price, direction, params['stop_loss_pips'], params['profit_target_pips'], pair
+        )
+        
+        trade = {
+            'id': st.session_state.trade_counter,
+            'pair': pair,
+            'direction': direction,
+            'entry_price': entry_price,
+            'stop_loss_price': stop_loss_price,
+            'take_profit_price': take_profit_price,
+            'stake': risk_amount,
+            'time': datetime.now(),
+            'status': 'open',
+            'profit_loss': 0,
+            'profit_loss_pips': 0,
+            'current_price': entry_price,
+            'type': 'AUTO',
+            'close_reason': None
+        }
+        
+        st.session_state.open_trades.append(trade)
+        st.session_state.bank_balance -= risk_amount
+        return True
+    except Exception as e:
+        return False
+
+def close_trade(trade_id, close_price=None, reason='MANUAL'):
+    for i, trade in enumerate(st.session_state.open_trades):
+        if trade['id'] == trade_id and trade['status'] == 'open':
+            if close_price is None:
+                close_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+            
+            pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+            
+            # Calculate P&L in pips
+            if trade['direction'] == 'BUY':
+                pips = (close_price - trade['entry_price']) / pip_value
+            else:
+                pips = (trade['entry_price'] - close_price) / pip_value
+            
+            # Calculate dollar P&L
+            profit_loss_dollar = pips * pip_value * 10000  # Simplified calculation
+            
+            # Update trade details
+            trade['status'] = 'closed'
+            trade['close_time'] = datetime.now()
+            trade['close_price'] = close_price
+            trade['profit_loss'] = profit_loss_dollar
+            trade['profit_loss_pips'] = pips
+            trade['close_reason'] = reason
+            
+            # Move to trade history and return stake + P&L
+            st.session_state.trade_history.append(trade.copy())
+            st.session_state.bank_balance += trade['stake'] + profit_loss_dollar
+            
+            # Remove from open trades
+            st.session_state.open_trades.pop(i)
+            return True
+    return False
+
+def update_trades():
+    trades_to_remove = []
+    
+    for i, trade in enumerate(st.session_state.open_trades):
+        if trade['status'] == 'open':
+            current_price = st.session_state.current_prices.get(trade['pair'], trade['entry_price'])
+            pip_value = FOREX_PAIRS[trade['pair']]['pip_value']
+            
+            # Calculate current P&L
+            if trade['direction'] == 'BUY':
+                pips = (current_price - trade['entry_price']) / pip_value
+            else:
+                pips = (trade['entry_price'] - current_price) / pip_value
+            
+            profit_loss_dollar = pips * pip_value * 10000
+            
+            trade['profit_loss'] = profit_loss_dollar
+            trade['profit_loss_pips'] = pips
+            trade['current_price'] = current_price
+            
+            # Check SL/TP
+            if trade['direction'] == 'BUY':
+                if current_price >= trade['take_profit_price']:
+                    close_trade(trade['id'], current_price, 'TP')
+                    trades_to_remove.append(i)
+                elif current_price <= trade['stop_loss_price']:
+                    close_trade(trade['id'], current_price, 'SL')
+                    trades_to_remove.append(i)
+            else:
+                if current_price <= trade['take_profit_price']:
+                    close_trade(trade['id'], current_price, 'TP')
+                    trades_to_remove.append(i)
+                elif current_price >= trade['stop_loss_price']:
+                    close_trade(trade['id'], current_price, 'SL')
+                    trades_to_remove.append(i)
+
+def scan_all_pairs_signals():
+    all_signals = {}
+    
+    for pair in trading_pairs:
+        df = generate_15min_forex_data(pair, 200)
+        df_with_indicators = calculate_indicators(df)
+        
+        signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
+        
+        current_price = df_with_indicators['close'].iloc[-1]
+        st.session_state.current_prices[pair] = current_price
+        
+        all_signals[pair] = {
+            'signals': signals,
+            'buy_indicators': buy_indicators,
+            'sell_indicators': sell_indicators,
+            'agreement': agreement,
+            'current_price': current_price
+        }
+    
+    return all_signals
+
+def execute_auto_trades():
+    if not st.session_state.auto_trading:
+        return []
+    
+    auto_trades_executed = []
+    
+    try:
+        all_signals = scan_all_pairs_signals()
+        
+        for pair, signal_info in all_signals.items():
+            signals = signal_info.get('signals', [])
+            agreement = signal_info.get('agreement', 'NONE')
+            
+            for signal_type, count, indicators in signals:
+                if agreement == 'BUY' and signal_type == "BUY" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
+                    current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
+                    
+                    if execute_trade(pair, 'BUY', current_price):
+                        auto_trades_executed.append(f"✅ BUY {pair} - {count} indicators")
+                
+                elif agreement == 'SELL' and signal_type == "SELL" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
+                    current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
+                    
+                    if execute_trade(pair, 'SELL', current_price):
+                        auto_trades_executed.append(f"❌ SELL {pair} - {count} indicators")
+                        
+    except Exception as e:
+        st.error(f"Error in auto trading: {e}")
+    
+    return auto_trades_executed
+
 def apply_strategy(strategy_name):
-    """Apply a proven trading strategy configuration"""
     if strategy_name in PRO_STRATEGIES:
         strategy = PRO_STRATEGIES[strategy_name]
         for key, value in strategy.items():
@@ -380,312 +511,306 @@ def apply_strategy(strategy_name):
     return False
 
 # MAIN APP LAYOUT
-st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Optimized Strategies</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Complete Trading</h1>', unsafe_allow_html=True)
 
-# PRO TIPS SECTION
-st.markdown("""
-<div class="pro-tip">
-    <h3>💡 PROFESSIONAL TRADING INSIGHTS</h3>
-    <p><strong>Proven Indicator Settings Based on Extensive Research:</strong></p>
-    <ul>
-        <li>✅ <strong>Moving Averages:</strong> 7-25 period combo provides best balance between sensitivity and reliability</li>
-        <li>✅ <strong>RSI:</strong> 14-period with 72/28 levels reduces false signals by 23%</li>
-        <li>✅ <strong>MACD:</strong> 10-22-7 configuration offers optimal momentum detection</li>
-        <li>✅ <strong>Risk/Reward:</strong> 1.67:1 ratio maintains profitability with 40%+ win rate</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
-
-# Sidebar with OPTIMIZED settings
+# Sidebar
 with st.sidebar:
-    st.header("🎯 Pro Trading Strategies")
+    st.header("🎯 Trading Controls")
     
-    # STRATEGY SELECTOR
-    st.subheader("🚀 Pre-Optimized Strategies")
+    # Strategy Selection
     strategy_options = {name: strategy['name'] for name, strategy in PRO_STRATEGIES.items()}
     selected_strategy = st.selectbox(
-        "Choose Trading Strategy",
+        "Choose Strategy",
         options=list(strategy_options.keys()),
         format_func=lambda x: strategy_options[x],
         index=list(strategy_options.keys()).index(st.session_state.trading_params.get('selected_strategy', 'PROFESSIONAL_COMBO'))
     )
     
-    if st.button("🔄 Apply Strategy", use_container_width=True, type="primary"):
-        if apply_strategy(selected_strategy):
-            st.success(f"✅ {PRO_STRATEGIES[selected_strategy]['name']} applied!")
-        else:
-            st.error("Failed to apply strategy")
+    if st.button("🔄 Apply Strategy", use_container_width=True):
+        apply_strategy(selected_strategy)
+        st.success("Strategy applied!")
     
     st.divider()
     
-    # STRATEGY DESCRIPTIONS
-    st.subheader("📊 Strategy Details")
-    current_strategy = PRO_STRATEGIES[selected_strategy]
-    st.write(f"**{current_strategy['name']}**")
-    st.write(f"*{current_strategy['description']}*")
-    st.write(f"**Timeframe:** {current_strategy['timeframe']}")
-    st.write(f"**MA:** {current_strategy['ma_fast']}/{current_strategy['ma_slow']}")
-    st.write(f"**RSI:** {current_strategy['rsi_period']} period")
-    st.write(f"**MACD:** {current_strategy['macd_fast']}-{current_strategy['macd_slow']}-{current_strategy['macd_signal']}")
-    st.write(f"**SL/TP:** {current_strategy['stop_loss_pips']}/{current_strategy['profit_target_pips']} pips")
-    
-    st.divider()
-    
-    # OPTIMAL SETTINGS SHOWCASE
-    st.subheader("🎯 Proven Indicator Combinations")
-    
-    with st.expander("📈 Moving Average Settings"):
-        for ma_setting in OPTIMAL_SETTINGS["MA_COMBINATIONS"]:
-            st.write(f"**{ma_setting['fast']}-{ma_setting['slow']}** - {ma_setting['use']}")
-    
-    with st.expander("📊 RSI Settings"):
-        for rsi_setting in OPTIMAL_SETTINGS["RSI_SETTINGS"]:
-            st.write(f"**Period {rsi_setting['period']}** - OB/OS: {rsi_setting['overbought']}/{rsi_setting['oversold']} - {rsi_setting['use']}")
-    
-    with st.expander("⚡ MACD Settings"):
-        for macd_setting in OPTIMAL_SETTINGS["MACD_SETTINGS"]:
-            st.write(f"**{macd_setting['fast']}-{macd_setting['slow']}-{macd_setting['signal']}** - {macd_setting['use']}")
-    
-    st.divider()
-    
-    # TRADING CONTROLS
-    st.subheader("🎮 Trading Controls")
+    # Trading Controls
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Start Auto Trading", use_container_width=True, type="primary"):
+        if st.button("🚀 Start Auto", use_container_width=True, type="primary"):
             st.session_state.auto_trading = True
             st.success("Auto Trading Started!")
     with col2:
-        if st.button("🛑 Stop Auto Trading", use_container_width=True, type="secondary"):
+        if st.button("🛑 Stop Auto", use_container_width=True):
             st.session_state.auto_trading = False
             st.warning("Auto Trading Stopped!")
     
-    if st.session_state.auto_trading:
-        st.markdown('<div style="background: linear-gradient(135deg, #00ff88 0%, #00cc66 100%); color: white; padding: 0.5rem; border-radius: 10px; text-align: center; font-weight: bold;">AUTO TRADING ACTIVE</div>', unsafe_allow_html=True)
-    else:
-        st.info("Auto Trading: INACTIVE")
-    
     st.divider()
     
-    # QUICK SETTINGS OVERRIDE
-    st.subheader("⚙️ Quick Adjustments")
-    
-    st.session_state.trading_params['required_indicators'] = st.slider(
-        "Required Indicator Agreement",
-        min_value=2,
-        max_value=4,
-        value=st.session_state.trading_params['required_indicators'],
-        help="Higher = Fewer but more reliable signals"
-    )
-    
-    st.session_state.trading_params['max_risk_percent'] = st.slider(
-        "Risk Per Trade (%)",
-        min_value=0.5,
-        max_value=5.0,
-        value=st.session_state.trading_params['max_risk_percent'],
-        step=0.5,
-        help="Professional traders risk 1-2% per trade"
-    )
-    
-    st.divider()
-    
-    # PERFORMANCE METRICS
-    st.subheader("📊 Current Metrics")
+    # Quick Stats
     total_profit = sum(trade.get('profit_loss', 0) for trade in st.session_state.trade_history)
-    win_rate = "N/A"
-    if st.session_state.trade_history:
-        winning_trades = len([t for t in st.session_state.trade_history if t.get('profit_loss', 0) > 0])
-        win_rate = f"{(winning_trades/len(st.session_state.trade_history)*100):.1f}%"
-    
     st.write(f"**Bank:** ${st.session_state.bank_balance:.2f}")
     st.write(f"**Total P&L:** ${total_profit:.2f}")
-    st.write(f"**Win Rate:** {win_rate}")
     st.write(f"**Open Trades:** {len(st.session_state.open_trades)}")
+    st.write(f"**Total Trades:** {len(st.session_state.trade_history)}")
 
-# STRATEGY COMPARISON SECTION
-st.subheader("🎯 Strategy Performance Comparison")
+# Execute trading logic
+auto_trades_executed = execute_auto_trades()
+update_trades()
+st.session_state.all_signals = scan_all_pairs_signals()
 
-cols = st.columns(len(PRO_STRATEGIES))
-for idx, (strategy_key, strategy) in enumerate(PRO_STRATEGIES.items()):
-    with cols[idx]:
-        is_current = strategy_key == st.session_state.trading_params.get('selected_strategy')
-        border_style = "4px solid #00ff88" if is_current else "2px solid #666"
+# CURRENT OPEN TRADES TABLE
+st.subheader("📊 Current Open Trades")
+
+if st.session_state.open_trades:
+    # Create DataFrame for open trades
+    open_trades_data = []
+    for trade in st.session_state.open_trades:
+        open_trades_data.append({
+            'ID': trade['id'],
+            'Pair': trade['pair'],
+            'Direction': trade['direction'],
+            'Entry Price': f"{trade['entry_price']:.4f}",
+            'Current Price': f"{trade['current_price']:.4f}",
+            'Stop Loss': f"{trade['stop_loss_price']:.4f}",
+            'Take Profit': f"{trade['take_profit_price']:.4f}",
+            'P&L ($)': f"${trade['profit_loss']:.2f}",
+            'P&L (Pips)': f"{trade['profit_loss_pips']:.1f}",
+            'Time Opened': trade['time'].strftime('%H:%M:%S'),
+            'Actions': trade['id']
+        })
+    
+    open_df = pd.DataFrame(open_trades_data)
+    
+    # Display the table with custom formatting
+    st.markdown('<div class="trade-table">', unsafe_allow_html=True)
+    
+    # Convert DataFrame to HTML with custom styling
+    def style_trade_dataframe(df):
+        styled_df = df.copy()
         
-        st.markdown(f"""
-        <div style="border: {border_style}; border-radius: 10px; padding: 1rem; background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%); color: white;">
-            <h4>{strategy['name']}</h4>
-            <p><small>{strategy['description']}</small></p>
-            <div class="indicator-optimal">
-                MA: {strategy['ma_fast']}/{strategy['ma_slow']}<br>
-                RSI: {strategy['rsi_period']}<br>
-                MACD: {strategy['macd_fast']}-{strategy['macd_slow']}-{strategy['macd_signal']}
-            </div>
-            <p><strong>SL/TP:</strong> {strategy['stop_loss_pips']}/{strategy['profit_target_pips']} pips</p>
-            { "✅ CURRENTLY ACTIVE" if is_current else "" }
-        </div>
-        """, unsafe_allow_html=True)
-
-# RESEARCH-BASED OPTIMAL SETTINGS
-st.subheader("🔬 Research-Backed Optimal Settings")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("""
-    <div class="strategy-card">
-        <h4>📈 Moving Averages</h4>
-        <p><strong>Most Effective:</strong> 7-25 period combo</p>
-        <p><strong>Why it works:</strong> Balances responsiveness with reliability, reduces whipsaws by 31% compared to standard 9-21</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-    <div class="strategy-card">
-        <h4>📊 RSI Settings</h4>
-        <p><strong>Optimal:</strong> 14-period, 72/28 levels</p>
-        <p><strong>Why it works:</strong> 72/28 levels reduce false signals by 23% while maintaining good entry timing</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown("""
-    <div class="strategy-card">
-        <h4>⚡ MACD Configuration</h4>
-        <p><strong>Best Performing:</strong> 10-22-7 setup</p>
-        <p><strong>Why it works:</strong> Faster signal line (7) provides earlier entries while maintaining momentum accuracy</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# RISK MANAGEMENT RESEARCH
-st.subheader("🛡️ Proven Risk Management")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("""
-    <div class="strategy-card">
-        <h4>💰 Position Sizing</h4>
-        <p><strong>Professional Standard:</strong> 1-2% risk per trade</p>
-        <p><strong>Research shows:</strong> This provides optimal growth while surviving inevitable drawdowns</p>
-        <p><strong>Mathematical Edge:</strong> Survives 15 consecutive losses with proper bankroll</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-    <div class="strategy-card">
-        <h4>⚖️ Risk/Reward Ratios</h4>
-        <p><strong>Minimum Viable:</strong> 1.5:1 ratio</p>
-        <p><strong>Professional Target:</strong> 2.0:1 or better</p>
-        <p><strong>Statistical Advantage:</strong> With 40% win rate, 2:1 R:R yields 20% ROI per 10 trades</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# CURRENT STRATEGY PERFORMANCE
-st.subheader("📊 Live Strategy Performance")
-
-# Simulate strategy performance (in real app, this would be actual performance data)
-strategy_performance = {
-    "SCALPING_5MIN": {"win_rate": "42%", "avg_trade": "+8.2 pips", "risk_level": "High"},
-    "SWING_15MIN": {"win_rate": "45%", "avg_trade": "+12.5 pips", "risk_level": "Medium"},
-    "TREND_1H": {"win_rate": "48%", "avg_trade": "+18.3 pips", "risk_level": "Low"},
-    "PROFESSIONAL_COMBO": {"win_rate": "46%", "avg_trade": "+15.1 pips", "risk_level": "Medium"}
-}
-
-current_strat = st.session_state.trading_params.get('selected_strategy', 'PROFESSIONAL_COMBO')
-perf = strategy_performance.get(current_strat, {"win_rate": "45%", "avg_trade": "+12.0 pips", "risk_level": "Medium"})
-
-st.markdown(f"""
-<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.5rem; border-radius: 10px; text-align: center;">
-    <h3>Current Strategy: {PRO_STRATEGIES[current_strat]['name']}</h3>
-    <div style="display: flex; justify-content: space-around; margin-top: 1rem;">
-        <div>
-            <h4>Projected Win Rate</h4>
-            <h2>{perf['win_rate']}</h2>
-        </div>
-        <div>
-            <h4>Average Trade</h4>
-            <h2>{perf['avg_trade']}</h2>
-        </div>
-        <div>
-            <h4>Risk Level</h4>
-            <h2>{perf['risk_level']}</h2>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# TRADING SIGNALS WITH OPTIMIZED SETTINGS
-st.subheader("🎯 Live Trading Signals - Optimized Settings")
-
-# Apply the trading logic (simplified for this example)
-st.session_state.all_signals = {}
-for pair in trading_pairs:
-    df = generate_15min_forex_data(pair, 200)
-    df_with_indicators = calculate_indicators(df)
-    signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
+        # Apply styling
+        styles = []
+        for _, row in styled_df.iterrows():
+            # Color P&L column
+            pnl_value = float(row['P&L ($)'].replace('$', ''))
+            pnl_color = 'color: #00ff88;' if pnl_value >= 0 else 'color: #ff4444;'
+            styles.append(['', '', '', '', '', '', '', pnl_color, '', '', ''])
+        
+        return styled_df.style.apply(lambda x: styles[df.index.get_loc(x.name)] if df.index.get_loc(x.name) < len(styles) else [''] * len(x), axis=1)
     
-    current_price = df_with_indicators['close'].iloc[-1]
-    st.session_state.current_prices[pair] = current_price
+    # Display styled dataframe
+    st.dataframe(open_df, use_container_width=True, hide_index=True)
     
-    st.session_state.all_signals[pair] = {
-        'signals': signals,
-        'buy_indicators': buy_indicators,
-        'sell_indicators': sell_indicators,
-        'agreement': agreement,
-        'current_price': current_price
-    }
+    # Close trade buttons
+    st.write("**Close Trades Manually:**")
+    cols = st.columns(4)
+    for i, trade in enumerate(st.session_state.open_trades):
+        with cols[i % 4]:
+            if st.button(f"Close Trade {trade['id']}", key=f"close_{trade['id']}", use_container_width=True):
+                close_trade(trade['id'])
+                st.success(f"Trade {trade['id']} closed!")
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+else:
+    st.info("No open trades currently")
 
-# Display signals in a grid
+# TRADE HISTORY TABLE
+st.subheader("📈 Trade History & Performance")
+
+if st.session_state.trade_history:
+    # Create DataFrame for trade history
+    history_data = []
+    for trade in st.session_state.trade_history:
+        # Determine close reason styling
+        if trade['close_reason'] == 'TP':
+            reason_class = "reason-tp"
+            reason_text = "TAKE PROFIT"
+        elif trade['close_reason'] == 'SL':
+            reason_class = "reason-sl"
+            reason_text = "STOP LOSS"
+        else:
+            reason_class = "reason-manual"
+            reason_text = "MANUAL"
+        
+        history_data.append({
+            'ID': trade['id'],
+            'Pair': trade['pair'],
+            'Direction': trade['direction'],
+            'Entry Price': f"{trade['entry_price']:.4f}",
+            'Exit Price': f"{trade['close_price']:.4f}",
+            'P&L ($)': f"${trade['profit_loss']:.2f}",
+            'P&L (Pips)': f"{trade['profit_loss_pips']:.1f}",
+            'Close Reason': trade['close_reason'],
+            'Duration': f"{(trade['close_time'] - trade['time']).seconds // 60}min",
+            'Open Time': trade['time'].strftime('%H:%M'),
+            'Close Time': trade['close_time'].strftime('%H:%M')
+        })
+    
+    history_df = pd.DataFrame(history_data)
+    
+    st.markdown('<div class="trade-table">', unsafe_allow_html=True)
+    
+    # Display trade history with filters
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        show_trades = st.selectbox("Show", ["All Trades", "Winning Trades", "Losing Trades"])
+    with col2:
+        sort_by = st.selectbox("Sort By", ["Most Recent", "Highest Profit", "Lowest Profit"])
+    with col3:
+        items_per_page = st.selectbox("Items per page", [10, 25, 50])
+    
+    # Apply filters
+    filtered_df = history_df.copy()
+    
+    if show_trades == "Winning Trades":
+        filtered_df = filtered_df[filtered_df['P&L ($)'].str.contains(r'\$[0-9]', regex=True)]
+        filtered_df = filtered_df[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')) > 0]
+    elif show_trades == "Losing Trades":
+        filtered_df = filtered_df[filtered_df['P&L ($)'].str.contains(r'\$[0-9]', regex=True)]
+        filtered_df = filtered_df[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')) < 0]
+    
+    # Apply sorting
+    if sort_by == "Most Recent":
+        filtered_df = filtered_df.iloc[::-1]
+    elif sort_by == "Highest Profit":
+        filtered_df = filtered_df.iloc[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')).argsort()[::-1]]
+    elif sort_by == "Lowest Profit":
+        filtered_df = filtered_df.iloc[pd.to_numeric(filtered_df['P&L ($)'].str.replace('$', '')).argsort()]
+    
+    # Pagination
+    total_trades = len(filtered_df)
+    page_number = st.number_input("Page", min_value=1, max_value=max(1, (total_trades // items_per_page) + 1), value=1)
+    start_idx = (page_number - 1) * items_per_page
+    end_idx = min(start_idx + items_per_page, total_trades)
+    
+    st.write(f"Showing {start_idx + 1}-{end_idx} of {total_trades} trades")
+    
+    # Display the table
+    st.dataframe(filtered_df.iloc[start_idx:end_idx], use_container_width=True, hide_index=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # PERFORMANCE SUMMARY
+    st.subheader("📊 Performance Summary")
+    
+    total_trades_count = len(st.session_state.trade_history)
+    winning_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] > 0])
+    losing_trades = len([t for t in st.session_state.trade_history if t['profit_loss'] < 0])
+    win_rate = (winning_trades / total_trades_count * 100) if total_trades_count > 0 else 0
+    
+    total_profit = sum(trade['profit_loss'] for trade in st.session_state.trade_history)
+    avg_profit = total_profit / total_trades_count if total_trades_count > 0 else 0
+    
+    # SL/TP Statistics
+    tp_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'TP'])
+    sl_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'SL'])
+    manual_trades = len([t for t in st.session_state.trade_history if t['close_reason'] == 'MANUAL'])
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("Total Trades", total_trades_count)
+    with col2:
+        st.metric("Win Rate", f"{win_rate:.1f}%")
+    with col3:
+        st.metric("Total P&L", f"${total_profit:.2f}")
+    with col4:
+        st.metric("Avg Trade", f"${avg_profit:.2f}")
+    with col5:
+        st.metric("Best Trade", f"${max([t['profit_loss'] for t in st.session_state.trade_history], default=0):.2f}")
+    
+    # Detailed Statistics
+    st.write("**Detailed Breakdown:**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.write(f"**Winning Trades:** {winning_trades}")
+        st.write(f"**Losing Trades:** {losing_trades}")
+    with col2:
+        st.write(f"**TP Hits:** {tp_trades} ({tp_trades/total_trades_count*100:.1f}%)")
+        st.write(f"**SL Hits:** {sl_trades} ({sl_trades/total_trades_count*100:.1f}%)")
+    with col3:
+        st.write(f"**Manual Closes:** {manual_trades} ({manual_trades/total_trades_count*100:.1f}%)")
+        st.write(f"**Largest Win:** ${max([t['profit_loss'] for t in st.session_state.trade_history if t['profit_loss'] > 0], default=0):.2f}")
+    
+else:
+    st.info("No trade history yet. Trades will appear here once they are closed.")
+
+# TRADING ACTIVITY
+st.subheader("🎯 Recent Trading Activity")
+
+# Show recent auto trade executions
+if auto_trades_executed:
+    st.write("**Recent Auto Trades:**")
+    for trade in auto_trades_executed[-5:]:  # Show last 5
+        if "BUY" in trade:
+            st.success(trade)
+        else:
+            st.error(trade)
+
+# Current signals
+st.write("**Current Market Signals:**")
 cols = st.columns(3)
-for idx, pair in enumerate(trading_pairs):
-    with cols[idx % 3]:
+for idx, pair in enumerate(trading_pairs[:3]):  # Show first 3 pairs
+    with cols[idx]:
         signal_info = st.session_state.all_signals.get(pair, {})
         agreement = signal_info.get('agreement', 'NONE')
         current_price = signal_info.get('current_price', 0)
         
         if agreement == 'BUY':
-            signal_color = "#00ff88"
-            signal_text = "STRONG BUY"
-            emoji = "🟢"
+            color = "#00ff88"
+            text = "BUY"
         elif agreement == 'SELL':
-            signal_color = "#ff4444"
-            signal_text = "STRONG SELL"
-            emoji = "🔴"
+            color = "#ff4444"
+            text = "SELL"
         else:
-            signal_color = "#666666"
-            signal_text = "NO SIGNAL"
-            emoji = "⚪"
+            color = "#666666"
+            text = "HOLD"
         
         st.markdown(f"""
-        <div style="border: 2px solid {signal_color}; border-radius: 10px; padding: 1rem; background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%); color: white;">
-            <h4>{pair} {emoji}</h4>
-            <div style="background: {signal_color}; color: white; padding: 0.5rem; border-radius: 5px; text-align: center; margin: 0.5rem 0;">
-                {signal_text}
-            </div>
-            <p><strong>Price:</strong> {current_price:.4f}</p>
-            <p><strong>Strategy:</strong> {PRO_STRATEGIES[current_strat]['name']}</p>
+        <div style="border: 2px solid {color}; border-radius: 10px; padding: 1rem; text-align: center;">
+            <h4>{pair}</h4>
+            <h3 style="color: {color};">{text}</h3>
+            <p>Price: {current_price:.4f}</p>
         </div>
         """, unsafe_allow_html=True)
 
-# PROFESSIONAL TIPS
-st.subheader("💡 Professional Trading Tips")
-
-tips = [
-    "**Stick to one strategy** - Consistency beats constantly changing approaches",
-    "**Risk management first** - Never risk more than 2% of your account on a single trade",
-    "**Let winners run** - Use trailing stops to maximize profitable trades",
-    "**Cut losses quickly** - Professional traders are quick to admit when they're wrong",
-    "**Trade the strategy, not your emotions** - Backtested systems outperform emotional trading",
-    "**Focus on risk/reward** - A 2:1 ratio with 40% win rate is highly profitable long-term"
-]
-
-for tip in tips:
-    st.write(f"• {tip}")
+# Export functionality
+if st.session_state.trade_history:
+    st.divider()
+    st.subheader("💾 Export Trade Data")
+    
+    # Convert trade history to CSV
+    export_data = []
+    for trade in st.session_state.trade_history:
+        export_data.append({
+            'Trade ID': trade['id'],
+            'Pair': trade['pair'],
+            'Direction': trade['direction'],
+            'Entry Price': trade['entry_price'],
+            'Exit Price': trade.get('close_price', ''),
+            'P&L ($)': trade['profit_loss'],
+            'P&L (Pips)': trade['profit_loss_pips'],
+            'Stop Loss': trade['stop_loss_price'],
+            'Take Profit': trade['take_profit_price'],
+            'Open Time': trade['time'],
+            'Close Time': trade.get('close_time', ''),
+            'Close Reason': trade.get('close_reason', ''),
+            'Status': trade['status']
+        })
+    
+    export_df = pd.DataFrame(export_data)
+    csv = export_df.to_csv(index=False)
+    
+    st.download_button(
+        label="📥 Download Trade History as CSV",
+        data=csv,
+        file_name=f"forex_trade_history_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
 
 # Auto-refresh
 st.divider()
-st.write("🔄 Auto-refreshing every 30 seconds with optimized strategies...")
+st.write("🔄 Auto-refreshing every 30 seconds...")
 time.sleep(30)
 st.rerun()
