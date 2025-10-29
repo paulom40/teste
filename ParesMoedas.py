@@ -45,12 +45,12 @@ df_volatilidade = pd.concat([
     simular_high_low(par, info["base"], info["vol"])
     for par, info in PARES.items()
 ])
+
 if "logs_tecnicos" not in st.session_state:
     st.session_state.logs_tecnicos = []
-
 st.title("📊 Painel de Monitoramento de Trades")
-
 st.subheader("🚨 Pares com Volatilidade Diária Elevada")
+
 pares_alerta = df_volatilidade[df_volatilidade["alerta_volatilidade"] == "Sim"]["par"].unique()
 if len(pares_alerta) > 0:
     for par in pares_alerta:
@@ -58,6 +58,7 @@ if len(pares_alerta) > 0:
         st.warning(f"{par}: {df_par['volatilidade'].max():.5f} de volatilidade máxima")
 else:
     st.info("Nenhum par excedeu o limite de volatilidade nos últimos 7 dias.")
+
 st.subheader("📈 Gráfico de Volatilidade Diária (com alertas)")
 fig, ax = plt.subplots(figsize=(10, 6))
 for par in pares_alerta:
@@ -79,7 +80,7 @@ if stake_manual == "€5":
 elif stake_manual == "€10":
     st.session_state.stake_valor = 10
 else:
-    st.session_state.stake_valor = 10  # padrão automático
+    st.session_state.stake_valor = 10  # automático
 st.subheader("🤖 Executar Trades com Volatilidade Alta")
 if st.button("🚀 Iniciar Execução"):
     for pair in PARES.keys():
@@ -107,88 +108,97 @@ if st.button("🚀 Iniciar Execução"):
             "log_risco_estimado": risco if executado == "Sim" else 0,
             "log_lucro_estimado": lucro if executado == "Sim" else 0
         })
+st.subheader("📡 Painel de Trades em Tempo Real")
+
 if st.session_state.logs_tecnicos:
     df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
     df_logs["Data"] = pd.to_datetime(df_logs["data"]).dt.date
-    df_logs["Lucro"] = df_logs["log_stake"].apply(lambda x: 0.10 if x == 5 else 0.20)
-    df_logs = df_logs[df_logs["trade_executado"] == "Sim"]
-    lucro_total = round(df_logs["Lucro"].sum(), 2)
-    lucro_diario = df_logs.groupby("Data")["Lucro"].sum().reset_index()
-    lucro_diario["Lucro Acumulado"] = lucro_diario["Lucro"].cumsum()
 
-    st.subheader("📌 Indicadores")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Trades Executados", len(df_logs))
-    col2.metric("Lucro Total", f"€{lucro_total}")
-    col3.metric("Stake Atual", f"€{st.session_state.stake_valor}")
+    df_ativos = df_logs[df_logs["status"] == "Ativo"].copy()
+    df_fechados = df_logs[df_logs["status"] == "Fechado"].copy()
 
-    st.subheader("📊 Lucro Acumulado")
-    fig2, ax2 = plt.subplots()
-    ax2.plot(lucro_diario["Data"], lucro_diario["Lucro Acumulado"], marker="o")
-    ax2.set_title("Lucro Acumulado por Dia")
-    ax2.set_xlabel("Data")
-    ax2.set_ylabel("Lucro (€)")
-    st.pyplot(fig2)
+    def format_painel(df, titulo):
+        if df.empty:
+            st.info(f"Nenhum trade {titulo.lower()} no momento.")
+            return
 
-    st.subheader("📋 Tabela de Trades Ativos e Concluídos")
+        df["Volatilidade"] = df["volatilidade_dia"].round(5)
+        df["Stake (€)"] = df["log_stake"]
+        df["Lucro Estimado (€)"] = df["log_lucro_estimado"]
+        df["Risco (€)"] = df["log_risco_estimado"]
+        df["Par"] = df["pair"]
 
-if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
-    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
-    df_logs["Data"] = pd.to_datetime(df_logs["data"]).dt.date
-
-    # Separar por status
-    df_ativos = df_logs[df_logs["status"] == "Ativo"]
-    df_fechados = df_logs[df_logs["status"] == "Fechado"]
+        df_exibir = df[["Data", "Par", "Volatilidade", "Stake (€)", "Lucro Estimado (€)", "Risco (€)", "status"]]
+        st.markdown(f"### {titulo}")
+        st.dataframe(df_exibir.style
+            .applymap(lambda v: "color: green" if isinstance(v, (int, float)) and v > 0 else "color: red", subset=["Lucro Estimado (€)", "Risco (€)"])
+            .set_properties(**{"font-weight": "bold"}, subset=["status", "Par"])
+        , use_container_width=True)
 
     col1, col2 = st.columns(2)
-
     with col1:
-        st.markdown("### ✅ Trades Ativos")
-        if not df_ativos.empty:
-            st.dataframe(df_ativos[["Data", "pair", "volatilidade_dia", "log_stake", "log_lucro_estimado"]].rename(columns={
-                "pair": "Par",
-                "volatilidade_dia": "Volatilidade",
-                "log_stake": "Stake (€)",
-                "log_lucro_estimado": "Lucro Estimado (€)"
-            }), use_container_width=True)
-        else:
-            st.info("Nenhum trade ativo no momento.")
-
+        format_painel(df_ativos, "✅ Trades Ativos")
     with col2:
-        st.markdown("### 📦 Trades Concluídos")
-        if not df_fechados.empty:
-            st.dataframe(df_fechados[["Data", "pair", "volatilidade_dia", "log_stake", "log_lucro_estimado"]].rename(columns={
-                "pair": "Par",
-                "volatilidade_dia": "Volatilidade",
-                "log_stake": "Stake (€)",
-                "log_lucro_estimado": "Lucro Estimado (€)"
-            }), use_container_width=True)
-        else:
-            st.info("Nenhum trade concluído ainda.")
+        format_painel(df_fechados, "📦 Trades Concluídos")
 else:
     st.info("Nenhum trade registrado ainda.")
+# KPIs e gráfico de lucro acumulado
+df_logs["Lucro"] = df_logs["log_stake"].apply(lambda x: 0.10 if x == 5 else 0.20)
+df_logs = df_logs[df_logs["trade_executado"] == "Sim"]
+lucro_total = round(df_logs["Lucro"].sum(), 2)
+lucro_diario = df_logs.groupby("Data")["Lucro"].sum().reset_index()
+lucro_diario["Lucro Acumulado"] = lucro_diario["Lucro"].cumsum()
 
-    
-    # Exportar Excel
-    export_buffer = io.BytesIO()
-    with pd.ExcelWriter(export_buffer, engine="xlsxwriter") as writer:
-        df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
-        lucro_diario.to_excel(writer, index=False, sheet_name="Lucro Acumulado")
-        worksheet = writer.sheets["Lucro Acumulado"]
-        chart = writer.book.add_chart({'type': 'line'})
-        chart.add_series({
-            'name': 'Lucro Acumulado',
-            'categories': ['Lucro Acumulado', 1, 0, len(lucro_diario), 0],
-            'values': ['Lucro Acumulado', 1, 1, len(lucro_diario), 1],
-        })
-        chart.set_title({'name': 'Lucro Acumulado por Dia'})
-        chart.set_x_axis({'name': 'Data'})
-        chart.set_y_axis({'name': 'Lucro (€)'})
-        worksheet.insert_chart('E2', chart)
+st.subheader("📌 Indicadores")
+col1, col2 = st.columns(2)
+col1.metric("Lucro Total", f"€{lucro_total}")
+col2.metric("Stake Atual", f"€{st.session_state.stake_valor}")
 
-    st.download_button(
-        label="📥 Exportar para Excel",
-        data=export_buffer.getvalue(),
-        file_name="painel_trades.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+st.subheader("📊 Lucro Acumulado por Dia")
+fig2, ax2 = plt.subplots()
+ax2.plot(lucro_diario["Data"], lucro_diario["Lucro Acumulado"], marker="o", color="green")
+ax2.set_title("Lucro Acumulado por Dia")
+ax2.set_xlabel("Data")
+ax2.set_ylabel("Lucro (€)")
+ax2.grid(True)
+st.pyplot(fig2)
+
+# Gestão de risco com pausa automática
+if lucro_total >= meta_lucro:
+    st.success(f"🎯 Meta de lucro (€{meta_lucro}) atingida! Operações pausadas.")
+    st.session_state.pausa_operacoes = True
+elif lucro_total <= limite_perda:
+    st.error(f"📉 Lucro abaixo do limite (€{limite_perda}). Operações pausadas.")
+    st.session_state.pausa_operacoes = True
+else:
+    st.session_state.pausa_operacoes = False
+st.subheader("📥 Exportar Painel para Excel")
+
+export_buffer = io.BytesIO()
+with pd.ExcelWriter(export_buffer, engine="xlsxwriter") as writer:
+    # Aba 1: Logs Técnicos
+    df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
+
+    # Aba 2: Lucro Acumulado
+    lucro_diario.to_excel(writer, index=False, sheet_name="Lucro Acumulado")
+
+    # Gráfico de lucro acumulado
+    workbook = writer.book
+    worksheet = writer.sheets["Lucro Acumulado"]
+    chart = workbook.add_chart({'type': 'line'})
+    chart.add_series({
+        'name': 'Lucro Acumulado',
+        'categories': ['Lucro Acumulado', 1, 0, len(lucro_diario), 0],
+        'values': ['Lucro Acumulado', 1, 2, len(lucro_diario), 2],
+    })
+    chart.set_title({'name': 'Lucro Acumulado por Dia'})
+    chart.set_x_axis({'name': 'Data'})
+    chart.set_y_axis({'name': 'Lucro (€)'})
+    worksheet.insert_chart('E2', chart)
+
+st.download_button(
+    label="📤 Baixar Excel com Dados e Gráficos",
+    data=export_buffer.getvalue(),
+    file_name="painel_trades.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
