@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import requests
 import io
 
 st.set_page_config(page_title="Forex Pro Bot", layout="wide")
@@ -120,6 +121,7 @@ def simular_volume_impulso(df):
     amplitude = ultima["high"] - ultima["low"]
     media = df["high"].sub(df["low"]).rolling(window=10).mean().iloc[-1]
     return amplitude > media * 1.2
+
 def generate_15min_forex_data(pair, periods=200):
     base = FOREX_PAIRS[pair]["base_price"]
     vol = FOREX_PAIRS[pair]["volatility"]
@@ -135,6 +137,26 @@ def generate_15min_forex_data(pair, periods=200):
         base = close
     return pd.DataFrame(data)
 
+def obter_dados_polygon(pair, api_key, fallback=True):
+    origem = "API"
+    try:
+        symbol = pair.replace("/", "")
+        url = f"https://api.polygon.io/v2/aggs/ticker/C:{symbol}/range/15/minute/1/day?adjusted=true&sort=asc&apiKey={api_key}"
+        response = requests.get(url)
+        response.raise_for_status()
+        dados = response.json()["results"]
+        df = pd.DataFrame([{
+            "timestamp": datetime.fromtimestamp(item["t"] / 1000),
+            "open": item["o"],
+            "high": item["h"],
+            "low": item["l"],
+            "close": item["c"]
+        } for item in dados])
+    except Exception:
+        origem = "Simulação"
+        st.warning(f"⚠️ API da Polygon falhou para {pair}. Usando dados simulados.")
+        df = generate_15min_forex_data(pair)
+    return df, origem
 def detect_trading_signals(df):
     params = st.session_state.trading_params
     latest = df.iloc[-1]
@@ -148,15 +170,48 @@ def detect_trading_signals(df):
     if len(buy) >= params['required_indicators']: return buy, sell, 'BUY'
     elif len(sell) >= params['required_indicators']: return buy, sell, 'SELL'
     return buy, sell, 'HOLD'
+
+COMBINACOES_CRITICAS = [
+    {"indicadores": {"RSI Oversold", "MACD Bullish"}, "padrao": "Pin Bar", "tipo": "BUY"},
+    {"indicadores": {"RSI Overbought", "MACD Bearish"}, "padrao": "Bearish Engulfing", "tipo": "SELL"},
+    {"indicadores": {"MA Bullish", "MACD Bullish"}, "padrao": "Inside Bar", "tipo": "BUY"},
+]
+
+def verificar_alerta_combinado(indicadores, padrao, tipo):
+    ativos = set(indicadores)
+    for regra in COMBINACOES_CRITICAS:
+        if regra["tipo"] == tipo and regra["padrao"] == padrao:
+            if regra["indicadores"].issubset(ativos):
+                return True
+    return False
+def registrar_log(pair, signal, padrao, breakout, confirmado, impulso, resultado, origem_dados, indicadores_ativos, alerta_critico=False):
+    log = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "pair": pair,
+        "signal": signal,
+        "padrao": padrao,
+        "breakout": breakout,
+        "confirmado": confirmado,
+        "impulso": impulso,
+        "resultado (€)": round(resultado, 2),
+        "origem_dados": origem_dados,
+        "indicadores_ativos": ", ".join(indicadores_ativos),
+        "alerta_critico": "Sim" if alerta_critico else "Não"
+    }
+    if "logs_tecnicos" not in st.session_state:
+        st.session_state.logs_tecnicos = []
+    st.session_state.logs_tecnicos.append(log)
+
 st.markdown("## 🤖 Trader Automático com Price Action")
 
 if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trading):
     st.session_state.auto_trading = True
 
     for pair in trading_pairs:
-        df = generate_15min_forex_data(pair)
+        df, origem_dados = obter_dados_polygon(pair, api_key="ZACYNJQZmDFZV0B92pErxGfiF60iUuZ_")
         df_ind = calculate_indicators(df)
         buy, sell, signal = detect_trading_signals(df_ind)
+        indicadores_ativos = buy if signal == "BUY" else sell if signal == "SELL" else []
 
         padrao = detectar_padrao_price_action(df)
         zonas = detectar_suporte_resistencia(df)
@@ -164,6 +219,7 @@ if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trad
         breakout = detectar_breakout(df, zonas)
         confirmado = confirmar_padrao_por_candles(df, padrao, n=2)
         impulso = simular_volume_impulso(df)
+        alerta_critico = verificar_alerta_combinado(indicadores_ativos, padrao, signal)
 
         condicoes_ideais = (
             signal in ["BUY", "SELL"] and
@@ -173,26 +229,28 @@ if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trad
         ) or (breakout in ["Breakout Acima", "Breakout Abaixo"] and impulso)
 
         if condicoes_ideais:
+            stake = st.session_state.trading_params['manual_stake_amount']
+            pip_value = FOREX_PAIRS[pair]["pip_value"]
+            movimento = np.random.choice(["profit", "loss"], p=[0.55, 0.45])
+            pips = DEFAULT_PARAMS["profit_target_pips"] if movimento == "profit" else DEFAULT_PARAMS["stop_loss_pips"]
+            resultado = stake * (pips * pip_value) * (1 if movimento == "profit" else -1)
+            status = "Lucro" if resultado > 0 else "Prejuízo"
+
             trade = {
                 "id": st.session_state.trade_counter + 1,
                 "pair": pair,
-                "stake": st.session_state.trading_params['manual_stake_amount'],
+                "stake": stake,
                 "signal": signal,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "auto": True
             }
             st.session_state.trade_counter += 1
             st.session_state.open_trades.append(trade)
-            pip_value = FOREX_PAIRS[pair]["pip_value"]
-            movimento = np.random.choice(["profit", "loss"], p=[0.55, 0.45])
-            pips = DEFAULT_PARAMS["profit_target_pips"] if movimento == "profit" else DEFAULT_PARAMS["stop_loss_pips"]
-            resultado = trade["stake"] * (pips * pip_value) * (1 if movimento == "profit" else -1)
-            status = "Lucro" if resultado > 0 else "Prejuízo"
 
             resultado_trade = {
                 "pair": pair,
                 "direção": signal,
-                "stake": trade["stake"],
+                "stake": stake,
                 "resultado (€)": round(resultado, 2),
                 "status": status,
                 "timestamp": trade["timestamp"]
@@ -200,7 +258,12 @@ if st.checkbox("🔁 Ativar trade automático", value=st.session_state.auto_trad
 
             st.session_state.trade_history.append(resultado_trade)
             st.session_state.bank_balance += resultado
+            registrar_log(pair, signal, padrao, breakout, confirmado, impulso, resultado, origem_dados, indicadores_ativos, alerta_critico)
 
+            if alerta_critico:
+                st.error(f"🚨 Alerta crítico: {signal} com {padrao} e {', '.join(indicadores_ativos)}")
+            else:
+                st.write(f"{pair} → {signal} → {padrao or breakout} → {status} (€{resultado:.2f})")
 st.markdown("## 📊 Painel de Performance")
 df_resultados = pd.DataFrame(st.session_state.trade_history)
 if not df_resultados.empty:
@@ -213,70 +276,34 @@ if not df_resultados.empty:
     st.write(f"Taxa de Acerto: {taxa_acerto:.1f}%")
     st.write(f"Drawdown Máximo: €{drawdown:.2f}")
     st.line_chart(df_resultados.set_index("timestamp")["saldo"])
-st.subheader("🔍 Filtrar Histórico")
-if not df_resultados.empty:
-    pares = df_resultados["pair"].unique().tolist()
-    par_selecionado = st.selectbox("Par de moeda", ["Todos"] + pares)
-    data_inicio = st.date_input("Data inicial", value=pd.to_datetime(df_resultados["timestamp"]).min().date())
-    data_fim = st.date_input("Data final", value=pd.to_datetime(df_resultados["timestamp"]).max().date())
 
-    df_filtrado = df_resultados.copy()
-    df_filtrado["timestamp"] = pd.to_datetime(df_filtrado["timestamp"])
-    df_filtrado = df_filtrado[
-        (df_filtrado["timestamp"].dt.date >= data_inicio) &
-        (df_filtrado["timestamp"].dt.date <= data_fim)
-    ]
-    if par_selecionado != "Todos":
-        df_filtrado = df_filtrado[df_filtrado["pair"] == par_selecionado]
+    st.subheader("🚨 Alertas por Par")
+    META_LUCRO = 150.0
+    LIMITE_DRAW = 100.0
+    for pair in df_resultados["pair"].unique():
+        df_par = df_resultados[df_resultados["pair"] == pair].copy()
+        df_par["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_par["resultado (€)"].cumsum()
+        lucro = df_par["resultado (€)"].sum()
+        draw = (df_par["saldo"].cummax() - df_par["saldo"]).max()
+        if lucro >= META_LUCRO:
+            st.success(f"{pair}: Meta de lucro atingida (€{lucro:.2f})")
+        elif draw >= LIMITE_DRAW:
+            st.warning(f"{pair}: Drawdown elevado (€{draw:.2f})")
+        else:
+            st.info(f"{pair}: Dentro dos parâmetros operacionais")
+st.subheader("🧾 Logs Técnicos")
+if "logs_tecnicos" in st.session_state and st.session_state.logs_tecnicos:
+    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
+    par_log = st.selectbox("Filtrar por par", ["Todos"] + df_logs["pair"].unique().tolist())
+    if par_log != "Todos":
+        df_logs = df_logs[df_logs["pair"] == par_log]
+    st.dataframe(df_logs, use_container_width=True)
 
-    st.dataframe(df_filtrado, use_container_width=True)
+    output_logs = io.BytesIO()
+    with pd.ExcelWriter(output_logs, engine="xlsxwriter") as writer:
+        df_logs.to_excel(writer, index=False, sheet_name="Logs Técnicos")
+    st.download_button("📥 Baixar Logs Técnicos", output_logs.getvalue(), "logs_tecnicos_trader.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Exportação por par com gráfico e métricas
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_resultados.to_excel(writer, index=False, sheet_name="Resumo Geral")
-        for pair in df_resultados["pair"].unique():
-            df_par = df_resultados[df_resultados["pair"] == pair].copy()
-            df_par["saldo"] = DEFAULT_PARAMS["initial_bank"] + df_par["resultado (€)"].cumsum()
-            df_par.to_excel(writer, index=False, sheet_name=pair.replace("/", "_"))
-
-            lucro_total = df_par["resultado (€)"].sum()
-            taxa_acerto = (df_par["resultado (€)"] > 0).mean() * 100
-            drawdown = (df_par["saldo"].cummax() - df_par["saldo"]).max()
-
-            worksheet = writer.sheets[pair.replace("/", "_")]
-            worksheet.write("H1", "Lucro Líquido (€)")
-            worksheet.write("H2", round(lucro_total, 2))
-            worksheet.write("H3", "Taxa de Acerto (%)")
-            worksheet.write("H4", round(taxa_acerto, 1))
-            worksheet.write("H5", "Drawdown Máximo (€)")
-            worksheet.write("H6", round(drawdown, 2))
-
-            # Alerta
-            META_LUCRO = 150.0
-            LIMITE_DRAW = 100.0
-            if lucro_total >= META_LUCRO:
-                alerta = f"Meta de lucro atingida (€{lucro_total:.2f})"
-            elif drawdown >= LIMITE_DRAW:
-                alerta = f"Drawdown elevado (€{drawdown:.2f})"
-            else:
-                alerta = "Dentro dos parâmetros operacionais"
-            worksheet.write("H8", "Alerta")
-            worksheet.write("H9", alerta)
-
-            # Gráfico
-            chart = writer.book.add_chart({'type': 'line'})
-            chart.add_series({
-                'name': 'Saldo',
-                'categories': [pair.replace("/", "_"), 1, df_par.columns.get_loc("timestamp"), len(df_par), df_par.columns.get_loc("timestamp")],
-                'values':     [pair.replace("/", "_"), 1, df_par.columns.get_loc("saldo"), len(df_par), df_par.columns.get_loc("saldo")],
-            })
-            chart.set_title({'name': f'Saldo - {pair}'})
-            worksheet.insert_chart('H11', chart)
-
-    st.download_button(
-        label="📥 Baixar Excel por Par com Métricas e Gráfico",
-        data=output.getvalue(),
-        file_name="trades_por_par_completo.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+st.subheader("📤 Exportar por Par com Métricas e Gráfico")
+output = io.BytesIO()
+with pd.ExcelWriter
