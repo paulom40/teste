@@ -68,7 +68,6 @@ def detectar_padrao_price_action(df):
     ultima = df.iloc[-1]
     anterior = df.iloc[-2]
 
-    # Engulfing
     if ultima["close"] > ultima["open"] and anterior["close"] < anterior["open"]:
         if ultima["open"] < anterior["close"] and ultima["close"] > anterior["open"]:
             return "Bullish Engulfing"
@@ -76,14 +75,12 @@ def detectar_padrao_price_action(df):
         if ultima["open"] > anterior["close"] and ultima["close"] < anterior["open"]:
             return "Bearish Engulfing"
 
-    # Pin Bar
     corpo = abs(ultima["close"] - ultima["open"])
     sombra_sup = ultima["high"] - max(ultima["close"], ultima["open"])
     sombra_inf = min(ultima["close"], ultima["open"]) - ultima["low"]
     if corpo < sombra_sup * 0.3 or corpo < sombra_inf * 0.3:
         return "Pin Bar"
 
-    # Inside Bar
     if ultima["high"] < anterior["high"] and ultima["low"] > anterior["low"]:
         return "Inside Bar"
 
@@ -155,14 +152,15 @@ st.markdown("## 🤖 Trader Automático com Price Action")
 
 if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_trading):
     st.session_state.auto_trading = True
-    for pair in trading_pairs:
-    df = generate_15min_forex_data(pair)
-    df_ind = calculate_indicators(df)
-    buy, sell, signal = detect_trading_signals(df_ind)
-    padrao = detectar_padrao_price_action(df)
 
-    zonas = detectar_suporte_resistencia(df)
-    preco_atual = df.iloc[-1]["close"]
+    for pair in trading_pairs:
+        df = generate_15min_forex_data(pair)
+        df_ind = calculate_indicators(df)
+        buy, sell, signal = detect_trading_signals(df_ind)
+
+        padrao = detectar_padrao_price_action(df)
+        zonas = detectar_suporte_resistencia(df)
+        preco_atual = df.iloc[-1]["close"]
         breakout = detectar_breakout(df, zonas)
         confirmado = confirmar_padrao_por_candles(df, padrao, n=2)
         impulso = simular_volume_impulso(df)
@@ -185,10 +183,9 @@ if st.toggle("🔁 Ativar trade automático", value=st.session_state.auto_tradin
             }
             st.session_state.trade_counter += 1
             st.session_state.open_trades.append(trade)
-
-            # Simular resultado
             pip_value = FOREX_PAIRS[pair]["pip_value"]
             movimento = np.random.choice(["profit", "loss"], p=[0.55, 0.45])
+
             if movimento == "profit":
                 pips = DEFAULT_PARAMS["profit_target_pips"]
                 resultado = trade["stake"] * (pips * pip_value)
