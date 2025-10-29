@@ -41,14 +41,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Forex pairs with realistic base prices and volatility
+# Forex pairs with realistic base prices and volatility (added more pairs)
 FOREX_PAIRS = {
     "EUR/USD": {"base_price": 1.0850, "volatility": 0.0008, "pip_value": 0.0001},
     "GBP/USD": {"base_price": 1.2650, "volatility": 0.0010, "pip_value": 0.0001},
     "USD/JPY": {"base_price": 148.50, "volatility": 0.15, "pip_value": 0.01},
     "USD/CHF": {"base_price": 0.8800, "volatility": 0.0009, "pip_value": 0.0001},
     "USD/CAD": {"base_price": 1.3550, "volatility": 0.0010, "pip_value": 0.0001},
-    "AUD/USD": {"base_price": 0.6550, "volatility": 0.0012, "pip_value": 0.0001}
+    "AUD/USD": {"base_price": 0.6550, "volatility": 0.0012, "pip_value": 0.0001},
+    "NZD/USD": {"base_price": 0.6050, "volatility": 0.0010, "pip_value": 0.0001},
+    "EUR/GBP": {"base_price": 0.8350, "volatility": 0.0005, "pip_value": 0.0001},
+    "EUR/JPY": {"base_price": 161.00, "volatility": 0.20, "pip_value": 0.01},
+    "GBP/JPY": {"base_price": 188.50, "volatility": 0.25, "pip_value": 0.01}
 }
 
 # PROVEN TRADING STRATEGIES
@@ -103,7 +107,7 @@ PRO_STRATEGIES = {
     }
 }
 
-# Default trading parameters
+# Default trading parameters (added loss avoidance params)
 DEFAULT_PARAMS = {
     'initial_bank': 10000,
     'profit_target_pips': 20.0,
@@ -119,8 +123,13 @@ DEFAULT_PARAMS = {
     'required_indicators': 3,
     'max_open_trades': 3,
     'max_risk_percent': 1.5,
+    'max_daily_loss_percent': 2.0,  # New: Max daily loss as % of initial bank
+    'trailing_stop_enabled': True,   # New: Enable trailing stop
+    'trail_start_pips': 10.0,        # New: Pips in profit to start trailing
+    'trail_distance_pips': 5.0,      # New: Trailing distance in pips
     'selected_strategy': 'PROFESSIONAL_COMBO',
-    'manual_stake_amount': 100  # Default manual stake
+    'manual_stake_amount': 100,  # Default manual stake
+    'use_pin_bar': True  # New: Use Pin Bar candlestick patterns
 }
 
 # Initialize session state
@@ -147,8 +156,13 @@ if 'trade_counter' not in st.session_state:
     st.session_state.trade_counter = 0
 if 'use_manual_stake' not in st.session_state:
     st.session_state.use_manual_stake = False
+# New for loss avoidance
+if 'last_reset_date' not in st.session_state:
+    st.session_state.last_reset_date = datetime.now().date()
+if 'daily_start_balance' not in st.session_state:
+    st.session_state.daily_start_balance = st.session_state.bank_balance
 
-# Trading pairs list
+# Trading pairs list (updated with new pairs)
 trading_pairs = list(FOREX_PAIRS.keys())
 
 # Technical Indicator Calculations
@@ -221,6 +235,28 @@ def generate_15min_forex_data(pair, periods=200):
     
     return pd.DataFrame(prices)
 
+# New: Pin Bar Detection based on Price Action Strategy
+def detect_pin_bar(df):
+    if len(df) < 1:
+        return None
+    
+    latest = df.iloc[-1]
+    body = abs(latest['close'] - latest['open'])
+    total_range = latest['high'] - latest['low']
+    
+    if total_range == 0:
+        return None
+    
+    lower_wick = min(latest['open'], latest['close']) - latest['low']
+    upper_wick = latest['high'] - max(latest['open'], latest['close'])
+    
+    if lower_wick >= (2/3 * total_range) and body <= (1/3 * total_range):
+        return 'bullish'
+    elif upper_wick >= (2/3 * total_range) and body <= (1/3 * total_range):
+        return 'bearish'
+    
+    return None
+
 def detect_trading_signals(df):
     buy_indicators = []
     sell_indicators = []
@@ -228,7 +264,7 @@ def detect_trading_signals(df):
     
     try:
         if len(df) < 20:
-            return [], [], [], 'NONE'
+            return [], [], [], 'NONE', None
         
         latest = df.iloc[-1]
         
@@ -253,6 +289,14 @@ def detect_trading_signals(df):
             else:
                 sell_indicators.append("MACD Bearish")
         
+        # New: Pin Bar Signals
+        if params['use_pin_bar']:
+            pin_type = detect_pin_bar(df)
+            if pin_type == 'bullish':
+                buy_indicators.append("Pin Bar Bullish")
+            elif pin_type == 'bearish':
+                sell_indicators.append("Pin Bar Bearish")
+        
         # Determine agreement
         total_buy = len(buy_indicators)
         total_sell = len(sell_indicators)
@@ -271,20 +315,29 @@ def detect_trading_signals(df):
             agreement = 'NONE'
             signals = []
             
-        return signals, buy_indicators, sell_indicators, agreement
+        return signals, buy_indicators, sell_indicators, agreement, detect_pin_bar(df)
         
     except Exception as e:
-        return [], [], [], 'NONE'
+        return [], [], [], 'NONE', None
 
-def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair):
+def calculate_sl_tp_prices(entry_price, direction, sl_pips, tp_pips, pair, pin_type=None):
     pip_value = FOREX_PAIRS[pair]['pip_value']
     
-    if direction == 'BUY':
-        stop_loss_price = entry_price - (sl_pips * pip_value)
+    if pin_type == 'bullish' and direction == 'BUY':
+        # For bullish pin bar: SL 3 pips below low, but since entry is adjusted, use params for TP
+        stop_loss_price = entry_price - (sl_pips * pip_value)  # Use standard, or adjust
         take_profit_price = entry_price + (tp_pips * pip_value)
-    else:
+    elif pin_type == 'bearish' and direction == 'SELL':
         stop_loss_price = entry_price + (sl_pips * pip_value)
         take_profit_price = entry_price - (tp_pips * pip_value)
+    else:
+        # Standard
+        if direction == 'BUY':
+            stop_loss_price = entry_price - (sl_pips * pip_value)
+            take_profit_price = entry_price + (tp_pips * pip_value)
+        else:
+            stop_loss_price = entry_price + (sl_pips * pip_value)
+            take_profit_price = entry_price - (tp_pips * pip_value)
     
     return stop_loss_price, take_profit_price
 
@@ -298,10 +351,42 @@ def calculate_position_size(stake_amount, sl_pips, pair):
         return min(position_size, 100000)  # Cap at 10 lots
     return 10000  # Default to 1 lot
 
-def execute_trade(pair, direction, entry_price, stake_amount=None):
+def check_daily_loss_limit():
+    """Check if daily loss limit is exceeded"""
+    if datetime.now().date() > st.session_state.last_reset_date:
+        st.session_state.daily_start_balance = st.session_state.bank_balance
+        st.session_state.last_reset_date = datetime.now().date()
+    
+    daily_pnl = st.session_state.bank_balance - st.session_state.daily_start_balance
+    max_loss = - (st.session_state.trading_params['initial_bank'] * st.session_state.trading_params['max_daily_loss_percent'] / 100)
+    
+    if daily_pnl < max_loss:
+        if st.session_state.auto_trading:
+            st.session_state.auto_trading = False
+            st.warning(f"Daily loss limit ({st.session_state.trading_params['max_daily_loss_percent']}%) reached! Auto trading stopped.")
+        return False
+    return True
+
+def execute_trade(pair, direction, entry_price, stake_amount=None, pin_type=None):
     try:
+        # Check daily loss limit before executing
+        if not check_daily_loss_limit():
+            st.error("Daily loss limit exceeded. Cannot execute new trades.")
+            return False
+
         st.session_state.trade_counter += 1
         params = st.session_state.trading_params
+        
+        # Adjust entry for Pin Bar
+        pip_value = FOREX_PAIRS[pair]['pip_value']
+        if pin_type == 'bullish' and direction == 'BUY':
+            # Entry 2 pips above the body high
+            body_high = max(entry_price, st.session_state.current_prices.get(pair, entry_price))  # Approximate
+            entry_price = body_high + (2 * pip_value)
+        elif pin_type == 'bearish' and direction == 'SELL':
+            # Entry 2 pips below the body low
+            body_low = min(entry_price, st.session_state.current_prices.get(pair, entry_price))
+            entry_price = body_low - (2 * pip_value)
         
         # Determine stake amount
         if stake_amount is None:
@@ -315,12 +400,17 @@ def execute_trade(pair, direction, entry_price, stake_amount=None):
             st.error(f"Insufficient balance! Available: ${st.session_state.bank_balance:.2f}, Required: ${stake_amount:.2f}")
             return False
         
-        # Calculate position size
-        position_size = calculate_position_size(stake_amount, params['stop_loss_pips'], pair)
+        # Calculate position size (use adjusted SL if pin bar)
+        sl_pips_adjusted = params['stop_loss_pips']
+        if pin_type == 'bullish' and direction == 'BUY':
+            sl_pips_adjusted = 3.0  # 3 pips for pin bar
+        elif pin_type == 'bearish' and direction == 'SELL':
+            sl_pips_adjusted = 5.0  # 5 pips for pin bar
+        position_size = calculate_position_size(stake_amount, sl_pips_adjusted, pair)
         
         # Calculate SL and TP prices
         stop_loss_price, take_profit_price = calculate_sl_tp_prices(
-            entry_price, direction, params['stop_loss_pips'], params['profit_target_pips'], pair
+            entry_price, direction, sl_pips_adjusted, params['profit_target_pips'], pair, pin_type
         )
         
         trade = {
@@ -339,7 +429,9 @@ def execute_trade(pair, direction, entry_price, stake_amount=None):
             'current_price': entry_price,
             'type': 'MANUAL' if stake_amount else 'AUTO',
             'close_reason': None,
-            'stake_type': 'MANUAL' if st.session_state.use_manual_stake else 'AUTO'
+            'stake_type': 'MANUAL' if st.session_state.use_manual_stake else 'AUTO',
+            'trailing_sl': stop_loss_price,  # New: Track trailing SL
+            'pin_type': pin_type  # Track pin bar type
         }
         
         st.session_state.open_trades.append(trade)
@@ -385,6 +477,10 @@ def close_trade(trade_id, close_price=None, reason='MANUAL'):
 
 def update_trades():
     trades_to_remove = []
+    params = st.session_state.trading_params
+    trailing_enabled = params['trailing_stop_enabled']
+    trail_start = params['trail_start_pips']
+    trail_dist = params['trail_distance_pips']
     
     for i, trade in enumerate(st.session_state.open_trades):
         if trade['status'] == 'open':
@@ -403,7 +499,21 @@ def update_trades():
             trade['profit_loss_pips'] = pips
             trade['current_price'] = current_price
             
-            # Check SL/TP
+            # New: Trailing Stop Logic
+            if trailing_enabled:
+                current_sl = trade['stop_loss_price']  # Use original or trailed
+                if trade['direction'] == 'BUY':
+                    if pips > trail_start:
+                        new_sl = current_price - (trail_dist * pip_value)
+                        if new_sl > trade['stop_loss_price']:  # Only move up
+                            trade['stop_loss_price'] = new_sl
+                else:  # SELL
+                    if pips > trail_start:
+                        new_sl = current_price + (trail_dist * pip_value)
+                        if new_sl < trade['stop_loss_price']:  # Only move down
+                            trade['stop_loss_price'] = new_sl
+            
+            # Check SL/TP (use updated SL for trailing)
             if trade['direction'] == 'BUY':
                 if current_price >= trade['take_profit_price']:
                     close_trade(trade['id'], current_price, 'TP')
@@ -426,7 +536,7 @@ def scan_all_pairs_signals():
         df = generate_15min_forex_data(pair, 200)
         df_with_indicators = calculate_indicators(df)
         
-        signals, buy_indicators, sell_indicators, agreement = detect_trading_signals(df_with_indicators)
+        signals, buy_indicators, sell_indicators, agreement, pin_type = detect_trading_signals(df_with_indicators)
         
         current_price = df_with_indicators['close'].iloc[-1]
         st.session_state.current_prices[pair] = current_price
@@ -436,13 +546,18 @@ def scan_all_pairs_signals():
             'buy_indicators': buy_indicators,
             'sell_indicators': sell_indicators,
             'agreement': agreement,
-            'current_price': current_price
+            'current_price': current_price,
+            'pin_type': pin_type
         }
     
     return all_signals
 
 def execute_auto_trades():
     if not st.session_state.auto_trading:
+        return []
+    
+    # Check daily loss limit before auto trades
+    if not check_daily_loss_limit():
         return []
     
     auto_trades_executed = []
@@ -453,21 +568,22 @@ def execute_auto_trades():
         for pair, signal_info in all_signals.items():
             signals = signal_info.get('signals', [])
             agreement = signal_info.get('agreement', 'NONE')
+            pin_type = signal_info.get('pin_type')
             
             for signal_type, count, indicators in signals:
                 if agreement == 'BUY' and signal_type == "BUY" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
-                    if execute_trade(pair, 'BUY', current_price):
+                    if execute_trade(pair, 'BUY', current_price, pin_type=pin_type):
                         stake_type = "Manual" if st.session_state.use_manual_stake else "Auto"
-                        auto_trades_executed.append(f"✅ BUY {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators")
+                        auto_trades_executed.append(f"✅ BUY {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators (Pin: {pin_type})")
                 
                 elif agreement == 'SELL' and signal_type == "SELL" and len(st.session_state.open_trades) < st.session_state.trading_params['max_open_trades']:
                     current_price = st.session_state.current_prices.get(pair, FOREX_PAIRS[pair]['base_price'])
                     
-                    if execute_trade(pair, 'SELL', current_price):
+                    if execute_trade(pair, 'SELL', current_price, pin_type=pin_type):
                         stake_type = "Manual" if st.session_state.use_manual_stake else "Auto"
-                        auto_trades_executed.append(f"❌ SELL {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators")
+                        auto_trades_executed.append(f"❌ SELL {pair} - ${st.session_state.trading_params['manual_stake_amount'] if st.session_state.use_manual_stake else 'Auto'} - {count} indicators (Pin: {pin_type})")
                         
     except Exception as e:
         st.error(f"Error in auto trading: {e}")
@@ -485,7 +601,7 @@ def apply_strategy(strategy_name):
     return False
 
 # MAIN APP LAYOUT
-st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Manual Stake Control</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🤖 Forex Pro Bot - Manual Stake Control with Price Action</h1>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -526,6 +642,58 @@ with st.sidebar:
         risk_amount = (st.session_state.trading_params['max_risk_percent'] / 100) * st.session_state.bank_balance
         st.write(f"**Risk per trade:** ${risk_amount:.2f}")
         st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.divider()
+    
+    # New: Loss Avoidance System
+    st.subheader("🛡️ Loss Avoidance System")
+    st.session_state.trading_params['trailing_stop_enabled'] = st.checkbox(
+        "Enable Trailing Stop Loss",
+        value=st.session_state.trading_params['trailing_stop_enabled'],
+        help="Trail SL after profit reaches start pips"
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.trading_params['trail_start_pips'] = st.number_input(
+            "Trail Start (Pips)",
+            min_value=5.0,
+            max_value=20.0,
+            value=st.session_state.trading_params['trail_start_pips'],
+            step=1.0
+        )
+    with col2:
+        st.session_state.trading_params['trail_distance_pips'] = st.number_input(
+            "Trail Distance (Pips)",
+            min_value=3.0,
+            max_value=10.0,
+            value=st.session_state.trading_params['trail_distance_pips'],
+            step=1.0
+        )
+    st.session_state.trading_params['max_daily_loss_percent'] = st.slider(
+        "Max Daily Loss (%)",
+        min_value=1.0,
+        max_value=5.0,
+        value=st.session_state.trading_params['max_daily_loss_percent'],
+        step=0.5,
+        help="Stop trading if daily loss exceeds this % of initial bank"
+    )
+    
+    # Show current daily PnL
+    if datetime.now().date() > st.session_state.last_reset_date:
+        st.session_state.daily_start_balance = st.session_state.bank_balance
+        st.session_state.last_reset_date = datetime.now().date()
+    daily_pnl = st.session_state.bank_balance - st.session_state.daily_start_balance
+    st.info(f"**Daily P&L:** ${daily_pnl:.2f} ({(daily_pnl / st.session_state.daily_start_balance * 100):.1f}%)")
+    
+    st.divider()
+    
+    # New: Candlestick Patterns
+    st.subheader("🕯️ Candlestick Patterns")
+    st.session_state.trading_params['use_pin_bar'] = st.checkbox(
+        "Enable Pin Bar Detection",
+        value=st.session_state.trading_params['use_pin_bar'],
+        help="Detect bullish/bearish pin bars for enhanced signals and adjusted entries/SL"
+    )
     
     st.divider()
     
@@ -595,9 +763,11 @@ with col3:
 with col4:
     current_price = st.session_state.current_prices.get(manual_pair, FOREX_PAIRS[manual_pair]['base_price'])
     st.write(f"**Current Price:** {current_price:.4f}")
+    # Manual pin type selection for demo
+    manual_pin = st.selectbox("Pin Bar Type", [None, "bullish", "bearish"], index=0)
     if st.button("🎯 Execute Manual Trade", use_container_width=True, type="primary"):
-        if execute_trade(manual_pair, manual_direction, current_price, manual_stake):
-            st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f}")
+        if execute_trade(manual_pair, manual_direction, current_price, manual_stake, manual_pin):
+            st.success(f"Manual trade executed! {manual_pair} {manual_direction} - ${manual_stake:.2f} (Pin: {manual_pin})")
         else:
             st.error("Failed to execute trade!")
 
@@ -619,6 +789,7 @@ if st.session_state.open_trades:
             'Direction': trade['direction'],
             'Stake': f"${trade['stake']:.2f}",
             'Stake Type': trade.get('stake_type', 'AUTO'),
+            'Pin Type': trade.get('pin_type', 'None'),
             'Entry Price': f"{trade['entry_price']:.4f}",
             'Current Price': f"{trade['current_price']:.4f}",
             'Stop Loss': f"{trade['stop_loss_price']:.4f}",
@@ -656,6 +827,7 @@ if st.session_state.trade_history:
             'Direction': trade['direction'],
             'Stake': f"${trade['stake']:.2f}",
             'Stake Type': trade.get('stake_type', 'AUTO'),
+            'Pin Type': trade.get('pin_type', 'None'),
             'Entry Price': f"{trade['entry_price']:.4f}",
             'Exit Price': f"{trade.get('close_price', 0):.4f}",
             'P&L ($)': f"${trade['profit_loss']:.2f}",
@@ -743,13 +915,14 @@ if auto_trades_executed:
         else:
             st.error(trade)
 
-# Current signals
+# Current signals (updated for more pairs, show in two rows)
 st.write("**Current Market Signals:**")
-cols = st.columns(3)
-for idx, pair in enumerate(trading_pairs[:3]):
-    with cols[idx]:
+cols = st.columns(5)
+for idx, pair in enumerate(trading_pairs):
+    with cols[idx % 5]:
         signal_info = st.session_state.all_signals.get(pair, {})
         agreement = signal_info.get('agreement', 'NONE')
+        pin_type = signal_info.get('pin_type', None)
         current_price = signal_info.get('current_price', 0)
         
         if agreement == 'BUY':
@@ -762,10 +935,12 @@ for idx, pair in enumerate(trading_pairs[:3]):
             color = "#666666"
             text = "HOLD"
         
+        pin_text = f" (Pin: {pin_type})" if pin_type else ""
+        
         st.markdown(f"""
-        <div style="border: 2px solid {color}; border-radius: 10px; padding: 1rem; text-align: center;">
-            <h4>{pair}</h4>
-            <h3 style="color: {color};">{text}</h3>
+        <div style="border: 2px solid {color}; border-radius: 10px; padding: 0.5rem; text-align: center; font-size: 0.8rem;">
+            <h5>{pair}</h5>
+            <h4 style="color: {color}; margin: 0;">{text}{pin_text}</h4>
             <p>Price: {current_price:.4f}</p>
         </div>
         """, unsafe_allow_html=True)
