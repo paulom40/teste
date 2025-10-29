@@ -82,5 +82,4 @@ PRO_STRATEGIES = {
         "rsi_period": 14,
         "rsi_overbought": 70,
         "rsi_oversold": 30,
-        "macd_fast": 8,
-        "macd_slow
+        "macd
