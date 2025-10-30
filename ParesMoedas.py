@@ -4,7 +4,6 @@ import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-import pandas_ta as ta  # For technical indicators
 
 # Page config
 st.set_page_config(page_title="Forex Dashboard with Technical Indicators", layout="wide")
@@ -26,13 +25,13 @@ if base == quote:
 
 pair = f"{base}{quote}=X"
 
-days = st.sidebar.slider("Historical Days", 20, 365, 30)  # Min 20 for Bollinger Bands
+days = st.sidebar.slider("Historical Days", 30, 365, 30)  # Min 30 for all indicators
 
 # Technical Indicators Selection
 st.sidebar.subheader("Technical Indicators")
 show_sma = st.sidebar.checkbox("Simple Moving Average (SMA 20)", True)
 show_ema = st.sidebar.checkbox("Exponential Moving Average (EMA 20)", True)
-show_bb = st.sidebar.checkbox("Bollinger Bands (20, 2)", True)  # New: Bollinger Bands
+show_bb = st.sidebar.checkbox("Bollinger Bands (20, 2)", True)  # Bollinger Bands
 show_rsi = st.sidebar.checkbox("RSI (14)", True)
 show_macd = st.sidebar.checkbox("MACD", True)
 
@@ -64,29 +63,47 @@ def fetch_forex_data(pair, days):
 # Fetch data
 df = fetch_forex_data(pair, days)
 
-# Compute Technical Indicators
+# Compute Technical Indicators (native pandas implementation)
 @st.cache_data
 def compute_indicators(df):
-    if df.empty or len(df) < 20:  # Need min data for indicators
+    if df.empty or len(df) < 30:  # Need min data for indicators
         return df
     
     df = df.copy()
-    df['SMA_20'] = ta.sma(df['Rate'], length=20)
-    df['EMA_20'] = ta.ema(df['Rate'], length=20)
+    
+    # SMA and EMA
+    if show_sma:
+        df['SMA_20'] = df['Rate'].rolling(window=20).mean()
+    if show_ema:
+        df['EMA_20'] = df['Rate'].ewm(span=20).mean()
     
     # Bollinger Bands
-    bb = ta.bbands(df['Rate'], length=20, std=2)
-    if bb is not None:
-        df['BBL_20_2.0'] = bb['BBL_20_2.0']
-        df['BBM_20_2.0'] = bb['BBM_20_2.0']  # Middle is SMA
-        df['BBU_20_2.0'] = bb['BBU_20_2.0']
+    if show_bb:
+        df['BBM_20_2.0'] = df['Rate'].rolling(window=20).mean()
+        bb_std = df['Rate'].rolling(window=20).std()
+        df['BBU_20_2.0'] = df['BBM_20_2.0'] + (bb_std * 2)
+        df['BBL_20_2.0'] = df['BBM_20_2.0'] - (bb_std * 2)
     
-    df['RSI'] = ta.rsi(df['Rate'], length=14)
-    macd = ta.macd(df['Rate'])
-    if macd is not None:
-        df['MACD'] = macd['MACD_12_26_9']
-        df['MACD_Signal'] = macd['MACDs_12_26_9']
-        df['MACD_Hist'] = macd['MACDh_12_26_9']
+    # RSI
+    if show_rsi:
+        def calculate_rsi(prices, window=14):
+            delta = prices.diff()
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            avg_gain = gain.rolling(window=window, min_periods=1).mean()
+            avg_loss = loss.rolling(window=window, min_periods=1).mean()
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
+        df['RSI'] = calculate_rsi(df['Rate'])
+    
+    # MACD
+    if show_macd:
+        ema12 = df['Rate'].ewm(span=12).mean()
+        ema26 = df['Rate'].ewm(span=26).mean()
+        df['MACD'] = ema12 - ema26
+        df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
     return df
 
@@ -97,16 +114,17 @@ if not df.empty:
 col1, col2 = st.columns(2)
 
 with col1:
-    st.metric("Current Rate", df["Rate"].iloc[-1] if not df.empty else "N/A", 
-              df["Rate"].iloc[-1] - df["Rate"].iloc[0] if len(df) > 1 else 0)
+    current_rate = df["Rate"].iloc[-1] if not df.empty else "N/A"
+    delta = df["Rate"].iloc[-1] - df["Rate"].iloc[0] if len(df) > 1 else 0
+    st.metric("Current Rate", current_rate, delta)
 
 with col2:
-    if not df.empty:
+    if not df.empty and len(df) > 1:
         change_pct = ((df["Rate"].iloc[-1] - df["Rate"].iloc[0]) / df["Rate"].iloc[0]) * 100
         st.metric("Change (Period)", f"{change_pct:.2f}%", change_pct)
 
 # Chart with Indicators
-if not df.empty and len(df) >= 20:
+if not df.empty and len(df) >= 30:
     # Determine number of subplots
     num_rows = 1
     if show_rsi: num_rows += 1
@@ -122,31 +140,37 @@ if not df.empty and len(df) >= 20:
     
     # Price and MAs/Bands (row 1)
     fig.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='blue')), row=1, col=1)
-    if show_sma:
+    if show_sma and 'SMA_20' in df.columns:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='orange')), row=1, col=1)
-    if show_ema:
+    if show_ema and 'EMA_20' in df.columns:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['EMA_20'], name='EMA 20', line=dict(color='green')), row=1, col=1)
     
     # Bollinger Bands
-    if show_bb and 'BBU_20_2.0' in df.columns:
+    if show_bb and all(col in df.columns for col in ['BBU_20_2.0', 'BBL_20_2.0']):
         fig.add_trace(go.Scatter(x=df['Date'], y=df['BBU_20_2.0'], name='BB Upper', line=dict(color='red', dash='dash')), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['BBL_20_2.0'], name='BB Lower', line=dict(color='green', dash='dash')), row=1, col=1)
         # Fill between bands
-        fig.add_trace(go.Scatter(x=pd.concat([df['Date'], df['Date'][::-1]]), 
-                                 y=pd.concat([df['BBU_20_2.0'], df['BBL_20_2.0'][::-1]]), 
-                                 fill='toself', fillcolor='rgba(128,128,128,0.2)', 
-                                 line=dict(color='rgba(255,255,255,0)'), name='BB Band', showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=pd.concat([df['Date'], df['Date'][::-1]]), 
+            y=pd.concat([df['BBU_20_2.0'], df['BBL_20_2.0'][::-1]]), 
+            fill='toself', fillcolor='rgba(128,128,128,0.2)', 
+            line=dict(color='rgba(255,255,255,0)'), name='BB Band', showlegend=False
+        ), row=1, col=1)
+        if show_sma:  # BB middle is SMA, avoid duplicate if SMA shown
+            pass
+        else:
+            fig.add_trace(go.Scatter(x=df['Date'], y=df['BBM_20_2.0'], name='BB Middle', line=dict(color='orange')), row=1, col=1)
     
     # RSI (row 2 if present)
     rsi_row = 2 if show_rsi else None
-    if show_rsi and rsi_row:
+    if show_rsi and rsi_row and 'RSI' in df.columns:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=rsi_row, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=rsi_row, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=rsi_row, col=1)
     
     # MACD (row 3 if present)
     macd_row = 3 if show_macd else None
-    if show_macd and macd_row:
+    if show_macd and macd_row and all(col in df.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
         fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=macd_row, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=macd_row, col=1)
         fig.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=macd_row, col=1)
@@ -164,15 +188,17 @@ if not df.empty and len(df) >= 20:
     # Data table with indicators
     st.subheader("Historical Data with Indicators")
     display_cols = ['Date', 'Rate']
-    if show_sma: display_cols.append('SMA_20')
-    if show_ema: display_cols.append('EMA_20')
-    if show_bb: display_cols.extend(['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0'])
-    if show_rsi: display_cols.append('RSI')
-    if show_macd: display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
+    if show_sma and 'SMA_20' in df.columns: display_cols.append('SMA_20')
+    if show_ema and 'EMA_20' in df.columns: display_cols.append('EMA_20')
+    if show_bb and all(col in df.columns for col in ['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0']):
+        display_cols.extend(['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0'])
+    if show_rsi and 'RSI' in df.columns: display_cols.append('RSI')
+    if show_macd and all(col in df.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
+        display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
     st.dataframe(df[display_cols], use_container_width=True)
 else:
-    st.info("No data available or insufficient data for indicators (need at least 20 days). Check API or increase days.")
+    st.info("No data available or insufficient data for indicators (need at least 30 days). Check API or increase days.")
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.info("Built with Streamlit & pandas_ta. For real trading, use a licensed broker.")
+st.sidebar.info("Built with Streamlit & native Pandas. No external TA library needed. For real trading, use a licensed broker.")
