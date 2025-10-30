@@ -57,29 +57,28 @@ def fetch_data(ticker, period, interval):
     try:
         data = yf.download(ticker, period=period, interval=interval,
                            progress=False, auto_adjust=True)
-        if data.empty:
+        if data.empty or len(data) < 26:
             return pd.DataFrame()
         df = data[['Open','High','Low','Close']].copy()
         df['Rate'] = 1.0 / df['Close']
         df = df.reset_index()
         df['Datetime'] = pd.to_datetime(df['Datetime'])
-        return df[['Datetime','Rate','Open','High','Low','Close']]
+        return df[['Datetime','Rate','Open','High','Low','Close']].dropna()
     except Exception:
         return pd.DataFrame()
 
 # ------------------------------------------------------------------ #
-# Price Action – **scalars only**
+# Price Action – scalars + NaN guard
 # ------------------------------------------------------------------ #
 def detect_price_action(last3: pd.DataFrame) -> str:
     if len(last3) < 3:
         return "No Pattern"
 
-    c  = last3.iloc[-1]   # current
-    p1 = last3.iloc[-2]   # previous
+    c  = last3.iloc[-1]
+    p1 = last3.iloc[-2]
 
-    # ----> scalar extraction + NaN guard <----
     try:
-        o, h, l, cl = float(c['Open']), float(c['High']), float(c['Low']), float(c['Close'])
+        o, h, l, cl   = float(c['Open']),   float(c['High']),   float(c['Low']),   float(c['Close'])
         po, ph, pl, pcl = float(p1['Open']), float(p1['High']), float(p1['Low']), float(p1['Close'])
     except (ValueError, TypeError):
         return "No Pattern"
@@ -104,7 +103,7 @@ def detect_price_action(last3: pd.DataFrame) -> str:
     return "No Pattern"
 
 # ------------------------------------------------------------------ #
-# Indicators (vectorized)
+# Indicators
 # ------------------------------------------------------------------ #
 @st.cache_data(show_spinner=False)
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -126,13 +125,12 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['MACD'] = macd
     df['MACD_Signal'] = macd.ewm(span=9, adjust=False).mean()
 
-    # ----> price action on the newest candle only <----
     df['Price_Action'] = "No Pattern"
     if len(df) >= 3:
         pattern = detect_price_action(df.tail(3))
         df.loc[df.index[-1], 'Price_Action'] = pattern
 
-    return df[['Datetime','Rate','SMA_20','RSI','MACD','MACD_Signal','Price_Action']]
+    return df[['Datetime','Rate','SMA_20','RSI','MACD','MACD_Signal','Price_Action']].dropna()
 
 # ------------------------------------------------------------------ #
 # Analyze Pair
@@ -140,28 +138,36 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def analyze_pair(b, q):
     try:
         df = fetch_data(f"{q}{b}=X", period, interval)
-        if df.empty or len(df) < 26:
+        if df.empty:
             return None
         df = compute_indicators(df)
+        if df.empty:
+            return None
         r = df.iloc[-1]
+
+        rate = float(r['Rate'])
+        rsi  = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
+        sma  = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate
+        macd = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
+        macd_sig = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
+        pattern = r['Price_Action']
 
         signal = "HOLD"
         strength = 0.0
-        pattern = r['Price_Action']
 
-        if (r['RSI'] < 30 and r['Rate'] > r['SMA_20'] and r['MACD'] > r['MACD_Signal'] and
+        if (rsi < 30 and rate > sma and macd > macd_sig and
             pattern in ("Bullish Engulfing", "Hammer")):
             signal = "BUY"
             strength = 0.8 + (0.2 if pattern != "No Pattern" else 0)
-        elif (r['RSI'] > 70 and r['Rate'] < r['SMA_20'] and r['MACD'] < r['MACD_Signal'] and
+        elif (rsi > 70 and rate < sma and macd < macd_sig and
               pattern in ("Bearish Engulfing", "Shooting Star")):
             signal = "SELL"
             strength = 0.7 + (0.3 if pattern != "No Pattern" else 0)
 
         return {
             "pair": f"{b}/{q}",
-            "rate": r['Rate'],
-            "rsi": r['RSI'],
+            "rate": rate,
+            "rsi": rsi,
             "pattern": pattern,
             "signal": signal,
             "strength": min(strength, 1.0)
@@ -174,14 +180,17 @@ def analyze_pair(b, q):
 # ------------------------------------------------------------------ #
 st.subheader("Real-Time Scanner – Top 10 Pairs")
 with st.spinner("Scanning 10 pairs..."):
-    results = [analyze_pair(b, q) for b, q in TOP_PAIRS]
-    results = [r for r in results if r]
+    results = []
+    for b, q in TOP_PAIRS:
+        res = analyze_pair(b, q)
+        if res:
+            results.append(res)
 
 if results:
     scan = pd.DataFrame(results).sort_values("strength", ascending=False)
     st.dataframe(scan.round(4), use_container_width=True)
 
-    # ---------- Auto-Trade (simulated) ----------
+    # Auto-Trade
     if auto_trade and live_mode and scan['strength'].max() > 0.7:
         strong = scan[scan['strength'] > 0.7]
         st.markdown("### Auto-Trade (Simulated)")
@@ -219,7 +228,7 @@ if st.sidebar.button("Refresh Now"):
     st.rerun()
 
 # ------------------------------------------------------------------ #
-# Tabs – Overview / Analysis / Simulator
+# Tabs
 # ------------------------------------------------------------------ #
 tab1, tab2, tab3 = st.tabs(["Overview", "Analysis", "Simulator"])
 
@@ -227,32 +236,41 @@ with tab1:
     df = fetch_data(ticker, period, interval)
     if not df.empty:
         df = compute_indicators(df)
-        r = df.iloc[-1]
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f'<div class="metric-card"><b>Rate:</b> {r["Rate"]:.5f}</div>', unsafe_allow_html=True)
-        with c2:
-            chg = (r["Rate"] - df["Rate"].iloc[0]) / df["Rate"].iloc[0] * 100
-            st.markdown(f'<div class="metric-card"><b>Change:</b> {chg:+.2f}%</div>', unsafe_allow_html=True)
-        with c3:
-            sig = ("BUY" if r["RSI"] < 30 and r["Rate"] > r["SMA_20"] and r["MACD"] > r["MACD_Signal"] and
-                   r["Price_Action"] in ("Bullish Engulfing","Hammer")
-                   else "SELL" if r["RSI"] > 70 and r["Rate"] < r["SMA_20"] and r["MACD"] < r["MACD_Signal"] and
-                   r["Price_Action"] in ("Bearish Engulfing","Shooting Star")
-                   else "HOLD")
-            cls = "signal-buy" if sig == "BUY" else "signal-sell" if sig == "SELL" else "signal-hold"
-            ico = "Up" if sig == "BUY" else "Down" if sig == "SELL" else "Pause"
-            st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{ico} {sig}</div></div>', unsafe_allow_html=True)
+        if not df.empty:
+            r = df.iloc[-1]
+            rate_val = float(r['Rate']) if pd.notna(r['Rate']) else 0.0
+            change_val = (rate_val - df['Rate'].iloc[0]) / df['Rate'].iloc[0] * 100 if pd.notna(df['Rate'].iloc[0]) else 0.0
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7,0.3])
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD'), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal'), row=2, col=1)
-        if r['Price_Action'] != "No Pattern":
-            fig.add_annotation(x=df['Datetime'].iloc[-1], y=r['Rate'], text=r['Price_Action'], row=1, col=1)
-        st.plotly_chart(fig, use_container_width=True)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f'<div class="metric-card"><b>Rate:</b> {rate_val:.5f}</div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="metric-card"><b>Change:</b> {change_val:+.2f}%</div>', unsafe_allow_html=True)
+            with c3:
+                rsi_val = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
+                sma_val = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate_val
+                macd_val = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
+                macd_sig_val = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
+                pattern = r['Price_Action']
+
+                sig = ("BUY" if rsi_val < 30 and rate_val > sma_val and macd_val > macd_sig_val and
+                       pattern in ("Bullish Engulfing","Hammer")
+                       else "SELL" if rsi_val > 70 and rate_val < sma_val and macd_val < macd_sig_val and
+                       pattern in ("Bearish Engulfing","Shooting Star")
+                       else "HOLD")
+                cls = "signal-buy" if sig == "BUY" else "signal-sell" if sig == "SELL" else "signal-hold"
+                ico = "Up" if sig == "BUY" else "Down" if sig == "SELL" else "Pause"
+                st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{ico} {sig}</div></div>', unsafe_allow_html=True)
+
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7,0.3])
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD'), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal'), row=2, col=1)
+            if pattern != "No Pattern":
+                fig.add_annotation(x=df['Datetime'].iloc[-1], y=rate_val, text=pattern, row=1, col=1)
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     if not df.empty:
@@ -273,7 +291,7 @@ with tab2:
 
 with tab3:
     stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
-    rate = df['Rate'].iloc[-1] if not df.empty else 1.0
+    rate = df['Rate'].iloc[-1] if not df.empty and len(df) > 0 else 1.0
     if st.button("Simulate BUY"):
         st.success(f"Simulated BUY @ {rate:.5f} | P&L +${stake*0.03:.0f}")
     if st.button("Simulate SELL"):
