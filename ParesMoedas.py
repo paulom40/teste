@@ -159,35 +159,39 @@ STRATEGY_15MIN = {
     }
 }
 
-# Session state para dados em tempo real
-if "dados_live" not in st.session_state:
-    st.session_state.dados_live = {}
-if "ultima_atualizacao" not in st.session_state:
-    st.session_state.ultima_atualizacao = datetime.now()
-if "contador_updates" not in st.session_state:
-    st.session_state.contador_updates = 0
-if "logs_tecnicos" not in st.session_state:
-    st.session_state.logs_tecnicos = []
-if "stake_valor" not in st.session_state:
-    st.session_state.stake_valor = 10
-if "auto_trade_active" not in st.session_state:
-    st.session_state.auto_trade_active = False
-if "trades_ativos" not in st.session_state:
-    st.session_state.trades_ativos = []
-if "historico_trades" not in st.session_state:
-    st.session_state.historico_trades = []
-if "auto_trade_stats" not in st.session_state:
-    st.session_state.auto_trade_stats = {
-        "total_trades": 0,
-        "trades_lucrativos": 0,
-        "trades_perdedores": 0,
-        "lucro_total": 0.0,
-        "melhor_trade": 0.0,
-        "pior_trade": 0.0,
-        "win_rate": 0.0
+# Inicializar session state com valores padrão
+def initialize_session_state():
+    """Inicializa todos os session states com valores padrão"""
+    defaults = {
+        "dados_live": {},
+        "ultima_atualizacao": datetime.now(),
+        "contador_updates": 0,
+        "logs_tecnicos": [],
+        "stake_valor": 10,
+        "auto_trade_active": False,
+        "trades_ativos": [],
+        "historico_trades": [],
+        "auto_trade_stats": {
+            "total_trades": 0,
+            "trades_lucrativos": 0,
+            "trades_perdedores": 0,
+            "lucro_total": 0.0,
+            "melhor_trade": 0.0,
+            "pior_trade": 0.0,
+            "win_rate": 0.0
+        },
+        "pares_config": {par: {"ativo": True, "stake": 10} for par in PARES.keys()},
+        "dados_15min": pd.DataFrame(),
+        "meta_lucro": 500,
+        "limite_perda": -200
     }
-if "pares_config" not in st.session_state:
-    st.session_state.pares_config = {par: {"ativo": True, "stake": 10} for par in PARES.keys()}
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+# Inicializar session state
+initialize_session_state()
 
 def detectar_padroes_candles(df):
     """Detecta padrões de candles usando lógica de price action"""
@@ -311,9 +315,7 @@ def executar_auto_trade():
         return
     
     # Verificar se há dados suficientes
-    if not st.session_state.get('dados_15min', None) is None and len(st.session_state.dados_15min) > 0:
-        dados_15min = st.session_state.dados_15min
-    else:
+    if st.session_state.dados_15min is None or len(st.session_state.dados_15min) == 0:
         return
     
     # Verificar limites de risco
@@ -329,7 +331,7 @@ def executar_auto_trade():
         if not st.session_state.pares_config[par]["ativo"]:
             continue
             
-        df_par = dados_15min[dados_15min['par'] == par]
+        df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
         
         if len(df_par) < 10:
             continue
@@ -586,11 +588,12 @@ def atualizar_dados_live():
         if len(st.session_state.dados_live[par]) > 50:
             st.session_state.dados_live[par] = st.session_state.dados_live[par][-50:]
 
-def simular_dados_15min(par, base_price, days=2):
-    """Simula dados de 15 minutos para análise"""
+def simular_dados_15min(par, base_price, days=1):
+    """Simula dados de 15 minutos para análise - versão mais leve"""
     timeframe_data = []
     current_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
+    # Reduzir para 1 dia para performance
     for day in range(days):
         for hour in range(24):
             for minute in range(0, 60, 15):
@@ -619,6 +622,9 @@ def simular_dados_15min(par, base_price, days=2):
 def calcular_indicadores_tecnicos(df):
     """Calcula indicadores técnicos para estratégia de 15min"""
     try:
+        if df.empty:
+            return df
+            
         df = df.sort_values('timestamp').copy()
         
         # EMA
@@ -658,6 +664,9 @@ def calcular_indicadores_tecnicos(df):
 def gerar_sinais_15min(df):
     """Gera sinais de trading baseados na estratégia de 15min"""
     try:
+        if df.empty:
+            return df
+            
         df = df.copy()
         df['sinal'] = 'NEUTRO'
         
@@ -768,27 +777,28 @@ for par in PARES.keys():
 # Atualizar dados em tempo real
 atualizar_dados_live()
 
-# Simular dados de 15 minutos para todos os pares
+# Simular dados de 15 minutos para todos os pares (apenas se necessário)
 try:
-    dados_15min = pd.concat([
-        simular_dados_15min(par, PARES[par]["base"]) 
-        for par in PARES.keys()
-    ])
+    if st.session_state.dados_15min.empty:
+        with st.spinner("Gerando dados de mercado..."):
+            dados_15min = pd.concat([
+                simular_dados_15min(par, PARES[par]["base"]) 
+                for par in list(PARES.keys())[:10]  # Limitar a 10 pares para performance
+            ])
 
-    # Calcular indicadores técnicos
-    dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
-    dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
-    st.session_state.dados_15min = dados_15min
+            # Calcular indicadores técnicos
+            dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
+            dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+            st.session_state.dados_15min = dados_15min
 except Exception as e:
     st.error(f"Erro ao processar dados: {e}")
-    dados_15min = pd.DataFrame()
 
 # Executar auto trade se estiver ativo
 if st.session_state.auto_trade_active:
     executar_auto_trade()
 
 # Layout principal em abas
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🎯 Estratégia", "🤖 Auto Trade", "🔧 Config Pares", "📈 Mercado"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🤖 Auto Trade", "🔧 Config Pares", "📈 Mercado"])
 
 with tab1:
     # Header com informações de atualização
@@ -800,7 +810,7 @@ with tab1:
     with col_update3:
         st.metric("Pares Monitorados", len(PARES))
     
-    # KPIs principais
+    # KPIs principais - COM VERIFICAÇÃO DE SEGURANÇA
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -812,11 +822,12 @@ with tab1:
         st.metric("Trades Ativos", trades_ativos)
     
     with col3:
-        win_rate = st.session_state.auto_trade_stats["win_rate"]
+        # Verificação segura do win_rate
+        win_rate = st.session_state.auto_trade_stats.get("win_rate", 0.0)
         st.metric("Win Rate", f"{win_rate:.1f}%")
     
     with col4:
-        lucro_total = st.session_state.auto_trade_stats["lucro_total"]
+        lucro_total = st.session_state.auto_trade_stats.get("lucro_total", 0.0)
         st.metric("Lucro Total", f"€{lucro_total:.2f}")
     
     # Aplicar estilo personalizado às métricas
@@ -824,21 +835,23 @@ with tab1:
     
     # Status do Auto Trade
     st.subheader("🤖 Status do Auto Trade")
-    status_color = "🟢" if st.session_state.auto_trade_active else "🔴"
-    status_text = "ATIVO" if st.session_state.auto_trade_active else "INATIVO"
     
     col_status1, col_status2, col_status3, col_status4 = st.columns(4)
     with col_status1:
+        status_color = "🟢" if st.session_state.auto_trade_active else "🔴"
+        status_text = "ATIVO" if st.session_state.auto_trade_active else "INATIVO"
         st.metric("Status", f"{status_color} {status_text}")
     with col_status2:
-        st.metric("Trades Hoje", st.session_state.auto_trade_stats["total_trades"])
+        total_trades = st.session_state.auto_trade_stats.get("total_trades", 0)
+        st.metric("Trades Hoje", total_trades)
     with col_status3:
-        st.metric("Lucro/Prejuízo", f"€{st.session_state.auto_trade_stats['lucro_total']:.2f}")
+        lucro_total = st.session_state.auto_trade_stats.get("lucro_total", 0.0)
+        st.metric("Lucro/Prejuízo", f"€{lucro_total:.2f}")
     with col_status4:
         pares_ativos = sum(1 for config in st.session_state.pares_config.values() if config["ativo"])
         st.metric("Pares Ativos", f"{pares_ativos}/{len(PARES)}")
 
-with tab4:
+with tab3:
     st.header("🔧 Configuração por Par")
     
     st.subheader("⚙️ Configurações Individuais dos Pares")
@@ -872,18 +885,20 @@ with tab4:
                 st.session_state.pares_config[par]["ativo"] = ativo
                 st.session_state.pares_config[par]["stake"] = stake
                 
-                # Mostrar informações do par
-                if st.session_state.get('dados_15min') is not None:
+                # Mostrar informações do par de forma segura
+                if not st.session_state.dados_15min.empty:
                     df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
                     if not df_par.empty:
                         ultimo = df_par.iloc[-1]
                         st.write(f"Preço: {ultimo['close']:.5f}")
-                        st.write(f"Sinal: {ultimo['sinal']}")
-                        st.write(f"RSI: {ultimo['RSI']:.1f}")
+                        st.write(f"Sinal: {ultimo.get('sinal', 'N/A')}")
+                        st.write(f"RSI: {ultimo.get('RSI', 0):.1f}")
+                else:
+                    st.write("Dados não disponíveis")
                 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-with tab3:
+with tab2:
     st.header("🤖 Painel de Auto Trade")
     
     col_auto1, col_auto2 = st.columns([2, 1])
@@ -892,8 +907,17 @@ with tab3:
         st.subheader("📊 Trades Ativos")
         if st.session_state.trades_ativos:
             trades_df = pd.DataFrame(st.session_state.trades_ativos)
-            trades_display = trades_df[['id', 'par', 'tipo', 'preco_entrada', 'stop_loss', 'take_profit', 'stake', 'timestamp_entrada']].copy()
-            trades_display['timestamp_entrada'] = trades_display['timestamp_entrada'].dt.strftime('%H:%M:%S')
+            # Verificar se as colunas existem antes de acessá-las
+            available_columns = [col for col in ['id', 'par', 'tipo', 'preco_entrada', 'stop_loss', 'take_profit', 'stake', 'timestamp_entrada'] 
+                               if col in trades_df.columns]
+            trades_display = trades_df[available_columns].copy()
+            
+            # Formatar timestamp se existir
+            if 'timestamp_entrada' in trades_display.columns:
+                trades_display['timestamp_entrada'] = trades_display['timestamp_entrada'].apply(
+                    lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x)
+                )
+                
             st.dataframe(trades_display, width='stretch', height=400)
         else:
             st.info("Nenhum trade ativo no momento")
@@ -902,13 +926,14 @@ with tab3:
         stats = st.session_state.auto_trade_stats
         col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
         with col_stat1:
-            st.metric("Total Trades", stats["total_trades"])
+            st.metric("Total Trades", stats.get("total_trades", 0))
         with col_stat2:
-            st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
+            win_rate = stats.get("win_rate", 0.0)
+            st.metric("Win Rate", f"{win_rate:.1f}%")
         with col_stat3:
-            st.metric("Melhor Trade", f"€{stats['melhor_trade']:.2f}")
+            st.metric("Melhor Trade", f"€{stats.get('melhor_trade', 0.0):.2f}")
         with col_stat4:
-            st.metric("Pior Trade", f"€{stats['pior_trade']:.2f}")
+            st.metric("Pior Trade", f"€{stats.get('pior_trade', 0.0):.2f}")
     
     with col_auto2:
         st.subheader("⚙️ Controles Rápidos")
@@ -941,33 +966,44 @@ with tab3:
             historico_recente = st.session_state.historico_trades[-8:]  # Últimos 8 trades
             historico_df = pd.DataFrame(historico_recente)
             if not historico_df.empty:
-                historico_display = historico_df[['id', 'par', 'tipo', 'preco_entrada', 'preco_saida', 'lucro_prejuizo', 'motivo_saida']].copy()
-                historico_display['timestamp'] = historico_df['timestamp_saida'].apply(lambda x: x.strftime('%H:%M') if hasattr(x, 'strftime') else 'N/A')
+                # Verificar colunas disponíveis
+                available_cols = [col for col in ['id', 'par', 'tipo', 'preco_entrada', 'preco_saida', 'lucro_prejuizo', 'motivo_saida'] 
+                                if col in historico_df.columns]
+                historico_display = historico_df[available_cols].copy()
                 
-                # Colorir baseado no resultado
-                def colorir_resultado(val):
-                    if val > 0:
-                        return 'background-color: #90EE90; font-weight: bold;'
-                    else:
-                        return 'background-color: #FFB6C1; font-weight: bold;'
+                # Adicionar timestamp se disponível
+                if 'timestamp_saida' in historico_df.columns:
+                    historico_display['timestamp'] = historico_df['timestamp_saida'].apply(
+                        lambda x: x.strftime('%H:%M') if hasattr(x, 'strftime') else 'N/A'
+                    )
                 
-                st.dataframe(
-                    historico_display.style.applymap(colorir_resultado, subset=['lucro_prejuizo']),
-                    width='stretch',
-                    height=400
-                )
+                # Colorir baseado no resultado se a coluna existir
+                if 'lucro_prejuizo' in historico_display.columns:
+                    def colorir_resultado(val):
+                        if val > 0:
+                            return 'background-color: #90EE90; font-weight: bold;'
+                        else:
+                            return 'background-color: #FFB6C1; font-weight: bold;'
+                    
+                    st.dataframe(
+                        historico_display.style.applymap(colorir_resultado, subset=['lucro_prejuizo']),
+                        width='stretch',
+                        height=400
+                    )
+                else:
+                    st.dataframe(historico_display, width='stretch', height=400)
         else:
             st.info("Nenhum trade no histórico")
 
-with tab5:
+with tab4:
     st.header("📈 Visão Geral do Mercado")
     
     # Resumo de todos os pares
     st.subheader("🎯 Sinais por Par")
     
-    if st.session_state.get('dados_15min') is not None:
+    if not st.session_state.dados_15min.empty:
         sinais_por_par = []
-        for par in PARES.keys():
+        for par in list(PARES.keys())[:15]:  # Limitar para performance
             df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
             if not df_par.empty:
                 ultimo = df_par.iloc[-1]
@@ -975,21 +1011,21 @@ with tab5:
                 sinais_por_par.append({
                     'Par': par,
                     'Preço': ultimo['close'],
-                    'Sinal': ultimo['sinal'],
-                    'RSI': f"{ultimo['RSI']:.1f}",
+                    'Sinal': ultimo.get('sinal', 'N/A'),
+                    'RSI': f"{ultimo.get('RSI', 0):.1f}",
                     'Tendência': tendencia,
-                    'Padrão': ultimo['padrao_candle'],
+                    'Padrão': ultimo.get('padrao_candle', ''),
                     'Ativo': st.session_state.pares_config[par]["ativo"]
                 })
         
         if sinais_por_par:
             df_sinais = pd.DataFrame(sinais_por_par)
             
-            # Colorir os sinais
+            # Colorir os sinais de forma segura
             def colorir_linha(row):
-                if row['Sinal'] == 'COMPRA':
+                if row.get('Sinal') == 'COMPRA':
                     return ['background-color: #90EE90'] * len(row)
-                elif row['Sinal'] == 'VENDA':
+                elif row.get('Sinal') == 'VENDA':
                     return ['background-color: #FFB6C1'] * len(row)
                 else:
                     return ['background-color: #F0F0F0'] * len(row)
@@ -999,6 +1035,8 @@ with tab5:
                 width='stretch',
                 height=600
             )
+    else:
+        st.info("Dados de mercado não disponíveis")
 
 # Sistema de atualização automática
 if auto_refresh:
