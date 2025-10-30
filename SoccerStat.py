@@ -1,14 +1,10 @@
 import streamlit as st
-import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import time
-import json
 import numpy as np
-import threading
 from collections import defaultdict
-import plotly.express as px
-import plotly.graph_objects as go
+import random
 
 # Page configuration
 st.set_page_config(
@@ -68,6 +64,15 @@ st.markdown("""
         background-color: #ffc107;
         color: black;
     }
+    .team-favorite {
+        background-color: #28a745;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        display: inline-block;
+        margin: 2px;
+    }
     @keyframes pulse {
         0% { transform: scale(1); }
         50% { transform: scale(1.02); }
@@ -81,69 +86,30 @@ class RobustLiveAlertSystem:
         self.favorite_teams = set()
         self.tracked_matches = {}
         self.alert_history = []
-        self.connection_status = "disconnected"
-        self.data_source = "none"
+        self.connection_status = "fallback"
+        self.data_source = "Simulated Data"
         
     def add_favorite_team(self, team_name):
         """Add team to favorites list"""
-        self.favorite_teams.add(team_name.lower())
+        if team_name and team_name.strip():
+            self.favorite_teams.add(team_name.lower().strip())
+            return True
+        return False
         
     def remove_favorite_team(self, team_name):
         """Remove team from favorites list"""
-        self.favorite_teams.discard(team_name.lower())
-    
-    def test_connection(self, source):
-        """Test connection to a data source"""
-        try:
-            if source == "football_data":
-                # Test Football-Data.org connection
-                response = requests.get(
-                    "https://api.football-data.org/v4/competitions/PL/matches",
-                    headers={'X-Auth-Token': 'test'},
-                    timeout=5
-                )
-                return response.status_code != 429  # Not rate limited
-                
-            elif source == "api_sports":
-                # Test API-Sports connection
-                response = requests.get(
-                    "https://v3.football.api-sports.io/status",
-                    headers={'x-rapidapi-host': 'v3.football.api-sports.io'},
-                    timeout=5
-                )
-                return response.status_code == 200
-                
-            elif source == "the_odds":
-                # Test The Odds API connection
-                response = requests.get(
-                    "https://api.the-odds-api.com/v4/sports",
-                    params={'apiKey': 'test'},
-                    timeout=5
-                )
-                return response.status_code != 401  # Not unauthorized
-                
-        except:
-            return False
-        
+        if team_name and team_name.strip():
+            self.favorite_teams.discard(team_name.lower().strip())
+            return True
         return False
     
     def find_working_source(self):
-        """Find a working data source"""
-        sources = [
-            ("football_data", "Football-Data.org"),
-            ("api_sports", "API-Sports.io"), 
-            ("the_odds", "The Odds API")
-        ]
-        
-        for source_id, source_name in sources:
-            if self.test_connection(source_id):
-                return source_id, source_name
-                
+        """Find a working data source - simplified for offline use"""
         return "simulated", "Simulated Data"
     
     def get_live_matches_simulated(self):
         """Generate simulated live matches when no API is available"""
-        # Common match templates
+        # Common match templates with realistic teams
         match_templates = [
             {
                 "home_team": "Manchester City",
@@ -184,24 +150,43 @@ class RobustLiveAlertSystem:
                 "away_score": 0, 
                 "status": "LIVE",
                 "minute": "42'"
+            },
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "home_score": 0,
+                "away_score": 1,
+                "status": "LIVE",
+                "minute": "28'"
+            },
+            {
+                "home_team": "AC Milan",
+                "away_team": "Napoli",
+                "home_score": 1,
+                "away_score": 1,
+                "status": "LIVE",
+                "minute": "71'"
             }
         ]
         
         live_matches = []
         
         for template in match_templates:
-            # Add some randomness to scores
+            # Add some randomness to scores to simulate live updates
             home_score = template["home_score"]
             away_score = template["away_score"]
             
-            # Randomly change scores to simulate live updates
-            if np.random.random() < 0.3:  # 30% chance to update score
+            # Randomly change scores to simulate live updates (25% chance)
+            if random.random() < 0.25:
                 if home_score > away_score:
-                    away_score += 1  # Underdog scores
+                    # Underdog scores to make it closer
+                    away_score += 1
                 elif away_score > home_score:
-                    home_score += 1  # Favorite scores back
+                    # Favorite scores back
+                    home_score += 1
                 else:
-                    if np.random.random() < 0.5:
+                    # Equal game - either team might score
+                    if random.random() < 0.5:
                         home_score += 1
                     else:
                         away_score += 1
@@ -228,27 +213,9 @@ class RobustLiveAlertSystem:
         
         return live_matches
     
-    def get_live_matches_football_data(self):
-        """Get live matches from Football-Data.org"""
-        try:
-            # This would require a valid API key
-            # For demo purposes, we'll use simulated data
-            return self.get_live_matches_simulated()
-            
-        except Exception as e:
-            st.error(f"Football-Data.org error: {str(e)}")
-            return self.get_live_matches_simulated()
-    
     def get_live_matches(self):
         """Get live matches from available sources"""
-        source_id, source_name = self.find_working_source()
-        self.connection_status = "connected" if source_id != "simulated" else "fallback"
-        self.data_source = source_name
-        
-        if source_id == "football_data":
-            return self.get_live_matches_football_data()
-        else:
-            return self.get_live_matches_simulated()
+        return self.get_live_matches_simulated()
     
     def _determine_favorite(self, home_team, away_team):
         """Determine which team is the favorite"""
@@ -271,10 +238,16 @@ class RobustLiveAlertSystem:
             return away_team
         
         # Fallback to big teams list
-        if any(team in home_lower for team in big_teams):
+        home_is_big = any(team in home_lower for team in big_teams)
+        away_is_big = any(team in away_lower for team in big_teams)
+        
+        if home_is_big and not away_is_big:
             return home_team
-        elif any(team in away_lower for team in big_teams):
+        elif away_is_big and not home_is_big:
             return away_team
+        elif home_is_big and away_is_big:
+            # Both are big teams, prefer home team
+            return home_team
         
         # Default to home team (home advantage)
         return home_team
@@ -365,18 +338,7 @@ def main():
     
     # Connection status
     st.sidebar.subheader("📡 Connection Status")
-    
-    # Test connections
-    if st.sidebar.button("Test Connections"):
-        with st.sidebar:
-            with st.spinner("Testing connections..."):
-                source_id, source_name = alert_system.find_working_source()
-                
-                if source_id == "simulated":
-                    st.error("❌ No API connections available")
-                    st.info("Using simulated data for demonstration")
-                else:
-                    st.success(f"✅ Connected to {source_name}")
+    st.sidebar.info("🔧 Using simulated data - works offline!")
     
     # Favorite teams management
     st.sidebar.subheader("⭐ Favorite Teams")
@@ -386,15 +348,21 @@ def main():
     with col1:
         new_team = st.text_input("Add Favorite Team", placeholder="e.g., Liverpool")
         if st.button("Add Team") and new_team:
-            alert_system.add_favorite_team(new_team)
-            st.success(f"Added {new_team} to favorites!")
+            if alert_system.add_favorite_team(new_team):
+                st.success(f"✅ Added {new_team} to favorites!")
+            else:
+                st.error("❌ Please enter a valid team name")
     
     with col2:
         if alert_system.favorite_teams:
-            team_to_remove = st.selectbox("Remove Team", list(alert_system.favorite_teams))
+            team_to_remove = st.selectbox("Remove Team", options=list(alert_system.favorite_teams))
             if st.button("Remove Team"):
-                alert_system.remove_favorite_team(team_to_remove)
-                st.success(f"Removed {team_to_remove} from favorites!")
+                if alert_system.remove_favorite_team(team_to_remove):
+                    st.success(f"✅ Removed {team_to_remove} from favorites!")
+                else:
+                    st.error("❌ Could not remove team")
+        else:
+            st.info("No favorite teams yet")
     
     # Display favorite teams
     if alert_system.favorite_teams:
@@ -403,7 +371,7 @@ def main():
             st.sidebar.write(f"⭐ {team.title()}")
     else:
         st.sidebar.info("💡 Add your favorite teams to get alerts!")
-        st.sidebar.write("**Popular teams:** Liverpool, Man City, Real Madrid, Barcelona, Bayern Munich")
+        st.sidebar.write("**Try:** Liverpool, Man City, Real Madrid, Barcelona")
     
     # Monitoring settings
     st.sidebar.subheader("🔔 Monitoring")
@@ -419,7 +387,7 @@ def main():
     display_connection_status(alert_system)
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🚨 Live Alerts", "📊 Live Matches", "📈 Alert History", "🔧 Setup Guide"])
+    tab1, tab2, tab3 = st.tabs(["🚨 Live Alerts", "📊 Live Matches", "📈 Alert History"])
     
     # Auto-refresh logic
     if auto_refresh:
@@ -429,24 +397,12 @@ def main():
     else:
         if st.button("🔄 Scan Live Matches", type="primary", use_container_width=True):
             perform_live_monitoring(alert_system, tab1, tab2, tab3, only_favorites, show_comeback_alerts)
-    
-    with tab4:
-        show_setup_guide()
 
 def display_connection_status(alert_system):
     """Display connection status"""
     
-    status_class = {
-        "connected": "status-connected",
-        "disconnected": "status-disconnected", 
-        "fallback": "status-fallback"
-    }[alert_system.connection_status]
-    
-    status_text = {
-        "connected": f"✅ Connected to {alert_system.data_source}",
-        "disconnected": "❌ No connection - check setup",
-        "fallback": f"🔄 Using {alert_system.data_source} (fallback mode)"
-    }[alert_system.connection_status]
+    status_class = "status-fallback"
+    status_text = "🔄 Using Simulated Data (works offline)"
     
     st.markdown(f"""
     <div class="connection-status {status_class}">
@@ -499,11 +455,11 @@ def display_live_alerts(alerts, only_favorites, show_comeback_alerts):
     if not filtered_alerts:
         st.info("📊 No new alerts. All favorites are winning or matches haven't started.")
         
-        # Show sample alert for demonstration
+        # Show sample of what alerts look like
         if not st.session_state.alert_system.favorite_teams:
-            st.warning("💡 Add favorite teams to see alerts when they're losing!")
+            st.warning("💡 Add favorite teams above to see alerts when they're losing!")
         else:
-            st.info("👆 Matches are simulated - add real API keys for live data")
+            st.info("👆 Matches are simulated - scores change randomly to demo alerts")
         
         return
     
@@ -559,12 +515,7 @@ def display_live_matches(live_matches):
     # Display matches
     for match in live_matches:
         # Determine alert status
-        if match['favorite_losing']:
-            alert_class = "alert-critical"
-            status_icon = "🚨"
-        else:
-            alert_class = "match-live"
-            status_icon = "✅"
+        is_favorite_losing = match['favorite_losing']
         
         with st.container():
             col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
@@ -572,7 +523,7 @@ def display_live_matches(live_matches):
             with col1:
                 st.write(f"**{match['home_team']}**")
                 if match['favorite_team'] == match['home_team']:
-                    st.markdown('<span style="color: #28a745; font-weight: bold;">⭐ FAVORITE</span>', unsafe_allow_html=True)
+                    st.markdown('<span class="team-favorite">⭐ FAVORITE</span>', unsafe_allow_html=True)
             
             with col2:
                 st.markdown(f"<h2>{match['home_score']} - {match['away_score']}</h2>", unsafe_allow_html=True)
@@ -581,13 +532,17 @@ def display_live_matches(live_matches):
             with col3:
                 st.write(f"**{match['away_team']}**")
                 if match['favorite_team'] == match['away_team']:
-                    st.markdown('<span style="color: #28a745; font-weight: bold;">⭐ FAVORITE</span>', unsafe_allow_html=True)
+                    st.markdown('<span class="team-favorite">⭐ FAVORITE</span>', unsafe_allow_html=True)
             
             with col4:
-                st.write(status_icon)
+                if is_favorite_losing:
+                    st.error("🚨 LOSING!")
+                    status_icon = "🚨"
+                else:
+                    st.success("✅ WINNING")
+                    status_icon = "✅"
+                
                 st.caption(match['source'])
-                if match['favorite_losing']:
-                    st.error("FAVORITE LOSING!")
             
             st.markdown("---")
 
@@ -617,66 +572,6 @@ def display_alert_history(alert_history):
     if st.button("Clear Alert History"):
         alert_history.clear()
         st.rerun()
-
-def show_setup_guide():
-    """Display setup guide"""
-    
-    st.header("🔧 Setup Guide")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🚀 Getting Real Data")
-        
-        st.markdown("""
-        ### **Option 1: Football-Data.org (Recommended)**
-        1. Go to [football-data.org](https://www.football-data.org/)
-        2. Register for free account
-        3. Get API key from client area
-        4. Add this to your code:
-        ```python
-        headers = {'X-Auth-Token': 'YOUR_API_KEY'}
-        ```
-        
-        ### **Option 2: API-Sports.io**
-        1. Visit [API-Sports.io](https://api-sports.io/)
-        2. Get free tier (100 requests/day)
-        3. Use their football API
-        
-        ### **Option 3: The Odds API**
-        1. Go to [the-odds-api.com](https://the-odds-api.com/)
-        2. Free tier available
-        3. Good for live odds data
-        """)
-    
-    with col2:
-        st.subheader("🎯 Current Setup")
-        
-        st.info("""
-        **Currently Using: Simulated Data**
-        - Demonstrates how alerts work
-        - Automatically generates match scenarios
-        - Perfect for testing the system
-        
-        **To get real data:**
-        1. Choose an API provider above
-        2. Get your API key
-        3. Replace the simulated data functions
-        4. Add proper error handling
-        """)
-        
-        st.subheader("💡 Alert Logic")
-        st.markdown("""
-        - **Favorites** are determined by:
-          - Your custom favorite teams
-          - Known big clubs database
-          - Home team advantage
-        
-        - **Alerts trigger when:**
-          - Favorite is currently losing
-          - Favorite was losing but equalized
-          - Favorite takes the lead after being behind
-        """)
 
 if __name__ == "__main__":
     main()
