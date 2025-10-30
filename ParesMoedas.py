@@ -29,6 +29,11 @@ st.markdown("""
         border-radius: 0.5rem;
         border-left: 4px solid #1f77b4;
     }
+    .signal-metric {
+        text-align: center;
+        font-size: 1.5rem;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,17 +92,17 @@ if not df.empty:
 
 # Signal Logic
 signal = "HOLD"
-color = "blue"
+signal_color = "blue"
 if not df.empty:
     rsi_val = df['RSI'].iloc[-1]
     sma_val = df['SMA_20'].iloc[-1]
     rate_val = df['Rate'].iloc[-1]
     if rsi_val < 30 and rate_val > sma_val:
         signal = "BUY"
-        color = "green"
+        signal_color = "green"
     elif rsi_val > 70 and rate_val < sma_val:
         signal = "SELL"
-        color = "red"
+        signal_color = "red"
 
 # Main Layout: Tabs for Professional Sections
 tab1, tab2, tab3 = st.tabs(["📈 Overview", "📊 Analysis", "💼 Trade Simulator"])
@@ -116,7 +121,7 @@ with tab1:
         st.markdown('</div>', unsafe_allow_html=True)
     with col3:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Signal", signal, delta_color=color)
+        st.markdown(f'<div class="signal-metric" style="color: {signal_color};">{signal}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Quick Chart
