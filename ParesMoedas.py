@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import numpy as np
+import time  # Added for live mode sleep
 
 # Set page config for professional look
 st.set_page_config(
