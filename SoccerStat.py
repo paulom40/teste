@@ -133,7 +133,7 @@ st.markdown("""
 
 # Initialize session state
 if 'api_source' not in st.session_state:
-    st.session_state.api_source = 'football-data'
+    st.session_state.api_source = 'sofascore'
 
 def get_football_data_matches():
     """Fetch live matches from football-data.org API"""
