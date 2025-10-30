@@ -64,20 +64,25 @@ def fetch_data(ticker, period, interval):
         df = df.reset_index()
         df['Datetime'] = pd.to_datetime(df['Datetime'])
         return df[['Datetime','Rate','Open','High','Low','Close']]
-    except:
+    except Exception:
         return pd.DataFrame()
 
 # ------------------------------------------------------------------ #
-# Price Action – Last 3 Candles (scalars!)
+# Price Action – **scalars only**
 # ------------------------------------------------------------------ #
-def detect_price_action(df: pd.DataFrame) -> str:
-    if len(df) < 3:
+def detect_price_action(last3: pd.DataFrame) -> str:
+    if len(last3) < 3:
         return "No Pattern"
-    c  = df.iloc[-1]   # current candle
-    p1 = df.iloc[-2]   # previous
 
-    o, h, l, cl = c['Open'], c['High'], c['Low'], c['Close']
-    po, ph, pl, pcl = p1['Open'], p1['High'], p1['Low'], p1['Close']
+    c  = last3.iloc[-1]   # current
+    p1 = last3.iloc[-2]   # previous
+
+    # ----> scalar extraction + NaN guard <----
+    try:
+        o, h, l, cl = float(c['Open']), float(c['High']), float(c['Low']), float(c['Close'])
+        po, ph, pl, pcl = float(p1['Open']), float(p1['High']), float(p1['Low']), float(p1['Close'])
+    except (ValueError, TypeError):
+        return "No Pattern"
 
     # Bullish Engulfing
     if (pcl < po and o < pcl and cl > po and cl > o):
@@ -99,7 +104,7 @@ def detect_price_action(df: pd.DataFrame) -> str:
     return "No Pattern"
 
 # ------------------------------------------------------------------ #
-# Indicators (Vectorized)
+# Indicators (vectorized)
 # ------------------------------------------------------------------ #
 @st.cache_data(show_spinner=False)
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -121,7 +126,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['MACD'] = macd
     df['MACD_Signal'] = macd.ewm(span=9, adjust=False).mean()
 
-    # Price action on the newest candle
+    # ----> price action on the newest candle only <----
     df['Price_Action'] = "No Pattern"
     if len(df) >= 3:
         pattern = detect_price_action(df.tail(3))
@@ -161,7 +166,7 @@ def analyze_pair(b, q):
             "signal": signal,
             "strength": min(strength, 1.0)
         }
-    except:
+    except Exception:
         return None
 
 # ------------------------------------------------------------------ #
@@ -169,11 +174,8 @@ def analyze_pair(b, q):
 # ------------------------------------------------------------------ #
 st.subheader("Real-Time Scanner – Top 10 Pairs")
 with st.spinner("Scanning 10 pairs..."):
-    results = []
-    for b, q in TOP_PAIRS:
-        res = analyze_pair(b, q)
-        if res:
-            results.append(res)
+    results = [analyze_pair(b, q) for b, q in TOP_PAIRS]
+    results = [r for r in results if r]
 
 if results:
     scan = pd.DataFrame(results).sort_values("strength", ascending=False)
@@ -278,7 +280,7 @@ with tab3:
         st.success(f"Simulated SELL @ {rate:.5f} | P&L -${stake*0.02:.0f}")
 
 # ------------------------------------------------------------------ #
-# Footer (fixed syntax)
+# Footer
 # ------------------------------------------------------------------ #
 st.markdown("---")
 st.markdown("<p style='text-align:center;color:#666'>Streamlit + yFinance | Educational Use Only</p>", unsafe_allow_html=True)
