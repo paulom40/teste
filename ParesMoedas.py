@@ -59,11 +59,11 @@ def fetch_data(ticker, period, interval):
                            progress=False, auto_adjust=True)
         if data.empty or len(data) < 26:
             return pd.DataFrame()
-        df = data[['Open','High','Low','Close']].copy()
+        df = data[['Open','High','Low','Close', 'Volume']].copy()
         df['Rate'] = 1.0 / df['Close']
         df = df.reset_index()
         df['Datetime'] = pd.to_datetime(df['Datetime'])
-        return df[['Datetime','Rate','Open','High','Low','Close']].dropna()
+        return df[['Datetime','Rate','Open','High','Low','Close','Volume']].dropna()
     except Exception:
         return pd.DataFrame()
 
@@ -130,7 +130,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         pattern = detect_price_action(df.tail(3))
         df.loc[df.index[-1], 'Price_Action'] = pattern
 
-    return df[['Datetime','Rate','SMA_20','RSI','MACD','MACD_Signal','Price_Action']].dropna()
+    return df[['Datetime','Rate','Open','High','Low','Close','Volume','SMA_20','RSI','MACD','MACD_Signal','Price_Action']].dropna()
 
 # ------------------------------------------------------------------ #
 # Analyze Pair
@@ -180,11 +180,8 @@ def analyze_pair(b, q):
 # ------------------------------------------------------------------ #
 st.subheader("Real-Time Scanner – Top 10 Pairs")
 with st.spinner("Scanning 10 pairs..."):
-    results = []
-    for b, q in TOP_PAIRS:
-        res = analyze_pair(b, q)
-        if res:
-            results.append(res)
+    results = [analyze_pair(b, q) for b, q in TOP_PAIRS]
+    results = [r for r in results if r]
 
 if results:
     scan = pd.DataFrame(results).sort_values("strength", ascending=False)
@@ -232,6 +229,9 @@ if st.sidebar.button("Refresh Now"):
 # ------------------------------------------------------------------ #
 tab1, tab2, tab3 = st.tabs(["Overview", "Analysis", "Simulator"])
 
+# ------------------------------------------------------------------ #
+# TAB 1: Overview – Candlestick Chart + Metrics
+# ------------------------------------------------------------------ #
 with tab1:
     df = fetch_data(ticker, period, interval)
     if not df.empty:
@@ -262,16 +262,74 @@ with tab1:
                 ico = "Up" if sig == "BUY" else "Down" if sig == "SELL" else "Pause"
                 st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{ico} {sig}</div></div>', unsafe_allow_html=True)
 
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7,0.3])
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD'), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal'), row=2, col=1)
+            # === CANDLESTICK CHART WITH VOLUME, SMA, RSI, MACD ===
+            fig = make_subplots(
+                rows=4, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.05,
+                subplot_titles=(f"{base}/{quote} Candlestick", "Volume", "RSI", "MACD"),
+                row_heights=[0.5, 0.15, 0.15, 0.2]
+            )
+
+            # Candlesticks
+            fig.add_trace(go.Candlestick(
+                x=df['Datetime'],
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name="OHLC"
+            ), row=1, col=1)
+
+            # SMA
+            fig.add_trace(go.Scatter(
+                x=df['Datetime'], y=df['SMA_20'],
+                name="SMA 20", line=dict(color="orange", width=2)
+            ), row=1, col=1)
+
+            # Volume
+            fig.add_trace(go.Bar(
+                x=df['Datetime'], y=df['Volume'],
+                name="Volume", marker_color="lightblue"
+            ), row=2, col=1)
+
+            # RSI
+            fig.add_trace(go.Scatter(
+                x=df['Datetime'], y=df['RSI'],
+                name="RSI", line=dict(color="purple")
+            ), row=3, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+
+            # MACD
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name="MACD", line=dict(color="blue")), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name="Signal", line=dict(color="red")), row=4, col=1)
+            fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD'] - df['MACD_Signal'], name="Histogram", marker_color="gray"), row=4, col=1)
+
+            # Annotate last pattern
             if pattern != "No Pattern":
-                fig.add_annotation(x=df['Datetime'].iloc[-1], y=rate_val, text=pattern, row=1, col=1)
+                fig.add_annotation(
+                    x=df['Datetime'].iloc[-1],
+                    y=df['High'].iloc[-1],
+                    text=pattern,
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowwidth=2,
+                    arrowcolor="yellow",
+                    font=dict(color="black", size=12),
+                    bgcolor="yellow",
+                    bordercolor="black",
+                    borderwidth=1,
+                    row=1, col=1
+                )
+
+            fig.update_layout(height=800, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
+# ------------------------------------------------------------------ #
+# TAB 2: Analysis
+# ------------------------------------------------------------------ #
 with tab2:
     if not df.empty:
         c1, c2 = st.columns(2)
@@ -289,6 +347,9 @@ with tab2:
             f.add_hline(y=30, line_dash="dash", line_color="green")
             st.plotly_chart(f, use_container_width=True)
 
+# ------------------------------------------------------------------ #
+# TAB 3: Simulator
+# ------------------------------------------------------------------ #
 with tab3:
     stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
     rate = df['Rate'].iloc[-1] if not df.empty and len(df) > 0 else 1.0
