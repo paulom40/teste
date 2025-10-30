@@ -93,6 +93,14 @@ st.markdown("""
         color: black;
         font-weight: bold;
     }
+    .pair-card {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 4px solid #1f77b4;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
     @keyframes blink {
         0% { opacity: 1; }
         50% { opacity: 0.5; }
@@ -103,22 +111,35 @@ st.markdown("""
 
 # Limites de volatilidade por par
 LIMITE_VOLATILIDADE = {
-    "EUR/USD": 0.0020,
-    "GBP/USD": 0.0025,
-    "USD/JPY": 0.25,
-    "AUD/USD": 0.0022,
-    "USD/CAD": 0.0023,
-    "USD/CHF": 0.0021
+    "EUR/USD": 0.0020, "GBP/USD": 0.0025, "USD/JPY": 0.25, "AUD/USD": 0.0022,
+    "USD/CAD": 0.0023, "USD/CHF": 0.0021, "EUR/GBP": 0.0018, "EUR/JPY": 0.0028,
+    "GBP/JPY": 0.0030, "AUD/JPY": 0.0028, "NZD/USD": 0.0024, "USD/CNH": 0.0035,
+    "USD/MXN": 0.0040, "USD/TRY": 0.0080, "USD/ZAR": 0.0050, "USD/SGD": 0.0020,
+    "USD/HKD": 0.0015, "USD/SEK": 0.0030, "USD/NOK": 0.0032, "USD/DKK": 0.0020
 }
 
-# Parâmetros simulados expandidos
+# Parâmetros simulados expandidos para todos os pares
 PARES = {
-    "EUR/USD": {"base": 1.10, "vol": 0.005},
-    "GBP/USD": {"base": 1.26, "vol": 0.006},
-    "USD/JPY": {"base": 148.0, "vol": 0.004},
-    "AUD/USD": {"base": 0.66, "vol": 0.007},
-    "USD/CAD": {"base": 1.35, "vol": 0.005},
-    "USD/CHF": {"base": 0.88, "vol": 0.004}
+    "EUR/USD": {"base": 1.10, "vol": 0.005, "pip_value": 10},
+    "GBP/USD": {"base": 1.26, "vol": 0.006, "pip_value": 10},
+    "USD/JPY": {"base": 148.0, "vol": 0.004, "pip_value": 9},
+    "AUD/USD": {"base": 0.66, "vol": 0.007, "pip_value": 10},
+    "USD/CAD": {"base": 1.35, "vol": 0.005, "pip_value": 10},
+    "USD/CHF": {"base": 0.88, "vol": 0.004, "pip_value": 10},
+    "EUR/GBP": {"base": 0.87, "vol": 0.004, "pip_value": 10},
+    "EUR/JPY": {"base": 162.0, "vol": 0.005, "pip_value": 9},
+    "GBP/JPY": {"base": 186.0, "vol": 0.006, "pip_value": 9},
+    "AUD/JPY": {"base": 97.0, "vol": 0.006, "pip_value": 9},
+    "NZD/USD": {"base": 0.61, "vol": 0.007, "pip_value": 10},
+    "USD/CNH": {"base": 7.25, "vol": 0.003, "pip_value": 10},
+    "USD/MXN": {"base": 17.5, "vol": 0.008, "pip_value": 10},
+    "USD/TRY": {"base": 32.0, "vol": 0.012, "pip_value": 10},
+    "USD/ZAR": {"base": 18.5, "vol": 0.009, "pip_value": 10},
+    "USD/SGD": {"base": 1.35, "vol": 0.003, "pip_value": 10},
+    "USD/HKD": {"base": 7.82, "vol": 0.002, "pip_value": 10},
+    "USD/SEK": {"base": 10.5, "vol": 0.004, "pip_value": 10},
+    "USD/NOK": {"base": 10.8, "vol": 0.004, "pip_value": 10},
+    "USD/DKK": {"base": 6.85, "vol": 0.003, "pip_value": 10}
 }
 
 # Estratégia para candles de 15 minutos
@@ -162,8 +183,11 @@ if "auto_trade_stats" not in st.session_state:
         "trades_perdedores": 0,
         "lucro_total": 0.0,
         "melhor_trade": 0.0,
-        "pior_trade": 0.0
+        "pior_trade": 0.0,
+        "win_rate": 0.0
     }
+if "pares_config" not in st.session_state:
+    st.session_state.pares_config = {par: {"ativo": True, "stake": 10} for par in PARES.keys()}
 
 def detectar_padroes_candles(df):
     """Detecta padrões de candles usando lógica de price action"""
@@ -281,26 +305,8 @@ def analisar_tendencia(df):
     except:
         return "Indefinida"
 
-def calcular_volume_profile(df):
-    """Calcula perfil de volume para análise de price action"""
-    if len(df) == 0:
-        return {}
-    
-    try:
-        price_levels = np.linspace(df['low'].min(), df['high'].max(), 10)
-        volume_at_price = {}
-        
-        for level in price_levels:
-            # Volume próximo a este nível de preço
-            mask = (df['low'] <= level) & (df['high'] >= level)
-            volume_at_price[round(level, 4)] = df[mask]['volume'].sum() if not df[mask].empty else 0
-        
-        return volume_at_price
-    except:
-        return {}
-
 def executar_auto_trade():
-    """Executa a lógica de auto trading"""
+    """Executa a lógica de auto trading para todos os pares"""
     if not st.session_state.auto_trade_active:
         return
     
@@ -318,7 +324,11 @@ def executar_auto_trade():
     
     trades_executados = 0
     
-    for par in st.session_state.get('pares_selecionados', []):
+    for par in PARES.keys():
+        # Verificar se o par está ativo na configuração
+        if not st.session_state.pares_config[par]["ativo"]:
+            continue
+            
         df_par = dados_15min[dados_15min['par'] == par]
         
         if len(df_par) < 10:
@@ -340,7 +350,12 @@ def executar_auto_trade():
                 trades_executados += 1
     
     if trades_executados > 0:
-        st.success(f"🤖 Auto Trade executou {trades_executados} trades")
+        st.session_state.logs_tecnicos.append({
+            "timestamp": datetime.now(),
+            "tipo": "AUTO_TRADE_EXECUCAO",
+            "trades_executados": trades_executados,
+            "status": f"Executados {trades_executados} trades"
+        })
 
 def verificar_condicoes_entrada(ultimo, df_par):
     """Verifica condições para entrada no trade"""
@@ -370,7 +385,7 @@ def verificar_condicoes_entrada(ultimo, df_par):
 def executar_nova_entrada(par, dados_entrada):
     """Executa uma nova entrada de trade"""
     try:
-        stake = st.session_state.stake_valor
+        stake = st.session_state.pares_config[par]["stake"]
         tipo_operacao = 'COMPRA' if dados_entrada['sinal'] == 'COMPRA' else 'VENDA'
         preco_entrada = dados_entrada['close']
         
@@ -476,6 +491,11 @@ def fechar_trade(trade, preco_saida, motivo):
                 st.session_state.auto_trade_stats["pior_trade"], lucro_euros
             )
         
+        # Calcular win rate
+        total = st.session_state.auto_trade_stats["total_trades"]
+        lucrativos = st.session_state.auto_trade_stats["trades_lucrativos"]
+        st.session_state.auto_trade_stats["win_rate"] = (lucrativos / total * 100) if total > 0 else 0
+        
         # Registrar no log
         st.session_state.logs_tecnicos.append({
             "timestamp": datetime.now(),
@@ -534,7 +554,7 @@ def gerar_dado_live(par, base_price):
     agora = datetime.now()
     
     # Simular preço atual com movimento realista
-    variacao = np.random.normal(0, 0.0002)
+    variacao = np.random.normal(0, PARES[par]["vol"] * 0.1)
     spread = np.random.uniform(0.0001, 0.0003)
     
     bid = base_price * (1 + variacao)
@@ -550,24 +570,23 @@ def gerar_dado_live(par, base_price):
     }
 
 def atualizar_dados_live():
-    """Atualiza dados em tempo real para todos os pares selecionados"""
+    """Atualiza dados em tempo real para todos os pares"""
     agora = datetime.now()
     st.session_state.ultima_atualizacao = agora
     st.session_state.contador_updates += 1
     
-    for par in st.session_state.get('pares_selecionados', []):
-        if par in PARES:
-            novo_dado = gerar_dado_live(par, PARES[par]["base"])
-            
-            if par not in st.session_state.dados_live:
-                st.session_state.dados_live[par] = []
-            
-            # Manter apenas os últimos 50 pontos
-            st.session_state.dados_live[par].append(novo_dado)
-            if len(st.session_state.dados_live[par]) > 50:
-                st.session_state.dados_live[par] = st.session_state.dados_live[par][-50:]
+    for par in PARES.keys():
+        novo_dado = gerar_dado_live(par, PARES[par]["base"])
+        
+        if par not in st.session_state.dados_live:
+            st.session_state.dados_live[par] = []
+        
+        # Manter apenas os últimos 50 pontos
+        st.session_state.dados_live[par].append(novo_dado)
+        if len(st.session_state.dados_live[par]) > 50:
+            st.session_state.dados_live[par] = st.session_state.dados_live[par][-50:]
 
-def simular_dados_15min(par, base_price, days=3):
+def simular_dados_15min(par, base_price, days=2):
     """Simula dados de 15 minutos para análise"""
     timeframe_data = []
     current_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -578,11 +597,11 @@ def simular_dados_15min(par, base_price, days=3):
                 timestamp = current_time - timedelta(days=day) + timedelta(hours=hour, minutes=minute)
                 
                 # Simular preços OHLC mais simples
-                variacao = np.random.normal(0, 0.0005)
+                variacao = np.random.normal(0, PARES[par]["vol"])
                 open_price = base_price * (1 + variacao)
-                close = open_price * (1 + np.random.normal(0, 0.0003))
-                high = max(open_price, close) * (1 + abs(np.random.normal(0, 0.0002)))
-                low = min(open_price, close) * (1 - abs(np.random.normal(0, 0.0002)))
+                close = open_price * (1 + np.random.normal(0, PARES[par]["vol"] * 0.6))
+                high = max(open_price, close) * (1 + abs(np.random.normal(0, PARES[par]["vol"] * 0.4)))
+                low = min(open_price, close) * (1 - abs(np.random.normal(0, PARES[par]["vol"] * 0.4)))
                 
                 timeframe_data.append({
                     "timestamp": timestamp,
@@ -695,7 +714,7 @@ def custom_metric_style():
 
 # Interface principal
 st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard</h1>', unsafe_allow_html=True)
-st.markdown('<h3 class="main-header" style="font-size: 1.5rem;">Auto Trade & Price Action Strategy</h3>', unsafe_allow_html=True)
+st.markdown('<h3 class="main-header" style="font-size: 1.5rem;">Multi-Pair Auto Trading System</h3>', unsafe_allow_html=True)
 
 # Sidebar modernizada
 with st.sidebar:
@@ -718,14 +737,14 @@ with st.sidebar:
         with col_auto1:
             if st.button("▶️ Iniciar Auto Trade", type="primary"):
                 st.session_state.auto_trade_active = True
-                st.success("Auto Trade Iniciado!")
+                st.success("Auto Trade Iniciado para todos os pares!")
         with col_auto2:
             if st.button("⏹️ Parar Auto Trade"):
                 st.session_state.auto_trade_active = False
                 st.warning("Auto Trade Parado!")
     
     st.subheader("💰 Gestão de Capital")
-    stake_manual = st.radio("Stake:", ["Automático", "€5", "€10", "€25", "€50"])
+    stake_padrao = st.number_input("Stake Padrão (€)", min_value=5, max_value=100, value=10, step=5)
     meta_lucro = st.number_input("🎯 Meta de Lucro (€)", min_value=10, max_value=5000, value=500, step=50)
     limite_perda = st.number_input("📉 Limite de Perda (€)", min_value=-2000, max_value=0, value=-200, step=50)
     
@@ -733,52 +752,35 @@ with st.sidebar:
     rsi_oversold = st.slider("RSI Oversold", 20, 40, 30)
     rsi_overbought = st.slider("RSI Overbought", 60, 80, 70)
     
-    st.subheader("📈 Filtros")
-    pares_selecionados = st.multiselect(
-        "Pares para análise:",
-        list(PARES.keys()),
-        default=["EUR/USD", "GBP/USD", "USD/JPY"]
-    )
-    
     # Configuração de atualização automática
     st.subheader("🔄 Configuração Live")
     auto_refresh = st.checkbox("Atualização Automática", value=False)
     refresh_interval = st.slider("Intervalo (segundos)", 1, 60, 5)
 
-# Atualizar pares selecionados no session state
-st.session_state.pares_selecionados = pares_selecionados
+# Atualizar configurações globais
 st.session_state.meta_lucro = meta_lucro
 st.session_state.limite_perda = limite_perda
 
-# Atualizar stake
-if stake_manual == "€5":
-    st.session_state.stake_valor = 5
-elif stake_manual == "€10":
-    st.session_state.stake_valor = 10
-elif stake_manual == "€25":
-    st.session_state.stake_valor = 25
-elif stake_manual == "€50":
-    st.session_state.stake_valor = 50
+# Atualizar stake padrão para todos os pares
+for par in PARES.keys():
+    st.session_state.pares_config[par]["stake"] = stake_padrao
 
 # Atualizar dados em tempo real
 atualizar_dados_live()
 
-# Simular dados de 15 minutos
-if pares_selecionados:
-    try:
-        dados_15min = pd.concat([
-            simular_dados_15min(par, PARES[par]["base"]) 
-            for par in pares_selecionados
-        ])
+# Simular dados de 15 minutos para todos os pares
+try:
+    dados_15min = pd.concat([
+        simular_dados_15min(par, PARES[par]["base"]) 
+        for par in PARES.keys()
+    ])
 
-        # Calcular indicadores técnicos
-        dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
-        dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
-        st.session_state.dados_15min = dados_15min
-    except Exception as e:
-        st.error(f"Erro ao processar dados: {e}")
-        dados_15min = pd.DataFrame()
-else:
+    # Calcular indicadores técnicos
+    dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
+    dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+    st.session_state.dados_15min = dados_15min
+except Exception as e:
+    st.error(f"Erro ao processar dados: {e}")
     dados_15min = pd.DataFrame()
 
 # Executar auto trade se estiver ativo
@@ -786,7 +788,7 @@ if st.session_state.auto_trade_active:
     executar_auto_trade()
 
 # Layout principal em abas
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🎯 Estratégia", "📈 Price Action", "🤖 Auto Trade", "💰 Live Data"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🎯 Estratégia", "🤖 Auto Trade", "🔧 Config Pares", "📈 Mercado"])
 
 with tab1:
     # Header com informações de atualização
@@ -796,8 +798,7 @@ with tab1:
     with col_update2:
         st.metric("Total Updates", st.session_state.contador_updates)
     with col_update3:
-        stake_atual = st.session_state.stake_valor
-        st.metric("Stake Atual", f"€{stake_atual}")
+        st.metric("Pares Monitorados", len(PARES))
     
     # KPIs principais
     col1, col2, col3, col4 = st.columns(4)
@@ -811,8 +812,7 @@ with tab1:
         st.metric("Trades Ativos", trades_ativos)
     
     with col3:
-        win_rate = (st.session_state.auto_trade_stats["trades_lucrativos"] / 
-                   st.session_state.auto_trade_stats["total_trades"] * 100) if st.session_state.auto_trade_stats["total_trades"] > 0 else 0
+        win_rate = st.session_state.auto_trade_stats["win_rate"]
         st.metric("Win Rate", f"{win_rate:.1f}%")
     
     with col4:
@@ -827,15 +827,63 @@ with tab1:
     status_color = "🟢" if st.session_state.auto_trade_active else "🔴"
     status_text = "ATIVO" if st.session_state.auto_trade_active else "INATIVO"
     
-    col_status1, col_status2, col_status3 = st.columns(3)
+    col_status1, col_status2, col_status3, col_status4 = st.columns(4)
     with col_status1:
         st.metric("Status", f"{status_color} {status_text}")
     with col_status2:
         st.metric("Trades Hoje", st.session_state.auto_trade_stats["total_trades"])
     with col_status3:
         st.metric("Lucro/Prejuízo", f"€{st.session_state.auto_trade_stats['lucro_total']:.2f}")
+    with col_status4:
+        pares_ativos = sum(1 for config in st.session_state.pares_config.values() if config["ativo"])
+        st.metric("Pares Ativos", f"{pares_ativos}/{len(PARES)}")
 
-with tab5:
+with tab4:
+    st.header("🔧 Configuração por Par")
+    
+    st.subheader("⚙️ Configurações Individuais dos Pares")
+    
+    # Dividir pares em colunas para melhor organização
+    pares_list = list(PARES.keys())
+    cols = st.columns(3)
+    
+    for i, par in enumerate(pares_list):
+        with cols[i % 3]:
+            with st.container():
+                st.markdown(f'<div class="pair-card">', unsafe_allow_html=True)
+                st.write(f"**{par}**")
+                
+                # Configurações do par
+                ativo = st.checkbox(
+                    f"Ativo", 
+                    value=st.session_state.pares_config[par]["ativo"],
+                    key=f"ativo_{par}"
+                )
+                
+                stake = st.number_input(
+                    f"Stake (€)",
+                    min_value=5,
+                    max_value=100,
+                    value=st.session_state.pares_config[par]["stake"],
+                    key=f"stake_{par}"
+                )
+                
+                # Atualizar configurações
+                st.session_state.pares_config[par]["ativo"] = ativo
+                st.session_state.pares_config[par]["stake"] = stake
+                
+                # Mostrar informações do par
+                if st.session_state.get('dados_15min') is not None:
+                    df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
+                    if not df_par.empty:
+                        ultimo = df_par.iloc[-1]
+                        st.write(f"Preço: {ultimo['close']:.5f}")
+                        st.write(f"Sinal: {ultimo['sinal']}")
+                        st.write(f"RSI: {ultimo['RSI']:.1f}")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+with tab3:
     st.header("🤖 Painel de Auto Trade")
     
     col_auto1, col_auto2 = st.columns([2, 1])
@@ -844,9 +892,9 @@ with tab5:
         st.subheader("📊 Trades Ativos")
         if st.session_state.trades_ativos:
             trades_df = pd.DataFrame(st.session_state.trades_ativos)
-            # Calcular P&L atualizado
             trades_display = trades_df[['id', 'par', 'tipo', 'preco_entrada', 'stop_loss', 'take_profit', 'stake', 'timestamp_entrada']].copy()
-            st.dataframe(trades_display, width='stretch')
+            trades_display['timestamp_entrada'] = trades_display['timestamp_entrada'].dt.strftime('%H:%M:%S')
+            st.dataframe(trades_display, width='stretch', height=400)
         else:
             st.info("Nenhum trade ativo no momento")
         
@@ -856,7 +904,7 @@ with tab5:
         with col_stat1:
             st.metric("Total Trades", stats["total_trades"])
         with col_stat2:
-            st.metric("Win Rate", f"{(stats['trades_lucrativos']/stats['total_trades']*100 if stats['total_trades'] > 0 else 0):.1f}%")
+            st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
         with col_stat3:
             st.metric("Melhor Trade", f"€{stats['melhor_trade']:.2f}")
         with col_stat4:
@@ -866,15 +914,15 @@ with tab5:
         st.subheader("⚙️ Controles Rápidos")
         
         if st.session_state.auto_trade_active:
-            if st.button("⏸️ Pausar Auto Trade", type="secondary"):
+            if st.button("⏸️ Pausar Auto Trade", type="secondary", use_container_width=True):
                 st.session_state.auto_trade_active = False
                 st.rerun()
         else:
-            if st.button("▶️ Iniciar Auto Trade", type="primary"):
+            if st.button("▶️ Iniciar Auto Trade", type="primary", use_container_width=True):
                 st.session_state.auto_trade_active = True
                 st.rerun()
         
-        if st.button("🗑️ Limpar Trades"):
+        if st.button("🗑️ Limpar Todos Trades", use_container_width=True):
             st.session_state.trades_ativos = []
             st.session_state.historico_trades = []
             st.session_state.auto_trade_stats = {
@@ -883,32 +931,74 @@ with tab5:
                 "trades_perdedores": 0,
                 "lucro_total": 0.0,
                 "melhor_trade": 0.0,
-                "pior_trade": 0.0
+                "pior_trade": 0.0,
+                "win_rate": 0.0
             }
             st.rerun()
         
         st.subheader("📋 Histórico Recente")
         if st.session_state.historico_trades:
-            historico_recente = st.session_state.historico_trades[-5:]  # Últimos 5 trades
+            historico_recente = st.session_state.historico_trades[-8:]  # Últimos 8 trades
             historico_df = pd.DataFrame(historico_recente)
-            historico_display = historico_df[['id', 'par', 'tipo', 'preco_entrada', 'preco_saida', 'lucro_prejuizo', 'motivo_saida']].copy()
-            
-            # Colorir baseado no resultado
-            def colorir_resultado(val):
-                if val > 0:
-                    return 'background-color: #90EE90; font-weight: bold;'
-                else:
-                    return 'background-color: #FFB6C1; font-weight: bold;'
-            
-            st.dataframe(
-                historico_display.style.applymap(colorir_resultado, subset=['lucro_prejuizo']),
-                width='stretch'
-            )
+            if not historico_df.empty:
+                historico_display = historico_df[['id', 'par', 'tipo', 'preco_entrada', 'preco_saida', 'lucro_prejuizo', 'motivo_saida']].copy()
+                historico_display['timestamp'] = historico_df['timestamp_saida'].apply(lambda x: x.strftime('%H:%M') if hasattr(x, 'strftime') else 'N/A')
+                
+                # Colorir baseado no resultado
+                def colorir_resultado(val):
+                    if val > 0:
+                        return 'background-color: #90EE90; font-weight: bold;'
+                    else:
+                        return 'background-color: #FFB6C1; font-weight: bold;'
+                
+                st.dataframe(
+                    historico_display.style.applymap(colorir_resultado, subset=['lucro_prejuizo']),
+                    width='stretch',
+                    height=400
+                )
         else:
             st.info("Nenhum trade no histórico")
 
-# Continuação dos outros tabs (Estratégia, Price Action, Live Data)...
-# [O código dos outros tabs permanece similar ao anterior]
+with tab5:
+    st.header("📈 Visão Geral do Mercado")
+    
+    # Resumo de todos os pares
+    st.subheader("🎯 Sinais por Par")
+    
+    if st.session_state.get('dados_15min') is not None:
+        sinais_por_par = []
+        for par in PARES.keys():
+            df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
+            if not df_par.empty:
+                ultimo = df_par.iloc[-1]
+                tendencia = analisar_tendencia(df_par)
+                sinais_por_par.append({
+                    'Par': par,
+                    'Preço': ultimo['close'],
+                    'Sinal': ultimo['sinal'],
+                    'RSI': f"{ultimo['RSI']:.1f}",
+                    'Tendência': tendencia,
+                    'Padrão': ultimo['padrao_candle'],
+                    'Ativo': st.session_state.pares_config[par]["ativo"]
+                })
+        
+        if sinais_por_par:
+            df_sinais = pd.DataFrame(sinais_por_par)
+            
+            # Colorir os sinais
+            def colorir_linha(row):
+                if row['Sinal'] == 'COMPRA':
+                    return ['background-color: #90EE90'] * len(row)
+                elif row['Sinal'] == 'VENDA':
+                    return ['background-color: #FFB6C1'] * len(row)
+                else:
+                    return ['background-color: #F0F0F0'] * len(row)
+            
+            st.dataframe(
+                df_sinais.style.apply(colorir_linha, axis=1),
+                width='stretch',
+                height=600
+            )
 
 # Sistema de atualização automática
 if auto_refresh:
@@ -919,7 +1009,7 @@ if auto_refresh:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "📊 Advanced Trading Dashboard - Auto Trade & Price Action Strategy"
+    "📊 Advanced Trading Dashboard - Multi-Pair Auto Trading System | 20 Pares Monitorados"
     "</div>", 
     unsafe_allow_html=True
 )
