@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import requests
+import yfinance as yf  # Switched to yfinance for free historical forex data (no API key needed)
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
@@ -23,9 +23,10 @@ if base == quote:
     st.sidebar.warning("Please select different currencies.")
     st.stop()
 
-pair = f"{base}{quote}=X"
+# yfinance ticker format: e.g., for base=USD, quote=EUR -> "EURUSD=X" (USD per EUR), then invert for EUR per USD
+ticker = f"{quote}{base}=X"
 
-days = st.sidebar.slider("Historical Days", 30, 365, 30)  # Min 30 for all indicators
+days = st.sidebar.slider("Historical Days", 5, 365, 30)  # Min lowered to 5, as yfinance handles it well
 
 # Technical Indicators Selection
 st.sidebar.subheader("Technical Indicators")
@@ -35,40 +36,36 @@ show_bb = st.sidebar.checkbox("Bollinger Bands (20, 2)", True)  # Bollinger Band
 show_rsi = st.sidebar.checkbox("RSI (14)", True)
 show_macd = st.sidebar.checkbox("MACD", True)
 
-# Free API for forex data
+# Fetch forex data using yfinance (free, no key required)
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_forex_data(pair, days):
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    
-    url = f"https://api.exchangerate.host/timeseries?start_date={start_date}&end_date={end_date}&base={base}&symbols={quote}"
-    
+def fetch_forex_data(ticker, days):
     try:
-        response = requests.get(url)
-        data = response.json()
-        if "rates" in data:
-            df = pd.DataFrame(data["rates"]).T
-            df.index = pd.to_datetime(df.index)
-            df = df.reset_index().rename(columns={"index": "Date", quote: "Rate"})
-            df["Date"] = pd.to_datetime(df["Date"])
-            df = df.sort_values("Date").reset_index(drop=True)  # Ensure sorted
+        # Download historical data
+        data = yf.download(ticker, period=f"{days}d", interval="1d", progress=False)
+        if not data.empty:
+            # Reset index to get Date column
+            df = data.reset_index()
+            # Use Close price, invert if needed to match base/quote (1 base = rate quote)
+            # Since ticker is quotebase=X (quote per base? Wait: yf "EURUSD=X" is USD per EUR, so for base=USD quote=EUR: 1 EUR = rate USD -> rate for 1 USD = 1/rate EUR
+            df['Rate'] = 1 / df['Close']  # Adjust to get quote per base
+            df = df[['Date', 'Rate']]
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values("Date").reset_index(drop=True)
             return df
         else:
-            # Fixed: Use f-string to handle potential dict error message
-            error_msg = data.get("error", "Unknown")
-            st.error(f"API error: {error_msg}")
+            st.warning("No data returned from yfinance. Try a different pair or more days.")
             return pd.DataFrame()
     except Exception as e:
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
 # Fetch data
-df = fetch_forex_data(pair, days)
+df = fetch_orex_data(ticker, days)
 
 # Compute Technical Indicators (native pandas implementation)
 @st.cache_data
 def compute_indicators(df):
-    if df.empty or len(df) < 30:  # Need min data for indicators
+    if df.empty or len(df) < 14:  # Min for RSI (14)
         return df
     
     df = df.copy()
@@ -118,7 +115,7 @@ col1, col2 = st.columns(2)
 with col1:
     current_rate = df["Rate"].iloc[-1] if not df.empty else "N/A"
     delta = df["Rate"].iloc[-1] - df["Rate"].iloc[0] if len(df) > 1 else 0
-    st.metric("Current Rate", current_rate, delta)
+    st.metric("Current Rate", f"{current_rate:.5f}" if isinstance(current_rate, (int, float)) else current_rate, delta)
 
 with col2:
     if not df.empty and len(df) > 1:
@@ -126,7 +123,8 @@ with col2:
         st.metric("Change (Period)", f"{change_pct:.2f}%", change_pct)
 
 # Chart with Indicators
-if not df.empty and len(df) >= 30:
+min_days_for_chart = 20 if any([show_sma, show_ema, show_bb]) else 14 if show_rsi else 26 if show_macd else 1
+if not df.empty and len(df) >= min_days_for_chart:
     # Determine number of subplots
     num_rows = 1
     if show_rsi: num_rows += 1
@@ -136,7 +134,7 @@ if not df.empty and len(df) >= 30:
         rows=num_rows, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
-        subplot_titles=(f"{base}/{quote} Price", "RSI" if show_rsi else "", "MACD" if show_macd else ""),
+        subplot_titles=(f"{base}/{quote} Rate", "RSI" if show_rsi else "", "MACD" if show_macd else ""),
         row_heights=[0.6] + [0.2] * (num_rows - 1)
     )
     
@@ -158,9 +156,7 @@ if not df.empty and len(df) >= 30:
             fill='toself', fillcolor='rgba(128,128,128,0.2)', 
             line=dict(color='rgba(255,255,255,0)'), name='BB Band', showlegend=False
         ), row=1, col=1)
-        if show_sma:  # BB middle is SMA, avoid duplicate if SMA shown
-            pass
-        else:
+        if not show_sma and 'BBM_20_2.0' in df.columns:
             fig.add_trace(go.Scatter(x=df['Date'], y=df['BBM_20_2.0'], name='BB Middle', line=dict(color='orange')), row=1, col=1)
     
     # RSI (row 2 if present)
@@ -197,10 +193,10 @@ if not df.empty and len(df) >= 30:
     if show_rsi and 'RSI' in df.columns: display_cols.append('RSI')
     if show_macd and all(col in df.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
         display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
-    st.dataframe(df[display_cols], use_container_width=True)
+    st.dataframe(df[display_cols].round(5), use_container_width=True)  # Round for readability
 else:
-    st.info("No data available or insufficient data for indicators (need at least 30 days). Check API or increase days. Note: For dates in the future, the API may return no data.")
+    st.info(f"No data available or insufficient data for selected indicators (need at least {min_days_for_chart} days). yfinance data may be limited for future dates (current sim: 2025-10-30). Try fewer days or different pair.")
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.info("Built with Streamlit & native Pandas. No external TA library needed. For real trading, use a licensed broker.")
+st.sidebar.info("Built with Streamlit, yfinance & native Pandas. Free historical data via Yahoo Finance. For real trading, use a licensed broker.")
