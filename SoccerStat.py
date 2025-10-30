@@ -360,47 +360,118 @@ def get_live_score_api_matches():
         return None, f"Error: {str(e)}"
 
 def get_sofascore_matches():
-    """Fetch matches from SofaScore (public data, no API key needed)"""
+    """Fetch matches from Football-Data and add simulated live stats"""
     try:
         import random
         
-        # Generate simulated live stats for demo purposes
-        # In production, you'd scrape or use a proper API
+        # Use the Football-Data API with our key
+        API_KEY = "e57f3ceec4254fdc940de3316e45b577"
         
-        # First get matches from football-data
-        matches, error = get_football_data_matches()
+        headers = {'X-Auth-Token': API_KEY}
+        url = "https://api.football-data.org/v4/matches"
+        params = {'status': 'IN_PLAY'}
         
-        if error or not matches:
-            return matches, error
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         
-        # Add simulated live statistics to matches
-        for match in matches:
-            minute = match.get('minute', 0)
-            if isinstance(minute, int):
-                # Generate realistic stats based on minute
-                possession_home = random.randint(35, 65)
+        if response.status_code != 200:
+            return None, f"API Error: {response.status_code}"
+        
+        data = response.json()
+        matches = []
+        
+        for match in data.get('matches', []):
+            home_score = match['score']['fullTime']['home']
+            away_score = match['score']['fullTime']['away']
+            
+            # Use halftime scores if fulltime is None
+            if home_score is None:
+                home_score = match['score']['halfTime']['home'] or 0
+            if away_score is None:
+                away_score = match['score']['halfTime']['away'] or 0
+            
+            # Get minute or use status description
+            minute = match.get('minute')
+            if minute is None or minute == 'null':
+                minute = match['status']
+            
+            # Get match start time
+            utc_date = match.get('utcDate', '')
+            kick_off_time = ''
+            if utc_date:
+                try:
+                    from datetime import datetime as dt
+                    match_time = dt.fromisoformat(utc_date.replace('Z', '+00:00'))
+                    kick_off_time = match_time.strftime('%H:%M')
+                except:
+                    kick_off_time = 'N/A'
+            
+            # Get odds if available
+            odds = match.get('odds', {})
+            home_odds = odds.get('homeWin', 'N/A')
+            draw_odds = odds.get('draw', 'N/A')
+            away_odds = odds.get('awayWin', 'N/A')
+            
+            # Generate realistic live statistics based on match data
+            if isinstance(minute, int) and minute > 0:
+                # Possession (should total 100%)
+                possession_home = random.randint(40, 60)
                 possession_away = 100 - possession_home
                 
-                corners_home = random.randint(0, minute // 15)
-                corners_away = random.randint(0, minute // 15)
+                # Corners (more as game progresses)
+                max_corners = minute // 12  # Average 1 corner per 12 minutes
+                corners_home = random.randint(0, max(1, max_corners))
+                corners_away = random.randint(0, max(1, max_corners))
                 
-                shots_home = random.randint(0, minute // 10 + match['home_score'] * 2)
-                shots_away = random.randint(0, minute // 10 + match['away_score'] * 2)
+                # Shots (teams with goals usually have more shots)
+                base_shots_home = minute // 8
+                base_shots_away = minute // 8
+                shots_home = random.randint(max(home_score * 2, 1), base_shots_home + home_score * 3 + 5)
+                shots_away = random.randint(max(away_score * 2, 1), base_shots_away + away_score * 3 + 5)
                 
-                shots_on_target_home = random.randint(match['home_score'], shots_home)
-                shots_on_target_away = random.randint(match['away_score'], shots_away)
-                
-                match['possession_home'] = f"{possession_home}%"
-                match['possession_away'] = f"{possession_away}%"
-                match['corners_home'] = corners_home
-                match['corners_away'] = corners_away
-                match['shots_home'] = shots_home
-                match['shots_away'] = shots_away
-                match['shots_on_target_home'] = shots_on_target_home
-                match['shots_on_target_away'] = shots_on_target_away
+                # Shots on target (must be at least equal to goals)
+                shots_on_target_home = random.randint(home_score, max(home_score + 1, shots_home // 2))
+                shots_on_target_away = random.randint(away_score, max(away_score + 1, shots_away // 2))
+            else:
+                # Early in match or status unknown
+                possession_home = 50
+                possession_away = 50
+                corners_home = 0
+                corners_away = 0
+                shots_home = home_score
+                shots_away = away_score
+                shots_on_target_home = home_score
+                shots_on_target_away = away_score
+            
+            match_data = {
+                'id': match['id'],
+                'home_team': match['homeTeam']['name'],
+                'away_team': match['awayTeam']['name'],
+                'home_score': home_score,
+                'away_score': away_score,
+                'status': match['status'],
+                'minute': minute,
+                'competition': match['competition']['name'],
+                'kick_off': kick_off_time,
+                'home_odds': home_odds,
+                'draw_odds': draw_odds,
+                'away_odds': away_odds,
+                'possession_home': f"{possession_home}%",
+                'possession_away': f"{possession_away}%",
+                'corners_home': corners_home,
+                'corners_away': corners_away,
+                'shots_home': shots_home,
+                'shots_away': shots_away,
+                'shots_on_target_home': shots_on_target_home,
+                'shots_on_target_away': shots_on_target_away
+            }
+            matches.append(match_data)
         
         return matches, None
         
+    except requests.exceptions.Timeout:
+        return None, "API request timed out"
+    except requests.exceptions.ConnectionError:
+        return None, "Connection error"
     except Exception as e:
         return None, f"Error: {str(e)}"
 
