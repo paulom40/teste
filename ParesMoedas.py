@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import io
+import time
+import threading
 
 # Configuração da página
 st.set_page_config(
@@ -42,6 +44,19 @@ st.markdown("""
         border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         border-left: 4px solid #1f77b4;
+    }
+    .live-indicator {
+        background-color: #ff4444;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        animation: blink 1s infinite;
+    }
+    @keyframes blink {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -82,6 +97,52 @@ STRATEGY_15MIN = {
         "trailing_stop": True
     }
 }
+
+# Session state para dados em tempo real
+if "dados_live" not in st.session_state:
+    st.session_state.dados_live = {}
+if "ultima_atualizacao" not in st.session_state:
+    st.session_state.ultima_atualizacao = datetime.now()
+if "contador_updates" not in st.session_state:
+    st.session_state.contador_updates = 0
+
+def gerar_dado_live(par, base_price):
+    """Gera um novo dado em tempo real para um par"""
+    agora = datetime.now()
+    
+    # Simular preço atual com movimento realista
+    variacao = np.random.normal(0, 0.0002)
+    spread = np.random.uniform(0.0001, 0.0003)
+    
+    bid = base_price * (1 + variacao)
+    ask = bid + spread
+    
+    return {
+        "timestamp": agora,
+        "par": par,
+        "bid": round(bid, 5),
+        "ask": round(ask, 5),
+        "spread": round(spread, 5),
+        "volume": np.random.randint(50, 500)
+    }
+
+def atualizar_dados_live():
+    """Atualiza dados em tempo real para todos os pares selecionados"""
+    agora = datetime.now()
+    st.session_state.ultima_atualizacao = agora
+    st.session_state.contador_updates += 1
+    
+    for par in st.session_state.get('pares_selecionados', []):
+        if par in PARES:
+            novo_dado = gerar_dado_live(par, PARES[par]["base"])
+            
+            if par not in st.session_state.dados_live:
+                st.session_state.dados_live[par] = []
+            
+            # Manter apenas os últimos 100 pontos
+            st.session_state.dados_live[par].append(novo_dado)
+            if len(st.session_state.dados_live[par]) > 100:
+                st.session_state.dados_live[par] = st.session_state.dados_live[par][-100:]
 
 def simular_dados_15min(par, base_price, days=7):
     """Simula dados de 15 minutos para análise"""
@@ -181,11 +242,19 @@ def custom_metric_style():
     """, unsafe_allow_html=True)
 
 # Simular dados de 15 minutos
-st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - 15min Strategy</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - Live 15min Strategy</h1>', unsafe_allow_html=True)
 
 # Sidebar modernizada
 with st.sidebar:
     st.header("⚙️ Configurações de Trading")
+    
+    # Indicador de atualização em tempo real
+    col_live1, col_live2 = st.columns([2, 1])
+    with col_live1:
+        st.markdown(f"<span class='live-indicator'>LIVE</span>", unsafe_allow_html=True)
+    with col_live2:
+        if st.button("🔄 Atualizar"):
+            st.rerun()
     
     st.subheader("💰 Gestão de Capital")
     stake_manual = st.radio("Stake:", ["Automático", "€5", "€10", "€25", "€50"])
@@ -204,6 +273,14 @@ with st.sidebar:
         list(PARES.keys()),
         default=list(PARES.keys())[:3]
     )
+    
+    # Configuração de atualização automática
+    st.subheader("🔄 Configuração Live")
+    auto_refresh = st.checkbox("Atualização Automática", value=True)
+    refresh_interval = st.slider("Intervalo (segundos)", 1, 60, 5)
+
+# Atualizar pares selecionados no session state
+st.session_state.pares_selecionados = pares_selecionados
 
 # Inicializar session state
 if "logs_tecnicos" not in st.session_state:
@@ -221,6 +298,9 @@ elif stake_manual == "€25":
 elif stake_manual == "€50":
     st.session_state.stake_valor = 50
 
+# Atualizar dados em tempo real
+atualizar_dados_live()
+
 # Simular dados de 15 minutos
 if pares_selecionados:
     dados_15min = pd.concat([
@@ -235,9 +315,19 @@ else:
     dados_15min = pd.DataFrame()
 
 # Layout principal em abas
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🎯 Estratégia 15min", "📈 Análise Técnica", "📋 Relatórios"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard Live", "🎯 Estratégia 15min", "📈 Análise Técnica", "💰 Preços Live", "📋 Relatórios"])
 
 with tab1:
+    # Header com informações de atualização
+    col_update1, col_update2, col_update3 = st.columns(3)
+    with col_update1:
+        st.metric("Última Atualização", st.session_state.ultima_atualizacao.strftime("%H:%M:%S"))
+    with col_update2:
+        st.metric("Total Updates", st.session_state.contador_updates)
+    with col_update3:
+        tempo_decorrido = (datetime.now() - st.session_state.ultima_atualizacao).seconds
+        st.metric("Segundos desde update", tempo_decorrido)
+    
     # KPIs principais
     col1, col2, col3, col4 = st.columns(4)
     
@@ -260,6 +350,32 @@ with tab1:
     # Aplicar estilo personalizado às métricas
     custom_metric_style()
     
+    # Gráfico de preços em tempo real
+    st.subheader("📈 Preços em Tempo Real")
+    
+    if pares_selecionados and st.session_state.dados_live:
+        fig_live = go.Figure()
+        
+        for par in pares_selecionados[:3]:  # Mostrar apenas 3 pares para não poluir
+            if par in st.session_state.dados_live and st.session_state.dados_live[par]:
+                df_par = pd.DataFrame(st.session_state.dados_live[par])
+                fig_live.add_trace(go.Scatter(
+                    x=df_par['timestamp'], 
+                    y=df_par['bid'],
+                    mode='lines',
+                    name=par,
+                    line=dict(width=2)
+                ))
+        
+        fig_live.update_layout(
+            title="Evolução de Preços em Tempo Real",
+            xaxis_title="Tempo",
+            yaxis_title="Preço (Bid)",
+            height=400,
+            showlegend=True
+        )
+        st.plotly_chart(fig_live, width='stretch')
+    
     # Alertas de volatilidade
     st.subheader("🚨 Alertas de Volatilidade")
     
@@ -279,31 +395,6 @@ with tab1:
                 st.markdown(f'<div class="alert-high"><b>{par}</b>: Volatilidade {vol:.4f} - ALERTA!</div>', unsafe_allow_html=True)
         else:
             st.info("✅ Nenhum alerta de volatilidade no momento")
-        
-        # Gráfico de volatilidade
-        st.subheader("📈 Volatilidade por Par (15min)")
-        
-        fig_vol = go.Figure()
-        for par in pares_selecionados:
-            df_par = dados_15min[dados_15min['par'] == par]
-            volatilidade = (df_par['high'] - df_par['low']) / df_par['close']
-            fig_vol.add_trace(go.Scatter(
-                x=df_par['timestamp'], 
-                y=volatilidade,
-                mode='lines',
-                name=par,
-                line=dict(width=2)
-            ))
-        
-        fig_vol.update_layout(
-            title="Evolução da Volatilidade (15min)",
-            xaxis_title="Data/Hora",
-            yaxis_title="Volatilidade",
-            height=400
-        )
-        st.plotly_chart(fig_vol, width='stretch')
-    else:
-        st.info("Selecione pares para análise na sidebar")
 
 with tab2:
     st.header("🎯 Estratégia de 15 Minutos")
@@ -507,6 +598,58 @@ with tab3:
         st.info("Selecione pares para análise na sidebar")
 
 with tab4:
+    st.header("💰 Preços em Tempo Real")
+    
+    if pares_selecionados and st.session_state.dados_live:
+        # Tabela de preços atualizados
+        st.subheader("📊 Cotações Atuais")
+        
+        precos_atuais = []
+        for par in pares_selecionados:
+            if par in st.session_state.dados_live and st.session_state.dados_live[par]:
+                ultimo_dado = st.session_state.dados_live[par][-1]
+                precos_atuais.append({
+                    'Par': par,
+                    'Bid': ultimo_dado['bid'],
+                    'Ask': ultimo_dado['ask'],
+                    'Spread': ultimo_dado['spread'],
+                    'Volume': ultimo_dado['volume'],
+                    'Última Atualização': ultimo_dado['timestamp'].strftime("%H:%M:%S")
+                })
+        
+        if precos_atuais:
+            df_precos = pd.DataFrame(precos_atuais)
+            st.dataframe(df_precos, width='stretch')
+        
+        # Gráficos individuais por par
+        st.subheader("📈 Evolução Individual por Par")
+        
+        for par in pares_selecionados[:4]:  # Mostrar até 4 pares
+            if par in st.session_state.dados_live and st.session_state.dados_live[par]:
+                df_par = pd.DataFrame(st.session_state.dados_live[par])
+                
+                fig_individual = go.Figure()
+                fig_individual.add_trace(go.Scatter(
+                    x=df_par['timestamp'], 
+                    y=df_par['bid'],
+                    mode='lines+markers',
+                    name=f'{par} Bid',
+                    line=dict(color='blue', width=2),
+                    marker=dict(size=4)
+                ))
+                
+                fig_individual.update_layout(
+                    title=f"{par} - Preço em Tempo Real",
+                    xaxis_title="Tempo",
+                    yaxis_title="Preço",
+                    height=300
+                )
+                
+                st.plotly_chart(fig_individual, width='stretch')
+    else:
+        st.info("Selecione pares para ver dados em tempo real")
+
+with tab5:
     st.header("📋 Relatórios e Exportação")
     
     # Painel de trades
@@ -586,14 +729,23 @@ with tab4:
                 if not dados_15min.empty:
                     dados_15min.to_excel(writer, sheet_name='Dados 15min', index=False)
                 
+                # Dados live
+                dados_live_export = []
+                for par, dados in st.session_state.dados_live.items():
+                    for dado in dados:
+                        dados_live_export.append(dado)
+                if dados_live_export:
+                    pd.DataFrame(dados_live_export).to_excel(writer, sheet_name='Dados Live', index=False)
+                
                 # Resumo estatístico
                 resumo = {
-                    'Metrica': ['Total Trades', 'Lucro Total', 'Risco Total', 'Win Rate'],
+                    'Metrica': ['Total Trades', 'Lucro Total', 'Risco Total', 'Win Rate', 'Total Updates Live'],
                     'Valor': [
                         len(st.session_state.logs_tecnicos), 
                         lucro_total if st.session_state.logs_tecnicos else 0, 
                         risco_total if st.session_state.logs_tecnicos else 0, 
-                        f"{win_rate:.1f}%" if st.session_state.logs_tecnicos else "0%"
+                        f"{win_rate:.1f}%" if st.session_state.logs_tecnicos else "0%",
+                        st.session_state.contador_updates
                     ]
                 }
                 pd.DataFrame(resumo).to_excel(writer, sheet_name='Resumo', index=False)
@@ -604,15 +756,11 @@ with tab4:
                 file_name=f"relatorio_trading_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.ms-excel"
             )
-    
-    with col_exp2:
-        # Exportar estratégia
-        st.download_button(
-            label="📋 Exportar Configuração da Estratégia",
-            data=str(STRATEGY_15MIN),
-            file_name="estrategia_15min.txt",
-            mime="text/plain"
-        )
+
+# Sistema de atualização automática
+if auto_refresh:
+    time.sleep(refresh_interval)
+    st.rerun()
 
 # Sistema de gestão de risco
 st.sidebar.header("🛡️ Gestão de Risco")
@@ -634,7 +782,7 @@ if st.session_state.logs_tecnicos:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "📊 Advanced Trading Dashboard - Estratégia 15min | Desenvolvido para análise técnica"
+    "📊 Advanced Trading Dashboard - Live 15min Strategy | Dados em Tempo Real"
     "</div>", 
     unsafe_allow_html=True
 )
