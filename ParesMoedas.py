@@ -9,7 +9,7 @@ import numpy as np
 # Set page config for professional look
 st.set_page_config(
     page_title="Professional Forex Dashboard",
-    page_icon="💱",
+    page_icon="Forex Trading",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -75,22 +75,30 @@ st.markdown("""
         50% { opacity: 0.7; }
         100% { opacity: 1; }
     }
+    .trade-execution {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<h1 class="main-header">💱 Professional Forex Trading Dashboard</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Forex Trading Professional Forex Trading Dashboard</h1>', unsafe_allow_html=True)
 st.markdown("---")
 
 # Sidebar: Inputs
-st.sidebar.header("📊 Dashboard Controls")
+st.sidebar.header("Dashboard Controls")
 base = st.sidebar.selectbox("Base Currency", ["USD", "EUR", "GBP", "JPY", "AUD", "CAD"], index=0)
 quote = st.sidebar.selectbox("Quote Currency", ["EUR", "GBP", "JPY", "AUD", "CAD", "USD"], index=0)
-interval = st.sidebar.selectbox("Intraday Interval", ["1m", "5m", "15m", "1h"], index=2)  # New: Interval selection
-period = st.sidebar.selectbox("Period", ["1d", "5d", "1mo"], index=1)  # New: Period for intraday
+interval = st.sidebar.selectbox("Intraday Interval", ["1m", "5m", "15m", "1h"], index=2)
+period = st.sidebar.selectbox("Period", ["1d", "5d", "1mo"], index=1)
 
-# Live Mode Toggle
-live_mode = st.sidebar.checkbox("🚨 Enable Live Mode (Auto-Refresh & Alerts every 60s)")
+# Live Mode & Auto-Trade Toggle
+live_mode = st.sidebar.checkbox("Enable Live Mode (Auto-Refresh every 60s)")
+auto_trade = st.sidebar.checkbox("Enable Auto-Trade (Simulated Execution on Signals)")
 
 if base == quote:
     st.sidebar.error("Select different currencies.")
@@ -98,141 +106,172 @@ if base == quote:
 
 ticker = f"{quote}{base}=X"
 
-# Fetch data (Updated for intraday)
-@st.cache_data(ttl=60 if live_mode else 300)  # Shorter cache in live mode
+# Predefined top 10 pairs for scanning
+TOP_PAIRS = [
+    ("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY"), ("AUD", "USD"),
+    ("USD", "CAD"), ("USD", "CHF"), ("NZD", "USD"), ("EUR", "GBP"),
+    ("EUR", "JPY"), ("GBP", "JPY")
+]
+
+# Fetch data
+@st.cache_data(ttl=60 if live_mode else 300)
 def fetch_data(ticker, period, interval):
     try:
         data = yf.download(ticker, period=period, interval=interval, progress=False)
         if data.empty:
             return pd.DataFrame()
         df = data.reset_index()
-        df['Rate'] = 1 / df['Close']  # Quote per base
-        df = df[['Datetime', 'Rate', 'Open', 'High', 'Low', 'Volume']].copy()  # Include OHLCV
+        df['Rate'] = 1 / df['Close']
+        df = df[['Datetime', 'Rate']].copy()
         df['Datetime'] = pd.to_datetime(df['Datetime'])
         return df.sort_values('Datetime').reset_index(drop=True)
     except Exception as e:
         st.error(f"Data fetch error: {e}")
         return pd.DataFrame()
 
-df = fetch_data(ticker, period, interval)
-
-# Indicators (Added MACD)
+# Compute indicators
 @st.cache_data
 def compute_indicators(df):
-    if len(df) < 26:  # Min for MACD
+    if len(df) < 26:
         return df
     df = df.copy()
-    # SMA 20
-    df['SMA_20'] = df['Rate'].rolling(window=20).mean()
-    # RSI 14
+    df['SMA_20'] = df['Rate'].rolling(20).mean()
     delta = df['Rate'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
-    # MACD
     ema12 = df['Rate'].ewm(span=12).mean()
     ema26 = df['Rate'].ewm(span=26).mean()
     df['MACD'] = ema12 - ema26
     df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     return df
 
-if not df.empty:
+# Analyze single pair
+def analyze_pair(base_cur, quote_cur):
+    ticker = f"{quote_cur}{base_cur}=X"
+    df = fetch_data(ticker, period, interval)
+    if df.empty or len(df) < 26:
+        return None
     df = compute_indicators(df)
-
-# Signal Logic
-signal = "HOLD"
-signal_class = "signal-hold"
-signal_icon = "⏸️"
-if not df.empty:
-    rsi_val = df['RSI'].iloc[-1]
-    sma_val = df['SMA_20'].iloc[-1]
-    rate_val = df['Rate'].iloc[-1]
-    macd_val = df['MACD'].iloc[-1]
-    macd_signal = df['MACD_Signal'].iloc[-1]
-    if rsi_val < 30 and rate_val > sma_val and macd_val > macd_signal:
+    rate = df['Rate'].iloc[-1]
+    rsi = df['RSI'].iloc[-1]
+    sma = df['SMA_20'].iloc[-1]
+    macd = df['MACD'].iloc[-1]
+    macd_sig = df['MACD_Signal'].iloc[-1]
+    
+    signal = "HOLD"
+    strength = 0.0
+    if rsi < 30 and rate > sma and macd > macd_sig:
         signal = "BUY"
-        signal_class = "signal-buy"
-        signal_icon = "📈"
-    elif rsi_val > 70 and rate_val < sma_val and macd_val < macd_signal:
+        strength = 0.8
+    elif rsi > 70 and rate < sma and macd < macd_sig:
         signal = "SELL"
-        signal_class = "signal-sell"
-        signal_icon = "📉"
+        strength = 0.7
+    
+    return {
+        "pair": f"{base_cur}/{quote_cur}",
+        "rate": rate,
+        "rsi": rsi,
+        "signal": signal,
+        "strength": strength
+    }
 
-# Real-Time Alerts Logic
-if 'last_signal' not in st.session_state:
-    st.session_state.last_signal = signal
+# Scan all pairs
+st.subheader("Real-Time Signal Scanner: Top 10 Pairs")
+scan_results = []
+for b, q in TOP_PAIRS:
+    result = analyze_pair(b, q)
+    if result:
+        scan_results.append(result)
 
-if signal != st.session_state.last_signal:
-    if signal == "BUY":
-        st.toast("🚨 ALERT: BUY Signal Triggered! RSI low + Rate > SMA + MACD Bullish.", icon="📈")
-    elif signal == "SELL":
-        st.toast("🚨 ALERT: SELL Signal Triggered! RSI high + Rate < SMA + MACD Bearish.", icon="📉")
-    else:
-        st.toast("📊 Signal Updated: HOLD", icon="⏸️")
-    st.session_state.last_signal = signal
+if scan_results:
+    scan_df = pd.DataFrame(scan_results)
+    scan_df = scan_df.sort_values("strength", ascending=False)
+    
+    # Display scanner table
+    st.dataframe(
+        scan_df[['pair', 'rate', 'rsi', 'signal', 'strength']].round(4),
+        use_container_width=True
+    )
+    
+    # Auto-Trade Execution
+    if auto_trade and live_mode:
+        strong_signals = scan_df[scan_df['strength'] > 0.6]
+        if not strong_signals.empty:
+            st.markdown("### Auto-Trade Execution (Simulated)")
+            executed = []
+            for _, row in strong_signals.iterrows():
+                entry = row['rate']
+                sl = entry * (0.98 if row['signal'] == "BUY" else 1.02)
+                tp = entry * (1.04 if row['signal'] == "BUY" else 0.96)
+                size = 0.5  # mini lot
+                pnl = size * 100000 * (0.02 if row['signal'] == "BUY" else -0.02)
+                executed.append({
+                    "Pair": row['pair'],
+                    "Signal": row['signal'],
+                    "Entry": f"{entry:.5f}",
+                    "SL": f"{sl:.5f}",
+                    "TP": f"{tp:.5f}",
+                    "P&L": f"${pnl:.0f}",
+                    "Status": "Executed"
+                })
+                st.toast(f"EXECUTED {row['signal']} {row['pair']} @ {entry:.5f}")
+            
+            exec_df = pd.DataFrame(executed)
+            st.dataframe(exec_df, use_container_width=True)
+            total_pnl = sum(float(p[1:]) for p in exec_df['P&L'])
+            st.success(f"Total Simulated P&L: ${total_pnl:.0f}")
 
-# Live Mode Polling (Non-blocking with JS)
+# Live Mode Polling
 if live_mode:
-    st.markdown('<div class="live-indicator">🔴 LIVE MODE ACTIVE</div>', unsafe_allow_html=True)
-    # Non-blocking JS timer for auto-rerun every 60s
+    st.markdown('<div class="live-indicator">LIVE MODE ACTIVE</div>', unsafe_allow_html=True)
     st.components.v1.html(
-        f"""
+        """
         <script>
-            setTimeout(() => {{
+            setTimeout(() => {
                 window.parent.document.querySelector('.stAppViewContainer').dispatchEvent(new Event('rerun'));
-            }}, 60000);
+            }, 60000);
         </script>
         """,
         height=0
     )
 
 # Manual Refresh
-if st.sidebar.button("🔄 Refresh Now"):
+if st.sidebar.button("Refresh Now"):
     st.rerun()
 
-# Main Layout: Tabs for Professional Sections
-tab1, tab2, tab3 = st.tabs(["📈 Overview", "📊 Analysis", "💼 Trade Simulator"])
+# Main Tabs
+tab1, tab2, tab3 = st.tabs(["Overview", "Analysis", "Trade Simulator"])
 
 with tab1:
-    # Metrics Row
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("Current Rate", f"{df['Rate'].iloc[-1]:.5f}" if not df.empty else "N/A")
-        st.markdown('</div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        change_pct = ((df['Rate'].iloc[-1] - df['Rate'].iloc[0]) / df['Rate'].iloc[0] * 100) if not df.empty and len(df) > 1 else 0
-        st.metric("Period Change", f"{change_pct:.2f}%", delta_color="normal")
-        st.markdown('</div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="{signal_class} signal-container">{signal_icon} {signal}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Quick Chart (Updated with MACD subplot)
+    df = fetch_data(ticker, period, interval)
     if not df.empty:
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.1,
-            subplot_titles=(f"{base}/{quote} Price & Indicators ({interval} interval)", "MACD"),
-            row_heights=[0.7, 0.3]
-        )
+        df = compute_indicators(df)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Current Rate", f"{df['Rate'].iloc[-1]:.5f}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            change = (df['Rate'].iloc[-1] - df['Rate'].iloc[0]) / df['Rate'].iloc[0] * 100
+            st.metric("Period Change", f"{change:.2f}%")
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col3:
+            signal = "BUY" if df['RSI'].iloc[-1] < 30 and df['Rate'].iloc[-1] > df['SMA_20'].iloc[-1] and df['MACD'].iloc[-1] > df['MACD_Signal'].iloc[-1] else "SELL" if df['RSI'].iloc[-1] > 70 and df['Rate'].iloc[-1] < df['SMA_20'].iloc[-1] and df['MACD'].iloc[-1] < df['MACD_Signal'].iloc[-1] else "HOLD"
+            cls = "signal-buy" if signal == "BUY" else "signal-sell" if signal == "SELL" else "signal-hold"
+            icon = "Up" if signal == "BUY" else "Down" if signal == "SELL" else "Pause"
+            st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{icon} {signal}</div></div>', unsafe_allow_html=True)
+        
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
+                           subplot_titles=(f"{base}/{quote} Price & Indicators", "MACD"), row_heights=[0.7, 0.3])
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate', line=dict(color='#1f77b4')), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA 20', line=dict(color='#ff7f0e')), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='#9467bd'), yaxis="y2"), row=1, col=1)
-        # MACD
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=2, col=1)
         fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=2, col=1)
-        fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=2, col=1)
-        fig.update_xaxes(title_text="Date", row=2, col=1)
-        fig.update_yaxes(title_text="Rate", row=1, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="RSI", row=1, col=1, secondary_y=True, range=[0, 100])
-        fig.update_yaxes(title_text="MACD", row=2, col=1)
-        fig.update_layout(title=f"{base}/{quote} Overview - {period} ({interval})", height=600)
+        fig.update_layout(height=600)
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
@@ -240,59 +279,26 @@ with tab2:
     if not df.empty:
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Rate & SMA")
+            st.subheader("Price & SMA")
             fig1 = go.Figure()
-            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate', line=dict(color='blue')))
-            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA 20', line=dict(color='orange')))
-            fig1.update_layout(title="Price Trend", xaxis_title="Datetime", yaxis_title="Rate")
+            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate'))
+            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA 20'))
             st.plotly_chart(fig1, use_container_width=True)
-        
         with col2:
-            st.subheader("RSI Momentum")
+            st.subheader("RSI")
             fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')))
-            fig2.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
-            fig2.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
-            fig2.update_layout(title="RSI Indicator", xaxis_title="Datetime", yaxis_title="RSI", yaxis_range=[0, 100])
+            fig2.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI'))
+            fig2.add_hline(y=70, line_dash="dash", line_color="red")
+            fig2.add_hline(y=30, line_dash="dash", line_color="green")
             st.plotly_chart(fig2, use_container_width=True)
-        
-        # New: MACD Chart
-        st.subheader("MACD Momentum")
-        fig3 = make_subplots(specs=[[{"secondary_y": False}]])
-        fig3.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), secondary_y=False)
-        fig3.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), secondary_y=False)
-        fig3.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), secondary_y=False)
-        fig3.update_layout(title="MACD Indicator (12,26,9)", xaxis_title="Datetime", yaxis_title="MACD")
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        # Data Table (Updated with OHLCV)
-        st.subheader("Intraday Data")
-        display_cols = ['Datetime', 'Rate', 'Open', 'High', 'Low', 'Volume', 'SMA_20', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']
-        st.dataframe(df[display_cols].round(4), use_container_width=True)
 
 with tab3:
-    st.header("Trade Simulator")
-    stake = st.number_input("Investment Stake ($)", min_value=100.0, max_value=100000.0, value=1000.0, step=100.0)
-    risk_pct = st.slider("Risk per Trade (%)", 1.0, 5.0, 2.0)
-    
-    if st.button("Simulate Trade", type="primary") and signal != "HOLD":
-        entry_price = df['Rate'].iloc[-1] if not df.empty else 1.0
-        position_size = (stake * (risk_pct / 100)) / entry_price
-        
-        # Simulate outcome based on signal
-        if signal == "BUY":
-            pnl = position_size * entry_price * 0.03  # 3% assumed gain
-            outcome = "Profitable"
-        else:
-            pnl = -position_size * entry_price * 0.02  # 2% assumed loss
-            outcome = "Loss"
-        
-        st.success(f"**Simulation Result**: {signal} {base}/{quote} | Entry: {entry_price:.5f} | P&L: ${pnl:.2f} | Outcome: {outcome}")
-        
-        # Simple backtest summary
-        if len(df) > 1:
-            total_change = (df['Rate'].iloc[-1] - df['Rate'].iloc[0]) / df['Rate'].iloc[0] * 100
-            st.metric("Hypothetical Return (Period)", f"{total_change:.2f}%")
+    st.header("Manual Trade Simulator")
+    stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
+    if st.button("Simulate BUY"):
+        st.success(f"Simulated BUY @ {df['Rate'].iloc[-1]:.5f} | P&L: +${stake*0.03:.0f}")
+    if st.button("Simulate SELL"):
+        st.success(f"Simulated SELL @ {df['Rate'].iloc[-1]:.5f} | P&L: -${stake*0.02:.0f}")
 
 # Footer
 st.markdown("---")
