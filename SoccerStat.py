@@ -168,6 +168,23 @@ def get_football_data_matches():
                 if minute is None or minute == 'null':
                     minute = match['status']
                 
+                # Get match start time
+                utc_date = match.get('utcDate', '')
+                kick_off_time = ''
+                if utc_date:
+                    try:
+                        from datetime import datetime as dt
+                        match_time = dt.fromisoformat(utc_date.replace('Z', '+00:00'))
+                        kick_off_time = match_time.strftime('%H:%M')
+                    except:
+                        kick_off_time = 'N/A'
+                
+                # Get odds if available
+                odds = match.get('odds', {})
+                home_odds = odds.get('homeWin', 'N/A')
+                draw_odds = odds.get('draw', 'N/A')
+                away_odds = odds.get('awayWin', 'N/A')
+                
                 match_data = {
                     'id': match['id'],
                     'home_team': match['homeTeam']['name'],
@@ -176,7 +193,11 @@ def get_football_data_matches():
                     'away_score': away_score,
                     'status': match['status'],
                     'minute': minute,
-                    'competition': match['competition']['name']
+                    'competition': match['competition']['name'],
+                    'kick_off': kick_off_time,
+                    'home_odds': home_odds,
+                    'draw_odds': draw_odds,
+                    'away_odds': away_odds
                 }
                 matches.append(match_data)
             
@@ -217,6 +238,17 @@ def get_api_football_matches():
             matches = []
             
             for match in data.get('response', []):
+                # Get kick-off time
+                timestamp = match['fixture'].get('timestamp', 0)
+                kick_off_time = 'N/A'
+                if timestamp:
+                    try:
+                        from datetime import datetime as dt
+                        match_time = dt.fromtimestamp(timestamp)
+                        kick_off_time = match_time.strftime('%H:%M')
+                    except:
+                        pass
+                
                 match_data = {
                     'id': match['fixture']['id'],
                     'home_team': match['teams']['home']['name'],
@@ -225,7 +257,11 @@ def get_api_football_matches():
                     'away_score': match['goals']['away'] or 0,
                     'status': match['fixture']['status']['short'],
                     'minute': match['fixture']['status']['elapsed'] or 0,
-                    'competition': match['league']['name']
+                    'competition': match['league']['name'],
+                    'kick_off': kick_off_time,
+                    'home_odds': 'N/A',
+                    'draw_odds': 'N/A',
+                    'away_odds': 'N/A'
                 }
                 matches.append(match_data)
             
@@ -270,27 +306,45 @@ def display_match_card(match):
     # Create container with custom styling
     st.markdown('<div class="match-card">', unsafe_allow_html=True)
     
-    # Header with badges
-    header_col1, header_col2 = st.columns([1, 1])
+    # Header with badges and kick-off time
+    header_col1, header_col2, header_col3 = st.columns([1, 1, 1])
     with header_col1:
         st.markdown('<span class="live-badge">🔴 LIVE</span>', unsafe_allow_html=True)
     with header_col2:
+        st.markdown(f'<div style="text-align: center; color: #7f8c8d; font-size: 0.9rem;">🕐 Kick-off: {match.get("kick_off", "N/A")}</div>', unsafe_allow_html=True)
+    with header_col3:
         st.markdown(f'<span class="competition-badge">🏆 {match["competition"]}</span>', unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Match details
+    # Match details with odds
     col1, col2, col3 = st.columns([3, 2, 3])
     
     with col1:
         st.markdown(f'<div class="team-name">{match["home_team"]}</div>', unsafe_allow_html=True)
+        # Display home odds
+        home_odds = match.get('home_odds', 'N/A')
+        if home_odds != 'N/A':
+            st.markdown(f'<div style="color: #27ae60; font-weight: 600; font-size: 0.95rem;">💰 {home_odds}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="color: #95a5a6; font-size: 0.85rem;">Odds: N/A</div>', unsafe_allow_html=True)
     
     with col2:
         st.markdown(f'<div class="score-display">{match["home_score"]} - {match["away_score"]}</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="color: #7f8c8d; font-weight: 600; font-size: 0.9rem; text-align: center;">{minute_text}</div>', unsafe_allow_html=True)
+        # Display draw odds
+        draw_odds = match.get('draw_odds', 'N/A')
+        if draw_odds != 'N/A':
+            st.markdown(f'<div style="color: #f39c12; font-weight: 600; font-size: 0.85rem; text-align: center; margin-top: 5px;">Draw: {draw_odds}</div>', unsafe_allow_html=True)
     
     with col3:
         st.markdown(f'<div class="team-name" style="text-align: right;">{match["away_team"]}</div>', unsafe_allow_html=True)
+        # Display away odds
+        away_odds = match.get('away_odds', 'N/A')
+        if away_odds != 'N/A':
+            st.markdown(f'<div style="color: #27ae60; font-weight: 600; font-size: 0.95rem; text-align: right;">💰 {away_odds}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="color: #95a5a6; font-size: 0.85rem; text-align: right;">Odds: N/A</div>', unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
