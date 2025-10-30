@@ -1,22 +1,4 @@
-def display_match_card(match):
-    """Display a single match card with enhanced styling"""
-    
-    # Format minute display
-    minute_display = match['minute']
-    if isinstance(minute_display, int):
-        minute_text = f"⏱️ {minute_display}'"
-    elif minute_display == 'IN_PLAY':
-        minute_text = "🔴 IN PLAY"
-    elif minute_display == 'PAUSED':
-        minute_text = "⏸️ HALF TIME"
-    else:
-        minute_text = f"🔴 {minute_display}"
-    
-    st.markdown(f"""
-    <div class="match-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <span class="live-badge">🔴 LIVE</span>
-            <span class="competition-badge">🏆 {match['competition']}</span>import streamlit as st
+import streamlit as st
 import requests
 from datetime import datetime
 import time
@@ -28,134 +10,125 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
+# Custom CSS - using HTML style tags to avoid parsing issues
 st.markdown("""
-<style>
-    /* Main container */
-    .main {
-        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
-        padding: 20px;
-    }
-    
-    /* Title */
-    .main-title {
-        text-align: center;
-        background: white;
-        padding: 30px;
-        border-radius: 15px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        margin-bottom: 30px;
-    }
-    
-    .main-title h1 {
-        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 3rem;
-        margin: 0;
-        font-weight: 800;
-    }
-    
-    /* Match card container */
-    .match-card {
-        background: white;
-        border-radius: 15px;
-        padding: 25px;
-        margin: 15px 0;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-    
-    .match-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-    }
-    
-    /* Live indicator */
-    .live-badge {
-        display: inline-block;
-        background: rgb(255, 68, 68);
-        color: white;
-        padding: 5px 15px;
-        border-radius: 20px;
-        font-weight: bold;
-        font-size: 0.9rem;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.7; }
-    }
-    
-    /* Score display */
-    .score-display {
-        text-align: center;
-        font-size: 3rem;
-        font-weight: 800;
-        color: rgb(44, 62, 80);
-        margin: 10px 0;
-    }
-    
-    .team-name {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: rgb(44, 62, 80);
-    }
-    
-    .competition-badge {
-        display: inline-block;
-        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
-        color: white;
-        padding: 5px 15px;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        margin-top: 10px;
-    }
-    
-    /* Stats container */
-    .stats-container {
-        background: white;
-        border-radius: 15px;
-        padding: 20px;
-        margin-bottom: 20px;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
-    
-    /* Sidebar styling */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
-    }
-    
-    [data-testid="stSidebar"] * {
-        color: white !important;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background: transparent;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background: white;
-        border-radius: 10px;
-        padding: 15px 30px;
-        font-weight: 600;
-        color: rgb(44, 62, 80);
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
-        color: white !important;
-    }
-    
-    /* Metric cards */
-    [data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 800;
-    }
-</style>
+    <style>
+        .main {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .main-title {
+            text-align: center;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            margin-bottom: 30px;
+        }
+        
+        .main-title h1 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 3rem;
+            margin: 0;
+            font-weight: 800;
+        }
+        
+        .match-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin: 15px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .match-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        
+        .live-badge {
+            display: inline-block;
+            background: #ff4444;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .score-display {
+            text-align: center;
+            font-size: 3rem;
+            font-weight: 800;
+            color: #2c3e50;
+            margin: 10px 0;
+        }
+        
+        .team-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .competition-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-top: 10px;
+        }
+        
+        .stats-container {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        [data-testid="stSidebar"] * {
+            color: white !important;
+        }
+        
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 10px;
+            background: transparent;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            background: white;
+            border-radius: 10px;
+            padding: 15px 30px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white !important;
+        }
+        
+        [data-testid="stMetricValue"] {
+            font-size: 2rem;
+            font-weight: 800;
+        }
+    </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state
@@ -282,6 +255,17 @@ def get_live_matches():
 
 def display_match_card(match):
     """Display a single match card with enhanced styling"""
+    
+    # Format minute display
+    minute_display = match['minute']
+    if isinstance(minute_display, int):
+        minute_text = f"⏱️ {minute_display}'"
+    elif minute_display == 'IN_PLAY':
+        minute_text = "🔴 IN PLAY"
+    elif minute_display == 'PAUSED':
+        minute_text = "⏸️ HALF TIME"
+    else:
+        minute_text = f"🔴 {minute_display}"
     
     st.markdown(f"""
     <div class="match-card">
