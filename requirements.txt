@@ -7,3 +7,4 @@ requests
 ta 
 XlsxWriter
 matplotlib
+style_metric_cards
