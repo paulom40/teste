@@ -301,7 +301,7 @@ with tab1:
             yaxis_title="Volatilidade",
             height=400
         )
-        st.plotly_chart(fig_vol, use_container_width=True)
+        st.plotly_chart(fig_vol, width='stretch')
     else:
         st.info("Selecione pares para análise na sidebar")
 
@@ -369,7 +369,7 @@ with tab2:
                     height=500
                 )
                 
-                st.plotly_chart(fig_candle, use_container_width=True)
+                st.plotly_chart(fig_candle, width='stretch')
         
         with col2:
             st.subheader("📋 Sinais Atuais")
@@ -402,7 +402,7 @@ with tab2:
                 
                 st.dataframe(
                     df_sinais.style.applymap(colorir_sinal, subset=['Sinal']),
-                    use_container_width=True
+                    width='stretch'
                 )
             else:
                 st.info("Nenhum sinal disponível")
@@ -475,7 +475,7 @@ with tab3:
                 yaxis_title="RSI",
                 height=400
             )
-            st.plotly_chart(fig_rsi, use_container_width=True)
+            st.plotly_chart(fig_rsi, width='stretch')
         
         with col2:
             # Gráfico MACD
@@ -502,7 +502,7 @@ with tab3:
                 yaxis_title="MACD",
                 height=400
             )
-            st.plotly_chart(fig_macd, use_container_width=True)
+            st.plotly_chart(fig_macd, width='stretch')
     else:
         st.info("Selecione pares para análise na sidebar")
 
@@ -552,7 +552,7 @@ with tab4:
         if 'rsi_entrada' in df_display.columns:
             colunas_display.extend(['rsi_entrada', 'ema_tendencia'])
         
-        st.dataframe(df_display[colunas_display], use_container_width=True)
+        st.dataframe(df_display[colunas_display], width='stretch')
         
         # Gráfico de lucro acumulado
         st.subheader("💰 Evolução do Lucro")
@@ -565,7 +565,7 @@ with tab4:
             fig_lucro = px.line(df_logs, x='timestamp', y='Lucro Acumulado', 
                               title='Lucro Acumulado ao Longo do Tempo')
             fig_lucro.update_layout(height=400)
-            st.plotly_chart(fig_lucro, use_container_width=True)
+            st.plotly_chart(fig_lucro, width='stretch')
     else:
         st.info("Nenhum trade executado ainda")
     
