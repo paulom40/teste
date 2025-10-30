@@ -1,4 +1,22 @@
-import streamlit as st
+def display_match_card(match):
+    """Display a single match card with enhanced styling"""
+    
+    # Format minute display
+    minute_display = match['minute']
+    if isinstance(minute_display, int):
+        minute_text = f"⏱️ {minute_display}'"
+    elif minute_display == 'IN_PLAY':
+        minute_text = "🔴 IN PLAY"
+    elif minute_display == 'PAUSED':
+        minute_text = "⏸️ HALF TIME"
+    else:
+        minute_text = f"🔴 {minute_display}"
+    
+    st.markdown(f"""
+    <div class="match-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <span class="live-badge">🔴 LIVE</span>
+            <span class="competition-badge">🏆 {match['competition']}</span>import streamlit as st
 import requests
 from datetime import datetime
 import time
@@ -172,6 +190,11 @@ def get_football_data_matches():
                 if away_score is None:
                     away_score = match['score']['halfTime']['away'] or 0
                 
+                # Get minute or use status description
+                minute = match.get('minute')
+                if minute is None or minute == 'null':
+                    minute = match['status']
+                
                 match_data = {
                     'id': match['id'],
                     'home_team': match['homeTeam']['name'],
@@ -179,7 +202,7 @@ def get_football_data_matches():
                     'home_score': home_score,
                     'away_score': away_score,
                     'status': match['status'],
-                    'minute': match.get('minute', 'LIVE'),
+                    'minute': minute,
                     'competition': match['competition']['name']
                 }
                 matches.append(match_data)
