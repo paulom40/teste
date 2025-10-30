@@ -143,12 +143,22 @@ def analyze_pair(b, q):
             return None
         r = df.iloc[-1]
 
-        # ---- scalar extraction with .item() ----
-        rate = r['Rate'].item() if pd.notna(r['Rate']) else 0.0
-        rsi  = r['RSI'].item() if pd.notna(r['RSI']) else 50.0
-        sma  = r['SMA_20'].item() if pd.notna(r['SMA_20']) else rate
-        macd = r['MACD'].item() if pd.notna(r['MACD']) else 0.0
-        macd_sig = r['MACD_Signal'].item() if pd.notna(r['MACD_Signal']) else 0.0
+        # ---- safe scalar extraction ----
+        rate_val = r['Rate'].item()
+        rate = rate_val if not pd.isna(rate_val) else 0.0
+
+        rsi_val = r['RSI'].item()
+        rsi = rsi_val if not pd.isna(rsi_val) else 50.0
+
+        sma_val = r['SMA_20'].item()
+        sma = sma_val if not pd.isna(sma_val) else rate
+
+        macd_val = r['MACD'].item()
+        macd = macd_val if not pd.isna(macd_val) else 0.0
+
+        macd_sig_val = r['MACD_Signal'].item()
+        macd_sig = macd_sig_val if not pd.isna(macd_sig_val) else 0.0
+
         pattern = str(r['Price_Action'])
 
         signal = "HOLD"
@@ -238,15 +248,27 @@ with tab1:
             r = df.iloc[-1]
 
             # ---- safe scalar extraction ----
-            rate_val   = r['Rate'].item()   if pd.notna(r['Rate'])   else 0.0
-            first_rate = df['Rate'].iloc[0].item() if pd.notna(df['Rate'].iloc[0]) else rate_val
+            rate_val_raw = r['Rate'].item()
+            rate_val = rate_val_raw if not pd.isna(rate_val_raw) else 0.0
+
+            first_rate_raw = df['Rate'].iloc[0].item()
+            first_rate = first_rate_raw if not pd.isna(first_rate_raw) else rate_val
+
             change_val = ((rate_val - first_rate) / first_rate * 100) if first_rate != 0 else 0.0
 
-            rsi_val      = r['RSI'].item()      if pd.notna(r['RSI'])      else 50.0
-            sma_val      = r['SMA_20'].item()   if pd.notna(r['SMA_20'])   else rate_val
-            macd_val     = r['MACD'].item()     if pd.notna(r['MACD'])     else 0.0
-            macd_sig_val = r['MACD_Signal'].item() if pd.notna(r['MACD_Signal']) else 0.0
-            pattern      = str(r['Price_Action'])
+            rsi_raw = r['RSI'].item()
+            rsi_val = rsi_raw if not pd.isna(rsi_raw) else 50.0
+
+            sma_raw = r['SMA_20'].item()
+            sma_val = sma_raw if not pd.isna(sma_raw) else rate_val
+
+            macd_raw = r['MACD'].item()
+            macd_val = macd_raw if not pd.isna(macd_raw) else 0.0
+
+            macd_sig_raw = r['MACD_Signal'].item()
+            macd_sig_val = macd_sig_raw if not pd.isna(macd_sig_raw) else 0.0
+
+            pattern = str(r['Price_Action'])
 
             # ---- metrics ----
             c1, c2, c3 = st.columns(3)
@@ -349,8 +371,8 @@ with tab2:
 # ------------------------------------------------------------------ #
 with tab3:
     stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
-    rate = (df['Rate'].iloc[-1].item()
-            if not df.empty and len(df) > 0 and pd.notna(df['Rate'].iloc[-1]) else 1.0)
+    rate_raw = df['Rate'].iloc[-1].item() if not df.empty and len(df) > 0 else 1.0
+    rate = rate_raw if not pd.isna(rate_raw) else 1.0
     if st.button("Simulate BUY"):
         st.success(f"Simulated BUY @ {rate:.5f} | P&L +${stake*0.03:.0f}")
     if st.button("Simulate SELL"):
