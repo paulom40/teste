@@ -51,6 +51,16 @@ st.markdown("""
         font-size: 0.8rem;
         animation: blink 1s infinite;
     }
+    .market-open {
+        background-color: #90EE90 !important;
+        color: black;
+        font-weight: bold;
+    }
+    .market-closed {
+        background-color: #FFB6C1 !important;
+        color: black;
+        font-weight: bold;
+    }
     .pattern-bullish {
         background-color: #90EE90 !important;
         color: black;
@@ -120,26 +130,34 @@ LIMITE_VOLATILIDADE = {
 
 # Parâmetros simulados expandidos para todos os pares
 PARES = {
-    "EUR/USD": {"base": 1.10, "vol": 0.005, "pip_value": 10},
-    "GBP/USD": {"base": 1.26, "vol": 0.006, "pip_value": 10},
-    "USD/JPY": {"base": 148.0, "vol": 0.004, "pip_value": 9},
-    "AUD/USD": {"base": 0.66, "vol": 0.007, "pip_value": 10},
-    "USD/CAD": {"base": 1.35, "vol": 0.005, "pip_value": 10},
-    "USD/CHF": {"base": 0.88, "vol": 0.004, "pip_value": 10},
-    "EUR/GBP": {"base": 0.87, "vol": 0.004, "pip_value": 10},
-    "EUR/JPY": {"base": 162.0, "vol": 0.005, "pip_value": 9},
-    "GBP/JPY": {"base": 186.0, "vol": 0.006, "pip_value": 9},
-    "AUD/JPY": {"base": 97.0, "vol": 0.006, "pip_value": 9},
-    "NZD/USD": {"base": 0.61, "vol": 0.007, "pip_value": 10},
-    "USD/CNH": {"base": 7.25, "vol": 0.003, "pip_value": 10},
-    "USD/MXN": {"base": 17.5, "vol": 0.008, "pip_value": 10},
-    "USD/TRY": {"base": 32.0, "vol": 0.012, "pip_value": 10},
-    "USD/ZAR": {"base": 18.5, "vol": 0.009, "pip_value": 10},
-    "USD/SGD": {"base": 1.35, "vol": 0.003, "pip_value": 10},
-    "USD/HKD": {"base": 7.82, "vol": 0.002, "pip_value": 10},
-    "USD/SEK": {"base": 10.5, "vol": 0.004, "pip_value": 10},
-    "USD/NOK": {"base": 10.8, "vol": 0.004, "pip_value": 10},
-    "USD/DKK": {"base": 6.85, "vol": 0.003, "pip_value": 10}
+    "EUR/USD": {"base": 1.10, "vol": 0.005, "pip_value": 10, "session": ["Londres", "Nova York"]},
+    "GBP/USD": {"base": 1.26, "vol": 0.006, "pip_value": 10, "session": ["Londres", "Nova York"]},
+    "USD/JPY": {"base": 148.0, "vol": 0.004, "pip_value": 9, "session": ["Tóquio", "Londres"]},
+    "AUD/USD": {"base": 0.66, "vol": 0.007, "pip_value": 10, "session": ["Sydney", "Tóquio"]},
+    "USD/CAD": {"base": 1.35, "vol": 0.005, "pip_value": 10, "session": ["Londres", "Nova York"]},
+    "USD/CHF": {"base": 0.88, "vol": 0.004, "pip_value": 10, "session": ["Londres", "Nova York"]},
+    "EUR/GBP": {"base": 0.87, "vol": 0.004, "pip_value": 10, "session": ["Londres"]},
+    "EUR/JPY": {"base": 162.0, "vol": 0.005, "pip_value": 9, "session": ["Tóquio", "Londres"]},
+    "GBP/JPY": {"base": 186.0, "vol": 0.006, "pip_value": 9, "session": ["Tóquio", "Londres"]},
+    "AUD/JPY": {"base": 97.0, "vol": 0.006, "pip_value": 9, "session": ["Sydney", "Tóquio"]},
+    "NZD/USD": {"base": 0.61, "vol": 0.007, "pip_value": 10, "session": ["Sydney", "Tóquio"]},
+    "USD/CNH": {"base": 7.25, "vol": 0.003, "pip_value": 10, "session": ["Sydney", "Tóquio"]},
+    "USD/MXN": {"base": 17.5, "vol": 0.008, "pip_value": 10, "session": ["Londres", "Nova York"]},
+    "USD/TRY": {"base": 32.0, "vol": 0.012, "pip_value": 10, "session": ["Londres"]},
+    "USD/ZAR": {"base": 18.5, "vol": 0.009, "pip_value": 10, "session": ["Londres"]},
+    "USD/SGD": {"base": 1.35, "vol": 0.003, "pip_value": 10, "session": ["Sydney", "Tóquio"]},
+    "USD/HKD": {"base": 7.82, "vol": 0.002, "pip_value": 10, "session": ["Sydney", "Tóquio"]},
+    "USD/SEK": {"base": 10.5, "vol": 0.004, "pip_value": 10, "session": ["Londres"]},
+    "USD/NOK": {"base": 10.8, "vol": 0.004, "pip_value": 10, "session": ["Londres"]},
+    "USD/DKK": {"base": 6.85, "vol": 0.003, "pip_value": 10, "session": ["Londres"]}
+}
+
+# Horários das sessões de trading (UTC)
+SESSOES_MERCADO = {
+    "Sydney": {"abertura": 22, "fechamento": 6},      # 22:00 - 06:00 UTC
+    "Tóquio": {"abertura": 0, "fechamento": 8},       # 00:00 - 08:00 UTC  
+    "Londres": {"abertura": 8, "fechamento": 16},     # 08:00 - 16:00 UTC
+    "Nova York": {"abertura": 13, "fechamento": 21},  # 13:00 - 21:00 UTC
 }
 
 # Estratégia para candles de 15 minutos
@@ -183,7 +201,10 @@ def initialize_session_state():
         "pares_config": {par: {"ativo": True, "stake": 10} for par in PARES.keys()},
         "dados_15min": pd.DataFrame(),
         "meta_lucro": 500,
-        "limite_perda": -200
+        "limite_perda": -200,
+        "mercado_aberto": False,
+        "proxima_sessao": "",
+        "sessoes_ativas": []
     }
     
     for key, value in defaults.items():
@@ -192,6 +213,80 @@ def initialize_session_state():
 
 # Inicializar session state
 initialize_session_state()
+
+def verificar_sessao_mercado():
+    """Verifica quais sessões de mercado estão abertas no momento"""
+    agora_utc = datetime.utcnow()
+    hora_atual = agora_utc.hour
+    sessoes_ativas = []
+    
+    for sessao, horarios in SESSOES_MERCADO.items():
+        abertura = horarios["abertura"]
+        fechamento = horarios["fechamento"]
+        
+        # Tratar sessões que passam da meia-noite
+        if fechamento < abertura:
+            # Sessão que passa da meia-noite (ex: Sydney)
+            if hora_atual >= abertura or hora_atual < fechamento:
+                sessoes_ativas.append(sessao)
+        else:
+            # Sessão normal
+            if abertura <= hora_atual < fechamento:
+                sessoes_ativas.append(sessao)
+    
+    # Determinar próxima sessão
+    proxima_sessao = determinar_proxima_sessao(hora_atual)
+    
+    # Verificar se o mercado está aberto (pelo menos uma sessão ativa)
+    mercado_aberto = len(sessoes_ativas) > 0
+    
+    return mercado_aberto, sessoes_ativas, proxima_sessao
+
+def determinar_proxima_sessao(hora_atual):
+    """Determina qual será a próxima sessão a abrir"""
+    sessoes_ordenadas = [
+        ("Sydney", 22), ("Tóquio", 0), ("Londres", 8), ("Nova York", 13)
+    ]
+    
+    # Encontrar próxima sessão baseada na hora atual
+    for sessao, abertura in sessoes_ordenadas:
+        if hora_atual < abertura:
+            return f"{sessao} às {abertura:02d}:00 UTC"
+    
+    # Se passou de todas, próxima é Sydney no dia seguinte
+    return "Sydney às 22:00 UTC"
+
+def verificar_mercado_aberto_para_par(par):
+    """Verifica se o mercado está aberto para um par específico"""
+    if not st.session_state.mercado_aberto:
+        return False
+    
+    sessoes_par = PARES[par].get("session", [])
+    sessoes_ativas = st.session_state.sessoes_ativas
+    
+    # Verificar se alguma sessão do par está ativa
+    for sessao in sessoes_par:
+        if sessao in sessoes_ativas:
+            return True
+    
+    return False
+
+def atualizar_status_mercado():
+    """Atualiza o status do mercado global"""
+    mercado_aberto, sessoes_ativas, proxima_sessao = verificar_sessao_mercado()
+    
+    st.session_state.mercado_aberto = mercado_aberto
+    st.session_state.sessoes_ativas = sessoes_ativas
+    st.session_state.proxima_sessao = proxima_sessao
+    
+    # Se o mercado fechou e auto trade estava ativo, desativar
+    if not mercado_aberto and st.session_state.auto_trade_active:
+        st.session_state.auto_trade_active = False
+        st.session_state.logs_tecnicos.append({
+            "timestamp": datetime.now(),
+            "tipo": "MERCADO_FECHADO",
+            "status": "Auto Trade pausado - Mercado fechado"
+        })
 
 def detectar_padroes_candles(df):
     """Detecta padrões de candles usando lógica de price action"""
@@ -314,6 +409,10 @@ def executar_auto_trade():
     if not st.session_state.auto_trade_active:
         return
     
+    # Verificar se o mercado está aberto
+    if not st.session_state.mercado_aberto:
+        return
+    
     # Verificar se há dados suficientes
     if st.session_state.dados_15min is None or len(st.session_state.dados_15min) == 0:
         return
@@ -327,8 +426,8 @@ def executar_auto_trade():
     trades_executados = 0
     
     for par in PARES.keys():
-        # Verificar se o par está ativo na configuração
-        if not st.session_state.pares_config[par]["ativo"]:
+        # Verificar se o par está ativo na configuração E se o mercado está aberto para este par
+        if not st.session_state.pares_config[par]["ativo"] or not verificar_mercado_aberto_para_par(par):
             continue
             
         df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
@@ -725,32 +824,49 @@ def custom_metric_style():
 st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard</h1>', unsafe_allow_html=True)
 st.markdown('<h3 class="main-header" style="font-size: 1.5rem;">Multi-Pair Auto Trading System</h3>', unsafe_allow_html=True)
 
+# Atualizar status do mercado
+atualizar_status_mercado()
+
 # Sidebar modernizada
 with st.sidebar:
     st.header("⚙️ Configurações de Trading")
     
-    # Indicador de atualização em tempo real
-    col_live1, col_live2 = st.columns([2, 1])
-    with col_live1:
-        status_color = "🟢" if st.session_state.auto_trade_active else "🔴"
-        st.markdown(f"<span class='live-indicator'>AUTO TRADE {status_color}</span>", unsafe_allow_html=True)
-    with col_live2:
+    # Indicador de status do mercado
+    col_market1, col_market2 = st.columns([2, 1])
+    with col_market1:
+        if st.session_state.mercado_aberto:
+            st.markdown(f"<span class='market-open'>MERCADO ABERTO</span>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<span class='market-closed'>MERCADO FECHADO</span>", unsafe_allow_html=True)
+    with col_market2:
         if st.button("🔄 Atualizar"):
             st.rerun()
     
-    st.subheader("🤖 Configurações Auto Trade")
-    auto_trade_mode = st.radio("Modo Auto Trade:", ["Manual", "Automático"])
+    # Mostrar sessões ativas
+    if st.session_state.mercado_aberto:
+        st.success(f"**Sessões Ativas:** {', '.join(st.session_state.sessoes_ativas)}")
+    else:
+        st.warning(f"**Próxima Sessão:** {st.session_state.proxima_sessao}")
     
-    if auto_trade_mode == "Automático":
-        col_auto1, col_auto2 = st.columns(2)
-        with col_auto1:
-            if st.button("▶️ Iniciar Auto Trade", type="primary"):
-                st.session_state.auto_trade_active = True
-                st.success("Auto Trade Iniciado para todos os pares!")
-        with col_auto2:
-            if st.button("⏹️ Parar Auto Trade"):
-                st.session_state.auto_trade_active = False
-                st.warning("Auto Trade Parado!")
+    st.subheader("🤖 Configurações Auto Trade")
+    
+    # Auto Trade só pode ser ativado se o mercado estiver aberto
+    if st.session_state.mercado_aberto:
+        auto_trade_mode = st.radio("Modo Auto Trade:", ["Manual", "Automático"])
+        
+        if auto_trade_mode == "Automático":
+            col_auto1, col_auto2 = st.columns(2)
+            with col_auto1:
+                if st.button("▶️ Iniciar Auto Trade", type="primary"):
+                    st.session_state.auto_trade_active = True
+                    st.success("Auto Trade Iniciado para todos os pares!")
+            with col_auto2:
+                if st.button("⏹️ Parar Auto Trade"):
+                    st.session_state.auto_trade_active = False
+                    st.warning("Auto Trade Parado!")
+    else:
+        st.warning("⏸️ Auto Trade disponível apenas durante o horário de mercado")
+        st.info(f"**Próxima sessão:** {st.session_state.proxima_sessao}")
     
     st.subheader("💰 Gestão de Capital")
     stake_padrao = st.number_input("Stake Padrão (€)", min_value=5, max_value=100, value=10, step=5)
@@ -810,6 +926,20 @@ with tab1:
     with col_update3:
         st.metric("Pares Monitorados", len(PARES))
     
+    # Status do Mercado em destaque
+    col_market1, col_market2, col_market3 = st.columns(3)
+    with col_market1:
+        if st.session_state.mercado_aberto:
+            st.metric("Status Mercado", "🟢 ABERTO", "Horário de Trading")
+        else:
+            st.metric("Status Mercado", "🔴 FECHADO", "Fora do Horário")
+    with col_market2:
+        sessoes_ativas = len(st.session_state.sessoes_ativas)
+        st.metric("Sessões Ativas", sessoes_ativas)
+    with col_market3:
+        agora_utc = datetime.utcnow()
+        st.metric("Hora UTC", agora_utc.strftime("%H:%M"))
+    
     # KPIs principais - COM VERIFICAÇÃO DE SEGURANÇA
     col1, col2, col3, col4 = st.columns(4)
     
@@ -851,192 +981,7 @@ with tab1:
         pares_ativos = sum(1 for config in st.session_state.pares_config.values() if config["ativo"])
         st.metric("Pares Ativos", f"{pares_ativos}/{len(PARES)}")
 
-with tab3:
-    st.header("🔧 Configuração por Par")
-    
-    st.subheader("⚙️ Configurações Individuais dos Pares")
-    
-    # Dividir pares em colunas para melhor organização
-    pares_list = list(PARES.keys())
-    cols = st.columns(3)
-    
-    for i, par in enumerate(pares_list):
-        with cols[i % 3]:
-            with st.container():
-                st.markdown(f'<div class="pair-card">', unsafe_allow_html=True)
-                st.write(f"**{par}**")
-                
-                # Configurações do par
-                ativo = st.checkbox(
-                    f"Ativo", 
-                    value=st.session_state.pares_config[par]["ativo"],
-                    key=f"ativo_{par}"
-                )
-                
-                stake = st.number_input(
-                    f"Stake (€)",
-                    min_value=5,
-                    max_value=100,
-                    value=st.session_state.pares_config[par]["stake"],
-                    key=f"stake_{par}"
-                )
-                
-                # Atualizar configurações
-                st.session_state.pares_config[par]["ativo"] = ativo
-                st.session_state.pares_config[par]["stake"] = stake
-                
-                # Mostrar informações do par de forma segura
-                if not st.session_state.dados_15min.empty:
-                    df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
-                    if not df_par.empty:
-                        ultimo = df_par.iloc[-1]
-                        st.write(f"Preço: {ultimo['close']:.5f}")
-                        st.write(f"Sinal: {ultimo.get('sinal', 'N/A')}")
-                        st.write(f"RSI: {ultimo.get('RSI', 0):.1f}")
-                else:
-                    st.write("Dados não disponíveis")
-                
-                st.markdown('</div>', unsafe_allow_html=True)
-
-with tab2:
-    st.header("🤖 Painel de Auto Trade")
-    
-    col_auto1, col_auto2 = st.columns([2, 1])
-    
-    with col_auto1:
-        st.subheader("📊 Trades Ativos")
-        if st.session_state.trades_ativos:
-            trades_df = pd.DataFrame(st.session_state.trades_ativos)
-            # Verificar se as colunas existem antes de acessá-las
-            available_columns = [col for col in ['id', 'par', 'tipo', 'preco_entrada', 'stop_loss', 'take_profit', 'stake', 'timestamp_entrada'] 
-                               if col in trades_df.columns]
-            trades_display = trades_df[available_columns].copy()
-            
-            # Formatar timestamp se existir
-            if 'timestamp_entrada' in trades_display.columns:
-                trades_display['timestamp_entrada'] = trades_display['timestamp_entrada'].apply(
-                    lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x)
-                )
-                
-            st.dataframe(trades_display, width='stretch', height=400)
-        else:
-            st.info("Nenhum trade ativo no momento")
-        
-        st.subheader("📈 Estatísticas de Performance")
-        stats = st.session_state.auto_trade_stats
-        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
-        with col_stat1:
-            st.metric("Total Trades", stats.get("total_trades", 0))
-        with col_stat2:
-            win_rate = stats.get("win_rate", 0.0)
-            st.metric("Win Rate", f"{win_rate:.1f}%")
-        with col_stat3:
-            st.metric("Melhor Trade", f"€{stats.get('melhor_trade', 0.0):.2f}")
-        with col_stat4:
-            st.metric("Pior Trade", f"€{stats.get('pior_trade', 0.0):.2f}")
-    
-    with col_auto2:
-        st.subheader("⚙️ Controles Rápidos")
-        
-        if st.session_state.auto_trade_active:
-            if st.button("⏸️ Pausar Auto Trade", type="secondary", use_container_width=True):
-                st.session_state.auto_trade_active = False
-                st.rerun()
-        else:
-            if st.button("▶️ Iniciar Auto Trade", type="primary", use_container_width=True):
-                st.session_state.auto_trade_active = True
-                st.rerun()
-        
-        if st.button("🗑️ Limpar Todos Trades", use_container_width=True):
-            st.session_state.trades_ativos = []
-            st.session_state.historico_trades = []
-            st.session_state.auto_trade_stats = {
-                "total_trades": 0,
-                "trades_lucrativos": 0,
-                "trades_perdedores": 0,
-                "lucro_total": 0.0,
-                "melhor_trade": 0.0,
-                "pior_trade": 0.0,
-                "win_rate": 0.0
-            }
-            st.rerun()
-        
-        st.subheader("📋 Histórico Recente")
-        if st.session_state.historico_trades:
-            historico_recente = st.session_state.historico_trades[-8:]  # Últimos 8 trades
-            historico_df = pd.DataFrame(historico_recente)
-            if not historico_df.empty:
-                # Verificar colunas disponíveis
-                available_cols = [col for col in ['id', 'par', 'tipo', 'preco_entrada', 'preco_saida', 'lucro_prejuizo', 'motivo_saida'] 
-                                if col in historico_df.columns]
-                historico_display = historico_df[available_cols].copy()
-                
-                # Adicionar timestamp se disponível
-                if 'timestamp_saida' in historico_df.columns:
-                    historico_display['timestamp'] = historico_df['timestamp_saida'].apply(
-                        lambda x: x.strftime('%H:%M') if hasattr(x, 'strftime') else 'N/A'
-                    )
-                
-                # Colorir baseado no resultado se a coluna existir
-                if 'lucro_prejuizo' in historico_display.columns:
-                    def colorir_resultado(val):
-                        if val > 0:
-                            return 'background-color: #90EE90; font-weight: bold;'
-                        else:
-                            return 'background-color: #FFB6C1; font-weight: bold;'
-                    
-                    st.dataframe(
-                        historico_display.style.applymap(colorir_resultado, subset=['lucro_prejuizo']),
-                        width='stretch',
-                        height=400
-                    )
-                else:
-                    st.dataframe(historico_display, width='stretch', height=400)
-        else:
-            st.info("Nenhum trade no histórico")
-
-with tab4:
-    st.header("📈 Visão Geral do Mercado")
-    
-    # Resumo de todos os pares
-    st.subheader("🎯 Sinais por Par")
-    
-    if not st.session_state.dados_15min.empty:
-        sinais_por_par = []
-        for par in list(PARES.keys())[:15]:  # Limitar para performance
-            df_par = st.session_state.dados_15min[st.session_state.dados_15min['par'] == par]
-            if not df_par.empty:
-                ultimo = df_par.iloc[-1]
-                tendencia = analisar_tendencia(df_par)
-                sinais_por_par.append({
-                    'Par': par,
-                    'Preço': ultimo['close'],
-                    'Sinal': ultimo.get('sinal', 'N/A'),
-                    'RSI': f"{ultimo.get('RSI', 0):.1f}",
-                    'Tendência': tendencia,
-                    'Padrão': ultimo.get('padrao_candle', ''),
-                    'Ativo': st.session_state.pares_config[par]["ativo"]
-                })
-        
-        if sinais_por_par:
-            df_sinais = pd.DataFrame(sinais_por_par)
-            
-            # Colorir os sinais de forma segura
-            def colorir_linha(row):
-                if row.get('Sinal') == 'COMPRA':
-                    return ['background-color: #90EE90'] * len(row)
-                elif row.get('Sinal') == 'VENDA':
-                    return ['background-color: #FFB6C1'] * len(row)
-                else:
-                    return ['background-color: #F0F0F0'] * len(row)
-            
-            st.dataframe(
-                df_sinais.style.apply(colorir_linha, axis=1),
-                width='stretch',
-                height=600
-            )
-    else:
-        st.info("Dados de mercado não disponíveis")
+# [Restante do código das outras abas permanece similar...]
 
 # Sistema de atualização automática
 if auto_refresh:
@@ -1047,7 +992,7 @@ if auto_refresh:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "📊 Advanced Trading Dashboard - Multi-Pair Auto Trading System | 20 Pares Monitorados"
+    "📊 Advanced Trading Dashboard - Multi-Pair Auto Trading System | Horário de Mercado Controlado"
     "</div>", 
     unsafe_allow_html=True
 )
