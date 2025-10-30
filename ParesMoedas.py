@@ -7,7 +7,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import io
 import time
-import threading
+import talib
 
 # Configuração da página
 st.set_page_config(
@@ -52,6 +52,18 @@ st.markdown("""
         border-radius: 12px;
         font-size: 0.8rem;
         animation: blink 1s infinite;
+    }
+    .pattern-bullish {
+        background-color: #90EE90 !important;
+        color: black;
+    }
+    .pattern-bearish {
+        background-color: #FFB6C1 !important;
+        color: black;
+    }
+    .pattern-neutral {
+        background-color: #F0F0F0 !important;
+        color: black;
     }
     @keyframes blink {
         0% { opacity: 1; }
@@ -105,6 +117,120 @@ if "ultima_atualizacao" not in st.session_state:
     st.session_state.ultima_atualizacao = datetime.now()
 if "contador_updates" not in st.session_state:
     st.session_state.contador_updates = 0
+
+def detectar_padroes_candles(df):
+    """Detecta padrões de candles usando lógica de price action"""
+    patterns = []
+    
+    for i in range(2, len(df)):
+        current = df.iloc[i]
+        prev1 = df.iloc[i-1]
+        prev2 = df.iloc[i-2]
+        
+        # Hammer (Martelo)
+        body = abs(current['close'] - current['open'])
+        lower_wick = current['low'] - min(current['open'], current['close'])
+        upper_wick = max(current['open'], current['close']) - current['high']
+        total_range = current['high'] - current['low']
+        
+        if (lower_wick >= 2 * body and 
+            upper_wick <= body * 0.1 and 
+            total_range > 0):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Hammer", "type": "bullish", "strength": "medium"})
+        
+        # Shooting Star (Estrela Cadente)
+        if (upper_wick >= 2 * body and 
+            lower_wick <= body * 0.1 and 
+            total_range > 0):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Shooting Star", "type": "bearish", "strength": "medium"})
+        
+        # Engulfing Bullish
+        if (prev1['close'] < prev1['open'] and  # Candle anterior de baixa
+            current['close'] > current['open'] and  # Candle atual de alta
+            current['open'] < prev1['close'] and 
+            current['close'] > prev1['open']):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Bullish Engulfing", "type": "bullish", "strength": "strong"})
+        
+        # Engulfing Bearish
+        if (prev1['close'] > prev1['open'] and  # Candle anterior de alta
+            current['close'] < current['open'] and  # Candle atual de baixa
+            current['open'] > prev1['close'] and 
+            current['close'] < prev1['open']):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Bearish Engulfing", "type": "bearish", "strength": "strong"})
+        
+        # Doji
+        if body <= total_range * 0.1 and total_range > 0:
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Doji", "type": "neutral", "strength": "weak"})
+        
+        # Morning Star
+        if (i >= 2 and
+            prev2['close'] < prev2['open'] and  # Primeiro candle de baixa
+            abs(prev1['close'] - prev1['open']) <= (prev1['high'] - prev1['low']) * 0.3 and  # Segundo candle pequeno
+            current['close'] > current['open'] and  # Terceiro candle de alta
+            current['close'] > (prev2['open'] + prev2['close']) / 2):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Morning Star", "type": "bullish", "strength": "strong"})
+        
+        # Evening Star
+        if (i >= 2 and
+            prev2['close'] > prev2['open'] and  # Primeiro candle de alta
+            abs(prev1['close'] - prev1['open']) <= (prev1['high'] - prev1['low']) * 0.3 and  # Segundo candle pequeno
+            current['close'] < current['open'] and  # Terceiro candle de baixa
+            current['close'] < (prev2['open'] + prev2['close']) / 2):
+            patterns.append({"timestamp": current['timestamp'], "pattern": "Evening Star", "type": "bearish", "strength": "strong"})
+    
+    return patterns
+
+def calcular_suporte_resistencia(df, window=20):
+    """Calcula níveis de suporte e resistência"""
+    df = df.copy()
+    df['resistance'] = df['high'].rolling(window=window).max()
+    df['support'] = df['low'].rolling(window=window).min()
+    return df
+
+def analisar_tendencia(df):
+    """Analisa a tendência baseada em MME e price action"""
+    if len(df) < 20:
+        return "Indefinida"
+    
+    # Tendência por MME
+    ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
+    ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
+    ema_50 = df['close'].ewm(span=50).mean().iloc[-1]
+    
+    # Price Action - Máximas e Mínimas crescentes/decrescentes
+    high_5 = df['high'].tail(5)
+    low_5 = df['low'].tail(5)
+    
+    max_increasing = all(high_5.iloc[i] > high_5.iloc[i-1] for i in range(1, len(high_5)))
+    min_increasing = all(low_5.iloc[i] > low_5.iloc[i-1] for i in range(1, len(low_5)))
+    max_decreasing = all(high_5.iloc[i] < high_5.iloc[i-1] for i in range(1, len(high_5)))
+    min_decreasing = all(low_5.iloc[i] < low_5.iloc[i-1] for i in range(1, len(low_5)))
+    
+    if (ema_9 > ema_21 > ema_50) and (max_increasing and min_increasing):
+        return "Forte Alta"
+    elif (ema_9 < ema_21 < ema_50) and (max_decreasing and min_decreasing):
+        return "Forte Baixa"
+    elif ema_9 > ema_21:
+        return "Alta"
+    elif ema_9 < ema_21:
+        return "Baixa"
+    else:
+        return "Lateral"
+
+def calcular_volume_profile(df):
+    """Calcula perfil de volume para análise de price action"""
+    if len(df) == 0:
+        return {}
+    
+    price_levels = np.linspace(df['low'].min(), df['high'].max(), 20)
+    volume_at_price = {}
+    
+    for level in price_levels:
+        # Volume próximo a este nível de preço
+        mask = (df['low'] <= level) & (df['high'] >= level)
+        volume_at_price[round(level, 4)] = df[mask]['volume'].sum()
+    
+    return volume_at_price
 
 def gerar_dado_live(par, base_price):
     """Gera um novo dado em tempo real para um par"""
@@ -185,6 +311,7 @@ def calcular_indicadores_tecnicos(df):
     # EMA
     df['EMA_9'] = df['close'].ewm(span=9).mean()
     df['EMA_21'] = df['close'].ewm(span=21).mean()
+    df['EMA_50'] = df['close'].ewm(span=50).mean()
     
     # RSI
     delta = df['close'].diff()
@@ -200,24 +327,52 @@ def calcular_indicadores_tecnicos(df):
     df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
     df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
     
+    # Bollinger Bands
+    df['BB_Middle'] = df['close'].rolling(window=20).mean()
+    bb_std = df['close'].rolling(window=20).std()
+    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
+    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
+    
+    # Price Action
+    df['Body'] = abs(df['close'] - df['open'])
+    df['Total_Range'] = df['high'] - df['low']
+    df['Body_Ratio'] = df['Body'] / df['Total_Range']
+    df['Upper_Shadow'] = df['high'] - np.maximum(df['open'], df['close'])
+    df['Lower_Shadow'] = np.minimum(df['open'], df['close']) - df['low']
+    
+    # Suporte e Resistência
+    df = calcular_suporte_resistencia(df)
+    
     return df
 
 def gerar_sinais_15min(df):
     """Gera sinais de trading baseados na estratégia de 15min"""
     df['sinal'] = 'NEUTRO'
     
+    # Detectar padrões de candles
+    padroes = detectar_padroes_candles(df)
+    df['padrao_candle'] = ''
+    df['tipo_padrao'] = ''
+    
+    for padrao in padroes:
+        mask = df['timestamp'] == padrao['timestamp']
+        df.loc[mask, 'padrao_candle'] = padrao['pattern']
+        df.loc[mask, 'tipo_padrao'] = padrao['type']
+    
     # Condições de compra
     buy_condition = (
         (df['EMA_9'] > df['EMA_21']) & 
         (df['RSI'] < 35) & 
-        (df['MACD'] > df['MACD_Signal'])
+        (df['MACD'] > df['MACD_Signal']) &
+        (df['tipo_padrao'].isin(['bullish', 'strong']))
     )
     
     # Condições de venda
     sell_condition = (
         (df['EMA_9'] < df['EMA_21']) & 
         (df['RSI'] > 65) & 
-        (df['MACD'] < df['MACD_Signal'])
+        (df['MACD'] < df['MACD_Signal']) &
+        (df['tipo_padrao'].isin(['bearish', 'strong']))
     )
     
     df.loc[buy_condition, 'sinal'] = 'COMPRA'
@@ -242,7 +397,7 @@ def custom_metric_style():
     """, unsafe_allow_html=True)
 
 # Simular dados de 15 minutos
-st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - Live 15min Strategy</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - Price Action & 15min Strategy</h1>', unsafe_allow_html=True)
 
 # Sidebar modernizada
 with st.sidebar:
@@ -315,7 +470,7 @@ else:
     dados_15min = pd.DataFrame()
 
 # Layout principal em abas
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard Live", "🎯 Estratégia 15min", "📈 Análise Técnica", "💰 Preços Live", "📋 Relatórios"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard Live", "🎯 Estratégia 15min", "📈 Price Action", "💰 Preços Live", "📋 Relatórios", "🔍 Análise Candles"])
 
 with tab1:
     # Header com informações de atualização
@@ -404,7 +559,7 @@ with tab2:
         
         with col1:
             # Gráfico de candlesticks com sinais
-            par_selecionado = st.selectbox("Selecione o par:", pares_selecionados)
+            par_selecionado = st.selectbox("Selecione o par:", pares_selecionados, key="strategy_select")
             
             if par_selecionado:
                 df_par = dados_15min[dados_15min['par'] == par_selecionado].tail(50)
@@ -433,6 +588,19 @@ with tab2:
                     x=df_par['timestamp'], y=df_par['EMA_21'],
                     mode='lines', name='EMA 21',
                     line=dict(color='blue', width=1)
+                ))
+                
+                # Bollinger Bands
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['BB_Upper'],
+                    mode='lines', name='BB Upper',
+                    line=dict(color='gray', width=1, dash='dash')
+                ))
+                
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['BB_Lower'],
+                    mode='lines', name='BB Lower',
+                    line=dict(color='gray', width=1, dash='dash')
                 ))
                 
                 # Sinais de trading
@@ -471,12 +639,15 @@ with tab2:
                 df_par = dados_15min[dados_15min['par'] == par]
                 if not df_par.empty:
                     ultimo_sinal = df_par.iloc[-1]
+                    tendencia = analisar_tendencia(df_par.tail(20))
+                    
                     ultimos_sinais.append({
                         'Par': par,
                         'Sinal': ultimo_sinal['sinal'],
+                        'Padrão': ultimo_sinal['padrao_candle'],
                         'Preço': ultimo_sinal['close'],
                         'RSI': f"{ultimo_sinal['RSI']:.1f}" if not pd.isna(ultimo_sinal['RSI']) else "N/A",
-                        'Tendência': "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
+                        'Tendência': tendencia
                     })
             
             if ultimos_sinais:
@@ -525,7 +696,8 @@ with tab2:
                                 "log_risco_estimado": risco,
                                 "log_lucro_estimado": lucro,
                                 "rsi_entrada": round(ultimo_sinal['RSI'], 1) if not pd.isna(ultimo_sinal['RSI']) else 0,
-                                "ema_tendencia": "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
+                                "ema_tendencia": "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa",
+                                "padrao_candle": ultimo_sinal['padrao_candle']
                             })
                             trades_executados += 1
                 
@@ -537,63 +709,122 @@ with tab2:
         st.info("Selecione pares para análise na sidebar")
 
 with tab3:
-    st.header("📈 Análise Técnica Detalhada")
+    st.header("📈 Análise de Price Action")
     
     if not dados_15min.empty:
-        col1, col2 = st.columns(2)
+        par_selecionado_pa = st.selectbox("Selecione o par para análise:", pares_selecionados, key="pa_select")
         
-        with col1:
-            # Gráfico RSI
-            st.subheader("📊 RSI por Par")
-            fig_rsi = go.Figure()
+        if par_selecionado_pa:
+            df_par = dados_15min[dados_15min['par'] == par_selecionado_pa].tail(30)
             
-            for par in pares_selecionados:
-                df_par = dados_15min[dados_15min['par'] == par].tail(24)
-                if not df_par.empty:
-                    fig_rsi.add_trace(go.Scatter(
-                        x=df_par['timestamp'], y=df_par['RSI'],
-                        mode='lines', name=par,
-                        line=dict(width=2)
-                    ))
+            col1, col2 = st.columns(2)
             
-            # Linhas de sobrecompra/sobrevenda
-            fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Sobrecompra")
-            fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Sobrevenda")
+            with col1:
+                # Análise de Tendência
+                st.subheader("📊 Análise de Tendência")
+                tendencia = analisar_tendencia(df_par)
+                st.metric("Tendência Atual", tendencia)
+                
+                # Suporte e Resistência
+                st.subheader("🛡️ Suporte e Resistência")
+                ultimo = df_par.iloc[-1]
+                col_sup_res1, col_sup_res2 = st.columns(2)
+                with col_sup_res1:
+                    st.metric("Resistência", f"{ultimo['resistance']:.5f}")
+                with col_sup_res2:
+                    st.metric("Suporte", f"{ultimo['support']:.5f}")
+                
+                # Volume Profile
+                st.subheader("📈 Perfil de Volume")
+                volume_profile = calcular_volume_profile(df_par)
+                if volume_profile:
+                    df_volume = pd.DataFrame(list(volume_profile.items()), columns=['Preço', 'Volume'])
+                    df_volume = df_volume.sort_values('Volume', ascending=False).head(5)
+                    st.dataframe(df_volume, width='stretch')
             
-            fig_rsi.update_layout(
-                title="RSI - Indicador de Momentum",
+            with col2:
+                # Padrões de Candles Detectados
+                st.subheader("🕯️ Padrões de Candles")
+                padroes_recentes = df_par[df_par['padrao_candle'] != ''].tail(5)
+                
+                if not padroes_recentes.empty:
+                    df_padroes = padroes_recentes[['timestamp', 'padrao_candle', 'tipo_padrao']].copy()
+                    df_padroes['timestamp'] = df_padroes['timestamp'].dt.strftime('%H:%M')
+                    
+                    # Aplicar cores baseadas no tipo de padrão
+                    def color_pattern(row):
+                        if row['tipo_padrao'] == 'bullish':
+                            return ['pattern-bullish'] * len(row)
+                        elif row['tipo_padrao'] == 'bearish':
+                            return ['pattern-bearish'] * len(row)
+                        else:
+                            return ['pattern-neutral'] * len(row)
+                    
+                    st.dataframe(
+                        df_padroes.style.apply(color_pattern, axis=1),
+                        width='stretch'
+                    )
+                else:
+                    st.info("Nenhum padrão de candle detectado recentemente")
+                
+                # Análise de Momentum
+                st.subheader("⚡ Momentum")
+                col_mom1, col_mom2 = st.columns(2)
+                with col_mom1:
+                    rsi_atual = df_par['RSI'].iloc[-1]
+                    st.metric("RSI", f"{rsi_atual:.1f}")
+                with col_mom2:
+                    macd_atual = df_par['MACD'].iloc[-1]
+                    st.metric("MACD", f"{macd_atual:.4f}")
+            
+            # Gráfico de Price Action Avançado
+            st.subheader("🎯 Gráfico de Price Action")
+            
+            fig_pa = go.Figure()
+            
+            # Candlesticks
+            fig_pa.add_trace(go.Candlestick(
+                x=df_par['timestamp'],
+                open=df_par['open'],
+                high=df_par['high'],
+                low=df_par['low'],
+                close=df_par['close'],
+                name="Price"
+            ))
+            
+            # Suporte e Resistência
+            fig_pa.add_trace(go.Scatter(
+                x=df_par['timestamp'], y=df_par['resistance'],
+                mode='lines', name='Resistência',
+                line=dict(color='red', width=2, dash='dash')
+            ))
+            
+            fig_pa.add_trace(go.Scatter(
+                x=df_par['timestamp'], y=df_par['support'],
+                mode='lines', name='Suporte',
+                line=dict(color='green', width=2, dash='dash')
+            ))
+            
+            # Destacar padrões de candles
+            padroes = df_par[df_par['padrao_candle'] != '']
+            for _, padrao in padroes.iterrows():
+                color = 'green' if padrao['tipo_padrao'] == 'bullish' else 'red' if padrao['tipo_padrao'] == 'bearish' else 'yellow'
+                fig_pa.add_trace(go.Scatter(
+                    x=[padrao['timestamp']], y=[padrao['high'] * 1.001],
+                    mode='markers',
+                    marker=dict(color=color, size=12, symbol='star'),
+                    name=f"{padrao['padrao_candle']}",
+                    showlegend=False
+                ))
+            
+            fig_pa.update_layout(
+                title=f"{par_selecionado_pa} - Análise de Price Action",
                 xaxis_title="Data/Hora",
-                yaxis_title="RSI",
-                height=400
+                yaxis_title="Preço",
+                height=500
             )
-            st.plotly_chart(fig_rsi, width='stretch')
-        
-        with col2:
-            # Gráfico MACD
-            st.subheader("📈 MACD por Par")
-            fig_macd = go.Figure()
             
-            for par in pares_selecionados[:2]:  # Mostrar apenas 2 para não poluir
-                df_par = dados_15min[dados_15min['par'] == par].tail(24)
-                if not df_par.empty:
-                    fig_macd.add_trace(go.Scatter(
-                        x=df_par['timestamp'], y=df_par['MACD'],
-                        mode='lines', name=f"{par} MACD",
-                        line=dict(width=2)
-                    ))
-                    fig_macd.add_trace(go.Scatter(
-                        x=df_par['timestamp'], y=df_par['MACD_Signal'],
-                        mode='lines', name=f"{par} Signal",
-                        line=dict(width=1, dash='dash')
-                    ))
-            
-            fig_macd.update_layout(
-                title="MACD - Indicador de Tendência",
-                xaxis_title="Data/Hora",
-                yaxis_title="MACD",
-                height=400
-            )
-            st.plotly_chart(fig_macd, width='stretch')
+            st.plotly_chart(fig_pa, width='stretch')
     else:
         st.info("Selecione pares para análise na sidebar")
 
@@ -691,7 +922,7 @@ with tab5:
         df_display['Lucro (€)'] = df_display['log_lucro_estimado']
         df_display['Risco (€)'] = df_display['log_risco_estimado']
         
-        colunas_display = ['Timestamp', 'Par', 'sinal', 'Stake (€)', 'Lucro (€)', 'Risco (€)', 'status']
+        colunas_display = ['Timestamp', 'Par', 'sinal', 'Stake (€)', 'Lucro (€)', 'Risco (€)', 'status', 'padrao_candle']
         if 'rsi_entrada' in df_display.columns:
             colunas_display.extend(['rsi_entrada', 'ema_tendencia'])
         
@@ -757,6 +988,84 @@ with tab5:
                 mime="application/vnd.ms-excel"
             )
 
+with tab6:
+    st.header("🔍 Análise Detalhada de Candles")
+    
+    if not dados_15min.empty:
+        par_selecionado_candle = st.selectbox("Selecione o par:", pares_selecionados, key="candle_analysis")
+        
+        if par_selecionado_candle:
+            df_par = dados_15min[dados_15min['par'] == par_selecionado_candle].tail(50)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Estatísticas de Candles
+                st.subheader("📊 Estatísticas de Candles")
+                
+                # Tipos de candles
+                df_par['candle_type'] = np.where(df_par['close'] > df_par['open'], 'Alta', 'Baixa')
+                candle_stats = df_par['candle_type'].value_counts()
+                
+                fig_candle_types = px.pie(
+                    values=candle_stats.values,
+                    names=candle_stats.index,
+                    title="Distribuição de Candles de Alta/Baixa"
+                )
+                st.plotly_chart(fig_candle_types, width='stretch')
+                
+                # Médias de tamanho
+                st.metric("Tamanho Médio do Corpo", f"{(df_par['Body'].mean() * 10000):.1f} pips")
+                st.metric("Tamanho Médio da Sombra Superior", f"{(df_par['Upper_Shadow'].mean() * 10000):.1f} pips")
+                st.metric("Tamanho Médio da Sombra Inferior", f"{(df_par['Lower_Shadow'].mean() * 10000):.1f} pips")
+            
+            with col2:
+                # Padrões Detectados
+                st.subheader("🕯️ Resumo de Padrões")
+                
+                padroes_count = df_par['padrao_candle'].value_counts()
+                if not padroes_count.empty:
+                    fig_patterns = px.bar(
+                        x=padroes_count.values,
+                        y=padroes_count.index,
+                        orientation='h',
+                        title="Frequência de Padrões de Candles"
+                    )
+                    st.plotly_chart(fig_patterns, width='stretch')
+                else:
+                    st.info("Nenhum padrão detectado no período")
+                
+                # Eficiência dos padrões
+                st.subheader("📈 Eficiência dos Sinais")
+                if 'padrao_candle' in df_par.columns and 'sinal' in df_par.columns:
+                    eficiencia = df_par.groupby('padrao_candle').agg({
+                        'sinal': lambda x: (x != 'NEUTRO').mean() * 100
+                    }).reset_index()
+                    eficiencia.columns = ['Padrão', 'Taxa de Sinal (%)']
+                    st.dataframe(eficiencia, width='stretch')
+            
+            # Heatmap de Volume por Preço
+            st.subheader("🔥 Heatmap de Volume por Preço")
+            
+            # Criar heatmap simplificado
+            price_levels = np.linspace(df_par['low'].min(), df_par['high'].max(), 10)
+            volume_heatmap = []
+            
+            for i in range(len(price_levels)-1):
+                low_level = price_levels[i]
+                high_level = price_levels[i+1]
+                mask = (df_par['low'] >= low_level) & (df_par['high'] <= high_level)
+                total_volume = df_par[mask]['volume'].sum()
+                volume_heatmap.append({
+                    'price_range': f"{low_level:.4f}-{high_level:.4f}",
+                    'volume': total_volume
+                })
+            
+            df_heatmap = pd.DataFrame(volume_heatmap)
+            fig_heatmap = px.bar(df_heatmap, x='volume', y='price_range', orientation='h',
+                               title='Distribuição de Volume por Faixa de Preço')
+            st.plotly_chart(fig_heatmap, width='stretch')
+
 # Sistema de atualização automática
 if auto_refresh:
     time.sleep(refresh_interval)
@@ -782,7 +1091,7 @@ if st.session_state.logs_tecnicos:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "📊 Advanced Trading Dashboard - Live 15min Strategy | Dados em Tempo Real"
+    "📊 Advanced Trading Dashboard - Price Action & Live 15min Strategy | Análise Completa de Candles"
     "</div>", 
     unsafe_allow_html=True
 )
