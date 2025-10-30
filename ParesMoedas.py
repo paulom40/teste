@@ -39,7 +39,7 @@ rsi_threshold_high = st.sidebar.slider("RSI Sell Threshold", 60, 80, 70)
 use_stop_loss = st.sidebar.checkbox("Use Stop Loss (2%)", True)
 use_take_profit = st.sidebar.checkbox("Use Take Profit (4%)", True)
 
-# Technical Indicators Selection (for visualization)
+# Technical Indicators Selection (for visualization only; all computed for strategies)
 st.sidebar.subheader("Display Indicators")
 show_sma = st.sidebar.checkbox("Simple Moving Average (SMA 20)", True)
 show_ema = st.sidebar.checkbox("Exponential Moving Average (EMA 20)", True)
@@ -68,50 +68,46 @@ def fetch_forex_data(ticker, days):
 
 df = fetch_forex_data(ticker, days)
 
-# Compute Technical Indicators
+# Compute Technical Indicators (always compute all for strategies)
 @st.cache_data
-def compute_indicators(df, show_sma, show_ema, show_bb, show_rsi, show_macd):
-    if df.empty or len(df) < 14:
+def compute_indicators(df):
+    if df.empty or len(df) < 26:  # Min for MACD
         return df
     
     df = df.copy()
     
-    if show_sma:
-        df['SMA_20'] = df['Rate'].rolling(window=20).mean()
-    if show_ema:
-        df['EMA_20'] = df['Rate'].ewm(span=20).mean()
+    # Always compute
+    df['SMA_20'] = df['Rate'].rolling(window=20).mean()
+    df['EMA_20'] = df['Rate'].ewm(span=20).mean()
     
-    if show_bb:
-        df['BBM_20_2.0'] = df['Rate'].rolling(window=20).mean()
-        bb_std = df['Rate'].rolling(window=20).std()
-        df['BBU_20_2.0'] = df['BBM_20_2.0'] + (bb_std * 2)
-        df['BBL_20_2.0'] = df['BBM_20_2.0'] - (bb_std * 2)
+    df['BBM_20_2.0'] = df['Rate'].rolling(window=20).mean()
+    bb_std = df['Rate'].rolling(window=20).std()
+    df['BBU_20_2.0'] = df['BBM_20_2.0'] + (bb_std * 2)
+    df['BBL_20_2.0'] = df['BBM_20_2.0'] - (bb_std * 2)
     
-    if show_rsi:
-        def calculate_rsi(prices, window=14):
-            delta = prices.diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(window=window, min_periods=1).mean()
-            avg_loss = loss.rolling(window=window, min_periods=1).mean()
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            return rsi
-        df['RSI'] = calculate_rsi(df['Rate'])
+    def calculate_rsi(prices, window=14):
+        delta = prices.diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=window, min_periods=1).mean()
+        avg_loss = loss.rolling(window=window, min_periods=1).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    df['RSI'] = calculate_rsi(df['Rate'])
     
-    if show_macd:
-        ema12 = df['Rate'].ewm(span=12).mean()
-        ema26 = df['Rate'].ewm(span=26).mean()
-        df['MACD'] = ema12 - ema26
-        df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
-        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    ema12 = df['Rate'].ewm(span=12).mean()
+    ema26 = df['Rate'].ewm(span=26).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
     return df
 
 if not df.empty:
-    df = compute_indicators(df, show_sma, show_ema, show_bb, show_rsi, show_macd)
+    df = compute_indicators(df)
 
-# Auto-Trading Logic (Simulation)
+# Auto-Trading Logic (Simulation) - Fixed with iloc[i] for scalars
 @st.cache_data
 def generate_signals(df, strategy, rsi_low, rsi_high):
     if df.empty:
@@ -122,33 +118,40 @@ def generate_signals(df, strategy, rsi_low, rsi_high):
     current_position = None
     
     for i in range(len(df)):
-        row = df.iloc[i]
         signal = 'HOLD'
         
-        if strategy == "RSI Oversold/Overbought" and 'RSI' in df.columns:
-            if row['RSI'] < rsi_low and current_position != 'LONG':
-                signal = 'BUY'
-                current_position = 'LONG'
-            elif row['RSI'] > rsi_high and current_position != 'SHORT':
-                signal = 'SELL'
-                current_position = 'SHORT'
-        
-        elif strategy == "MA Crossover" and 'SMA_20' in df.columns and 'EMA_20' in df.columns:
-            if i > 0:
-                prev_sma = df.iloc[i-1]['SMA_20']
-                prev_ema = df.iloc[i-1]['EMA_20']
-                if row['EMA_20'] > row['SMA_20'] and prev_ema <= prev_sma:
+        if strategy == "RSI Oversold/Overbought":
+            rsi_val = df['RSI'].iloc[i]
+            if pd.notna(rsi_val):
+                if rsi_val < rsi_low and current_position != 'LONG':
                     signal = 'BUY'
                     current_position = 'LONG'
-                elif row['EMA_20'] < row['SMA_20'] and prev_ema >= prev_sma:
+                elif rsi_val > rsi_high and current_position != 'SHORT':
+                    signal = 'SELL'
+                    current_position = 'SHORT'
+        
+        elif strategy == "MA Crossover":
+            if i > 0 and pd.notna(df['SMA_20'].iloc[i]) and pd.notna(df['EMA_20'].iloc[i]):
+                prev_sma = df['SMA_20'].iloc[i-1]
+                prev_ema = df['EMA_20'].iloc[i-1]
+                if df['EMA_20'].iloc[i] > df['SMA_20'].iloc[i] and prev_ema <= prev_sma:
+                    signal = 'BUY'
+                    current_position = 'LONG'
+                elif df['EMA_20'].iloc[i] < df['SMA_20'].iloc[i] and prev_ema >= prev_sma:
                     signal = 'SELL'
                     current_position = 'SHORT'
         
         elif strategy == "Combined":
-            rsi_buy = row['RSI'] < rsi_low if 'RSI' in df.columns else False
-            rsi_sell = row['RSI'] > rsi_high if 'RSI' in df.columns else False
-            ma_buy = (row['EMA_20'] > row['SMA_20']) if all(col in df.columns for col in ['EMA_20', 'SMA_20']) else False
-            ma_sell = (row['EMA_20'] < row['SMA_20']) if all(col in df.columns for col in ['EMA_20', 'SMA_20']) else False
+            rsi_val = df['RSI'].iloc[i] if pd.notna(df['RSI'].iloc[i]) else 50
+            ma_buy = df['EMA_20'].iloc[i] > df['SMA_20'].iloc[i] if pd.notna(df['EMA_20'].iloc[i]) and pd.notna(df['SMA_20'].iloc[i]) else False
+            ma_sell = df['EMA_20'].iloc[i] < df['SMA_20'].iloc[i] if pd.notna(df['EMA_20'].iloc[i]) and pd.notna(df['SMA_20'].iloc[i]) else False
+            if i > 0:
+                prev_ema = df['EMA_20'].iloc[i-1]
+                prev_sma = df['SMA_20'].iloc[i-1]
+                ma_buy = ma_buy and prev_ema <= prev_sma
+                ma_sell = ma_sell and prev_ema >= prev_sma
+            rsi_buy = rsi_val < rsi_low
+            rsi_sell = rsi_val > rsi_high
             if rsi_buy and ma_buy and current_position != 'LONG':
                 signal = 'BUY'
                 current_position = 'LONG'
@@ -181,9 +184,9 @@ if not df.empty:
 if st.sidebar.button("Simulate Trade with Stake"):
     if not df.empty and current_signal != 'HOLD':
         entry_price = df['Rate'].iloc[-1]
-        position_size = stake / entry_price  # Units of quote currency
+        position_size = stake / entry_price  # Units of base currency
         
-        # Simulate P&L based on next day's price (or random for demo; in real, use future data)
+        # Simulate P&L based on next day's price (or random for demo)
         # For demo, assume 1% move in signal direction
         if current_signal == 'BUY':
             exit_price = entry_price * 1.01  # Simulated profit
@@ -194,10 +197,11 @@ if st.sidebar.button("Simulate Trade with Stake"):
             pnl = (entry_price - exit_price) * position_size
             trade_type = "Short"
         
-        # Apply SL/TP if enabled
-        sl_price = entry_price * 0.98 if use_stop_loss and trade_type == "Long" else entry_price * 1.02
-        tp_price = entry_price * 1.04 if use_take_profit and trade_type == "Long" else entry_price * 0.96
-        # Simplified: assume hits TP for demo
+        # Apply SL/TP if enabled (simplified: assume hits TP)
+        if use_take_profit:
+            tp_mult = 1.04 if trade_type == "Long" else 0.96
+            exit_price = entry_price * tp_mult
+            pnl = (exit_price - entry_price) * position_size if trade_type == "Long" else (entry_price - exit_price) * position_size
         
         st.session_state.trade_history = st.session_state.get('trade_history', []) + [{
             'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -231,8 +235,7 @@ with col2:
         st.metric("Change (Period)", f"{change_pct:.2f}%", change_pct)
 
 # Chart with Indicators and Signals
-min_days_for_chart = 20 if any([show_sma, show_ema, show_bb]) else 14 if show_rsi else 26 if show_macd else 1
-if not df.empty and len(df) >= min_days_for_chart:
+if not df.empty and len(df) >= 26:
     num_rows = 1
     if show_rsi: num_rows += 1
     if show_macd: num_rows += 1
@@ -247,12 +250,12 @@ if not df.empty and len(df) >= min_days_for_chart:
     
     # Price and Indicators
     fig.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='blue')), row=1, col=1)
-    if show_sma and 'SMA_20' in df.columns:
+    if show_sma:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='orange')), row=1, col=1)
-    if show_ema and 'EMA_20' in df.columns:
+    if show_ema:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['EMA_20'], name='EMA 20', line=dict(color='green')), row=1, col=1)
     
-    if show_bb and all(col in df.columns for col in ['BBU_20_2.0', 'BBL_20_2.0']):
+    if show_bb:
         fig.add_trace(go.Scatter(x=df['Date'], y=df['BBU_20_2.0'], name='BB Upper', line=dict(color='red', dash='dash')), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['BBL_20_2.0'], name='BB Lower', line=dict(color='green', dash='dash')), row=1, col=1)
         fig.add_trace(go.Scatter(
@@ -261,7 +264,7 @@ if not df.empty and len(df) >= min_days_for_chart:
             fill='toself', fillcolor='rgba(128,128,128,0.2)', 
             line=dict(color='rgba(255,255,255,0)'), name='BB Band', showlegend=False
         ), row=1, col=1)
-        if not show_sma and 'BBM_20_2.0' in df.columns:
+        if not show_sma:
             fig.add_trace(go.Scatter(x=df['Date'], y=df['BBM_20_2.0'], name='BB Middle', line=dict(color='orange')), row=1, col=1)
     
     # Signals
@@ -272,40 +275,40 @@ if not df.empty and len(df) >= min_days_for_chart:
     if not sell_signals.empty:
         fig.add_trace(go.Scatter(x=sell_signals['Date'], y=sell_signals['Rate'], mode='markers', marker=dict(color='red', size=10, symbol='triangle-down'), name='Sell Signal'), row=1, col=1)
     
-    # RSI and MACD subplots
-    if show_rsi and 'RSI' in df.columns:
+    # RSI subplot
+    if show_rsi:
         rsi_row = 2
         fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='purple')), row=rsi_row, col=1)
         fig.add_hline(y=rsi_threshold_high, line_dash="dash", line_color="red", row=rsi_row, col=1)
         fig.add_hline(y=rsi_threshold_low, line_dash="dash", line_color="green", row=rsi_row, col=1)
+        num_rows = max(num_rows, 2)
     
-    if show_macd and all(col in df.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
+    # MACD subplot
+    if show_macd:
         macd_row = 3 if show_rsi else 2
         fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=macd_row, col=1)
         fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=macd_row, col=1)
         fig.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=macd_row, col=1)
+        num_rows = max(num_rows, macd_row)
     
-    num_rows_final = num_rows if not show_macd or not show_rsi else num_rows
-    fig.update_layout(height=600 + 200 * (num_rows_final - 1), title=f"{base}/{quote} Chart with Auto-Trading Signals (Last {days} Days)", xaxis_rangeslider_visible=False)
-    fig.update_xaxes(title_text="Date", row=num_rows_final, col=1)
+    fig.update_layout(height=600 + 200 * (num_rows - 1), title=f"{base}/{quote} Chart with Auto-Trading Signals (Last {days} Days)", xaxis_rangeslider_visible=False)
+    fig.update_xaxes(title_text="Date", row=num_rows, col=1)
     fig.update_yaxes(title_text="Rate", row=1, col=1)
     if show_rsi:
         fig.update_yaxes(title_text="RSI", row=2, col=1, range=[0, 100])
     if show_macd:
-        fig.update_yaxes(title_text="MACD", row=num_rows_final, col=1)
+        fig.update_yaxes(title_text="MACD", row=macd_row, col=1)
     
     st.plotly_chart(fig, use_container_width=True)
     
     # Data table
     st.subheader("Historical Data with Signals")
     display_cols = ['Date', 'Rate', 'Signal', 'Position']
-    if show_sma and 'SMA_20' in df.columns: display_cols.append('SMA_20')
-    if show_ema and 'EMA_20' in df.columns: display_cols.append('EMA_20')
-    if show_bb and all(col in df.columns for col in ['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0']):
-        display_cols.extend(['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0'])
-    if show_rsi and 'RSI' in df.columns: display_cols.append('RSI')
-    if show_macd and all(col in df.columns for col in ['MACD', 'MACD_Signal', 'MACD_Hist']):
-        display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
+    if show_sma: display_cols.append('SMA_20')
+    if show_ema: display_cols.append('EMA_20')
+    if show_bb: display_cols.extend(['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0'])
+    if show_rsi: display_cols.append('RSI')
+    if show_macd: display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
     st.dataframe(df[display_cols].round(5), use_container_width=True)
 else:
     st.info("No data available. Try adjusting parameters.")
