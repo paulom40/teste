@@ -33,7 +33,7 @@ st.markdown("""
 <style>
     /* Main container */
     .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
         padding: 20px;
     }
     
@@ -48,7 +48,7 @@ st.markdown("""
     }
     
     .main-title h1 {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-size: 3rem;
@@ -74,7 +74,7 @@ st.markdown("""
     /* Live indicator */
     .live-badge {
         display: inline-block;
-        background: #ff4444;
+        background: rgb(255, 68, 68);
         color: white;
         padding: 5px 15px;
         border-radius: 20px;
@@ -93,19 +93,19 @@ st.markdown("""
         text-align: center;
         font-size: 3rem;
         font-weight: 800;
-        color: #2c3e50;
+        color: rgb(44, 62, 80);
         margin: 10px 0;
     }
     
     .team-name {
         font-size: 1.5rem;
         font-weight: 700;
-        color: #2c3e50;
+        color: rgb(44, 62, 80);
     }
     
     .competition-badge {
         display: inline-block;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
         color: white;
         padding: 5px 15px;
         border-radius: 20px;
@@ -124,7 +124,7 @@ st.markdown("""
     
     /* Sidebar styling */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(180deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
     }
     
     [data-testid="stSidebar"] * {
@@ -142,11 +142,11 @@ st.markdown("""
         border-radius: 10px;
         padding: 15px 30px;
         font-weight: 600;
-        color: #2c3e50;
+        color: rgb(44, 62, 80);
     }
     
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
         color: white !important;
     }
     
@@ -297,7 +297,7 @@ def display_match_card(match):
             
             <div style="flex: 0 0 auto; text-align: center; padding: 0 30px;">
                 <div class="score-display">{match['home_score']} - {match['away_score']}</div>
-                <div style="color: #7f8c8d; font-weight: 600;">⏱️ {match['minute']}'</div>
+                <div style="color: #7f8c8d; font-weight: 600; font-size: 0.9rem;">{minute_text}</div>
             </div>
             
             <div style="flex: 1; text-align: right;">
