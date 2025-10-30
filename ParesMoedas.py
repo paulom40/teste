@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import numpy as np
-import time  # Added for live mode sleep
 
 # Set page config for professional look
 st.set_page_config(
@@ -87,7 +86,8 @@ st.markdown("---")
 st.sidebar.header("📊 Dashboard Controls")
 base = st.sidebar.selectbox("Base Currency", ["USD", "EUR", "GBP", "JPY", "AUD", "CAD"], index=0)
 quote = st.sidebar.selectbox("Quote Currency", ["EUR", "GBP", "JPY", "AUD", "CAD", "USD"], index=0)
-days = st.sidebar.slider("Historical Days", min_value=5, max_value=365, value=30, step=5)
+interval = st.sidebar.selectbox("Intraday Interval", ["1m", "5m", "15m", "1h"], index=2)  # New: Interval selection
+period = st.sidebar.selectbox("Period", ["1d", "5d", "1mo"], index=1)  # New: Period for intraday
 
 # Live Mode Toggle
 live_mode = st.sidebar.checkbox("🚨 Enable Live Mode (Auto-Refresh & Alerts every 60s)")
@@ -98,23 +98,23 @@ if base == quote:
 
 ticker = f"{quote}{base}=X"
 
-# Fetch data
+# Fetch data (Updated for intraday)
 @st.cache_data(ttl=60 if live_mode else 300)  # Shorter cache in live mode
-def fetch_data(ticker, days):
+def fetch_data(ticker, period, interval):
     try:
-        data = yf.download(ticker, period=f"{days}d", interval="1d", progress=False)
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
         if data.empty:
             return pd.DataFrame()
         df = data.reset_index()
         df['Rate'] = 1 / df['Close']  # Quote per base
-        df = df[['Date', 'Rate']].copy()
-        df['Date'] = pd.to_datetime(df['Date'])
-        return df.sort_values('Date').reset_index(drop=True)
+        df = df[['Datetime', 'Rate', 'Open', 'High', 'Low', 'Volume']].copy()  # Include OHLCV
+        df['Datetime'] = pd.to_datetime(df['Datetime'])
+        return df.sort_values('Datetime').reset_index(drop=True)
     except Exception as e:
         st.error(f"Data fetch error: {e}")
         return pd.DataFrame()
 
-df = fetch_data(ticker, days)
+df = fetch_data(ticker, period, interval)
 
 # Indicators (Added MACD)
 @st.cache_data
@@ -130,7 +130,7 @@ def compute_indicators(df):
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
-    # MACD (New!)
+    # MACD
     ema12 = df['Rate'].ewm(span=12).mean()
     ema26 = df['Rate'].ewm(span=26).mean()
     df['MACD'] = ema12 - ema26
@@ -173,11 +173,20 @@ if signal != st.session_state.last_signal:
         st.toast("📊 Signal Updated: HOLD", icon="⏸️")
     st.session_state.last_signal = signal
 
-# Live Mode Polling
+# Live Mode Polling (Non-blocking with JS)
 if live_mode:
     st.markdown('<div class="live-indicator">🔴 LIVE MODE ACTIVE</div>', unsafe_allow_html=True)
-    time.sleep(60)  # Wait 60s
-    st.rerun()  # Refresh app
+    # Non-blocking JS timer for auto-rerun every 60s
+    st.components.v1.html(
+        f"""
+        <script>
+            setTimeout(() => {{
+                window.parent.document.querySelector('.stAppViewContainer').dispatchEvent(new Event('rerun'));
+            }}, 60000);
+        </script>
+        """,
+        height=0
+    )
 
 # Manual Refresh
 if st.sidebar.button("🔄 Refresh Now"):
@@ -209,21 +218,21 @@ with tab1:
             rows=2, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.1,
-            subplot_titles=(f"{base}/{quote} Price & Indicators", "MACD"),
+            subplot_titles=(f"{base}/{quote} Price & Indicators ({interval} interval)", "MACD"),
             row_heights=[0.7, 0.3]
         )
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='#1f77b4')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='#ff7f0e')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='#9467bd'), yaxis="y2"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate', line=dict(color='#1f77b4')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA 20', line=dict(color='#ff7f0e')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='#9467bd'), yaxis="y2"), row=1, col=1)
         # MACD
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=2, col=1)
-        fig.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=2, col=1)
+        fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=2, col=1)
         fig.update_xaxes(title_text="Date", row=2, col=1)
         fig.update_yaxes(title_text="Rate", row=1, col=1, secondary_y=False)
         fig.update_yaxes(title_text="RSI", row=1, col=1, secondary_y=True, range=[0, 100])
         fig.update_yaxes(title_text="MACD", row=2, col=1)
-        fig.update_layout(title=f"{base}/{quote} Overview - Last {days} Days", height=600)
+        fig.update_layout(title=f"{base}/{quote} Overview - {period} ({interval})", height=600)
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
@@ -233,32 +242,32 @@ with tab2:
         with col1:
             st.subheader("Rate & SMA")
             fig1 = go.Figure()
-            fig1.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='blue')))
-            fig1.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='orange')))
-            fig1.update_layout(title="Price Trend", xaxis_title="Date", yaxis_title="Rate")
+            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['Rate'], name='Rate', line=dict(color='blue')))
+            fig1.add_trace(go.Scatter(x=df['Datetime'], y=df['SMA_20'], name='SMA 20', line=dict(color='orange')))
+            fig1.update_layout(title="Price Trend", xaxis_title="Datetime", yaxis_title="Rate")
             st.plotly_chart(fig1, use_container_width=True)
         
         with col2:
             st.subheader("RSI Momentum")
             fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='purple')))
+            fig2.add_trace(go.Scatter(x=df['Datetime'], y=df['RSI'], name='RSI', line=dict(color='purple')))
             fig2.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
             fig2.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
-            fig2.update_layout(title="RSI Indicator", xaxis_title="Date", yaxis_title="RSI", yaxis_range=[0, 100])
+            fig2.update_layout(title="RSI Indicator", xaxis_title="Datetime", yaxis_title="RSI", yaxis_range=[0, 100])
             st.plotly_chart(fig2, use_container_width=True)
         
         # New: MACD Chart
         st.subheader("MACD Momentum")
         fig3 = make_subplots(specs=[[{"secondary_y": False}]])
-        fig3.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), secondary_y=False)
-        fig3.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), secondary_y=False)
-        fig3.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), secondary_y=False)
-        fig3.update_layout(title="MACD Indicator (12,26,9)", xaxis_title="Date", yaxis_title="MACD")
+        fig3.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name='MACD', line=dict(color='blue')), secondary_y=False)
+        fig3.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), secondary_y=False)
+        fig3.add_trace(go.Bar(x=df['Datetime'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), secondary_y=False)
+        fig3.update_layout(title="MACD Indicator (12,26,9)", xaxis_title="Datetime", yaxis_title="MACD")
         st.plotly_chart(fig3, use_container_width=True)
         
-        # Data Table
-        st.subheader("Historical Data")
-        display_cols = ['Date', 'Rate', 'SMA_20', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']
+        # Data Table (Updated with OHLCV)
+        st.subheader("Intraday Data")
+        display_cols = ['Datetime', 'Rate', 'Open', 'High', 'Low', 'Volume', 'SMA_20', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']
         st.dataframe(df[display_cols].round(4), use_container_width=True)
 
 with tab3:
