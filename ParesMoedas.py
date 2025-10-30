@@ -54,7 +54,9 @@ def fetch_forex_data(pair, days):
             df = df.sort_values("Date").reset_index(drop=True)  # Ensure sorted
             return df
         else:
-            st.error("API error: " + data.get("error", "Unknown"))
+            # Fixed: Use f-string to handle potential dict error message
+            error_msg = data.get("error", "Unknown")
+            st.error(f"API error: {error_msg}")
             return pd.DataFrame()
     except Exception as e:
         st.error(f"Error fetching data: {e}")
@@ -197,7 +199,7 @@ if not df.empty and len(df) >= 30:
         display_cols.extend(['MACD', 'MACD_Signal', 'MACD_Hist'])
     st.dataframe(df[display_cols], use_container_width=True)
 else:
-    st.info("No data available or insufficient data for indicators (need at least 30 days). Check API or increase days.")
+    st.info("No data available or insufficient data for indicators (need at least 30 days). Check API or increase days. Note: For dates in the future, the API may return no data.")
 
 # Footer
 st.sidebar.markdown("---")
