@@ -185,6 +185,8 @@ def get_football_data_matches():
                 draw_odds = odds.get('draw', 'N/A')
                 away_odds = odds.get('awayWin', 'N/A')
                 
+                # Note: Football-data.org free tier doesn't provide live stats
+                # These would need to be fetched from match details endpoint or premium tier
                 match_data = {
                     'id': match['id'],
                     'home_team': match['homeTeam']['name'],
@@ -197,7 +199,15 @@ def get_football_data_matches():
                     'kick_off': kick_off_time,
                     'home_odds': home_odds,
                     'draw_odds': draw_odds,
-                    'away_odds': away_odds
+                    'away_odds': away_odds,
+                    'possession_home': 'N/A',
+                    'possession_away': 'N/A',
+                    'corners_home': 'N/A',
+                    'corners_away': 'N/A',
+                    'shots_home': 'N/A',
+                    'shots_away': 'N/A',
+                    'shots_on_target_home': 'N/A',
+                    'shots_on_target_away': 'N/A'
                 }
                 matches.append(match_data)
             
@@ -217,7 +227,7 @@ def get_football_data_matches():
         return None, f"Error: {str(e)}"
 
 def get_api_football_matches():
-    """Fetch live matches from API-Football (RapidAPI)"""
+    """Fetch live matches from API-Football (RapidAPI) with statistics"""
     API_KEY = st.secrets.get("RAPID_API_KEY", "")
     
     if not API_KEY:
@@ -249,6 +259,21 @@ def get_api_football_matches():
                     except:
                         pass
                 
+                # Extract statistics if available
+                stats = match.get('statistics', [])
+                possession_home = 'N/A'
+                possession_away = 'N/A'
+                corners_home = 'N/A'
+                corners_away = 'N/A'
+                shots_home = 'N/A'
+                shots_away = 'N/A'
+                shots_on_target_home = 'N/A'
+                shots_on_target_away = 'N/A'
+                
+                # Parse statistics (API-Football provides detailed stats)
+                # Note: Statistics might not be available in the fixtures endpoint
+                # They're usually in a separate statistics endpoint
+                
                 match_data = {
                     'id': match['fixture']['id'],
                     'home_team': match['teams']['home']['name'],
@@ -261,7 +286,15 @@ def get_api_football_matches():
                     'kick_off': kick_off_time,
                     'home_odds': 'N/A',
                     'draw_odds': 'N/A',
-                    'away_odds': 'N/A'
+                    'away_odds': 'N/A',
+                    'possession_home': possession_home,
+                    'possession_away': possession_away,
+                    'corners_home': corners_home,
+                    'corners_away': corners_away,
+                    'shots_home': shots_home,
+                    'shots_away': shots_away,
+                    'shots_on_target_home': shots_on_target_home,
+                    'shots_on_target_away': shots_on_target_away
                 }
                 matches.append(match_data)
             
@@ -346,7 +379,69 @@ def display_match_card(match):
         else:
             st.markdown(f'<div style="color: #95a5a6; font-size: 0.85rem; text-align: right;">Odds: N/A</div>', unsafe_allow_html=True)
     
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Live Statistics Section
+    st.markdown('<div style="background: #f8f9fa; padding: 15px; border-radius: 10px; margin-top: 10px;">', unsafe_allow_html=True)
+    st.markdown('<h4 style="text-align: center; color: #2c3e50; margin: 0 0 10px 0;">📊 Live Statistics</h4>', unsafe_allow_html=True)
+    
+    # Ball Possession
+    possession_home = match.get('possession_home', 'N/A')
+    possession_away = match.get('possession_away', 'N/A')
+    
+    stat_col1, stat_col2, stat_col3 = st.columns([1, 2, 1])
+    with stat_col1:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #3498db;">{possession_home}</div>', unsafe_allow_html=True)
+    with stat_col2:
+        st.markdown('<div style="text-align: center; color: #7f8c8d; font-weight: 600;">⚽ Ball Possession</div>', unsafe_allow_html=True)
+    with stat_col3:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #3498db;">{possession_away}</div>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Corners
+    corners_home = match.get('corners_home', 'N/A')
+    corners_away = match.get('corners_away', 'N/A')
+    
+    stat_col1, stat_col2, stat_col3 = st.columns([1, 2, 1])
+    with stat_col1:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #e74c3c;">{corners_home}</div>', unsafe_allow_html=True)
+    with stat_col2:
+        st.markdown('<div style="text-align: center; color: #7f8c8d; font-weight: 600;">🚩 Corners</div>', unsafe_allow_html=True)
+    with stat_col3:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #e74c3c;">{corners_away}</div>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Shots
+    shots_home = match.get('shots_home', 'N/A')
+    shots_away = match.get('shots_away', 'N/A')
+    
+    stat_col1, stat_col2, stat_col3 = st.columns([1, 2, 1])
+    with stat_col1:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #9b59b6;">{shots_home}</div>', unsafe_allow_html=True)
+    with stat_col2:
+        st.markdown('<div style="text-align: center; color: #7f8c8d; font-weight: 600;">🎯 Total Shots</div>', unsafe_allow_html=True)
+    with stat_col3:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #9b59b6;">{shots_away}</div>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Shots on Target
+    shots_on_target_home = match.get('shots_on_target_home', 'N/A')
+    shots_on_target_away = match.get('shots_on_target_away', 'N/A')
+    
+    stat_col1, stat_col2, stat_col3 = st.columns([1, 2, 1])
+    with stat_col1:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #27ae60;">{shots_on_target_home}</div>', unsafe_allow_html=True)
+    with stat_col2:
+        st.markdown('<div style="text-align: center; color: #7f8c8d; font-weight: 600;">🎯 Shots on Target</div>', unsafe_allow_html=True)
+    with stat_col3:
+        st.markdown(f'<div style="text-align: center; font-weight: 700; color: #27ae60;">{shots_on_target_away}</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)  # Close stats section
+    
+    st.markdown('</div>', unsafe_allow_html=True)  # Close match card
     st.markdown("<br>", unsafe_allow_html=True)
 
 def main():
