@@ -12,11 +12,12 @@ import threading
 from collections import defaultdict
 import plotly.express as px
 import plotly.graph_objects as go
+import json
 
 # Page configuration
 st.set_page_config(
-    page_title="Daily Soccer Odds Scanner",
-    page_icon="📅",
+    page_title="Live Match Alerts",
+    page_icon="🚨",
     layout="wide"
 )
 
@@ -25,57 +26,81 @@ st.markdown("""
 <style>
     .main-header {
         font-size: 2.5rem;
-        color: #1f77b4;
+        color: #dc3545;
         text-align: center;
         margin-bottom: 2rem;
     }
-    .day-section {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    .alert-critical {
+        background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
         color: white;
-        padding: 15px;
+        padding: 20px;
         border-radius: 10px;
         margin: 15px 0;
+        border: 3px solid #ff0000;
+        animation: pulse 2s infinite;
     }
-    .match-card {
-        background-color: #f8f9fa;
-        padding: 12px;
-        border-radius: 8px;
-        margin: 8px 0;
-        border-left: 4px solid #28a745;
-    }
-    .odds-badge {
-        background-color: #17a2b8;
+    .alert-warning {
+        background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);
         color: white;
-        padding: 4px 8px;
-        border-radius: 12px;
-        font-size: 0.8em;
-        margin: 2px;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        border: 2px solid #ff9800;
     }
-    .value-bet {
+    .match-live {
         background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         color: white;
-        padding: 8px;
-        border-radius: 6px;
-        margin: 4px 0;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
     }
-    .league-header {
-        background-color: #343a40;
+    .match-finished {
+        background-color: #6c757d;
         color: white;
-        padding: 10px;
-        border-radius: 5px;
-        margin: 10px 0;
+        padding: 12px;
+        border-radius: 6px;
+        margin: 8px 0;
     }
-    .scraping-progress {
-        margin: 10px 0;
+    .team-favorite {
+        background-color: #28a745;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .team-underdog {
+        background-color: #dc3545;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.02); }
+        100% { transform: scale(1); }
+    }
+    .notification-badge {
+        background-color: #dc3545;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        margin-left: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-class DailyOddsScanner:
+class LiveAlertSystem:
     def __init__(self):
         self.ua = UserAgent()
         self.session = requests.Session()
-        self.scraping_stats = defaultdict(int)
+        self.tracked_matches = {}
+        self.alert_history = []
+        self.favorite_teams = set()
         
     def get_headers(self):
         return {
@@ -87,625 +112,560 @@ class DailyOddsScanner:
             'Upgrade-Insecure-Requests': '1',
         }
     
-    def scrape_oddsportal_daily(self, days_ahead=7):
-        """Scan OddsPortal for matches day by day"""
-        base_url = "https://www.oddsportal.com/matches/soccer"
-        all_daily_matches = {}
+    def add_favorite_team(self, team_name):
+        """Add team to favorites list"""
+        self.favorite_teams.add(team_name.lower())
         
-        for days in range(days_ahead + 1):
-            target_date = datetime.now() + timedelta(days=days)
-            date_str = target_date.strftime("%Y%m%d")
-            url = f"{base_url}/{target_date.strftime('%Y%m%d')}/"
-            
-            day_matches = self._scrape_oddsportal_date(url, target_date)
-            if day_matches:
-                all_daily_matches[target_date.strftime("%Y-%m-%d")] = day_matches
-            
-            time.sleep(1)  # Be respectful
-            
-        return all_daily_matches
+    def remove_favorite_team(self, team_name):
+        """Remove team from favorites list"""
+        self.favorite_teams.discard(team_name.lower())
     
-    def _scrape_oddsportal_date(self, url, target_date):
-        """Scrape matches for a specific date from OddsPortal"""
+    def scrape_live_matches(self):
+        """Scrape live matches from multiple sources"""
+        live_matches = []
+        
         try:
-            headers = self.get_headers()
-            response = self.session.get(url, headers=headers, timeout=15)
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Try Flashscore first for live matches
+            flashscore_matches = self._scrape_flashscore_live()
+            live_matches.extend(flashscore_matches)
             
-            day_matches = []
-            
-            # Find league sections
-            league_sections = soup.find_all('div', class_=re.compile('eventRow'))
-            
-            for section in league_sections:
-                try:
-                    # Extract league name
-                    league_element = section.find_previous('div', class_=re.compile('title'))
-                    league_name = league_element.get_text(strip=True) if league_element else "Unknown League"
-                    
-                    # Extract match details
-                    match_elements = section.find_all('tr', class_=re.compile('deactivate'))
-                    
-                    for match_element in match_elements:
-                        try:
-                            # Team names
-                            teams_element = match_element.find('td', class_=re.compile('name'))
-                            if not teams_element:
-                                continue
-                                
-                            teams_text = teams_element.get_text(strip=True)
-                            if ' - ' in teams_text:
-                                home_team, away_team = teams_text.split(' - ')
-                            else:
-                                continue
-                            
-                            # Match time
-                            time_element = match_element.find('td', class_=re.compile('time'))
-                            match_time = time_element.get_text(strip=True) if time_element else "TBD"
-                            
-                            # Odds
-                            odds_elements = match_element.find_all('div', class_=re.compile('odds'))
-                            if len(odds_elements) >= 3:
-                                home_odds = self.parse_odds(odds_elements[0].get_text())
-                                draw_odds = self.parse_odds(odds_elements[1].get_text())
-                                away_odds = self.parse_odds(odds_elements[2].get_text())
-                                
-                                match_data = {
-                                    'league': league_name,
-                                    'home_team': home_team.strip(),
-                                    'away_team': away_team.strip(),
-                                    'match_time': match_time,
-                                    'home_odds': home_odds,
-                                    'draw_odds': draw_odds,
-                                    'away_odds': away_odds,
-                                    'date': target_date.strftime("%Y-%m-%d"),
-                                    'timestamp': datetime.now(),
-                                    'source': 'OddsPortal'
-                                }
-                                
-                                day_matches.append(match_data)
-                                self.scraping_stats['matches_found'] += 1
-                                
-                        except Exception as e:
-                            continue
-                            
-                except Exception as e:
-                    continue
-            
-            return day_matches
+            # Try Sofascore as backup
+            sofascore_matches = self._scrape_sofascore_live()
+            live_matches.extend(sofascore_matches)
             
         except Exception as e:
-            st.error(f"Error scraping {url}: {str(e)}")
-            return []
+            st.error(f"Error scraping live matches: {str(e)}")
+            
+        return live_matches
     
-    def scrape_betexplorer_daily(self, days_ahead=7):
-        """Scan BetExplorer for matches day by day"""
-        all_daily_matches = {}
-        
-        for days in range(days_ahead + 1):
-            target_date = datetime.now() + timedelta(days=days)
-            date_str = target_date.strftime("%Y-%m-%d")
-            
-            # BetExplorer URL structure for specific dates
-            url = f"https://www.betexplorer.com/soccer/?date={date_str}"
-            
-            day_matches = self._scrape_betexplorer_date(url, target_date)
-            if day_matches:
-                all_daily_matches[target_date.strftime("%Y-%m-%d")] = day_matches
-            
-            time.sleep(1)
-            
-        return all_daily_matches
-    
-    def _scrape_betexplorer_date(self, url, target_date):
-        """Scrape matches for a specific date from BetExplorer"""
+    def _scrape_flashscore_live(self):
+        """Scrape live matches from Flashscore"""
         try:
+            url = "https://www.flashscore.com/"
             headers = self.get_headers()
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self.session.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            day_matches = []
+            live_matches = []
             
-            # Find match tables
-            match_tables = soup.find_all('table', class_='table-main')
+            # Look for live match elements
+            live_sections = soup.find_all('div', class_=re.compile('event__match'))
             
-            for table in match_tables:
+            for match in live_sections[:20]:  # Limit to first 20 matches
                 try:
-                    # Get league name from previous h3
-                    league_header = table.find_previous('h3')
-                    league_name = league_header.get_text(strip=True) if league_header else "Unknown League"
+                    # Extract team names
+                    home_team_elem = match.find('div', class_=re.compile('event__participant--home'))
+                    away_team_elem = match.find('div', class_=re.compile('event__participant--away'))
                     
-                    # Process matches in this league
-                    rows = table.find_all('tr')[1:]  # Skip header row
+                    if not home_team_elem or not away_team_elem:
+                        continue
                     
-                    for row in rows:
-                        try:
-                            teams_cell = row.find('td', class_='table-main__tt')
-                            if not teams_cell:
-                                continue
-                                
-                            teams_link = teams_cell.find('a')
-                            if teams_link:
-                                teams_text = teams_link.get('title', '') or teams_link.get_text(strip=True)
-                            else:
-                                teams_text = teams_cell.get_text(strip=True)
-                            
-                            if ' - ' in teams_text:
-                                home_team, away_team = teams_text.split(' - ')
-                            else:
-                                continue
-                            
-                            # Match time
-                            time_cell = row.find('td', class_='table-main__time')
-                            match_time = time_cell.get_text(strip=True) if time_cell else "TBD"
-                            
-                            # Odds
-                            odds_cells = row.find_all('td', class_=re.compile('odds-'))
-                            if len(odds_cells) >= 3:
-                                home_odds = self.parse_odds(odds_cells[0].get_text())
-                                draw_odds = self.parse_odds(odds_cells[1].get_text())
-                                away_odds = self.parse_odds(odds_cells[2].get_text())
-                                
-                                match_data = {
-                                    'league': league_name,
-                                    'home_team': home_team.strip(),
-                                    'away_team': away_team.strip(),
-                                    'match_time': match_time,
-                                    'home_odds': home_odds,
-                                    'draw_odds': draw_odds,
-                                    'away_odds': away_odds,
-                                    'date': target_date.strftime("%Y-%m-%d"),
-                                    'timestamp': datetime.now(),
-                                    'source': 'BetExplorer'
-                                }
-                                
-                                day_matches.append(match_data)
-                                self.scraping_stats['matches_found'] += 1
-                                
-                        except Exception as e:
-                            continue
-                            
-                except Exception as e:
-                    continue
-            
-            return day_matches
-            
-        except Exception as e:
-            st.error(f"Error scraping BetExplorer {url}: {str(e)}")
-            return []
-    
-    def parse_odds(self, odds_text):
-        """Parse odds text to float"""
-        try:
-            cleaned = re.sub(r'[^\d.,]', '', odds_text)
-            cleaned = cleaned.replace(',', '.')
-            return float(cleaned) if cleaned else 0.0
-        except:
-            return 0.0
-    
-    def scan_all_sources_daily(self, days_ahead=7):
-        """Scan all sources for daily matches"""
-        all_matches = {}
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future_oddsportal = executor.submit(self.scrape_oddsportal_daily, days_ahead)
-            future_betexplorer = executor.submit(self.scrape_betexplorer_daily, days_ahead)
-            
-            try:
-                oddsportal_matches = future_oddsportal.result(timeout=60)
-                all_matches.update(oddsportal_matches)
-            except Exception as e:
-                st.error(f"OddsPortal scanning failed: {str(e)}")
-            
-            try:
-                betexplorer_matches = future_betexplorer.result(timeout=60)
-                # Merge BetExplorer matches
-                for date, matches in betexplorer_matches.items():
-                    if date in all_matches:
-                        all_matches[date].extend(matches)
+                    home_team = home_team_elem.get_text(strip=True)
+                    away_team = away_team_elem.get_text(strip=True)
+                    
+                    # Extract score
+                    score_elem = match.find('div', class_=re.compile('event__score'))
+                    if score_elem:
+                        score_text = score_elem.get_text(strip=True)
+                        if '-' in score_text:
+                            home_score, away_score = map(int, score_text.split('-'))
+                        else:
+                            home_score, away_score = 0, 0
                     else:
-                        all_matches[date] = matches
-            except Exception as e:
-                st.error(f"BetExplorer scanning failed: {str(e)}")
-        
-        return all_matches
-    
-    def find_best_odds_daily(self, daily_matches):
-        """Find best odds for each match across sources"""
-        best_odds_by_date = {}
-        
-        for date, matches in daily_matches.items():
-            # Group by match
-            matches_dict = {}
-            for match in matches:
-                match_key = f"{match['league']} | {match['home_team']} vs {match['away_team']}"
-                if match_key not in matches_dict:
-                    matches_dict[match_key] = []
-                matches_dict[match_key].append(match)
-            
-            # Find best odds for each match
-            best_matches = []
-            for match_key, match_list in matches_dict.items():
-                if len(match_list) > 0:
-                    best_home = max(match_list, key=lambda x: x['home_odds'])
-                    best_draw = max(match_list, key=lambda x: x['draw_odds'])
-                    best_away = max(match_list, key=lambda x: x['away_odds'])
+                        home_score, away_score = 0, 0
                     
-                    best_match = {
-                        'match': match_key,
-                        'league': match_list[0]['league'],
-                        'home_team': match_list[0]['home_team'],
-                        'away_team': match_list[0]['away_team'],
-                        'match_time': match_list[0]['match_time'],
-                        'best_home_odds': best_home['home_odds'],
-                        'best_home_source': best_home['source'],
-                        'best_draw_odds': best_draw['draw_odds'],
-                        'best_draw_source': best_draw['source'],
-                        'best_away_odds': best_away['away_odds'],
-                        'best_away_source': best_away['source'],
-                        'sources_count': len(match_list),
-                        'date': date
+                    # Extract match time or status
+                    time_elem = match.find('div', class_=re.compile('event__stage'))
+                    match_time = time_elem.get_text(strip=True) if time_elem else "LIVE"
+                    
+                    # Determine favorite based on common knowledge (you can enhance this with odds data)
+                    favorite = self._determine_favorite(home_team, away_team)
+                    
+                    match_data = {
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'home_score': home_score,
+                        'away_score': away_score,
+                        'status': 'LIVE',
+                        'match_time': match_time,
+                        'favorite_team': favorite,
+                        'favorite_losing': self._is_favorite_losing(home_team, away_team, home_score, away_score, favorite),
+                        'timestamp': datetime.now(),
+                        'source': 'Flashscore'
                     }
                     
-                    best_matches.append(best_match)
+                    live_matches.append(match_data)
+                    
+                except Exception as e:
+                    continue
+                    
+            return live_matches
             
-            best_odds_by_date[date] = best_matches
-        
-        return best_odds_by_date
+        except Exception as e:
+            st.error(f"Error scraping Flashscore: {str(e)}")
+            return []
     
-    def calculate_value_bets_daily(self, best_odds_daily):
-        """Calculate value bets for each day"""
-        value_bets_by_date = {}
-        
-        for date, matches in best_odds_daily.items():
-            value_bets = []
+    def _scrape_sofascore_live(self):
+        """Scrape live matches from Sofascore"""
+        try:
+            # Sofascore API endpoint for live matches
+            url = "https://api.sofascore.com/api/v1/sport/football/events/live"
+            headers = {
+                'User-Agent': self.ua.random,
+                'Accept': 'application/json',
+            }
             
-            for match in matches:
-                # Simple value calculation based on odds
-                avg_odds = (match['best_home_odds'] + match['best_draw_odds'] + match['best_away_odds']) / 3
-                
-                # Value threshold
-                threshold = 0.15
-                
-                if match['best_home_odds'] > avg_odds + threshold:
-                    value_bets.append({
-                        'match': match['match'],
-                        'bet_type': 'Home Win',
-                        'odds': match['best_home_odds'],
-                        'source': match['best_home_source'],
-                        'value': match['best_home_odds'] - avg_odds,
-                        'time': match['match_time']
-                    })
-                
-                if match['best_draw_odds'] > avg_odds + threshold:
-                    value_bets.append({
-                        'match': match['match'],
-                        'bet_type': 'Draw',
-                        'odds': match['best_draw_odds'],
-                        'source': match['best_draw_source'],
-                        'value': match['best_draw_odds'] - avg_odds,
-                        'time': match['match_time']
-                    })
-                
-                if match['best_away_odds'] > avg_odds + threshold:
-                    value_bets.append({
-                        'match': match['match'],
-                        'bet_type': 'Away Win',
-                        'odds': match['best_away_odds'],
-                        'source': match['best_away_source'],
-                        'value': match['best_away_odds'] - avg_odds,
-                        'time': match['match_time']
-                    })
+            response = self.session.get(url, headers=headers, timeout=10)
             
-            value_bets_by_date[date] = sorted(value_bets, key=lambda x: x['value'], reverse=True)
+            if response.status_code == 200:
+                data = response.json()
+                live_matches = []
+                
+                for event in data.get('events', [])[:15]:  # Limit to 15 matches
+                    try:
+                        home_team = event['homeTeam']['name']
+                        away_team = event['awayTeam']['name']
+                        home_score = event['homeScore'].get('current', 0)
+                        away_score = event['awayScore'].get('current', 0)
+                        
+                        # Determine status
+                        status = event.get('status', {})
+                        match_time = status.get('description', 'LIVE')
+                        
+                        favorite = self._determine_favorite(home_team, away_team)
+                        
+                        match_data = {
+                            'home_team': home_team,
+                            'away_team': away_team,
+                            'home_score': home_score,
+                            'away_score': away_score,
+                            'status': 'LIVE',
+                            'match_time': match_time,
+                            'favorite_team': favorite,
+                            'favorite_losing': self._is_favorite_losing(home_team, away_team, home_score, away_score, favorite),
+                            'timestamp': datetime.now(),
+                            'source': 'Sofascore'
+                        }
+                        
+                        live_matches.append(match_data)
+                        
+                    except Exception as e:
+                        continue
+                
+                return live_matches
+            return []
+            
+        except Exception as e:
+            return []
+    
+    def _determine_favorite(self, home_team, away_team):
+        """Determine which team is the favorite (simplified - enhance with odds data)"""
+        # Common big teams (you can expand this list)
+        big_teams = {
+            'manchester city', 'manchester united', 'liverpool', 'chelsea', 'arsenal', 'tottenham',
+            'real madrid', 'barcelona', 'atletico madrid', 'sevilla',
+            'bayern munich', 'dortmund', 'leipzig',
+            'juventus', 'inter', 'milan', 'napoli', 'roma',
+            'psg', 'lyon', 'marseille',
+            'benfica', 'porto', 'sporting'
+        }
         
-        return value_bets_by_date
+        home_lower = home_team.lower()
+        away_lower = away_team.lower()
+        
+        # Check if either team is in our favorites list
+        if home_lower in self.favorite_teams:
+            return home_team
+        elif away_lower in self.favorite_teams:
+            return away_team
+        
+        # Fallback to big teams list
+        if any(team in home_lower for team in big_teams):
+            return home_team
+        elif any(team in away_lower for team in big_teams):
+            return away_team
+        
+        # Default to home team (home advantage)
+        return home_team
+    
+    def _is_favorite_losing(self, home_team, away_team, home_score, away_score, favorite):
+        """Check if the favorite team is currently losing"""
+        if favorite == home_team:
+            return home_score < away_score
+        elif favorite == away_team:
+            return away_score < home_score
+        return False
+    
+    def monitor_matches(self, matches):
+        """Monitor matches for alert conditions"""
+        alerts = []
+        
+        for match in matches:
+            match_key = f"{match['home_team']} vs {match['away_team']}"
+            
+            # Check if this is a new match or score has changed
+            if match_key not in self.tracked_matches:
+                self.tracked_matches[match_key] = match
+            else:
+                # Check if score changed
+                old_match = self.tracked_matches[match_key]
+                if (old_match['home_score'] != match['home_score'] or 
+                    old_match['away_score'] != match['away_score']):
+                    self.tracked_matches[match_key] = match
+                    
+                    # Check for favorite losing alert
+                    if match['favorite_losing']:
+                        alert = self._create_alert(match, "FAVORITE_LOSING")
+                        alerts.append(alert)
+                        self.alert_history.append(alert)
+                    
+                    # Check for favorite comeback (was losing, now not losing)
+                    if (old_match['favorite_losing'] and 
+                        not match['favorite_losing'] and 
+                        match['home_score'] + match['away_score'] > 0):
+                        alert = self._create_alert(match, "FAVORITE_COMEBACK")
+                        alerts.append(alert)
+                        self.alert_history.append(alert)
+            
+            # Initial alert for favorite losing
+            if (match_key not in self.tracked_matches and 
+                match['favorite_losing'] and 
+                match['home_score'] + match['away_score'] > 0):
+                alert = self._create_alert(match, "FAVORITE_LOSING")
+                alerts.append(alert)
+                self.alert_history.append(alert)
+                self.tracked_matches[match_key] = match
+        
+        return alerts
+    
+    def _create_alert(self, match, alert_type):
+        """Create alert object"""
+        if alert_type == "FAVORITE_LOSING":
+            message = f"🚨 {match['favorite_team']} is LOSING! {match['home_team']} {match['home_score']}-{match['away_score']} {match['away_team']}"
+            severity = "CRITICAL"
+        elif alert_type == "FAVORITE_COMEBACK":
+            message = f"🎉 {match['favorite_team']} has EQUALIZED! {match['home_team']} {match['home_score']}-{match['away_score']} {match['away_team']}"
+            severity = "SUCCESS"
+        else:
+            message = f"Match update: {match['home_team']} {match['home_score']}-{match['away_score']} {match['away_team']}"
+            severity = "INFO"
+        
+        return {
+            'timestamp': datetime.now(),
+            'match': f"{match['home_team']} vs {match['away_team']}",
+            'message': message,
+            'severity': severity,
+            'score': f"{match['home_score']}-{match['away_score']}",
+            'favorite_team': match['favorite_team'],
+            'alert_type': alert_type
+        }
 
 def main():
-    st.markdown('<h1 class="main-header">📅 Daily Soccer Odds Scanner</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🚨 Live Match Alert System</h1>', unsafe_allow_html=True)
     
-    # Initialize scanner
-    scanner = DailyOddsScanner()
+    # Initialize alert system
+    if 'alert_system' not in st.session_state:
+        st.session_state.alert_system = LiveAlertSystem()
+    
+    alert_system = st.session_state.alert_system
     
     # Sidebar
-    st.sidebar.title("⚙️ Scanner Settings")
+    st.sidebar.title("⚙️ Alert Settings")
     
-    # Date range selection
-    st.sidebar.subheader("Scan Range")
-    days_ahead = st.sidebar.slider("Days to scan ahead", 1, 14, 7)
+    # Favorite teams management
+    st.sidebar.subheader("⭐ Favorite Teams")
     
-    # Sources selection
-    st.sidebar.subheader("Data Sources")
-    use_oddsportal = st.sidebar.checkbox("OddsPortal", value=True)
-    use_betexplorer = st.sidebar.checkbox("BetExplorer", value=True)
+    col1, col2 = st.sidebar.columns(2)
     
-    # Auto-scan options
-    st.sidebar.subheader("Auto Scan")
-    auto_scan = st.sidebar.checkbox("Auto-scan on load", value=False)
-    refresh_interval = st.sidebar.selectbox("Refresh interval", [30, 60, 120, 300], index=1)
+    with col1:
+        new_team = st.text_input("Add Favorite Team")
+        if st.button("Add Team") and new_team:
+            alert_system.add_favorite_team(new_team)
+            st.success(f"Added {new_team} to favorites!")
+    
+    with col2:
+        if alert_system.favorite_teams:
+            team_to_remove = st.selectbox("Remove Team", list(alert_system.favorite_teams))
+            if st.button("Remove Team"):
+                alert_system.remove_favorite_team(team_to_remove)
+                st.success(f"Removed {team_to_remove} from favorites!")
+    
+    # Display favorite teams
+    if alert_system.favorite_teams:
+        st.sidebar.write("**Your Favorite Teams:**")
+        for team in sorted(alert_system.favorite_teams):
+            st.sidebar.write(f"⭐ {team.title()}")
+    else:
+        st.sidebar.info("Add your favorite teams to get alerts when they're losing!")
+    
+    # Monitoring settings
+    st.sidebar.subheader("🔔 Monitoring")
+    auto_refresh = st.sidebar.checkbox("Auto-refresh Live Matches", value=True)
+    refresh_interval = st.sidebar.slider("Refresh Interval (seconds)", 10, 120, 30)
+    
+    # Alert filters
+    st.sidebar.subheader("📋 Alert Filters")
+    show_comeback_alerts = st.sidebar.checkbox("Show Comeback Alerts", value=True)
+    only_favorites = st.sidebar.checkbox("Only My Favorite Teams", value=False)
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Daily Overview", "🎯 Value Bets", "📈 Match Details", "⚡ Quick Scan"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🚨 Live Alerts", "📊 Live Matches", "📈 Alert History", "⚙️ Settings"])
     
-    # Auto-scan logic
-    if auto_scan or st.button("Start Daily Scan", type="primary"):
-        perform_daily_scan(scanner, days_ahead, tab1, tab2, tab3, tab4)
+    # Auto-refresh logic
+    if auto_refresh:
+        perform_live_monitoring(alert_system, tab1, tab2, tab3, only_favorites, show_comeback_alerts)
+        time.sleep(refresh_interval)
+        st.rerun()
+    else:
+        if st.button("🔄 Scan Live Matches", type="primary"):
+            perform_live_monitoring(alert_system, tab1, tab2, tab3, only_favorites, show_comeback_alerts)
     
     with tab4:
-        show_quick_scan(scanner)
+        show_settings(alert_system)
 
-def perform_daily_scan(scanner, days_ahead, tab1, tab2, tab3, tab4):
-    """Perform the daily scanning process"""
+def perform_live_monitoring(alert_system, tab1, tab2, tab3, only_favorites, show_comeback_alerts):
+    """Perform live monitoring and display results"""
     
-    with st.spinner(f"🔄 Scanning matches for next {days_ahead} days..."):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    with st.spinner("🔍 Scanning live matches..."):
+        # Get live matches
+        live_matches = alert_system.scrape_live_matches()
         
-        # Scan all sources
-        status_text.text("📡 Connecting to data sources...")
-        all_daily_matches = scanner.scan_all_sources_daily(days_ahead)
-        progress_bar.progress(33)
-        
-        if not all_daily_matches:
-            st.error("❌ No matches found. Please check your connection or try different sources.")
-            return
-        
-        status_text.text("🎯 Analyzing best odds...")
-        best_odds_daily = scanner.find_best_odds_daily(all_daily_matches)
-        progress_bar.progress(66)
-        
-        status_text.text("💰 Calculating value bets...")
-        value_bets_daily = scanner.calculate_value_bets_daily(best_odds_daily)
-        progress_bar.progress(100)
-        
-        status_text.text("✅ Scan completed!")
+        # Monitor for alerts
+        new_alerts = alert_system.monitor_matches(live_matches)
         
         # Store in session state
-        st.session_state.all_daily_matches = all_daily_matches
-        st.session_state.best_odds_daily = best_odds_daily
-        st.session_state.value_bets_daily = value_bets_daily
-        st.session_state.scanner_stats = scanner.scraping_stats
+        st.session_state.live_matches = live_matches
+        st.session_state.new_alerts = new_alerts
     
-    # Display results in respective tabs
+    # Display in respective tabs
     with tab1:
-        display_daily_overview(best_odds_daily)
+        display_live_alerts(new_alerts, only_favorites, show_comeback_alerts)
     
     with tab2:
-        display_value_bets(value_bets_daily)
+        display_live_matches(live_matches)
     
     with tab3:
-        display_match_details(all_daily_matches)
+        display_alert_history(alert_system.alert_history)
 
-def display_daily_overview(best_odds_daily):
-    """Display daily overview of matches and odds"""
+def display_live_alerts(alerts, only_favorites, show_comeback_alerts):
+    """Display live alerts"""
     
-    st.header("📊 Daily Matches Overview")
+    st.header("🚨 Active Alerts")
     
-    if not best_odds_daily:
-        st.info("No match data available. Please run the scanner first.")
+    # Filter alerts
+    filtered_alerts = []
+    for alert in alerts:
+        if only_favorites and alert['favorite_team'].lower() not in st.session_state.alert_system.favorite_teams:
+            continue
+        if not show_comeback_alerts and alert['alert_type'] == "FAVORITE_COMEBACK":
+            continue
+        filtered_alerts.append(alert)
+    
+    if not filtered_alerts:
+        st.info("📊 No new alerts. All favorites are winning or matches haven't started.")
         return
     
-    # Summary statistics
-    total_matches = sum(len(matches) for matches in best_odds_daily.values())
-    st.success(f"📈 Found {total_matches} matches across {len(best_odds_daily)} days")
+    # Display critical alerts first
+    critical_alerts = [a for a in filtered_alerts if a['severity'] == "CRITICAL"]
+    success_alerts = [a for a in filtered_alerts if a['severity'] == "SUCCESS"]
+    info_alerts = [a for a in filtered_alerts if a['severity'] == "INFO"]
     
-    # Display by date
-    for date, matches in sorted(best_odds_daily.items()):
+    # Show alert count
+    total_alerts = len(filtered_alerts)
+    st.markdown(f"### 🔔 {total_alerts} New Alert{'s' if total_alerts != 1 else ''}")
+    
+    # Display critical alerts (favorite losing)
+    for alert in critical_alerts:
         st.markdown(f"""
-        <div class="day-section">
-            <h3>📅 {date} - {len(matches)} matches</h3>
+        <div class="alert-critical">
+            <h3>🚨 CRITICAL ALERT</h3>
+            <p><strong>{alert['message']}</strong></p>
+            <p>⏰ {alert['timestamp'].strftime('%H:%M:%S')}</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Group by league
-        leagues = {}
-        for match in matches:
-            if match['league'] not in leagues:
-                leagues[match['league']] = []
-            leagues[match['league']].append(match)
-        
-        for league, league_matches in leagues.items():
-            st.markdown(f"""
-            <div class="league-header">
-                <h4>🏆 {league}</h4>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            for match in league_matches:
-                with st.container():
-                    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
-                    
-                    with col1:
-                        st.write(f"**{match['home_team']} vs {match['away_team']}**")
-                        st.caption(f"🕒 {match['match_time']} | 📊 {match['sources_count']} sources")
-                    
-                    with col2:
-                        st.markdown(f"""
-                        <div class="odds-badge">
-                            🏠 {match['best_home_odds']}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.caption(match['best_home_source'])
-                    
-                    with col3:
-                        st.markdown(f"""
-                        <div class="odds-badge">
-                            ⚖ {match['best_draw_odds']}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.caption(match['best_draw_source'])
-                    
-                    with col4:
-                        st.markdown(f"""
-                        <div class="odds-badge">
-                            ✈️ {match['best_away_odds']}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        st.caption(match['best_away_source'])
-                    
-                    with col5:
-                        # Show if this match has value bets
-                        max_odds = max(match['best_home_odds'], match['best_draw_odds'], match['best_away_odds'])
-                        avg_odds = (match['best_home_odds'] + match['best_draw_odds'] + match['best_away_odds']) / 3
-                        if max_odds > avg_odds + 0.2:
-                            st.success("💰 Value")
-                        else:
-                            st.info("📊 Normal")
+        # Add audio alert (browser notification)
+        st.components.v1.html(f"""
+        <script>
+            if (Notification.permission === "granted") {{
+                new Notification("Favorite Losing!", {{
+                    body: "{alert['message']}",
+                    icon: "https://cdn-icons-png.flaticon.com/512/179/179158.png"
+                }});
+            }}
+        </script>
+        """)
+    
+    # Display success alerts (comebacks)
+    for alert in success_alerts:
+        st.markdown(f"""
+        <div class="alert-warning">
+            <h3>🎉 COMEBACK ALERT</h3>
+            <p><strong>{alert['message']}</strong></p>
+            <p>⏰ {alert['timestamp'].strftime('%H:%M:%S')}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Display info alerts
+    for alert in info_alerts:
+        st.info(f"**{alert['message']}** - {alert['timestamp'].strftime('%H:%M:%S')}")
 
-def display_value_bets(value_bets_daily):
-    """Display value bets organized by date"""
+def display_live_matches(live_matches):
+    """Display all live matches"""
     
-    st.header("💰 Daily Value Bets")
+    st.header("📊 Live Matches Monitor")
     
-    if not value_bets_daily:
-        st.info("No value bets found. Please run the scanner first.")
+    if not live_matches:
+        st.info("No live matches found. Matches may have ended or there might be connection issues.")
         return
-    
-    total_value_bets = sum(len(bets) for bets in value_bets_daily.values())
-    
-    if total_value_bets == 0:
-        st.info("🎯 No significant value bets found in this scan.")
-        return
-    
-    st.success(f"🎯 Found {total_value_bets} value bet opportunities!")
-    
-    for date, value_bets in sorted(value_bets_daily.items()):
-        if value_bets:
-            st.markdown(f"""
-            <div class="day-section">
-                <h3>📅 {date} - {len(value_bets)} value bets</h3>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            for bet in value_bets:
-                st.markdown(f"""
-                <div class="value-bet">
-                    <h4>🎯 {bet['match']}</h4>
-                    <p><strong>Bet:</strong> {bet['bet_type']} @ {bet['odds']:.2f}</p>
-                    <p><strong>Source:</strong> {bet['source']} | <strong>Time:</strong> {bet['time']}</p>
-                    <p><strong>Value:</strong> +{bet['value']:.3f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-def display_match_details(all_daily_matches):
-    """Display detailed match information"""
-    
-    st.header("📈 Match Details & Analysis")
-    
-    if not all_daily_matches:
-        st.info("No match data available. Please run the scanner first.")
-        return
-    
-    # Create comprehensive DataFrame
-    all_matches_list = []
-    for date, matches in all_daily_matches.items():
-        for match in matches:
-            match['full_date'] = date
-            all_matches_list.append(match)
-    
-    df = pd.DataFrame(all_matches_list)
-    
-    if df.empty:
-        st.info("No detailed match data available.")
-        return
-    
-    # Filters
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        selected_date = st.selectbox("Select Date", options=sorted(df['full_date'].unique()))
-    
-    with col2:
-        selected_league = st.selectbox("Select League", options=["All"] + sorted(df['league'].unique()))
-    
-    with col3:
-        min_odds = st.slider("Minimum Odds", 1.0, 10.0, 1.5, 0.1)
-    
-    # Filter data
-    filtered_df = df[df['full_date'] == selected_date]
-    if selected_league != "All":
-        filtered_df = filtered_df[filtered_df['league'] == selected_league]
-    
-    filtered_df = filtered_df[
-        (filtered_df['home_odds'] >= min_odds) | 
-        (filtered_df['draw_odds'] >= min_odds) | 
-        (filtered_df['away_odds'] >= min_odds)
-    ]
-    
-    # Display filtered matches
-    st.subheader(f"Matches on {selected_date}")
-    
-    if filtered_df.empty:
-        st.info("No matches match the selected criteria.")
-        return
-    
-    # Create a display-friendly table
-    display_df = filtered_df[['league', 'home_team', 'away_team', 'match_time', 'home_odds', 'draw_odds', 'away_odds', 'source']]
-    display_df = display_df.sort_values(['league', 'match_time'])
-    
-    st.dataframe(display_df, use_container_width=True)
     
     # Statistics
-    st.subheader("📊 Daily Statistics")
-    col1, col2, col3, col4 = st.columns(4)
+    total_matches = len(live_matches)
+    favorites_losing = sum(1 for m in live_matches if m['favorite_losing'])
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Live Matches", total_matches)
+    with col2:
+        st.metric("Favorites Losing", favorites_losing)
+    with col3:
+        st.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
+    
+    # Display matches
+    for match in live_matches:
+        # Determine alert status
+        if match['favorite_losing']:
+            alert_class = "alert-critical"
+            status_icon = "🚨"
+        else:
+            alert_class = "match-live"
+            status_icon = "✅"
+        
+        with st.container():
+            col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
+            
+            with col1:
+                st.write(f"**{match['home_team']}**")
+                if match['favorite_team'] == match['home_team']:
+                    st.markdown('<span class="team-favorite">FAVORITE</span>', unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(f"<h2>{match['home_score']} - {match['away_score']}</h2>", unsafe_allow_html=True)
+                st.caption(match['match_time'])
+            
+            with col3:
+                st.write(f"**{match['away_team']}**")
+                if match['favorite_team'] == match['away_team']:
+                    st.markdown('<span class="team-favorite">FAVORITE</span>', unsafe_allow_html=True)
+            
+            with col4:
+                st.write(status_icon)
+                st.caption(match['source'])
+                if match['favorite_losing']:
+                    st.error("FAVORITE LOSING!")
+            
+            st.markdown("---")
+
+def display_alert_history(alert_history):
+    """Display alert history"""
+    
+    st.header("📈 Alert History")
+    
+    if not alert_history:
+        st.info("No alert history yet. Alerts will appear here when favorites start losing.")
+        return
+    
+    # Show recent alerts (last 50)
+    recent_alerts = alert_history[-50:]
+    
+    st.subheader(f"Last {len(recent_alerts)} Alerts")
+    
+    for alert in reversed(recent_alerts):
+        if alert['severity'] == "CRITICAL":
+            st.error(f"**{alert['timestamp'].strftime('%H:%M:%S')}** - {alert['message']}")
+        elif alert['severity'] == "SUCCESS":
+            st.success(f"**{alert['timestamp'].strftime('%H:%M:%S')}** - {alert['message']}")
+        else:
+            st.info(f"**{alert['timestamp'].strftime('%H:%M:%S')}** - {alert['message']}")
+    
+    # Statistics
+    st.subheader("📊 Alert Statistics")
+    
+    today = datetime.now().date()
+    today_alerts = [a for a in alert_history if a['timestamp'].date() == today]
+    critical_today = len([a for a in today_alerts if a['severity'] == "CRITICAL"])
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Alerts", len(alert_history))
+    with col2:
+        st.metric("Today's Alerts", len(today_alerts))
+    with col3:
+        st.metric("Critical Today", critical_today)
+
+def show_settings(alert_system):
+    """Display settings and instructions"""
+    
+    st.header("⚙️ System Settings & Instructions")
+    
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Total Matches", len(filtered_df))
+        st.subheader("🔧 Configuration")
+        
+        st.info("""
+        **How to set up:**
+        1. Add your favorite teams in the sidebar
+        2. Enable auto-refresh for live monitoring
+        3. Set alert preferences
+        4. Keep the app running for continuous monitoring
+        """)
+        
+        # Notification permissions
+        st.subheader("🔔 Browser Notifications")
+        st.write("Enable browser notifications for audible alerts:")
+        
+        if st.button("Enable Notifications"):
+            st.components.v1.html("""
+            <script>
+                if ("Notification" in window) {
+                    Notification.requestPermission().then(function(permission) {
+                        if (permission === "granted") {
+                            alert("Notifications enabled! You will hear alerts even when tab is in background.");
+                        }
+                    });
+                }
+            </script>
+            """)
     
     with col2:
-        avg_home = filtered_df['home_odds'].mean()
-        st.metric("Avg Home Odds", f"{avg_home:.2f}")
-    
-    with col3:
-        avg_draw = filtered_df['draw_odds'].mean()
-        st.metric("Avg Draw Odds", f"{avg_draw:.2f}")
-    
-    with col4:
-        avg_away = filtered_df['away_odds'].mean()
-        st.metric("Avg Away Odds", f"{avg_away:.2f}")
-
-def show_quick_scan(scanner):
-    """Quick scanning functionality"""
-    
-    st.header("⚡ Quick Daily Scan")
-    
-    st.info("""
-    **Quick Scan Features:**
-    - Fast scanning of today's matches only
-    - Immediate value bet detection
-    - Lightweight and fast
-    """)
-    
-    if st.button("Run Quick Scan (Today Only)", type="primary"):
-        with st.spinner("⚡ Quick scanning today's matches..."):
-            # Quick scan for today only
-            today_matches = scanner.scan_all_sources_daily(0)
-            
-            if today_matches:
-                today_date = datetime.now().strftime("%Y-%m-%d")
-                if today_date in today_matches:
-                    best_odds = scanner.find_best_odds_daily({today_date: today_matches[today_date]})
-                    value_bets = scanner.calculate_value_bets_daily(best_odds)
-                    
-                    st.success(f"✅ Quick scan completed! Found {len(today_matches[today_date])} matches for today.")
-                    
-                    # Show quick results
-                    if value_bets and today_date in value_bets and value_bets[today_date]:
-                        st.subheader("🎯 Today's Top Value Bets")
-                        for bet in value_bets[today_date][:5]:  # Top 5
-                            col1, col2, col3 = st.columns([3, 2, 1])
-                            with col1:
-                                st.write(f"**{bet['match']}**")
-                            with col2:
-                                st.write(f"{bet['bet_type']} @ {bet['odds']:.2f}")
-                            with col3:
-                                st.success(f"+{bet['value']:.3f}")
-                    else:
-                        st.info("No high-value bets found for today.")
-                else:
-                    st.info("No matches found for today.")
-            else:
-                st.error("Quick scan failed. Please try again.")
+        st.subheader("🎯 Alert Types")
+        
+        st.markdown("""
+        **🚨 CRITICAL ALERTS**
+        - Favorite team is currently losing
+        - Score changed and favorite is behind
+        
+        **🎉 COMEBACK ALERTS** 
+        - Favorite was losing but has equalized
+        - Favorite has taken the lead after being behind
+        
+        **📊 INFO ALERTS**
+        - General match updates
+        - Score changes without favorite status change
+        """)
+        
+        st.subheader("🏆 Supported Teams")
+        st.info("""
+        The system automatically recognizes major teams:
+        - Premier League: Man City, Liverpool, Arsenal, etc.
+        - La Liga: Real Madrid, Barcelona, Atletico, etc.
+        - Serie A: Juventus, Inter, Milan, Napoli, etc.
+        - Bundesliga: Bayern, Dortmund, Leipzig, etc.
+        - Ligue 1: PSG, Lyon, Marseille, etc.
+        
+        Add any team to your favorites for personalized alerts!
+        """)
 
 if __name__ == "__main__":
     main()
