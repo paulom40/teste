@@ -1,10 +1,9 @@
 streamlit
 pandas
-numpy
-plotly
-yfinance
+beautifulsoup4
 requests
-ta 
-XlsxWriter
-matplotlib
-
+lxml
+fake-useragent
+plotly
+numpy
+concurrent-log-handler
