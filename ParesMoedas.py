@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for professional styling
+# Custom CSS for professional styling (Enhanced with more vibrant gradients)
 st.markdown("""
 <style>
     .main-header {
@@ -28,11 +28,52 @@ st.markdown("""
         padding: 1rem;
         border-radius: 0.5rem;
         border-left: 4px solid #1f77b4;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    .signal-metric {
+    .signal-container {
         text-align: center;
-        font-size: 1.5rem;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        font-size: 1.8rem;
         font-weight: bold;
+        margin: 0.5rem 0;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        transition: transform 0.2s ease-in-out;
+    }
+    .signal-container:hover {
+        transform: scale(1.05);
+    }
+    .signal-buy {
+        background: linear-gradient(135deg, #28a745, #20c997);
+        color: white;
+        border: 2px solid #28a745;
+    }
+    .signal-sell {
+        background: linear-gradient(135deg, #dc3545, #fd7e14);
+        color: white;
+        border: 2px solid #dc3545;
+    }
+    .signal-hold {
+        background: linear-gradient(135deg, #17a2b8, #6f42c1);
+        color: white;
+        border: 2px solid #17a2b8;
+    }
+    .live-indicator {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: #28a745;
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: bold;
+        z-index: 1000;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.7; }
+        100% { opacity: 1; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -47,6 +88,9 @@ base = st.sidebar.selectbox("Base Currency", ["USD", "EUR", "GBP", "JPY", "AUD",
 quote = st.sidebar.selectbox("Quote Currency", ["EUR", "GBP", "JPY", "AUD", "CAD", "USD"], index=0)
 days = st.sidebar.slider("Historical Days", min_value=5, max_value=365, value=30, step=5)
 
+# Live Mode Toggle
+live_mode = st.sidebar.checkbox("🚨 Enable Live Mode (Auto-Refresh & Alerts every 60s)")
+
 if base == quote:
     st.sidebar.error("Select different currencies.")
     st.stop()
@@ -54,7 +98,7 @@ if base == quote:
 ticker = f"{quote}{base}=X"
 
 # Fetch data
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=60 if live_mode else 300)  # Shorter cache in live mode
 def fetch_data(ticker, days):
     try:
         data = yf.download(ticker, period=f"{days}d", interval="1d", progress=False)
@@ -71,10 +115,10 @@ def fetch_data(ticker, days):
 
 df = fetch_data(ticker, days)
 
-# Indicators
+# Indicators (Added MACD)
 @st.cache_data
 def compute_indicators(df):
-    if len(df) < 20:
+    if len(df) < 26:  # Min for MACD
         return df
     df = df.copy()
     # SMA 20
@@ -85,6 +129,12 @@ def compute_indicators(df):
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    # MACD (New!)
+    ema12 = df['Rate'].ewm(span=12).mean()
+    ema26 = df['Rate'].ewm(span=26).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     return df
 
 if not df.empty:
@@ -92,17 +142,45 @@ if not df.empty:
 
 # Signal Logic
 signal = "HOLD"
-signal_color = "blue"
+signal_class = "signal-hold"
+signal_icon = "⏸️"
 if not df.empty:
     rsi_val = df['RSI'].iloc[-1]
     sma_val = df['SMA_20'].iloc[-1]
     rate_val = df['Rate'].iloc[-1]
-    if rsi_val < 30 and rate_val > sma_val:
+    macd_val = df['MACD'].iloc[-1]
+    macd_signal = df['MACD_Signal'].iloc[-1]
+    if rsi_val < 30 and rate_val > sma_val and macd_val > macd_signal:
         signal = "BUY"
-        signal_color = "green"
-    elif rsi_val > 70 and rate_val < sma_val:
+        signal_class = "signal-buy"
+        signal_icon = "📈"
+    elif rsi_val > 70 and rate_val < sma_val and macd_val < macd_signal:
         signal = "SELL"
-        signal_color = "red"
+        signal_class = "signal-sell"
+        signal_icon = "📉"
+
+# Real-Time Alerts Logic
+if 'last_signal' not in st.session_state:
+    st.session_state.last_signal = signal
+
+if signal != st.session_state.last_signal:
+    if signal == "BUY":
+        st.toast("🚨 ALERT: BUY Signal Triggered! RSI low + Rate > SMA + MACD Bullish.", icon="📈")
+    elif signal == "SELL":
+        st.toast("🚨 ALERT: SELL Signal Triggered! RSI high + Rate < SMA + MACD Bearish.", icon="📉")
+    else:
+        st.toast("📊 Signal Updated: HOLD", icon="⏸️")
+    st.session_state.last_signal = signal
+
+# Live Mode Polling
+if live_mode:
+    st.markdown('<div class="live-indicator">🔴 LIVE MODE ACTIVE</div>', unsafe_allow_html=True)
+    time.sleep(60)  # Wait 60s
+    st.rerun()  # Refresh app
+
+# Manual Refresh
+if st.sidebar.button("🔄 Refresh Now"):
+    st.rerun()
 
 # Main Layout: Tabs for Professional Sections
 tab1, tab2, tab3 = st.tabs(["📈 Overview", "📊 Analysis", "💼 Trade Simulator"])
@@ -121,19 +199,30 @@ with tab1:
         st.markdown('</div>', unsafe_allow_html=True)
     with col3:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="signal-metric" style="color: {signal_color};">{signal}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="{signal_class} signal-container">{signal_icon} {signal}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Quick Chart
+    # Quick Chart (Updated with MACD subplot)
     if not df.empty:
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='#1f77b4')), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='#ff7f0e')), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='#9467bd')), secondary_y=True)
-        fig.update_xaxes(title_text="Date")
-        fig.update_yaxes(title_text="Rate", secondary_y=False)
-        fig.update_yaxes(title_text="RSI", secondary_y=True, range=[0, 100])
-        fig.update_layout(title=f"{base}/{quote} Overview - Last {days} Days", height=500)
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.1,
+            subplot_titles=(f"{base}/{quote} Price & Indicators", "MACD"),
+            row_heights=[0.7, 0.3]
+        )
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Rate'], name='Rate', line=dict(color='#1f77b4')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['SMA_20'], name='SMA 20', line=dict(color='#ff7f0e')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['RSI'], name='RSI', line=dict(color='#9467bd'), yaxis="y2"), row=1, col=1)
+        # MACD
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), row=2, col=1)
+        fig.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), row=2, col=1)
+        fig.update_xaxes(title_text="Date", row=2, col=1)
+        fig.update_yaxes(title_text="Rate", row=1, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="RSI", row=1, col=1, secondary_y=True, range=[0, 100])
+        fig.update_yaxes(title_text="MACD", row=2, col=1)
+        fig.update_layout(title=f"{base}/{quote} Overview - Last {days} Days", height=600)
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
@@ -157,9 +246,18 @@ with tab2:
             fig2.update_layout(title="RSI Indicator", xaxis_title="Date", yaxis_title="RSI", yaxis_range=[0, 100])
             st.plotly_chart(fig2, use_container_width=True)
         
+        # New: MACD Chart
+        st.subheader("MACD Momentum")
+        fig3 = make_subplots(specs=[[{"secondary_y": False}]])
+        fig3.add_trace(go.Scatter(x=df['Date'], y=df['MACD'], name='MACD', line=dict(color='blue')), secondary_y=False)
+        fig3.add_trace(go.Scatter(x=df['Date'], y=df['MACD_Signal'], name='Signal', line=dict(color='red')), secondary_y=False)
+        fig3.add_trace(go.Bar(x=df['Date'], y=df['MACD_Hist'], name='Histogram', marker_color='gray'), secondary_y=False)
+        fig3.update_layout(title="MACD Indicator (12,26,9)", xaxis_title="Date", yaxis_title="MACD")
+        st.plotly_chart(fig3, use_container_width=True)
+        
         # Data Table
         st.subheader("Historical Data")
-        display_cols = ['Date', 'Rate', 'SMA_20', 'RSI']
+        display_cols = ['Date', 'Rate', 'SMA_20', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']
         st.dataframe(df[display_cols].round(4), use_container_width=True)
 
 with tab3:
