@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import io
-from streamlit_extras.metric_cards import style_metric_cards
 
 # Configuração da página
 st.set_page_config(
@@ -29,12 +28,20 @@ st.markdown("""
         padding: 1rem;
         border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border-left: 4px solid #1f77b4;
     }
     .alert-high {
         background-color: #ffcccc;
         padding: 0.5rem;
         border-radius: 5px;
         border-left: 4px solid #ff4444;
+    }
+    .stMetric {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border-left: 4px solid #1f77b4;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -157,6 +164,22 @@ def gerar_sinais_15min(df):
     
     return df
 
+# Função alternativa para style_metric_cards
+def custom_metric_style():
+    """Aplica estilo personalizado às métricas"""
+    st.markdown("""
+    <style>
+    div[data-testid="metric-container"] {
+        background-color: #f0f2f6;
+        border: 1px solid #ccc;
+        padding: 5% 5% 5% 10%;
+        border-radius: 10px;
+        border-left: 4px solid #1f77b4;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # Simular dados de 15 minutos
 st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - 15min Strategy</h1>', unsafe_allow_html=True)
 
@@ -199,14 +222,17 @@ elif stake_manual == "€50":
     st.session_state.stake_valor = 50
 
 # Simular dados de 15 minutos
-dados_15min = pd.concat([
-    simular_dados_15min(par, PARES[par]["base"]) 
-    for par in pares_selecionados
-])
+if pares_selecionados:
+    dados_15min = pd.concat([
+        simular_dados_15min(par, PARES[par]["base"]) 
+        for par in pares_selecionados
+    ])
 
-# Calcular indicadores técnicos
-dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
-dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+    # Calcular indicadores técnicos
+    dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
+    dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+else:
+    dados_15min = pd.DataFrame()
 
 # Layout principal em abas
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🎯 Estratégia 15min", "📈 Análise Técnica", "📋 Relatórios"])
@@ -231,230 +257,254 @@ with tab1:
         stake_atual = st.session_state.stake_valor
         st.metric("Stake Atual", f"€{stake_atual}")
     
-    style_metric_cards()
+    # Aplicar estilo personalizado às métricas
+    custom_metric_style()
     
     # Alertas de volatilidade
     st.subheader("🚨 Alertas de Volatilidade")
     
-    # Calcular volatilidade dos últimos dados
-    volatilidade_recente = dados_15min.groupby('par').apply(
-        lambda x: (x['high'].max() - x['low'].min()) / x['close'].mean()
-    ).round(5)
-    
-    alertas_ativos = []
-    for par, vol in volatilidade_recente.items():
-        if vol > LIMITE_VOLATILIDADE.get(par, 0.0020):
-            alertas_ativos.append((par, vol))
-    
-    if alertas_ativos:
-        for par, vol in alertas_ativos:
-            st.markdown(f'<div class="alert-high"><b>{par}</b>: Volatilidade {vol:.4f} - ALERTA!</div>', unsafe_allow_html=True)
+    if not dados_15min.empty:
+        # Calcular volatilidade dos últimos dados
+        volatilidade_recente = dados_15min.groupby('par').apply(
+            lambda x: (x['high'].max() - x['low'].min()) / x['close'].mean()
+        ).round(5)
+        
+        alertas_ativos = []
+        for par, vol in volatilidade_recente.items():
+            if vol > LIMITE_VOLATILIDADE.get(par, 0.0020):
+                alertas_ativos.append((par, vol))
+        
+        if alertas_ativos:
+            for par, vol in alertas_ativos:
+                st.markdown(f'<div class="alert-high"><b>{par}</b>: Volatilidade {vol:.4f} - ALERTA!</div>', unsafe_allow_html=True)
+        else:
+            st.info("✅ Nenhum alerta de volatilidade no momento")
+        
+        # Gráfico de volatilidade
+        st.subheader("📈 Volatilidade por Par (15min)")
+        
+        fig_vol = go.Figure()
+        for par in pares_selecionados:
+            df_par = dados_15min[dados_15min['par'] == par]
+            volatilidade = (df_par['high'] - df_par['low']) / df_par['close']
+            fig_vol.add_trace(go.Scatter(
+                x=df_par['timestamp'], 
+                y=volatilidade,
+                mode='lines',
+                name=par,
+                line=dict(width=2)
+            ))
+        
+        fig_vol.update_layout(
+            title="Evolução da Volatilidade (15min)",
+            xaxis_title="Data/Hora",
+            yaxis_title="Volatilidade",
+            height=400
+        )
+        st.plotly_chart(fig_vol, use_container_width=True)
     else:
-        st.info("✅ Nenhum alerta de volatilidade no momento")
-    
-    # Gráfico de volatilidade
-    st.subheader("📈 Volatilidade por Par (15min)")
-    
-    fig_vol = go.Figure()
-    for par in pares_selecionados:
-        df_par = dados_15min[dados_15min['par'] == par]
-        volatilidade = (df_par['high'] - df_par['low']) / df_par['close']
-        fig_vol.add_trace(go.Scatter(
-            x=df_par['timestamp'], 
-            y=volatilidade,
-            mode='lines',
-            name=par,
-            line=dict(width=2)
-        ))
-    
-    fig_vol.update_layout(
-        title="Evolução da Volatilidade (15min)",
-        xaxis_title="Data/Hora",
-        yaxis_title="Volatilidade",
-        height=400
-    )
-    st.plotly_chart(fig_vol, use_container_width=True)
+        st.info("Selecione pares para análise na sidebar")
 
 with tab2:
     st.header("🎯 Estratégia de 15 Minutos")
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Gráfico de candlesticks com sinais
-        par_selecionado = st.selectbox("Selecione o par:", pares_selecionados)
+    if not dados_15min.empty:
+        col1, col2 = st.columns([2, 1])
         
-        if par_selecionado:
-            df_par = dados_15min[dados_15min['par'] == par_selecionado].tail(50)
+        with col1:
+            # Gráfico de candlesticks com sinais
+            par_selecionado = st.selectbox("Selecione o par:", pares_selecionados)
             
-            # Criar gráfico de candlestick
-            fig_candle = go.Figure()
-            
-            # Candlesticks
-            fig_candle.add_trace(go.Candlestick(
-                x=df_par['timestamp'],
-                open=df_par['open'],
-                high=df_par['high'],
-                low=df_par['low'],
-                close=df_par['close'],
-                name="Price"
-            ))
-            
-            # EMAs
-            fig_candle.add_trace(go.Scatter(
-                x=df_par['timestamp'], y=df_par['EMA_9'],
-                mode='lines', name='EMA 9',
-                line=dict(color='orange', width=1)
-            ))
-            
-            fig_candle.add_trace(go.Scatter(
-                x=df_par['timestamp'], y=df_par['EMA_21'],
-                mode='lines', name='EMA 21',
-                line=dict(color='blue', width=1)
-            ))
-            
-            # Sinais de trading
-            compras = df_par[df_par['sinal'] == 'COMPRA']
-            vendas = df_par[df_par['sinal'] == 'VENDA']
-            
-            fig_candle.add_trace(go.Scatter(
-                x=compras['timestamp'], y=compras['low'] * 0.998,
-                mode='markers', name='Compra',
-                marker=dict(color='green', size=10, symbol='triangle-up')
-            ))
-            
-            fig_candle.add_trace(go.Scatter(
-                x=vendas['timestamp'], y=vendas['high'] * 1.002,
-                mode='markers', name='Venda',
-                marker=dict(color='red', size=10, symbol='triangle-down')
-            ))
-            
-            fig_candle.update_layout(
-                title=f"{par_selecionado} - Candlestick 15min com Sinais",
-                xaxis_title="Data/Hora",
-                yaxis_title="Preço",
-                height=500
-            )
-            
-            st.plotly_chart(fig_candle, use_container_width=True)
-    
-    with col2:
-        st.subheader("📋 Sinais Atuais")
+            if par_selecionado:
+                df_par = dados_15min[dados_15min['par'] == par_selecionado].tail(50)
+                
+                # Criar gráfico de candlestick
+                fig_candle = go.Figure()
+                
+                # Candlesticks
+                fig_candle.add_trace(go.Candlestick(
+                    x=df_par['timestamp'],
+                    open=df_par['open'],
+                    high=df_par['high'],
+                    low=df_par['low'],
+                    close=df_par['close'],
+                    name="Price"
+                ))
+                
+                # EMAs
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['EMA_9'],
+                    mode='lines', name='EMA 9',
+                    line=dict(color='orange', width=1)
+                ))
+                
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['EMA_21'],
+                    mode='lines', name='EMA 21',
+                    line=dict(color='blue', width=1)
+                ))
+                
+                # Sinais de trading
+                compras = df_par[df_par['sinal'] == 'COMPRA']
+                vendas = df_par[df_par['sinal'] == 'VENDA']
+                
+                if not compras.empty:
+                    fig_candle.add_trace(go.Scatter(
+                        x=compras['timestamp'], y=compras['low'] * 0.998,
+                        mode='markers', name='Compra',
+                        marker=dict(color='green', size=10, symbol='triangle-up')
+                    ))
+                
+                if not vendas.empty:
+                    fig_candle.add_trace(go.Scatter(
+                        x=vendas['timestamp'], y=vendas['high'] * 1.002,
+                        mode='markers', name='Venda',
+                        marker=dict(color='red', size=10, symbol='triangle-down')
+                    ))
+                
+                fig_candle.update_layout(
+                    title=f"{par_selecionado} - Candlestick 15min com Sinais",
+                    xaxis_title="Data/Hora",
+                    yaxis_title="Preço",
+                    height=500
+                )
+                
+                st.plotly_chart(fig_candle, use_container_width=True)
         
-        # Últimos sinais por par
-        ultimos_sinais = []
-        for par in pares_selecionados:
-            df_par = dados_15min[dados_15min['par'] == par]
-            ultimo_sinal = df_par.iloc[-1]
-            ultimos_sinais.append({
-                'Par': par,
-                'Sinal': ultimo_sinal['sinal'],
-                'Preço': ultimo_sinal['close'],
-                'RSI': f"{ultimo_sinal['RSI']:.1f}",
-                'Tendência': "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
-            })
-        
-        df_sinais = pd.DataFrame(ultimos_sinais)
-        
-        # Colorir os sinais
-        def colorir_sinal(val):
-            if val == 'COMPRA':
-                return 'background-color: #90EE90'
-            elif val == 'VENDA':
-                return 'background-color: #FFB6C1'
-            else:
-                return ''
-        
-        st.dataframe(
-            df_sinais.style.applymap(colorir_sinal, subset=['Sinal']),
-            use_container_width=True
-        )
-        
-        # Botão de execução
-        st.subheader("🤖 Executar Trades")
-        if st.button("🚀 Executar Estratégia 15min", type="primary"):
+        with col2:
+            st.subheader("📋 Sinais Atuais")
+            
+            # Últimos sinais por par
+            ultimos_sinais = []
             for par in pares_selecionados:
                 df_par = dados_15min[dados_15min['par'] == par]
-                ultimo_sinal = df_par.iloc[-1]
-                
-                if ultimo_sinal['sinal'] in ['COMPRA', 'VENDA']:
-                    stake = st.session_state.stake_valor
-                    risco = round(stake * 0.01, 2)
-                    lucro = round(stake * 0.02, 2)
-                    
-                    st.session_state.logs_tecnicos.append({
-                        "timestamp": datetime.now(),
-                        "data": str(datetime.now().date()),
-                        "pair": par,
-                        "sinal": ultimo_sinal['sinal'],
-                        "preco_entrada": ultimo_sinal['close'],
-                        "timeframe": "15min",
-                        "trade_executado": "Sim",
-                        "status": "Ativo",
-                        "log_stake": stake,
-                        "log_risco_estimado": risco,
-                        "log_lucro_estimado": lucro,
-                        "rsi_entrada": round(ultimo_sinal['RSI'], 1),
-                        "ema_tendencia": "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
+                if not df_par.empty:
+                    ultimo_sinal = df_par.iloc[-1]
+                    ultimos_sinais.append({
+                        'Par': par,
+                        'Sinal': ultimo_sinal['sinal'],
+                        'Preço': ultimo_sinal['close'],
+                        'RSI': f"{ultimo_sinal['RSI']:.1f}" if not pd.isna(ultimo_sinal['RSI']) else "N/A",
+                        'Tendência': "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
                     })
             
-            st.success(f"✅ {len([s for s in ultimos_sinais if s['Sinal'] in ['COMPRA', 'VENDA']])} trades executados!")
+            if ultimos_sinais:
+                df_sinais = pd.DataFrame(ultimos_sinais)
+                
+                # Colorir os sinais
+                def colorir_sinal(val):
+                    if val == 'COMPRA':
+                        return 'background-color: #90EE90'
+                    elif val == 'VENDA':
+                        return 'background-color: #FFB6C1'
+                    else:
+                        return ''
+                
+                st.dataframe(
+                    df_sinais.style.applymap(colorir_sinal, subset=['Sinal']),
+                    use_container_width=True
+                )
+            else:
+                st.info("Nenhum sinal disponível")
+            
+            # Botão de execução
+            st.subheader("🤖 Executar Trades")
+            if st.button("🚀 Executar Estratégia 15min", type="primary"):
+                trades_executados = 0
+                for par in pares_selecionados:
+                    df_par = dados_15min[dados_15min['par'] == par]
+                    if not df_par.empty:
+                        ultimo_sinal = df_par.iloc[-1]
+                        
+                        if ultimo_sinal['sinal'] in ['COMPRA', 'VENDA']:
+                            stake = st.session_state.stake_valor
+                            risco = round(stake * 0.01, 2)
+                            lucro = round(stake * 0.02, 2)
+                            
+                            st.session_state.logs_tecnicos.append({
+                                "timestamp": datetime.now(),
+                                "data": str(datetime.now().date()),
+                                "pair": par,
+                                "sinal": ultimo_sinal['sinal'],
+                                "preco_entrada": ultimo_sinal['close'],
+                                "timeframe": "15min",
+                                "trade_executado": "Sim",
+                                "status": "Ativo",
+                                "log_stake": stake,
+                                "log_risco_estimado": risco,
+                                "log_lucro_estimado": lucro,
+                                "rsi_entrada": round(ultimo_sinal['RSI'], 1) if not pd.isna(ultimo_sinal['RSI']) else 0,
+                                "ema_tendencia": "Alta" if ultimo_sinal['EMA_9'] > ultimo_sinal['EMA_21'] else "Baixa"
+                            })
+                            trades_executados += 1
+                
+                if trades_executados > 0:
+                    st.success(f"✅ {trades_executados} trades executados!")
+                else:
+                    st.info("Nenhum sinal de trade válido encontrado")
+    else:
+        st.info("Selecione pares para análise na sidebar")
 
 with tab3:
     st.header("📈 Análise Técnica Detalhada")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Gráfico RSI
-        st.subheader("📊 RSI por Par")
-        fig_rsi = go.Figure()
+    if not dados_15min.empty:
+        col1, col2 = st.columns(2)
         
-        for par in pares_selecionados:
-            df_par = dados_15min[dados_15min['par'] == par].tail(24)
-            fig_rsi.add_trace(go.Scatter(
-                x=df_par['timestamp'], y=df_par['RSI'],
-                mode='lines', name=par,
-                line=dict(width=2)
-            ))
+        with col1:
+            # Gráfico RSI
+            st.subheader("📊 RSI por Par")
+            fig_rsi = go.Figure()
+            
+            for par in pares_selecionados:
+                df_par = dados_15min[dados_15min['par'] == par].tail(24)
+                if not df_par.empty:
+                    fig_rsi.add_trace(go.Scatter(
+                        x=df_par['timestamp'], y=df_par['RSI'],
+                        mode='lines', name=par,
+                        line=dict(width=2)
+                    ))
+            
+            # Linhas de sobrecompra/sobrevenda
+            fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Sobrecompra")
+            fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Sobrevenda")
+            
+            fig_rsi.update_layout(
+                title="RSI - Indicador de Momentum",
+                xaxis_title="Data/Hora",
+                yaxis_title="RSI",
+                height=400
+            )
+            st.plotly_chart(fig_rsi, use_container_width=True)
         
-        # Linhas de sobrecompra/sobrevenda
-        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Sobrecompra")
-        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Sobrevenda")
-        
-        fig_rsi.update_layout(
-            title="RSI - Indicador de Momentum",
-            xaxis_title="Data/Hora",
-            yaxis_title="RSI",
-            height=400
-        )
-        st.plotly_chart(fig_rsi, use_container_width=True)
-    
-    with col2:
-        # Gráfico MACD
-        st.subheader("📈 MACD por Par")
-        fig_macd = go.Figure()
-        
-        for par in pares_selecionados[:2]:  # Mostrar apenas 2 para não poluir
-            df_par = dados_15min[dados_15min['par'] == par].tail(24)
-            fig_macd.add_trace(go.Scatter(
-                x=df_par['timestamp'], y=df_par['MACD'],
-                mode='lines', name=f"{par} MACD",
-                line=dict(width=2)
-            ))
-            fig_macd.add_trace(go.Scatter(
-                x=df_par['timestamp'], y=df_par['MACD_Signal'],
-                mode='lines', name=f"{par} Signal",
-                line=dict(width=1, dash='dash')
-            ))
-        
-        fig_macd.update_layout(
-            title="MACD - Indicador de Tendência",
-            xaxis_title="Data/Hora",
-            yaxis_title="MACD",
-            height=400
-        )
-        st.plotly_chart(fig_macd, use_container_width=True)
+        with col2:
+            # Gráfico MACD
+            st.subheader("📈 MACD por Par")
+            fig_macd = go.Figure()
+            
+            for par in pares_selecionados[:2]:  # Mostrar apenas 2 para não poluir
+                df_par = dados_15min[dados_15min['par'] == par].tail(24)
+                if not df_par.empty:
+                    fig_macd.add_trace(go.Scatter(
+                        x=df_par['timestamp'], y=df_par['MACD'],
+                        mode='lines', name=f"{par} MACD",
+                        line=dict(width=2)
+                    ))
+                    fig_macd.add_trace(go.Scatter(
+                        x=df_par['timestamp'], y=df_par['MACD_Signal'],
+                        mode='lines', name=f"{par} Signal",
+                        line=dict(width=1, dash='dash')
+                    ))
+            
+            fig_macd.update_layout(
+                title="MACD - Indicador de Tendência",
+                xaxis_title="Data/Hora",
+                yaxis_title="MACD",
+                height=400
+            )
+            st.plotly_chart(fig_macd, use_container_width=True)
+    else:
+        st.info("Selecione pares para análise na sidebar")
 
 with tab4:
     st.header("📋 Relatórios e Exportação")
@@ -480,18 +530,27 @@ with tab4:
         with col4:
             st.metric("Win Rate", f"{win_rate:.1f}%")
         
+        # Aplicar estilo às métricas
+        custom_metric_style()
+        
         # Tabela de trades
         st.subheader("📋 Histórico de Trades")
         
         # Formatar colunas
         df_display = df_logs.copy()
-        df_display['Timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%Y-%m-%d %H:%M')
+        if 'timestamp' in df_display.columns:
+            df_display['Timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%Y-%m-%d %H:%M')
+        else:
+            df_display['Timestamp'] = df_display.get('data', 'N/A')
+        
         df_display['Par'] = df_display['pair']
         df_display['Stake (€)'] = df_display['log_stake']
         df_display['Lucro (€)'] = df_display['log_lucro_estimado']
         df_display['Risco (€)'] = df_display['log_risco_estimado']
         
-        colunas_display = ['Timestamp', 'Par', 'sinal', 'Stake (€)', 'Lucro (€)', 'Risco (€)', 'status', 'rsi_entrada', 'ema_tendencia']
+        colunas_display = ['Timestamp', 'Par', 'sinal', 'Stake (€)', 'Lucro (€)', 'Risco (€)', 'status']
+        if 'rsi_entrada' in df_display.columns:
+            colunas_display.extend(['rsi_entrada', 'ema_tendencia'])
         
         st.dataframe(df_display[colunas_display], use_container_width=True)
         
@@ -507,6 +566,8 @@ with tab4:
                               title='Lucro Acumulado ao Longo do Tempo')
             fig_lucro.update_layout(height=400)
             st.plotly_chart(fig_lucro, use_container_width=True)
+    else:
+        st.info("Nenhum trade executado ainda")
     
     # Exportação de dados
     st.subheader("📥 Exportar Dados")
@@ -519,13 +580,21 @@ with tab4:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 if st.session_state.logs_tecnicos:
+                    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
                     df_logs.to_excel(writer, sheet_name='Trades Executados', index=False)
-                dados_15min.to_excel(writer, sheet_name='Dados 15min', index=False)
+                
+                if not dados_15min.empty:
+                    dados_15min.to_excel(writer, sheet_name='Dados 15min', index=False)
                 
                 # Resumo estatístico
                 resumo = {
                     'Metrica': ['Total Trades', 'Lucro Total', 'Risco Total', 'Win Rate'],
-                    'Valor': [len(st.session_state.logs_tecnicos), lucro_total, risco_total, f"{win_rate:.1f}%"]
+                    'Valor': [
+                        len(st.session_state.logs_tecnicos), 
+                        lucro_total if st.session_state.logs_tecnicos else 0, 
+                        risco_total if st.session_state.logs_tecnicos else 0, 
+                        f"{win_rate:.1f}%" if st.session_state.logs_tecnicos else "0%"
+                    ]
                 }
                 pd.DataFrame(resumo).to_excel(writer, sheet_name='Resumo', index=False)
             
