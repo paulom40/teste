@@ -13,29 +13,134 @@ st.set_page_config(
 # Custom CSS
 st.markdown("""
 <style>
+    /* Main container */
+    .main {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+    }
+    
+    /* Title */
     .main-title {
         text-align: center;
-        color: #2c3e50;
-        padding: 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
+        background: white;
+        padding: 30px;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
         margin-bottom: 30px;
     }
+    
+    .main-title h1 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 3rem;
+        margin: 0;
+        font-weight: 800;
+    }
+    
+    /* Match card container */
+    .match-card {
+        background: white;
+        border-radius: 15px;
+        padding: 25px;
+        margin: 15px 0;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .match-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+    
+    /* Live indicator */
+    .live-badge {
+        display: inline-block;
+        background: #ff4444;
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 0.9rem;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    
+    /* Score display */
+    .score-display {
+        text-align: center;
+        font-size: 3rem;
+        font-weight: 800;
+        color: #2c3e50;
+        margin: 10px 0;
+    }
+    
+    .team-name {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #2c3e50;
+    }
+    
+    .competition-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        margin-top: 10px;
+    }
+    
+    /* Stats container */
+    .stats-container {
+        background: white;
+        border-radius: 15px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    
+    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
+        background: transparent;
     }
+    
     .stTabs [data-baseweb="tab"] {
-        padding: 10px 20px;
-        background-color: #f0f2f6;
-        border-radius: 5px;
+        background: white;
+        border-radius: 10px;
+        padding: 15px 30px;
+        font-weight: 600;
+        color: #2c3e50;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white !important;
+    }
+    
+    /* Metric cards */
+    [data-testid="stMetricValue"] {
+        font-size: 2rem;
+        font-weight: 800;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state
-if 'favorite_teams' not in st.session_state:
-    st.session_state.favorite_teams = set()
 if 'api_source' not in st.session_state:
     st.session_state.api_source = 'football-data'
 
@@ -44,7 +149,7 @@ def get_football_data_matches():
     API_KEY = st.secrets.get("FOOTBALL_API_KEY", "e57f3ceec4254fdc940de3316e45b577")
     
     if not API_KEY:
-        return None, "API key not configured. Add FOOTBALL_API_KEY to Streamlit secrets."
+        return None, "API key not configured."
     
     try:
         headers = {'X-Auth-Token': API_KEY}
@@ -83,7 +188,7 @@ def get_football_data_matches():
         elif response.status_code == 429:
             return None, "API rate limit reached. Try again later."
         elif response.status_code == 403:
-            return None, "Invalid API key. Check your FOOTBALL_API_KEY in secrets."
+            return None, "Invalid API key."
         else:
             return None, f"API returned status code {response.status_code}"
             
@@ -99,7 +204,7 @@ def get_api_football_matches():
     API_KEY = st.secrets.get("RAPID_API_KEY", "")
     
     if not API_KEY:
-        return None, "RapidAPI key not configured. Add RAPID_API_KEY to Streamlit secrets."
+        return None, "RapidAPI key not configured."
     
     try:
         url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
@@ -132,7 +237,7 @@ def get_api_football_matches():
         elif response.status_code == 429:
             return None, "API rate limit reached. Try again later."
         elif response.status_code == 403:
-            return None, "Invalid API key. Check your RAPID_API_KEY in secrets."
+            return None, "Invalid API key."
         else:
             return None, f"API returned status code {response.status_code}"
             
@@ -152,76 +257,47 @@ def get_live_matches():
     else:
         return None, "Invalid API source selected"
 
-def is_favorite_team(team_name):
-    """Check if team is in favorites"""
-    return team_name.lower() in st.session_state.favorite_teams
-
-def check_if_losing(match):
-    """Check if a favorite team is losing in this match"""
-    home_is_fav = is_favorite_team(match['home_team'])
-    away_is_fav = is_favorite_team(match['away_team'])
-    
-    if home_is_fav and match['home_score'] < match['away_score']:
-        return True, match['home_team']
-    elif away_is_fav and match['away_score'] < match['home_score']:
-        return True, match['away_team']
-    
-    return False, None
-
 def display_match_card(match):
-    """Display a single match card"""
-    home_is_fav = is_favorite_team(match['home_team'])
-    away_is_fav = is_favorite_team(match['away_team'])
-    is_losing, losing_team = check_if_losing(match)
+    """Display a single match card with enhanced styling"""
     
-    # Determine card color
-    if is_losing:
-        border_color = "#dc3545"  # Red
-        bg_color = "#fff5f5"
-    elif home_is_fav or away_is_fav:
-        border_color = "#28a745"  # Green
-        bg_color = "#f0fff4"
-    else:
-        border_color = "#e0e0e0"  # Gray
-        bg_color = "#ffffff"
-    
-    col1, col2, col3 = st.columns([3, 2, 3])
-    
-    with col1:
-        if home_is_fav:
-            st.markdown(f"### ⭐ **{match['home_team']}**")
-        else:
-            st.markdown(f"### {match['home_team']}")
-    
-    with col2:
-        st.markdown(f"<h1 style='text-align: center; color: {border_color};'>{match['home_score']} - {match['away_score']}</h1>", unsafe_allow_html=True)
-        st.markdown(f"<p style='text-align: center;'>⏱️ {match['minute']}'</p>", unsafe_allow_html=True)
-    
-    with col3:
-        if away_is_fav:
-            st.markdown(f"### **{match['away_team']}** ⭐")
-        else:
-            st.markdown(f"### {match['away_team']}")
-    
-    st.caption(f"🏆 {match['competition']}")
-    
-    if is_losing:
-        st.error(f"🚨 {losing_team} is currently LOSING!")
-    
-    st.divider()
+    st.markdown(f"""
+    <div class="match-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <span class="live-badge">🔴 LIVE</span>
+            <span class="competition-badge">🏆 {match['competition']}</span>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="flex: 1; text-align: left;">
+                <div class="team-name">{match['home_team']}</div>
+            </div>
+            
+            <div style="flex: 0 0 auto; text-align: center; padding: 0 30px;">
+                <div class="score-display">{match['home_score']} - {match['away_score']}</div>
+                <div style="color: #7f8c8d; font-weight: 600;">⏱️ {match['minute']}'</div>
+            </div>
+            
+            <div style="flex: 1; text-align: right;">
+                <div class="team-name">{match['away_team']}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def main():
-    st.markdown('<div class="main-title"><h1>⚽ Live Soccer Match Alerts</h1></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title"><h1>⚽ LIVE SOCCER MATCHES</h1></div>', unsafe_allow_html=True)
     
     # Sidebar
     with st.sidebar:
-        st.header("⚙️ Settings")
+        st.title("⚙️ Settings")
+        
+        st.markdown("---")
         
         # API Source Selection
         st.subheader("📡 API Source")
         api_options = {
-            'football-data': 'Football-Data.org (Free)',
-            'api-football': 'API-Football (RapidAPI)'
+            'football-data': 'Football-Data.org',
+            'api-football': 'API-Football'
         }
         selected = st.radio(
             "Select data source:",
@@ -231,54 +307,16 @@ def main():
         )
         st.session_state.api_source = selected
         
-        if selected == 'football-data':
-            st.info("📝 Get free API key at: https://www.football-data.org/")
-            st.caption("Add as FOOTBALL_API_KEY in secrets")
-        else:
-            st.info("📝 Get API key at: https://rapidapi.com/api-sports/api/api-football")
-            st.caption("Add as RAPID_API_KEY in secrets")
-        
-        st.divider()
-        
-        # Favorite teams
-        st.subheader("⭐ Your Favorite Teams")
-        
-        with st.form("add_team_form"):
-            new_team = st.text_input("Team name:", placeholder="e.g., Liverpool")
-            submitted = st.form_submit_button("➕ Add Team", use_container_width=True)
-            
-            if submitted and new_team.strip():
-                st.session_state.favorite_teams.add(new_team.lower().strip())
-                st.success(f"✅ Added {new_team}!")
-                time.sleep(0.5)
-                st.rerun()
-        
-        if st.session_state.favorite_teams:
-            st.write("**Current favorites:**")
-            teams_to_remove = []
-            for team in sorted(st.session_state.favorite_teams):
-                cols = st.columns([4, 1])
-                with cols[0]:
-                    st.write(f"⭐ {team.title()}")
-                with cols[1]:
-                    if st.button("🗑️", key=f"del_{team}", help="Remove"):
-                        teams_to_remove.append(team)
-            
-            for team in teams_to_remove:
-                st.session_state.favorite_teams.remove(team)
-                st.rerun()
-        else:
-            st.info("No favorites yet. Add teams above!")
-        
-        st.divider()
+        st.markdown("---")
         
         # Refresh settings
         st.subheader("🔄 Auto Refresh")
-        auto_refresh = st.checkbox("Enable", value=True)
+        auto_refresh = st.checkbox("Enable auto-refresh", value=True)
         refresh_seconds = st.slider("Interval (seconds)", 15, 120, 30)
         
-        st.divider()
-        st.caption("💡 Add teams to get alerts when they're losing")
+        st.markdown("---")
+        
+        st.caption("⚽ Real-time soccer match tracking")
     
     # Fetch matches
     with st.spinner("🔍 Fetching live matches..."):
@@ -286,61 +324,38 @@ def main():
         
         if error:
             st.error(f"❌ Error: {error}")
-            st.info("💡 Make sure you've added the correct API key to your Streamlit secrets.")
-            st.code("""
-# Add to Streamlit secrets (.streamlit/secrets.toml):
-FOOTBALL_API_KEY = "your_api_key_here"
-# OR
-RAPID_API_KEY = "your_api_key_here"
-            """)
             return
     
     if not matches:
-        st.warning("⚽ No live matches at the moment. Check back later!")
-        st.info("Matches typically happen during weekends and weekday evenings (local time).")
+        st.markdown("""
+        <div class="stats-container" style="text-align: center; padding: 50px;">
+            <h2 style="color: #95a5a6;">⚽ No Live Matches</h2>
+            <p style="color: #7f8c8d; font-size: 1.2rem;">Check back later for live match updates!</p>
+        </div>
+        """, unsafe_allow_html=True)
         return
     
-    # Create tabs
-    tab1, tab2 = st.tabs(["🚨 Alerts", "📊 All Live Matches"])
+    # Stats overview
+    st.markdown('<div class="stats-container">', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
     
-    # Alerts tab
-    with tab1:
-        st.header("🚨 Match Alerts")
-        
-        alerts = [(m, team) for m in matches for is_losing, team in [check_if_losing(m)] if is_losing]
-        
-        if alerts:
-            st.error(f"**{len(alerts)} ALERT(S)** - Your favorite team(s) are losing!")
-            st.write("")
-            
-            for match, losing_team in alerts:
-                with st.container():
-                    st.markdown(f"""
-                    <div style='background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); 
-                                padding: 20px; border-radius: 10px; color: white; margin: 10px 0;
-                                border: 3px solid #c92a2a;'>
-                        <h2 style='margin: 0; color: white;'>🚨 {losing_team} IS LOSING!</h2>
-                        <h3 style='margin: 10px 0; color: white;'>{match['home_team']} {match['home_score']} - {match['away_score']} {match['away_team']}</h3>
-                        <p style='margin: 5px 0; color: white;'>⏱️ Minute {match['minute']} | 🏆 {match['competition']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            if st.session_state.favorite_teams:
-                st.success("✅ Great news! All your favorite teams are winning or drawing!")
-                st.balloons()
-            else:
-                st.info("💡 Add your favorite teams in the sidebar to see alerts when they're losing")
+    with col1:
+        st.metric("🎮 Live Matches", len(matches))
     
-    # All matches tab
-    with tab2:
-        st.header(f"📊 Live Matches ({len(matches)})")
-        st.write("")
-        
-        for match in matches:
-            display_match_card(match)
+    with col2:
+        total_goals = sum(m['home_score'] + m['away_score'] for m in matches)
+        st.metric("⚽ Total Goals", total_goals)
     
-    # Display last update time
-    st.caption(f"🕐 Last updated: {datetime.now().strftime('%H:%M:%S')}")
+    with col3:
+        st.metric("🕐 Last Update", datetime.now().strftime("%H:%M:%S"))
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Display matches
+    st.markdown("---")
+    
+    for match in matches:
+        display_match_card(match)
     
     # Auto-refresh
     if auto_refresh:
