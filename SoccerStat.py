@@ -41,7 +41,7 @@ if 'api_source' not in st.session_state:
 
 def get_football_data_matches():
     """Fetch live matches from football-data.org API"""
-    API_KEY = st.secrets.get("FOOTBALL_API_KEY", "")
+    API_KEY = st.secrets.get("FOOTBALL_API_KEY", "e57f3ceec4254fdc940de3316e45b577")
     
     if not API_KEY:
         return None, "API key not configured. Add FOOTBALL_API_KEY to Streamlit secrets."
