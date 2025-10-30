@@ -73,10 +73,9 @@ def fetch_data(ticker, period, interval):
 def detect_price_action(df: pd.DataFrame) -> str:
     if len(df) < 3:
         return "No Pattern"
-    c  = df.iloc[-1]  # current candle
-    p1 = df.iloc[-2]  # previous
+    c  = df.iloc[-1]   # current candle
+    p1 = df.iloc[-2]   # previous
 
-    # Extract scalars
     o, h, l, cl = c['Open'], c['High'], c['Low'], c['Close']
     po, ph, pl, pcl = p1['Open'], p1['High'], p1['Low'], p1['Close']
 
@@ -122,7 +121,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['MACD'] = macd
     df['MACD_Signal'] = macd.ewm(span=9, adjust=False).mean()
 
-    # Price action
+    # Price action on the newest candle
     df['Price_Action'] = "No Pattern"
     if len(df) >= 3:
         pattern = detect_price_action(df.tail(3))
@@ -180,7 +179,7 @@ if results:
     scan = pd.DataFrame(results).sort_values("strength", ascending=False)
     st.dataframe(scan.round(4), use_container_width=True)
 
-    # Auto-Trade
+    # ---------- Auto-Trade (simulated) ----------
     if auto_trade and live_mode and scan['strength'].max() > 0.7:
         strong = scan[scan['strength'] > 0.7]
         st.markdown("### Auto-Trade (Simulated)")
@@ -218,7 +217,7 @@ if st.sidebar.button("Refresh Now"):
     st.rerun()
 
 # ------------------------------------------------------------------ #
-# Tabs
+# Tabs – Overview / Analysis / Simulator
 # ------------------------------------------------------------------ #
 tab1, tab2, tab3 = st.tabs(["Overview", "Analysis", "Simulator"])
 
@@ -279,7 +278,7 @@ with tab3:
         st.success(f"Simulated SELL @ {rate:.5f} | P&L -${stake*0.02:.0f}")
 
 # ------------------------------------------------------------------ #
-# Footer
+# Footer (fixed syntax)
 # ------------------------------------------------------------------ #
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#666'>Streamlit + yFinance | Educational Use Only</p>",.unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#666'>Streamlit + yFinance | Educational Use Only</p>", unsafe_allow_html=True)
