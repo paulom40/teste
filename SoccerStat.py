@@ -36,13 +36,15 @@ st.markdown("""
 # Initialize session state
 if 'favorite_teams' not in st.session_state:
     st.session_state.favorite_teams = set()
+if 'api_source' not in st.session_state:
+    st.session_state.api_source = 'football-data'
 
-def get_live_matches_api():
+def get_football_data_matches():
     """Fetch live matches from football-data.org API"""
     API_KEY = st.secrets.get("FOOTBALL_API_KEY", "")
     
     if not API_KEY:
-        return None, "No API key configured"
+        return None, "API key not configured. Add FOOTBALL_API_KEY to Streamlit secrets."
     
     try:
         headers = {'X-Auth-Token': API_KEY}
@@ -80,49 +82,75 @@ def get_live_matches_api():
             return matches, None
         elif response.status_code == 429:
             return None, "API rate limit reached. Try again later."
+        elif response.status_code == 403:
+            return None, "Invalid API key. Check your FOOTBALL_API_KEY in secrets."
         else:
             return None, f"API returned status code {response.status_code}"
             
     except requests.exceptions.Timeout:
-        return None, "API request timed out"
+        return None, "API request timed out. Try again."
+    except requests.exceptions.ConnectionError:
+        return None, "Connection error. Check your internet connection."
     except Exception as e:
-        return None, f"Error connecting to API: {str(e)}"
+        return None, f"Error: {str(e)}"
 
-def get_simulated_matches():
-    """Generate realistic simulated live matches"""
-    import random
+def get_api_football_matches():
+    """Fetch live matches from API-Football (RapidAPI)"""
+    API_KEY = st.secrets.get("RAPID_API_KEY", "")
     
-    # More realistic match scenarios
-    matches_data = [
-        {'home': 'Manchester City', 'away': 'Liverpool', 'comp': 'Premier League', 'min': 67},
-        {'home': 'Real Madrid', 'away': 'Barcelona', 'comp': 'La Liga', 'min': 34},
-        {'home': 'Bayern Munich', 'away': 'Borussia Dortmund', 'comp': 'Bundesliga', 'min': 78},
-        {'home': 'PSG', 'away': 'Marseille', 'comp': 'Ligue 1', 'min': 45},
-        {'home': 'Inter Milan', 'away': 'AC Milan', 'comp': 'Serie A', 'min': 56},
-        {'home': 'Arsenal', 'away': 'Chelsea', 'comp': 'Premier League', 'min': 23},
-    ]
+    if not API_KEY:
+        return None, "RapidAPI key not configured. Add RAPID_API_KEY to Streamlit secrets."
     
-    matches = []
-    for i, match in enumerate(matches_data):
-        # Generate realistic scores based on minute
-        minute = match['min']
-        max_goals = minute // 15  # Average goal every 15 minutes
+    try:
+        url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+        headers = {
+            "X-RapidAPI-Key": API_KEY,
+            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+        }
+        params = {"live": "all"}
         
-        home_score = random.randint(0, min(max_goals + 1, 3))
-        away_score = random.randint(0, min(max_goals + 1, 3))
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         
-        matches.append({
-            'id': i,
-            'home_team': match['home'],
-            'away_team': match['away'],
-            'home_score': home_score,
-            'away_score': away_score,
-            'status': 'IN_PLAY',
-            'minute': minute,
-            'competition': match['comp']
-        })
-    
-    return matches, None
+        if response.status_code == 200:
+            data = response.json()
+            matches = []
+            
+            for match in data.get('response', []):
+                match_data = {
+                    'id': match['fixture']['id'],
+                    'home_team': match['teams']['home']['name'],
+                    'away_team': match['teams']['away']['name'],
+                    'home_score': match['goals']['home'] or 0,
+                    'away_score': match['goals']['away'] or 0,
+                    'status': match['fixture']['status']['short'],
+                    'minute': match['fixture']['status']['elapsed'] or 0,
+                    'competition': match['league']['name']
+                }
+                matches.append(match_data)
+            
+            return matches, None
+        elif response.status_code == 429:
+            return None, "API rate limit reached. Try again later."
+        elif response.status_code == 403:
+            return None, "Invalid API key. Check your RAPID_API_KEY in secrets."
+        else:
+            return None, f"API returned status code {response.status_code}"
+            
+    except requests.exceptions.Timeout:
+        return None, "API request timed out. Try again."
+    except requests.exceptions.ConnectionError:
+        return None, "Connection error. Check your internet connection."
+    except Exception as e:
+        return None, f"Error: {str(e)}"
+
+def get_live_matches():
+    """Get live matches from selected API source"""
+    if st.session_state.api_source == 'football-data':
+        return get_football_data_matches()
+    elif st.session_state.api_source == 'api-football':
+        return get_api_football_matches()
+    else:
+        return None, "Invalid API source selected"
 
 def is_favorite_team(team_name):
     """Check if team is in favorites"""
@@ -189,6 +217,29 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
         
+        # API Source Selection
+        st.subheader("📡 API Source")
+        api_options = {
+            'football-data': 'Football-Data.org (Free)',
+            'api-football': 'API-Football (RapidAPI)'
+        }
+        selected = st.radio(
+            "Select data source:",
+            options=list(api_options.keys()),
+            format_func=lambda x: api_options[x],
+            index=0
+        )
+        st.session_state.api_source = selected
+        
+        if selected == 'football-data':
+            st.info("📝 Get free API key at: https://www.football-data.org/")
+            st.caption("Add as FOOTBALL_API_KEY in secrets")
+        else:
+            st.info("📝 Get API key at: https://rapidapi.com/api-sports/api/api-football")
+            st.caption("Add as RAPID_API_KEY in secrets")
+        
+        st.divider()
+        
         # Favorite teams
         st.subheader("⭐ Your Favorite Teams")
         
@@ -221,12 +272,6 @@ def main():
         
         st.divider()
         
-        # Data source
-        st.subheader("📡 Data Source")
-        use_api = st.toggle("Use Real API", value=False, help="Requires API key in secrets")
-        
-        st.divider()
-        
         # Refresh settings
         st.subheader("🔄 Auto Refresh")
         auto_refresh = st.checkbox("Enable", value=True)
@@ -237,18 +282,22 @@ def main():
     
     # Fetch matches
     with st.spinner("🔍 Fetching live matches..."):
-        if use_api:
-            matches, error = get_live_matches_api()
-            if error:
-                st.error(f"❌ API Error: {error}")
-                st.info("💡 Enable Demo Mode (toggle off 'Use Real API') to test the app")
-                return
-        else:
-            matches, error = get_simulated_matches()
-            st.info("🎮 **Demo Mode Active** - Showing simulated matches. Toggle 'Use Real API' for live data.")
+        matches, error = get_live_matches()
+        
+        if error:
+            st.error(f"❌ Error: {error}")
+            st.info("💡 Make sure you've added the correct API key to your Streamlit secrets.")
+            st.code("""
+# Add to Streamlit secrets (.streamlit/secrets.toml):
+FOOTBALL_API_KEY = "your_api_key_here"
+# OR
+RAPID_API_KEY = "your_api_key_here"
+            """)
+            return
     
     if not matches:
-        st.warning("⚠️ No live matches found right now")
+        st.warning("⚽ No live matches at the moment. Check back later!")
+        st.info("Matches typically happen during weekends and weekday evenings (local time).")
         return
     
     # Create tabs
