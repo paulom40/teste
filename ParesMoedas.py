@@ -68,7 +68,7 @@ def fetch_data(ticker, period, interval):
         return pd.DataFrame()
 
 # ------------------------------------------------------------------ #
-# Price Action – scalars + NaN guard
+# Price Action – scalars only
 # ------------------------------------------------------------------ #
 def detect_price_action(last3: pd.DataFrame) -> str:
     if len(last3) < 3:
@@ -83,11 +83,8 @@ def detect_price_action(last3: pd.DataFrame) -> str:
     except (ValueError, TypeError):
         return "No Pattern"
 
-    # Bullish Engulfing
     if (pcl < po and o < pcl and cl > po and cl > o):
         return "Bullish Engulfing"
-
-    # Bearish Engulfing
     if (pcl > po and o > pcl and cl < po and cl < o):
         return "Bearish Engulfing"
 
@@ -150,7 +147,7 @@ def analyze_pair(b, q):
         sma  = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate
         macd = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
         macd_sig = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
-        pattern = r['Price_Action']
+        pattern = str(r['Price_Action'])
 
         signal = "HOLD"
         strength = 0.0
@@ -187,7 +184,6 @@ if results:
     scan = pd.DataFrame(results).sort_values("strength", ascending=False)
     st.dataframe(scan.round(4), use_container_width=True)
 
-    # Auto-Trade
     if auto_trade and live_mode and scan['strength'].max() > 0.7:
         strong = scan[scan['strength'] > 0.7]
         st.markdown("### Auto-Trade (Simulated)")
@@ -230,7 +226,7 @@ if st.sidebar.button("Refresh Now"):
 tab1, tab2, tab3 = st.tabs(["Overview", "Analysis", "Simulator"])
 
 # ------------------------------------------------------------------ #
-# TAB 1: Overview – Candlestick Chart + Metrics
+# TAB 1: Overview – Candlestick Chart
 # ------------------------------------------------------------------ #
 with tab1:
     df = fetch_data(ticker, period, interval)
@@ -238,21 +234,25 @@ with tab1:
         df = compute_indicators(df)
         if not df.empty:
             r = df.iloc[-1]
-            rate_val = float(r['Rate']) if pd.notna(r['Rate']) else 0.0
-            change_val = (rate_val - df['Rate'].iloc[0]) / df['Rate'].iloc[0] * 100 if pd.notna(df['Rate'].iloc[0]) else 0.0
 
+            # === Extract scalars safely ===
+            rate_val = float(r['Rate']) if pd.notna(r['Rate']) else 0.0
+            first_rate = float(df['Rate'].iloc[0]) if pd.notna(df['Rate'].iloc[0]) else rate_val
+            change_val = ((rate_val - first_rate) / first_rate * 100) if first_rate != 0 else 0.0
+
+            rsi_val = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
+            sma_val = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate_val
+            macd_val = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
+            macd_sig_val = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
+            pattern = str(r['Price_Action'])
+
+            # === Metrics ===
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.markdown(f'<div class="metric-card"><b>Rate:</b> {rate_val:.5f}</div>', unsafe_allow_html=True)
             with c2:
                 st.markdown(f'<div class="metric-card"><b>Change:</b> {change_val:+.2f}%</div>', unsafe_allow_html=True)
             with c3:
-                rsi_val = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
-                sma_val = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate_val
-                macd_val = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
-                macd_sig_val = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
-                pattern = r['Price_Action']
-
                 sig = ("BUY" if rsi_val < 30 and rate_val > sma_val and macd_val > macd_sig_val and
                        pattern in ("Bullish Engulfing","Hammer")
                        else "SELL" if rsi_val > 70 and rate_val < sma_val and macd_val < macd_sig_val and
@@ -262,7 +262,7 @@ with tab1:
                 ico = "Up" if sig == "BUY" else "Down" if sig == "SELL" else "Pause"
                 st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{ico} {sig}</div></div>', unsafe_allow_html=True)
 
-            # === CANDLESTICK CHART WITH VOLUME, SMA, RSI, MACD ===
+            # === CANDLESTICK CHART ===
             fig = make_subplots(
                 rows=4, cols=1,
                 shared_xaxes=True,
@@ -271,7 +271,6 @@ with tab1:
                 row_heights=[0.5, 0.15, 0.15, 0.2]
             )
 
-            # Candlesticks
             fig.add_trace(go.Candlestick(
                 x=df['Datetime'],
                 open=df['Open'],
@@ -281,19 +280,16 @@ with tab1:
                 name="OHLC"
             ), row=1, col=1)
 
-            # SMA
             fig.add_trace(go.Scatter(
                 x=df['Datetime'], y=df['SMA_20'],
                 name="SMA 20", line=dict(color="orange", width=2)
             ), row=1, col=1)
 
-            # Volume
             fig.add_trace(go.Bar(
                 x=df['Datetime'], y=df['Volume'],
                 name="Volume", marker_color="lightblue"
             ), row=2, col=1)
 
-            # RSI
             fig.add_trace(go.Scatter(
                 x=df['Datetime'], y=df['RSI'],
                 name="RSI", line=dict(color="purple")
@@ -301,12 +297,10 @@ with tab1:
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
 
-            # MACD
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name="MACD", line=dict(color="blue")), row=4, col=1)
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name="Signal", line=dict(color="red")), row=4, col=1)
             fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD'] - df['MACD_Signal'], name="Histogram", marker_color="gray"), row=4, col=1)
 
-            # Annotate last pattern
             if pattern != "No Pattern":
                 fig.add_annotation(
                     x=df['Datetime'].iloc[-1],
@@ -324,7 +318,7 @@ with tab1:
                     row=1, col=1
                 )
 
-            fig.update_layout(height=800, xaxis_rangeslider_visible=False)
+            fig.update_layout(height=800, xaxis_rangeslider_visible=False, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------------------------------------------ #
@@ -352,7 +346,7 @@ with tab2:
 # ------------------------------------------------------------------ #
 with tab3:
     stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
-    rate = df['Rate'].iloc[-1] if not df.empty and len(df) > 0 else 1.0
+    rate = df['Rate'].iloc[-1] if not df.empty and len(df) > 0 and pd.notna(df['Rate'].iloc[-1]) else 1.0
     if st.button("Simulate BUY"):
         st.success(f"Simulated BUY @ {rate:.5f} | P&L +${stake*0.03:.0f}")
     if st.button("Simulate SELL"):
