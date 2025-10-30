@@ -326,7 +326,7 @@ class RobustLiveAlertSystem:
 def main():
     st.markdown('<h1 class="main-header">🚨 Live Match Alert System</h1>', unsafe_allow_html=True)
     
-    # Initialize alert system
+    # Initialize alert system FIRST
     if 'alert_system' not in st.session_state:
         st.session_state.alert_system = RobustLiveAlertSystem()
         st.session_state.last_update = datetime.now()
@@ -383,7 +383,7 @@ def main():
     show_comeback_alerts = st.sidebar.checkbox("Show Comeback Alerts", value=True)
     only_favorites = st.sidebar.checkbox("Only My Favorite Teams", value=False)
     
-    # Main content
+    # Main content - NOW display connection status after session state is initialized
     display_connection_status(alert_system)
     
     # Main tabs
