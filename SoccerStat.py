@@ -267,29 +267,33 @@ def display_match_card(match):
     else:
         minute_text = f"🔴 {minute_display}"
     
-    st.markdown(f"""
-    <div class="match-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <span class="live-badge">🔴 LIVE</span>
-            <span class="competition-badge">🏆 {match['competition']}</span>
-        </div>
-        
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="flex: 1; text-align: left;">
-                <div class="team-name">{match['home_team']}</div>
-            </div>
-            
-            <div style="flex: 0 0 auto; text-align: center; padding: 0 30px;">
-                <div class="score-display">{match['home_score']} - {match['away_score']}</div>
-                <div style="color: #7f8c8d; font-weight: 600; font-size: 0.9rem;">{minute_text}</div>
-            </div>
-            
-            <div style="flex: 1; text-align: right;">
-                <div class="team-name">{match['away_team']}</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Create container with custom styling
+    st.markdown('<div class="match-card">', unsafe_allow_html=True)
+    
+    # Header with badges
+    header_col1, header_col2 = st.columns([1, 1])
+    with header_col1:
+        st.markdown('<span class="live-badge">🔴 LIVE</span>', unsafe_allow_html=True)
+    with header_col2:
+        st.markdown(f'<span class="competition-badge">🏆 {match["competition"]}</span>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Match details
+    col1, col2, col3 = st.columns([3, 2, 3])
+    
+    with col1:
+        st.markdown(f'<div class="team-name">{match["home_team"]}</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f'<div class="score-display">{match["home_score"]} - {match["away_score"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="color: #7f8c8d; font-weight: 600; font-size: 0.9rem; text-align: center;">{minute_text}</div>', unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f'<div class="team-name" style="text-align: right;">{match["away_team"]}</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
 def main():
     st.markdown('<div class="main-title"><h1>⚽ LIVE SOCCER MATCHES</h1></div>', unsafe_allow_html=True)
