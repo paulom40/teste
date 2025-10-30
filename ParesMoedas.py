@@ -23,7 +23,7 @@ if base == quote:
     st.sidebar.warning("Please select different currencies.")
     st.stop()
 
-# yfinance ticker format: e.g., for base=USD, quote=EUR -> "EURUSD=X" (USD per EUR), then invert for EUR per USD
+# yfinance ticker format: e.g., for base=USD, quote=EUR -> "EURUSD=X" (USD per EUR), then invert for EUR per USD? Wait: for 1 base (USD) = rate quote (EUR)
 ticker = f"{quote}{base}=X"
 
 days = st.sidebar.slider("Historical Days", 5, 365, 30)  # Min lowered to 5, as yfinance handles it well
@@ -45,9 +45,8 @@ def fetch_forex_data(ticker, days):
         if not data.empty:
             # Reset index to get Date column
             df = data.reset_index()
-            # Use Close price, invert if needed to match base/quote (1 base = rate quote)
-            # Since ticker is quotebase=X (quote per base? Wait: yf "EURUSD=X" is USD per EUR, so for base=USD quote=EUR: 1 EUR = rate USD -> rate for 1 USD = 1/rate EUR
-            df['Rate'] = 1 / df['Close']  # Adjust to get quote per base
+            # Adjust rate: yf "EURUSD=X" Close is USD per EUR, but for base=USD quote=EUR: want EUR per USD = 1 / Close
+            df['Rate'] = 1 / df['Close']
             df = df[['Date', 'Rate']]
             df['Date'] = pd.to_datetime(df['Date'])
             df = df.sort_values("Date").reset_index(drop=True)
@@ -59,8 +58,8 @@ def fetch_forex_data(ticker, days):
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-# Fetch data
-df = fetch_orex_data(ticker, days)
+# Fetch data (Fixed: was fetch_orex_data)
+df = fetch_forex_data(ticker, days)
 
 # Compute Technical Indicators (native pandas implementation)
 @st.cache_data
