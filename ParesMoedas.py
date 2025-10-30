@@ -5,16 +5,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import numpy as np
-from oandapyV20 import API  # New: OANDA API wrapper
-from oandapyV20.exceptions import V20Error
-from oandapyV20.endpoints import orders as orders_endpoint
-from oandapyV20.endpoints import accounts as accounts_endpoint
+import requests  # For potential free API calls
 
 # Page config
 st.set_page_config(page_title="Auto-Trading Forex System", layout="wide")
 
 # Title
-st.title("🤖 Auto-Trading Forex System with Broker API Integration")
+st.title("🤖 Auto-Trading Forex System with Manual Stake & Free API Data")
 
 # Sidebar for user inputs
 st.sidebar.header("Select Currency Pair")
@@ -43,24 +40,11 @@ rsi_threshold_high = st.sidebar.slider("RSI Sell Threshold", 60, 80, 70)
 use_stop_loss = st.sidebar.checkbox("Use Stop Loss (2%)", True)
 use_take_profit = st.sidebar.checkbox("Use Take Profit (4%)", True)
 
-# OANDA Broker API Configuration (New)
-st.sidebar.subheader("Broker API (OANDA v20)")
-api_token = st.sidebar.text_input("API Token", type="password", help="Get from https://www.oanda.com/account/settings/api")
-account_id = st.sidebar.text_input("Account ID", help="Your OANDA account ID (demo/live)")
-environment = st.sidebar.selectbox("Environment", ["practice", "live"], help="Use 'practice' for testing")
-if st.sidebar.button("Test API Connection"):
-    if api_token and account_id:
-        try:
-            api = API(access_token=api_token, environment=environment)
-            r = accounts_endpoint.AccountDetails(accountID=account_id)
-            api.request(r)
-            st.sidebar.success("✅ API Connected Successfully!")
-        except V20Error as e:
-            st.sidebar.error(f"❌ API Error: {e}")
-    else:
-        st.sidebar.warning("Enter API Token and Account ID to test.")
+# Free API Data Source (New: Switch to freeforexapi or similar; here using yfinance as fallback, but example with free API)
+st.sidebar.subheader("Data Source")
+use_free_api = st.sidebar.checkbox("Use Free Forex API (No Key)", True)
 
-# Technical Indicators Selection (for visualization only; all computed for strategies)
+# Technical Indicators Selection
 st.sidebar.subheader("Display Indicators")
 show_sma = st.sidebar.checkbox("Simple Moving Average (SMA 20)", True)
 show_ema = st.sidebar.checkbox("Exponential Moving Average (EMA 20)", True)
@@ -72,9 +56,30 @@ show_macd = st.sidebar.checkbox("MACD", True)
 if st.sidebar.button("🔄 Refresh Data & Check Alerts"):
     st.rerun()
 
-# Fetch forex data using yfinance (for charts; OANDA for orders)
-@st.cache_data(ttl=60)  # Cache for 1 minute for more "real-time" feel
-def fetch_forex_data(ticker, days):
+# Fetch forex data (Priority: Free API if selected, fallback to yfinance)
+@st.cache_data(ttl=60)
+def fetch_forex_data(ticker, days, use_free_api):
+    if use_free_api:
+        try:
+            # Use free API: exchangerate.host (no key for basic latest; historical limited)
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+            url = f"https://api.exchangerate.host/timeseries?start_date={start_date}&end_date={end_date}&base={base}&symbols={quote}"
+            response = requests.get(url)
+            data = response.json()
+            if "rates" in data:
+                df = pd.DataFrame(data["rates"]).T
+                df.index = pd.to_datetime(df.index)
+                df = df.reset_index().rename(columns={"index": "Date", quote: "Rate"})
+                df["Date"] = pd.to_datetime(df["Date"])
+                df = df.sort_values("Date").reset_index(drop=True)
+                return df
+            else:
+                st.warning("Free API failed; falling back to yfinance.")
+        except Exception as e:
+            st.warning(f"Free API error: {e}; using yfinance.")
+    
+    # Fallback to yfinance
     try:
         data = yf.download(ticker, period=f"{days}d", interval="1d", progress=False)
         if not data.empty:
@@ -91,7 +96,7 @@ def fetch_forex_data(ticker, days):
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-df = fetch_forex_data(ticker, days)
+df = fetch_forex_data(ticker, days, use_free_api)
 
 # Compute Technical Indicators (always compute all for strategies)
 @st.cache_data
@@ -132,7 +137,7 @@ def compute_indicators(df):
 if not df.empty:
     df = compute_indicators(df)
 
-# Auto-Trading Logic (Simulation)
+# Auto-Trading Logic
 @st.cache_data
 def generate_signals(df, strategy, rsi_low, rsi_high):
     if df.empty:
@@ -222,56 +227,8 @@ if not df.empty:
     else:
         st.sidebar.info("Recommendation: HOLD")
 
-# Place Real Order via OANDA API (New: Replaces Simulate)
-if st.sidebar.button("🚀 Place Real Order (Demo/Live)"):
-    if not df.empty and current_signal != 'HOLD' and api_token and account_id:
-        entry_price = df['Rate'].iloc[-1]
-        # OANDA instrument format: e.g., EUR_USD
-        instrument = f"{quote}_{base}"
-        units = int(stake / entry_price * 10000)  # Approximate units (pip value adjustment; customize for pair)
-        if current_signal == 'SELL':
-            units = -units  # Negative for sell
-        
-        try:
-            api = API(access_token=api_token, environment=environment)
-            # Market order
-            order_data = {
-                "order": {
-                    "instrument": instrument,
-                    "units": str(units),
-                    "type": "MARKET",
-                    "positionFill": "DEFAULT"
-                }
-            }
-            r = orders_endpoint.OrderCreate(accountID=account_id, data=order_data)
-            api.request(r)
-            st.success(f"✅ Order Placed: {current_signal} {abs(units)} units of {instrument} at ~{entry_price:.5f}")
-            
-            # Optional: Add SL/TP (requires more config; simplified here)
-            if use_stop_loss or use_take_profit:
-                st.info("SL/TP not auto-added; manage manually in OANDA dashboard.")
-            
-            # Log to history
-            pnl = 0  # Real P&L tracked by broker
-            trade_type = "Long" if units > 0 else "Short"
-            st.session_state.trade_history = st.session_state.get('trade_history', []) + [{
-                'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                'Pair': f"{base}/{quote}",
-                'Type': trade_type,
-                'Units': units,
-                'Entry': entry_price,
-                'P&L': pnl,  # Update later from API
-                'Status': 'Live'
-            }]
-        except V20Error as e:
-            st.error(f"❌ Order Error: {e}")
-        except Exception as e:
-            st.error(f"Unexpected error: {e}")
-    else:
-        st.warning("Enter valid signal, API details, or use 'Simulate' for demo.")
-
-# Simulate Trade (Fallback)
-if st.sidebar.button("Simulate Trade (No API)"):
+# Simulate Trade (No Broker API - Free Simulation)
+if st.sidebar.button("Simulate Trade with Stake"):
     if not df.empty and current_signal != 'HOLD':
         entry_price = df['Rate'].iloc[-1]
         position_size = stake / entry_price
@@ -297,8 +254,7 @@ if st.sidebar.button("Simulate Trade (No API)"):
             'Entry': entry_price,
             'Stake': stake,
             'P&L': pnl,
-            'Exit': exit_price,
-            'Status': 'Simulated'
+            'Exit': exit_price
         }]
         st.success(f"Simulated {trade_type} Trade: Entry {entry_price:.5f}, Exit {exit_price:.5f}, P&L ${pnl:.2f}")
 
@@ -307,8 +263,8 @@ if 'trade_history' in st.session_state and st.session_state.trade_history:
     st.subheader("Trade History")
     history_df = pd.DataFrame(st.session_state.trade_history)
     st.dataframe(history_df)
-    total_pnl = history_df[history_df['Status'] == 'Simulated']['P&L'].sum() if 'P&L' in history_df.columns else 0
-    st.metric("Simulated Total P&L", f"${total_pnl:.2f}")
+    total_pnl = history_df['P&L'].sum()
+    st.metric("Total Simulated P&L", f"${total_pnl:.2f}")
 
 # Main content: Metrics
 col1, col2 = st.columns(2)
@@ -403,4 +359,4 @@ else:
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.info("⚠️ REAL TRADING RISK: Use 'practice' environment for testing. This integrates OANDA v20 API for market orders. Customize units/SL/TP for production. Built with Streamlit & yfinance/oandapyV20.")
+st.sidebar.info("⚠️ SIMULATION ONLY: No broker API integrated to avoid library issues. For real trading, consider OANDA practice account (install oandapyV20 via requirements.txt on Streamlit Cloud). Data from free API or yfinance. Built with Streamlit.")
