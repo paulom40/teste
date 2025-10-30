@@ -59,7 +59,7 @@ def fetch_data(ticker, period, interval):
                            progress=False, auto_adjust=True)
         if data.empty or len(data) < 26:
             return pd.DataFrame()
-        df = data[['Open','High','Low','Close', 'Volume']].copy()
+        df = data[['Open','High','Low','Close','Volume']].copy()
         df['Rate'] = 1.0 / df['Close']
         df = df.reset_index()
         df['Datetime'] = pd.to_datetime(df['Datetime'])
@@ -127,7 +127,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         pattern = detect_price_action(df.tail(3))
         df.loc[df.index[-1], 'Price_Action'] = pattern
 
-    return df[['Datetime','Rate','Open','High','Low','Close','Volume','SMA_20','RSI','MACD','MACD_Signal','Price_Action']].dropna()
+    return df[['Datetime','Rate','Open','High','Low','Close','Volume',
+               'SMA_20','RSI','MACD','MACD_Signal','Price_Action']].dropna()
 
 # ------------------------------------------------------------------ #
 # Analyze Pair
@@ -142,11 +143,12 @@ def analyze_pair(b, q):
             return None
         r = df.iloc[-1]
 
-        rate = float(r['Rate'])
-        rsi  = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
-        sma  = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate
-        macd = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
-        macd_sig = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
+        # ---- scalar extraction with .item() ----
+        rate = r['Rate'].item() if pd.notna(r['Rate']) else 0.0
+        rsi  = r['RSI'].item() if pd.notna(r['RSI']) else 50.0
+        sma  = r['SMA_20'].item() if pd.notna(r['SMA_20']) else rate
+        macd = r['MACD'].item() if pd.notna(r['MACD']) else 0.0
+        macd_sig = r['MACD_Signal'].item() if pd.notna(r['MACD_Signal']) else 0.0
         pattern = str(r['Price_Action'])
 
         signal = "HOLD"
@@ -235,18 +237,18 @@ with tab1:
         if not df.empty:
             r = df.iloc[-1]
 
-            # === Extract scalars safely ===
-            rate_val = float(r['Rate']) if pd.notna(r['Rate']) else 0.0
-            first_rate = float(df['Rate'].iloc[0]) if pd.notna(df['Rate'].iloc[0]) else rate_val
+            # ---- safe scalar extraction ----
+            rate_val   = r['Rate'].item()   if pd.notna(r['Rate'])   else 0.0
+            first_rate = df['Rate'].iloc[0].item() if pd.notna(df['Rate'].iloc[0]) else rate_val
             change_val = ((rate_val - first_rate) / first_rate * 100) if first_rate != 0 else 0.0
 
-            rsi_val = float(r['RSI']) if pd.notna(r['RSI']) else 50.0
-            sma_val = float(r['SMA_20']) if pd.notna(r['SMA_20']) else rate_val
-            macd_val = float(r['MACD']) if pd.notna(r['MACD']) else 0.0
-            macd_sig_val = float(r['MACD_Signal']) if pd.notna(r['MACD_Signal']) else 0.0
-            pattern = str(r['Price_Action'])
+            rsi_val      = r['RSI'].item()      if pd.notna(r['RSI'])      else 50.0
+            sma_val      = r['SMA_20'].item()   if pd.notna(r['SMA_20'])   else rate_val
+            macd_val     = r['MACD'].item()     if pd.notna(r['MACD'])     else 0.0
+            macd_sig_val = r['MACD_Signal'].item() if pd.notna(r['MACD_Signal']) else 0.0
+            pattern      = str(r['Price_Action'])
 
-            # === Metrics ===
+            # ---- metrics ----
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.markdown(f'<div class="metric-card"><b>Rate:</b> {rate_val:.5f}</div>', unsafe_allow_html=True)
@@ -262,7 +264,7 @@ with tab1:
                 ico = "Up" if sig == "BUY" else "Down" if sig == "SELL" else "Pause"
                 st.markdown(f'<div class="metric-card"><div class="{cls} signal-container">{ico} {sig}</div></div>', unsafe_allow_html=True)
 
-            # === CANDLESTICK CHART ===
+            # ---- candlestick chart ----
             fig = make_subplots(
                 rows=4, cols=1,
                 shared_xaxes=True,
@@ -299,7 +301,8 @@ with tab1:
 
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD'], name="MACD", line=dict(color="blue")), row=4, col=1)
             fig.add_trace(go.Scatter(x=df['Datetime'], y=df['MACD_Signal'], name="Signal", line=dict(color="red")), row=4, col=1)
-            fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD'] - df['MACD_Signal'], name="Histogram", marker_color="gray"), row=4, col=1)
+            fig.add_trace(go.Bar(x=df['Datetime'], y=df['MACD'] - df['MACD_Signal'],
+                                name="Histogram", marker_color="gray"), row=4, col=1)
 
             if pattern != "No Pattern":
                 fig.add_annotation(
@@ -346,7 +349,8 @@ with tab2:
 # ------------------------------------------------------------------ #
 with tab3:
     stake = st.number_input("Stake ($)", 100.0, 10000.0, 1000.0)
-    rate = df['Rate'].iloc[-1] if not df.empty and len(df) > 0 and pd.notna(df['Rate'].iloc[-1]) else 1.0
+    rate = (df['Rate'].iloc[-1].item()
+            if not df.empty and len(df) > 0 and pd.notna(df['Rate'].iloc[-1]) else 1.0)
     if st.button("Simulate BUY"):
         st.success(f"Simulated BUY @ {rate:.5f} | P&L +${stake*0.03:.0f}")
     if st.button("Simulate SELL"):
