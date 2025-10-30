@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -64,6 +63,18 @@ st.markdown("""
         background-color: #F0F0F0 !important;
         color: black;
     }
+    .bullish-sentiment {
+        background-color: #90EE90 !important;
+        color: black;
+    }
+    .bearish-sentiment {
+        background-color: #FFB6C1 !important;
+        color: black;
+    }
+    .neutral-sentiment {
+        background-color: #F0F0F0 !important;
+        color: black;
+    }
     @keyframes blink {
         0% { opacity: 1; }
         50% { opacity: 0.5; }
@@ -116,10 +127,17 @@ if "ultima_atualizacao" not in st.session_state:
     st.session_state.ultima_atualizacao = datetime.now()
 if "contador_updates" not in st.session_state:
     st.session_state.contador_updates = 0
+if "logs_tecnicos" not in st.session_state:
+    st.session_state.logs_tecnicos = []
+if "stake_valor" not in st.session_state:
+    st.session_state.stake_valor = 10
 
 def detectar_padroes_candles(df):
     """Detecta padrões de candles usando lógica de price action"""
     patterns = []
+    
+    if len(df) < 3:
+        return patterns
     
     for i in range(2, len(df)):
         current = df.iloc[i]
@@ -192,171 +210,108 @@ def detectar_padroes_candles(df):
                 "type": "neutral", 
                 "strength": "weak"
             })
-        
-        # Morning Star - reversão bullish
-        if (i >= 2 and
-            prev2['close'] < prev2['open'] and  # Primeiro candle de baixa
-            abs(prev1['close'] - prev1['open']) <= (prev1['high'] - prev1['low']) * 0.3 and  # Segundo candle pequeno
-            current['close'] > current['open'] and  # Terceiro candle de alta
-            current['close'] > (prev2['open'] + prev2['close']) / 2):
-            patterns.append({
-                "timestamp": current['timestamp'], 
-                "pattern": "Morning Star", 
-                "type": "bullish", 
-                "strength": "strong"
-            })
-        
-        # Evening Star - reversão bearish
-        if (i >= 2 and
-            prev2['close'] > prev2['open'] and  # Primeiro candle de alta
-            abs(prev1['close'] - prev1['open']) <= (prev1['high'] - prev1['low']) * 0.3 and  # Segundo candle pequeno
-            current['close'] < current['open'] and  # Terceiro candle de baixa
-            current['close'] < (prev2['open'] + prev2['close']) / 2):
-            patterns.append({
-                "timestamp": current['timestamp'], 
-                "pattern": "Evening Star", 
-                "type": "bearish", 
-                "strength": "strong"
-            })
-        
-        # Piercing Line - reversão bullish
-        if (prev1['close'] < prev1['open'] and  # Candle anterior de baixa
-            current['close'] > current['open'] and  # Candle atual de alta
-            current['open'] < prev1['low'] and 
-            current['close'] > (prev1['open'] + prev1['close']) / 2 and
-            current['close'] < prev1['open']):
-            patterns.append({
-                "timestamp": current['timestamp'], 
-                "pattern": "Piercing Line", 
-                "type": "bullish", 
-                "strength": "medium"
-            })
-        
-        # Dark Cloud Cover - reversão bearish
-        if (prev1['close'] > prev1['open'] and  # Candle anterior de alta
-            current['close'] < current['open'] and  # Candle atual de baixa
-            current['open'] > prev1['high'] and 
-            current['close'] < (prev1['open'] + prev1['close']) / 2 and
-            current['close'] > prev1['close']):
-            patterns.append({
-                "timestamp": current['timestamp'], 
-                "pattern": "Dark Cloud Cover", 
-                "type": "bearish", 
-                "strength": "medium"
-            })
     
     return patterns
 
 def calcular_suporte_resistencia(df, window=20):
     """Calcula níveis de suporte e resistência"""
     df = df.copy()
-    df['resistance'] = df['high'].rolling(window=window).max()
-    df['support'] = df['low'].rolling(window=window).min()
+    df['resistance'] = df['high'].rolling(window=window, min_periods=1).max()
+    df['support'] = df['low'].rolling(window=window, min_periods=1).min()
     return df
 
 def analisar_tendencia(df):
     """Analisa a tendência baseada em MME e price action"""
-    if len(df) < 20:
+    if len(df) < 5:
         return "Indefinida"
     
-    # Tendência por MME
-    ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
-    ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
-    ema_50 = df['close'].ewm(span=50).mean().iloc[-1]
-    
-    # Price Action - Máximas e Mínimas crescentes/decrescentes
-    high_5 = df['high'].tail(5)
-    low_5 = df['low'].tail(5)
-    
-    max_increasing = all(high_5.iloc[i] > high_5.iloc[i-1] for i in range(1, len(high_5)))
-    min_increasing = all(low_5.iloc[i] > low_5.iloc[i-1] for i in range(1, len(low_5)))
-    max_decreasing = all(high_5.iloc[i] < high_5.iloc[i-1] for i in range(1, len(high_5)))
-    min_decreasing = all(low_5.iloc[i] < low_5.iloc[i-1] for i in range(1, len(low_5)))
-    
-    if (ema_9 > ema_21 > ema_50) and (max_increasing and min_increasing):
-        return "Forte Alta"
-    elif (ema_9 < ema_21 < ema_50) and (max_decreasing and min_decreasing):
-        return "Forte Baixa"
-    elif ema_9 > ema_21:
-        return "Alta"
-    elif ema_9 < ema_21:
-        return "Baixa"
-    else:
-        return "Lateral"
+    try:
+        # Tendência por MME
+        ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
+        ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
+        
+        # Price Action - Máximas e Mínimas
+        high_5 = df['high'].tail(5)
+        low_5 = df['low'].tail(5)
+        
+        max_increasing = all(high_5.iloc[i] > high_5.iloc[i-1] for i in range(1, len(high_5)))
+        min_increasing = all(low_5.iloc[i] > low_5.iloc[i-1] for i in range(1, len(low_5)))
+        max_decreasing = all(high_5.iloc[i] < high_5.iloc[i-1] for i in range(1, len(high_5)))
+        min_decreasing = all(low_5.iloc[i] < low_5.iloc[i-1] for i in range(1, len(low_5)))
+        
+        if ema_9 > ema_21 and (max_increasing or min_increasing):
+            return "Alta"
+        elif ema_9 < ema_21 and (max_decreasing or min_decreasing):
+            return "Baixa"
+        else:
+            return "Lateral"
+    except:
+        return "Indefinida"
 
 def calcular_volume_profile(df):
     """Calcula perfil de volume para análise de price action"""
     if len(df) == 0:
         return {}
     
-    price_levels = np.linspace(df['low'].min(), df['high'].max(), 20)
-    volume_at_price = {}
-    
-    for level in price_levels:
-        # Volume próximo a este nível de preço
-        mask = (df['low'] <= level) & (df['high'] >= level)
-        volume_at_price[round(level, 4)] = df[mask]['volume'].sum()
-    
-    return volume_at_price
-
-def calcular_pivot_points(df):
-    """Calcula pontos pivô para day trading"""
-    if len(df) == 0:
+    try:
+        price_levels = np.linspace(df['low'].min(), df['high'].max(), 10)
+        volume_at_price = {}
+        
+        for level in price_levels:
+            # Volume próximo a este nível de preço
+            mask = (df['low'] <= level) & (df['high'] >= level)
+            volume_at_price[round(level, 4)] = df[mask]['volume'].sum() if not df[mask].empty else 0
+        
+        return volume_at_price
+    except:
         return {}
-    
-    high = df['high'].max()
-    low = df['low'].min()
-    close = df['close'].iloc[-1]
-    
-    pivot = (high + low + close) / 3
-    r1 = 2 * pivot - low
-    s1 = 2 * pivot - high
-    r2 = pivot + (high - low)
-    s2 = pivot - (high - low)
-    
-    return {
-        'pivot': pivot,
-        'r1': r1,
-        'r2': r2,
-        's1': s1,
-        's2': s2
-    }
+
+def calcular_pivot_points(high, low, close):
+    """Calcula pontos pivô para day trading"""
+    try:
+        pivot = (high + low + close) / 3
+        r1 = 2 * pivot - low
+        s1 = 2 * pivot - high
+        r2 = pivot + (high - low)
+        s2 = pivot - (high - low)
+        
+        return {
+            'pivot': pivot,
+            'r1': r1,
+            'r2': r2,
+            's1': s1,
+            's2': s2
+        }
+    except:
+        return {}
 
 def analisar_mercado(df):
     """Análise completa do mercado baseada em price action"""
-    if len(df) < 10:
+    if len(df) < 5:
         return "Dados insuficientes"
     
-    ultimo = df.iloc[-1]
-    tendencia = analisar_tendencia(df)
-    padroes = detectar_padroes_candles(df.tail(5))
-    
-    # Análise de força
-    rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 50
-    volume_avg = df['volume'].tail(5).mean()
-    volume_current = df['volume'].iloc[-1]
-    
-    # Determinar sentimento
-    if tendencia in ["Forte Alta", "Alta"] and rsi < 70 and volume_current > volume_avg:
-        if any(p['type'] == 'bullish' for p in padroes):
-            return "💰 Forte Bullish"
-        else:
+    try:
+        ultimo = df.iloc[-1]
+        tendencia = analisar_tendencia(df)
+        
+        # Análise de força
+        rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 50
+        volume_avg = df['volume'].tail(5).mean()
+        volume_current = df['volume'].iloc[-1]
+        
+        # Determinar sentimento
+        if tendencia == "Alta" and rsi < 70:
             return "📈 Bullish"
-    
-    elif tendencia in ["Forte Baixa", "Baixa"] and rsi > 30 and volume_current > volume_avg:
-        if any(p['type'] == 'bearish' for p in padroes):
-            return "🐻 Forte Bearish"
-        else:
+        elif tendencia == "Baixa" and rsi > 30:
             return "📉 Bearish"
-    
-    elif rsi > 70 and volume_current > volume_avg:
-        return "⚡ Sobrecomprado"
-    
-    elif rsi < 30 and volume_current > volume_avg:
-        return "🛒 Sobrevendido"
-    
-    else:
-        return "⚖️ Neutral"
+        elif rsi > 70:
+            return "⚡ Sobrecomprado"
+        elif rsi < 30:
+            return "🛒 Sobrevendido"
+        else:
+            return "⚖️ Neutral"
+    except:
+        return "❌ Erro análise"
 
 def gerar_dado_live(par, base_price):
     """Gera um novo dado em tempo real para um par"""
@@ -391,13 +346,13 @@ def atualizar_dados_live():
             if par not in st.session_state.dados_live:
                 st.session_state.dados_live[par] = []
             
-            # Manter apenas os últimos 100 pontos
+            # Manter apenas os últimos 50 pontos
             st.session_state.dados_live[par].append(novo_dado)
-            if len(st.session_state.dados_live[par]) > 100:
-                st.session_state.dados_live[par] = st.session_state.dados_live[par][-100:]
+            if len(st.session_state.dados_live[par]) > 50:
+                st.session_state.dados_live[par] = st.session_state.dados_live[par][-50:]
 
-def simular_dados_15min(par, base_price, days=7):
-    """Simula dados de 15 minutos para análise"""
+def simular_dados_15min(par, base_price, days=3):
+    """Simula dados de 15 minutos para análise - versão simplificada"""
     timeframe_data = []
     current_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
@@ -406,15 +361,12 @@ def simular_dados_15min(par, base_price, days=7):
             for minute in range(0, 60, 15):
                 timestamp = current_time - timedelta(days=day) + timedelta(hours=hour, minutes=minute)
                 
-                # Simular preços OHLC
-                open_price = base_price * (1 + np.random.normal(0, 0.0005))
-                high = open_price * (1 + abs(np.random.normal(0, 0.001)))
-                low = open_price * (1 - abs(np.random.normal(0, 0.001)))
-                close = (high + low) / 2 + np.random.normal(0, 0.0002)
-                
-                # Calcular indicadores
-                volume = np.random.randint(100, 1000)
-                spread = np.random.uniform(0.0001, 0.0003)
+                # Simular preços OHLC mais simples
+                variacao = np.random.normal(0, 0.0005)
+                open_price = base_price * (1 + variacao)
+                close = open_price * (1 + np.random.normal(0, 0.0003))
+                high = max(open_price, close) * (1 + abs(np.random.normal(0, 0.0002)))
+                low = min(open_price, close) * (1 - abs(np.random.normal(0, 0.0002)))
                 
                 timeframe_data.append({
                     "timestamp": timestamp,
@@ -424,101 +376,90 @@ def simular_dados_15min(par, base_price, days=7):
                     "high": round(high, 5),
                     "low": round(low, 5),
                     "close": round(close, 5),
-                    "volume": volume,
-                    "spread": round(spread, 5)
+                    "volume": np.random.randint(100, 1000)
                 })
     
     return pd.DataFrame(timeframe_data)
 
 def calcular_indicadores_tecnicos(df):
     """Calcula indicadores técnicos para estratégia de 15min"""
-    df = df.sort_values('timestamp')
-    
-    # EMA
-    df['EMA_9'] = df['close'].ewm(span=9).mean()
-    df['EMA_21'] = df['close'].ewm(span=21).mean()
-    df['EMA_50'] = df['close'].ewm(span=50).mean()
-    
-    # RSI
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    # MACD
-    exp1 = df['close'].ewm(span=12).mean()
-    exp2 = df['close'].ewm(span=26).mean()
-    df['MACD'] = exp1 - exp2
-    df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
-    df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
-    
-    # Bollinger Bands
-    df['BB_Middle'] = df['close'].rolling(window=20).mean()
-    bb_std = df['close'].rolling(window=20).std()
-    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
-    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
-    
-    # Price Action
-    df['Body'] = abs(df['close'] - df['open'])
-    df['Total_Range'] = df['high'] - df['low']
-    df['Body_Ratio'] = df['Body'] / df['Total_Range']
-    df['Upper_Shadow'] = df['high'] - np.maximum(df['open'], df['close'])
-    df['Lower_Shadow'] = np.minimum(df['open'], df['close']) - df['low']
-    df['Candle_Type'] = np.where(df['close'] > df['open'], 'Alta', 'Baixa')
-    
-    # Suporte e Resistência
-    df = calcular_suporte_resistencia(df)
-    
-    # Pivot Points
-    pivot_data = calcular_pivot_points(df.tail(20))
-    for key, value in pivot_data.items():
-        df[key] = value
-    
-    return df
+    try:
+        df = df.sort_values('timestamp').copy()
+        
+        # EMA
+        df['EMA_9'] = df['close'].ewm(span=9).mean()
+        df['EMA_21'] = df['close'].ewm(span=21).mean()
+        
+        # RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI'] = df['RSI'].fillna(50)
+        
+        # MACD simplificado
+        exp1 = df['close'].ewm(span=12).mean()
+        exp2 = df['close'].ewm(span=26).mean()
+        df['MACD'] = exp1 - exp2
+        df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+        
+        # Price Action
+        df['Body'] = abs(df['close'] - df['open'])
+        df['Total_Range'] = df['high'] - df['low']
+        df['Body_Ratio'] = np.where(df['Total_Range'] > 0, df['Body'] / df['Total_Range'], 0)
+        df['Upper_Shadow'] = df['high'] - np.maximum(df['open'], df['close'])
+        df['Lower_Shadow'] = np.minimum(df['open'], df['close']) - df['low']
+        df['Candle_Type'] = np.where(df['close'] > df['open'], 'Alta', 'Baixa')
+        
+        # Suporte e Resistência
+        df = calcular_suporte_resistencia(df)
+        
+        return df
+    except Exception as e:
+        st.error(f"Erro no cálculo de indicadores: {e}")
+        return df
 
 def gerar_sinais_15min(df):
     """Gera sinais de trading baseados na estratégia de 15min"""
-    df['sinal'] = 'NEUTRO'
-    
-    # Detectar padrões de candles
-    padroes = detectar_padroes_candles(df)
-    df['padrao_candle'] = ''
-    df['tipo_padrao'] = ''
-    df['forca_padrao'] = ''
-    
-    for padrao in padroes:
-        mask = df['timestamp'] == padrao['timestamp']
-        df.loc[mask, 'padrao_candle'] = padrao['pattern']
-        df.loc[mask, 'tipo_padrao'] = padrao['type']
-        df.loc[mask, 'forca_padrao'] = padrao['strength']
-    
-    # Análise de mercado
-    df['analise_mercado'] = ''
-    for i in range(10, len(df)):
-        df_segment = df.iloc[:i+1]
-        df.loc[df.index[i], 'analise_mercado'] = analisar_mercado(df_segment)
-    
-    # Condições de compra
-    buy_condition = (
-        (df['EMA_9'] > df['EMA_21']) & 
-        (df['RSI'] < 35) & 
-        (df['MACD'] > df['MACD_Signal']) &
-        (df['tipo_padrao'].isin(['bullish', 'strong']))
-    )
-    
-    # Condições de venda
-    sell_condition = (
-        (df['EMA_9'] < df['EMA_21']) & 
-        (df['RSI'] > 65) & 
-        (df['MACD'] < df['MACD_Signal']) &
-        (df['tipo_padrao'].isin(['bearish', 'strong']))
-    )
-    
-    df.loc[buy_condition, 'sinal'] = 'COMPRA'
-    df.loc[sell_condition, 'sinal'] = 'VENDA'
-    
-    return df
+    try:
+        df = df.copy()
+        df['sinal'] = 'NEUTRO'
+        
+        # Detectar padrões de candles
+        padroes = detectar_padroes_candles(df)
+        df['padrao_candle'] = ''
+        df['tipo_padrao'] = ''
+        
+        for padrao in padroes:
+            mask = df['timestamp'] == padrao['timestamp']
+            if mask.any():
+                df.loc[mask, 'padrao_candle'] = padrao['pattern']
+                df.loc[mask, 'tipo_padrao'] = padrao['type']
+        
+        # Condições de compra
+        buy_condition = (
+            (df['EMA_9'] > df['EMA_21']) & 
+            (df['RSI'] < 35) & 
+            (df['MACD'] > df['MACD_Signal']) &
+            (df['tipo_padrao'] == 'bullish')
+        )
+        
+        # Condições de venda
+        sell_condition = (
+            (df['EMA_9'] < df['EMA_21']) & 
+            (df['RSI'] > 65) & 
+            (df['MACD'] < df['MACD_Signal']) &
+            (df['tipo_padrao'] == 'bearish')
+        )
+        
+        df.loc[buy_condition, 'sinal'] = 'COMPRA'
+        df.loc[sell_condition, 'sinal'] = 'VENDA'
+        
+        return df
+    except Exception as e:
+        st.error(f"Erro na geração de sinais: {e}")
+        return df
 
 # Função alternativa para style_metric_cards
 def custom_metric_style():
@@ -536,8 +477,9 @@ def custom_metric_style():
     </style>
     """, unsafe_allow_html=True)
 
-# Simular dados de 15 minutos
-st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard - Price Action & 15min Strategy</h1>', unsafe_allow_html=True)
+# Interface principal
+st.markdown('<h1 class="main-header">🎯 Advanced Trading Dashboard</h1>', unsafe_allow_html=True)
+st.markdown('<h3 class="main-header" style="font-size: 1.5rem;">Price Action & 15min Strategy</h3>', unsafe_allow_html=True)
 
 # Sidebar modernizada
 with st.sidebar:
@@ -559,29 +501,21 @@ with st.sidebar:
     st.subheader("📊 Parâmetros da Estratégia")
     rsi_oversold = st.slider("RSI Oversold", 20, 40, 30)
     rsi_overbought = st.slider("RSI Overbought", 60, 80, 70)
-    take_profit = st.number_input("Take Profit (pips)", value=15, min_value=5, max_value=50)
-    stop_loss = st.number_input("Stop Loss (pips)", value=10, min_value=5, max_value=30)
     
     st.subheader("📈 Filtros")
     pares_selecionados = st.multiselect(
         "Pares para análise:",
         list(PARES.keys()),
-        default=list(PARES.keys())[:3]
+        default=["EUR/USD", "GBP/USD", "USD/JPY"]
     )
     
     # Configuração de atualização automática
     st.subheader("🔄 Configuração Live")
-    auto_refresh = st.checkbox("Atualização Automática", value=True)
+    auto_refresh = st.checkbox("Atualização Automática", value=False)
     refresh_interval = st.slider("Intervalo (segundos)", 1, 60, 5)
 
 # Atualizar pares selecionados no session state
 st.session_state.pares_selecionados = pares_selecionados
-
-# Inicializar session state
-if "logs_tecnicos" not in st.session_state:
-    st.session_state.logs_tecnicos = []
-if "stake_valor" not in st.session_state:
-    st.session_state.stake_valor = 10
 
 # Atualizar stake
 if stake_manual == "€5":
@@ -598,19 +532,23 @@ atualizar_dados_live()
 
 # Simular dados de 15 minutos
 if pares_selecionados:
-    dados_15min = pd.concat([
-        simular_dados_15min(par, PARES[par]["base"]) 
-        for par in pares_selecionados
-    ])
+    try:
+        dados_15min = pd.concat([
+            simular_dados_15min(par, PARES[par]["base"]) 
+            for par in pares_selecionados
+        ])
 
-    # Calcular indicadores técnicos
-    dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
-    dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+        # Calcular indicadores técnicos
+        dados_15min = dados_15min.groupby('par').apply(calcular_indicadores_tecnicos).reset_index(drop=True)
+        dados_15min = dados_15min.groupby('par').apply(gerar_sinais_15min).reset_index(drop=True)
+    except Exception as e:
+        st.error(f"Erro ao processar dados: {e}")
+        dados_15min = pd.DataFrame()
 else:
     dados_15min = pd.DataFrame()
 
 # Layout principal em abas
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard Live", "🎯 Estratégia 15min", "📈 Price Action", "💰 Preços Live", "📋 Relatórios", "🔍 Análise Candles"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🎯 Estratégia", "📈 Price Action", "💰 Live Data"])
 
 with tab1:
     # Header com informações de atualização
@@ -620,8 +558,8 @@ with tab1:
     with col_update2:
         st.metric("Total Updates", st.session_state.contador_updates)
     with col_update3:
-        tempo_decorrido = (datetime.now() - st.session_state.ultima_atualizacao).seconds
-        st.metric("Segundos desde update", tempo_decorrido)
+        stake_atual = st.session_state.stake_valor
+        st.metric("Stake Atual", f"€{stake_atual}")
     
     # KPIs principais
     col1, col2, col3, col4 = st.columns(4)
@@ -639,8 +577,8 @@ with tab1:
         st.metric("Win Rate", f"{win_rate:.1f}%")
     
     with col4:
-        stake_atual = st.session_state.stake_valor
-        st.metric("Stake Atual", f"€{stake_atual}")
+        lucro_total = sum([log.get('log_lucro_estimado', 0) for log in st.session_state.logs_tecnicos])
+        st.metric("Lucro Total", f"€{lucro_total:.2f}")
     
     # Aplicar estilo personalizado às métricas
     custom_metric_style()
@@ -653,17 +591,31 @@ with tab1:
         for par in pares_selecionados:
             df_par = dados_15min[dados_15min['par'] == par]
             if not df_par.empty:
-                sentimento = df_par['analise_mercado'].iloc[-1] if 'analise_mercado' in df_par.columns else "Neutral"
-                sentimentos.append({"Par": par, "Sentimento": sentimento})
+                tendencia = analisar_tendencia(df_par)
+                rsi = df_par['RSI'].iloc[-1] if 'RSI' in df_par.columns else 50
+                
+                # Determinar sentimento simples
+                if tendencia == "Alta" and rsi < 70:
+                    sentimento = "📈 Bullish"
+                elif tendencia == "Baixa" and rsi > 30:
+                    sentimento = "📉 Bearish"
+                elif rsi > 70:
+                    sentimento = "⚡ Sobrecomprado"
+                elif rsi < 30:
+                    sentimento = "🛒 Sobrevendido"
+                else:
+                    sentimento = "⚖️ Neutral"
+                    
+                sentimentos.append({"Par": par, "Sentimento": sentimento, "RSI": f"{rsi:.1f}", "Tendência": tendencia})
         
         if sentimentos:
             df_sentimentos = pd.DataFrame(sentimentos)
             
             # Colorir baseado no sentimento
             def colorir_sentimento(val):
-                if "Forte Bullish" in val or "Bullish" in val:
+                if "Bullish" in val:
                     return 'background-color: #90EE90'
-                elif "Forte Bearish" in val or "Bearish" in val:
+                elif "Bearish" in val:
                     return 'background-color: #FFB6C1'
                 elif "Sobrecomprado" in val:
                     return 'background-color: #FFD700'
@@ -676,14 +628,199 @@ with tab1:
                 df_sentimentos.style.applymap(colorir_sentimento, subset=['Sentimento']),
                 width='stretch'
             )
+
+with tab2:
+    st.header("🎯 Estratégia de 15 Minutos")
     
-    # Gráfico de preços em tempo real
-    st.subheader("📈 Preços em Tempo Real")
+    if not dados_15min.empty:
+        par_selecionado = st.selectbox("Selecione o par:", pares_selecionados, key="strategy_select")
+        
+        if par_selecionado:
+            df_par = dados_15min[dados_15min['par'] == par_selecionado].tail(30)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Gráfico de candlesticks com sinais
+                fig_candle = go.Figure()
+                
+                # Candlesticks
+                fig_candle.add_trace(go.Candlestick(
+                    x=df_par['timestamp'],
+                    open=df_par['open'],
+                    high=df_par['high'],
+                    low=df_par['low'],
+                    close=df_par['close'],
+                    name="Price"
+                ))
+                
+                # EMAs
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['EMA_9'],
+                    mode='lines', name='EMA 9',
+                    line=dict(color='orange', width=2)
+                ))
+                
+                fig_candle.add_trace(go.Scatter(
+                    x=df_par['timestamp'], y=df_par['EMA_21'],
+                    mode='lines', name='EMA 21',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                # Sinais de trading
+                compras = df_par[df_par['sinal'] == 'COMPRA']
+                vendas = df_par[df_par['sinal'] == 'VENDA']
+                
+                if not compras.empty:
+                    fig_candle.add_trace(go.Scatter(
+                        x=compras['timestamp'], y=compras['low'] * 0.999,
+                        mode='markers', name='Compra',
+                        marker=dict(color='green', size=12, symbol='triangle-up')
+                    ))
+                
+                if not vendas.empty:
+                    fig_candle.add_trace(go.Scatter(
+                        x=vendas['timestamp'], y=vendas['high'] * 1.001,
+                        mode='markers', name='Venda',
+                        marker=dict(color='red', size=12, symbol='triangle-down')
+                    ))
+                
+                fig_candle.update_layout(
+                    title=f"{par_selecionado} - Candlestick 15min com Sinais",
+                    xaxis_title="Data/Hora",
+                    yaxis_title="Preço",
+                    height=500
+                )
+                
+                st.plotly_chart(fig_candle, width='stretch')
+            
+            with col2:
+                st.subheader("📋 Sinais Atuais")
+                
+                if not df_par.empty:
+                    ultimo = df_par.iloc[-1]
+                    info = {
+                        'Par': par_selecionado,
+                        'Sinal': ultimo['sinal'],
+                        'Preço': ultimo['close'],
+                        'RSI': f"{ultimo['RSI']:.1f}",
+                        'Padrão': ultimo['padrao_candle'],
+                        'Tendência': analisar_tendencia(df_par)
+                    }
+                    
+                    df_info = pd.DataFrame([info])
+                    st.dataframe(df_info, width='stretch')
+                
+                # Botão de execução
+                st.subheader("🤖 Executar Trades")
+                if st.button("🚀 Executar Estratégia", type="primary"):
+                    trades_executados = 0
+                    for par in pares_selecionados:
+                        df_par = dados_15min[dados_15min['par'] == par]
+                        if not df_par.empty:
+                            ultimo = df_par.iloc[-1]
+                            
+                            if ultimo['sinal'] in ['COMPRA', 'VENDA']:
+                                stake = st.session_state.stake_valor
+                                st.session_state.logs_tecnicos.append({
+                                    "timestamp": datetime.now(),
+                                    "pair": par,
+                                    "sinal": ultimo['sinal'],
+                                    "preco_entrada": ultimo['close'],
+                                    "log_stake": stake,
+                                    "log_lucro_estimado": stake * 0.02,
+                                    "status": "Ativo"
+                                })
+                                trades_executados += 1
+                    
+                    if trades_executados > 0:
+                        st.success(f"✅ {trades_executados} trades executados!")
+                    else:
+                        st.info("Nenhum sinal de trade válido encontrado")
+    else:
+        st.info("Selecione pares para análise na sidebar")
+
+with tab3:
+    st.header("📈 Análise de Price Action")
+    
+    if not dados_15min.empty:
+        par_selecionado_pa = st.selectbox("Selecione o par:", pares_selecionados, key="pa_select")
+        
+        if par_selecionado_pa:
+            df_par = dados_15min[dados_15min['par'] == par_selecionado_pa].tail(20)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Análise de Tendência
+                st.subheader("📊 Análise de Tendência")
+                tendencia = analisar_tendencia(df_par)
+                st.metric("Tendência Atual", tendencia)
+                
+                # Estatísticas de Candles
+                st.subheader("🕯️ Estatísticas de Candles")
+                alta_count = (df_par['Candle_Type'] == 'Alta').sum()
+                baixa_count = (df_par['Candle_Type'] == 'Baixa').sum()
+                
+                col_stat1, col_stat2 = st.columns(2)
+                with col_stat1:
+                    st.metric("Candles de Alta", alta_count)
+                with col_stat2:
+                    st.metric("Candles de Baixa", baixa_count)
+                
+                st.metric("Tamanho Médio Corpo", f"{(df_par['Body'].mean() * 10000):.1f} pips")
+            
+            with col2:
+                # Padrões Detectados
+                st.subheader("🎯 Padrões de Candles")
+                padroes_recentes = df_par[df_par['padrao_candle'] != ''].tail(5)
+                
+                if not padroes_recentes.empty:
+                    df_padroes = padroes_recentes[['timestamp', 'padrao_candle', 'tipo_padrao']].copy()
+                    df_padroes['timestamp'] = df_padroes['timestamp'].dt.strftime('%H:%M')
+                    
+                    st.dataframe(df_padroes, width='stretch')
+                else:
+                    st.info("Nenhum padrão de candle detectado")
+                
+                # RSI e MACD
+                st.subheader("⚡ Momentum")
+                if not df_par.empty:
+                    ultimo = df_par.iloc[-1]
+                    col_mom1, col_mom2 = st.columns(2)
+                    with col_mom1:
+                        st.metric("RSI", f"{ultimo['RSI']:.1f}")
+                    with col_mom2:
+                        st.metric("MACD", f"{ultimo['MACD']:.5f}")
+
+with tab4:
+    st.header("💰 Dados em Tempo Real")
     
     if pares_selecionados and st.session_state.dados_live:
-        fig_live = go.Figure()
+        # Tabela de preços atualizados
+        st.subheader("📊 Cotações Atuais")
         
-        for par in pares_selecionados[:3]:  # Mostrar apenas 3 pares para não poluir
+        precos_atuais = []
+        for par in pares_selecionados:
+            if par in st.session_state.dados_live and st.session_state.dados_live[par]:
+                ultimo_dado = st.session_state.dados_live[par][-1]
+                precos_atuais.append({
+                    'Par': par,
+                    'Bid': ultimo_dado['bid'],
+                    'Ask': ultimo_dado['ask'],
+                    'Spread': f"{ultimo_dado['spread']:.5f}",
+                    'Volume': ultimo_dado['volume']
+                })
+        
+        if precos_atuais:
+            df_precos = pd.DataFrame(precos_atuais)
+            st.dataframe(df_precos, width='stretch')
+        
+        # Gráfico de preços live
+        st.subheader("📈 Evolução de Preços")
+        
+        fig_live = go.Figure()
+        for par in pares_selecionados[:2]:  # Mostrar apenas 2 pares
             if par in st.session_state.dados_live and st.session_state.dados_live[par]:
                 df_par = pd.DataFrame(st.session_state.dados_live[par])
                 fig_live.add_trace(go.Scatter(
@@ -695,63 +832,25 @@ with tab1:
                 ))
         
         fig_live.update_layout(
-            title="Evolução de Preços em Tempo Real",
+            title="Preços em Tempo Real",
             xaxis_title="Tempo",
-            yaxis_title="Preço (Bid)",
-            height=400,
-            showlegend=True
+            yaxis_title="Preço Bid",
+            height=400
         )
         st.plotly_chart(fig_live, width='stretch')
-    
-    # Alertas de volatilidade
-    st.subheader("🚨 Alertas de Volatilidade")
-    
-    if not dados_15min.empty:
-        # Calcular volatilidade dos últimos dados
-        volatilidade_recente = dados_15min.groupby('par').apply(
-            lambda x: (x['high'].max() - x['low'].min()) / x['close'].mean()
-        ).round(5)
-        
-        alertas_ativos = []
-        for par, vol in volatilidade_recente.items():
-            if vol > LIMITE_VOLATILIDADE.get(par, 0.0020):
-                alertas_ativos.append((par, vol))
-        
-        if alertas_ativos:
-            for par, vol in alertas_ativos:
-                st.markdown(f'<div class="alert-high"><b>{par}</b>: Volatilidade {vol:.4f} - ALERTA!</div>', unsafe_allow_html=True)
-        else:
-            st.info("✅ Nenhum alerta de volatilidade no momento")
-
-# Continuação dos outros tabs (tab2 até tab6) permanece similar ao código anterior
-# [...] (O restante do código dos tabs 2-6 permanece igual)
+    else:
+        st.info("Selecione pares para ver dados em tempo real")
 
 # Sistema de atualização automática
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
 
-# Sistema de gestão de risco
-st.sidebar.header("🛡️ Gestão de Risco")
-
-if st.session_state.logs_tecnicos:
-    df_logs = pd.DataFrame(st.session_state.logs_tecnicos)
-    lucro_total = df_logs['log_lucro_estimado'].sum()
-    
-    if lucro_total >= meta_lucro:
-        st.sidebar.success(f"🎯 Meta de lucro atingida: €{lucro_total:.2f}")
-        st.sidebar.info("✅ Operações podem ser continuadas")
-    elif lucro_total <= limite_perda:
-        st.sidebar.error(f"📉 Limite de perda atingido: €{lucro_total:.2f}")
-        st.sidebar.warning("⛔ Operações devem ser pausadas")
-    else:
-        st.sidebar.info(f"📊 Lucro atual: €{lucro_total:.2f}")
-
 # Footer
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray;'>"
-    "📊 Advanced Trading Dashboard - Price Action & Live 15min Strategy | Análise Completa de Candles"
+    "📊 Advanced Trading Dashboard - Price Action & Live 15min Strategy"
     "</div>", 
     unsafe_allow_html=True
 )
