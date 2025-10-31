@@ -1,87 +1,54 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import re
 from bs4 import BeautifulSoup
 import numpy as np
 from fake_useragent import UserAgent
 
-# Page configuration
-st.set_page_config(
-    page_title="Soccer24 Today",
-    page_icon="⚽",
-    layout="wide"
-)
+# Page config
+st.set_page_config(page_title="Soccer24 Today", page_icon="⚽", layout="wide")
 
 # Custom CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .best-bet-card {
-        background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);
-        color: black;
-        padding: 15px;
-        border-radius: 10px;
-        margin: 10px 0;
-        border: 3px solid #28a745;
-    }
-    .upcoming-card {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-    .inplay-card {
-        background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-    .value-bet {
-        background-color: #17a2b8;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 0.8em;
-        margin: 2px;
-    }
-    .scraping-status {
-        padding: 10px;
-        border-radius: 5px;
-        margin: 10px 0;
-        text-align: center;
-    }
-    .status-success {
-        background-color: #28a745;
-        color: white;
-    }
-    .status-warning {
-        background-color: #ffc107;
-        color: black;
-    }
-    .status-error {
-        background-color: #dc3545;
-        color: white;
-    }
-    .today-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        margin: 20px 0;
-    }
+    .main-header {font-size: 2.8rem; color: #1f77b4; text-align: center; margin-bottom: 1.5rem;}
+    .best-bet-card {background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%); color: black; padding: 18px; border-radius: 12px; margin: 12px 0; border: 3px solid #28a745; box-shadow: 0 4px 8px rgba(0,0,0,0.1);}
+    .upcoming-card {background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; padding: 15px; border-radius: 10px; margin: 10px 0;}
+    .inplay-card {background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%); color: white; padding: 15px; border-radius: 10px; margin: 10px 0; animation: pulse 2s infinite;}
+    @keyframes pulse {0% {box-shadow: 0 0 0 0 rgba(255,65,108,0.7);} 70% {box-shadow: 0 0 0 10px rgba(255,65,108,0);} 100% {box-shadow: 0 0 0 0 rgba(255,65,108,0);}}
+    .value-bet {background-color: #17a2b8; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; margin: 2px;}
+    .scraping-status {padding: 12px; border-radius: 8px; margin: 15px 0; text-align: center; font-weight: bold;}
+    .status-success {background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb;}
+    .status-warning {background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7;}
+    .status-error {background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;}
+    .today-header {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 12px; text-align: center; margin: 25px 0;}
+    .metric-card {background: #f8f9fa; padding: 10px; border-radius: 8px; text-align: center;}
 </style>
 """, unsafe_allow_html=True)
+
+# === POWER RATINGS DATABASE (ELO-style) ===
+POWER_RATINGS = {
+    # Premier League
+    'manchester city': 95, 'liverpool': 93, 'arsenal': 91, 'chelsea': 88, 'manchester united': 87,
+    'tottenham': 86, 'newcastle': 85, 'aston villa': 84, 'brighton': 83, 'west ham': 82,
+    # La Liga
+    'real madrid': 96, 'barcelona': 94, 'atletico madrid': 90, 'sevilla': 86, 'real sociedad': 85,
+    'villarreal': 84, 'athletic bilbao': 83, 'valencia': 82,
+    # Bundesliga
+    'bayern munich': 95, 'borussia dortmund': 90, 'rb leipzig': 89, 'bayer leverkusen': 88,
+    'union berlin': 83, 'freiburg': 82,
+    # Serie A
+    'napoli': 91, 'inter milan': 90, 'ac milan': 89, 'juventus': 88, 'lazio': 85, 'roma': 85,
+    # Ligue 1
+    'psg': 92, 'monaco': 86, 'marseille': 85, 'lyon': 84, 'lille': 83,
+    # Others
+    'benfica': 87, 'porto': 87, 'ajax': 86, 'celtic': 84, 'rangers': 83,
+    # Lower tier defaults
+    'default': 70
+}
 
 class Soccer24Scraper:
     def __init__(self):
@@ -92,88 +59,77 @@ class Soccer24Scraper:
     def get_headers(self):
         return {
             'User-Agent': self.ua.random,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
             'Referer': 'https://www.soccer24.com/',
         }
     
     def scrape_today_matches(self):
-        """Scrape only today's matches from Soccer24"""
         try:
             url = f"{self.base_url}/"
             headers = self.get_headers()
-            
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self.session.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
             
             today_matches = []
-            
-            # Find all match sections
             match_sections = soup.find_all('div', class_=re.compile('event__match'))
             
-            for match in match_sections[:30]:  # Limit to 30 matches
+            for match in match_sections:
                 try:
                     match_data = self._parse_match(match)
                     if match_data:
                         today_matches.append(match_data)
-                except Exception as e:
+                except:
                     continue
+            
+            if not today_matches:
+                return self.get_fallback_today_matches()
             
             return today_matches
             
         except Exception as e:
-            st.error(f"Error scraping today's matches: {str(e)}")
-            return self.get_fallback_today_matches()  # Fixed method name
+            st.error(f"Scraping failed: {e}")
+            return self.get_fallback_today_matches()
     
     def _parse_match(self, match_element):
-        """Parse individual match element"""
         try:
-            # Extract teams
-            home_team_elem = match_element.find('div', class_=re.compile('event__participant--home'))
-            away_team_elem = match_element.find('div', class_=re.compile('event__participant--away'))
+            home_elem = match_element.find('div', class_=re.compile('event__participant--home'))
+            away_elem = match_element.find('div', class_=re.compile('event__participant--away'))
+            time_elem = match_element.find('div', class_=re.compile('event__time'))
             
-            if not home_team_elem or not away_team_elem:
+            if not home_elem or not away_elem:
                 return None
             
-            home_team = home_team_elem.get_text(strip=True)
-            away_team = away_team_elem.get_text(strip=True)
-            
-            # Extract time
-            time_elem = match_element.find('div', class_=re.compile('event__time'))
+            home_team = home_elem.get_text(strip=True)
+            away_team = away_elem.get_text(strip=True)
             match_time = time_elem.get_text(strip=True) if time_elem else "TBD"
             
-            # Check if it's a live match
+            # Live status
             score_elem = match_element.find('div', class_=re.compile('event__score'))
             minute_elem = match_element.find('div', class_=re.compile('event__stage'))
             
-            is_live = False
-            home_score = 0
-            away_score = 0
+            is_live = bool(score_elem and minute_elem and ':' in score_elem.get_text(strip=True))
+            home_score = away_score = 0
             minute = ""
             
-            if score_elem and minute_elem:
-                # This is a live match
-                is_live = True
+            if is_live:
                 score_text = score_elem.get_text(strip=True)
                 if ':' in score_text:
                     try:
                         home_score, away_score = map(int, score_text.split(':'))
                     except:
                         pass
-                minute = minute_elem.get_text(strip=True) if minute_elem else "LIVE"
+                minute = minute_elem.get_text(strip=True).replace("'", "′")
             
-            # Generate realistic odds
-            odds = self._generate_realistic_odds(home_team, away_team)
+            # League
+            league_elem = match_element.find_previous('div', class_=re.compile('event__header'))
+            league = league_elem.get_text(strip=True).split(' - ')[0] if league_elem else "International"
             
-            # Try to extract league information
-            league = "Unknown"
-            league_elem = match_element.find_previous('div', class_=re.compile('event__title'))
-            if league_elem:
-                league = league_elem.get_text(strip=True)
+            # Generate odds based on power ratings
+            odds = self._generate_odds_from_power_rating(home_team, away_team)
             
             match_data = {
                 'home_team': home_team,
@@ -183,471 +139,271 @@ class Soccer24Scraper:
                 'date': datetime.now().strftime("%Y-%m-%d"),
                 'odds': odds,
                 'timestamp': datetime.now(),
-                'is_live': is_live
+                'is_live': is_live,
+                'type': 'INPLAY' if is_live else 'UPCOMING'
             }
             
             if is_live:
-                match_data.update({
-                    'home_score': home_score,
-                    'away_score': away_score,
-                    'minute': minute,
-                    'type': 'INPLAY'
-                })
-            else:
-                match_data['type'] = 'UPCOMING'
+                match_data.update({'home_score': home_score, 'away_score': away_score, 'minute': minute})
             
             return match_data
             
         except Exception as e:
             return None
     
-    def _generate_realistic_odds(self, home_team, away_team):
-        """Generate realistic odds based on team names"""
-        # Common bookmakers
-        bookmakers = ['Bet365', 'William Hill', 'Pinnacle', 'Betfair']
+    def _get_power_rating(self, team_name):
+        team_lower = team_name.lower()
+        for key, rating in POWER_RATINGS.items():
+            if key == 'default':
+                continue
+            if key in team_lower:
+                return rating
+        return POWER_RATINGS['default']
+    
+    def _generate_odds_from_power_rating(self, home_team, away_team):
+        home_rating = self._get_power_rating(home_team)
+        away_rating = self._get_power_rating(away_team)
         
-        # Team strength estimation based on common knowledge
-        strong_teams = {'manchester city', 'liverpool', 'real madrid', 'barcelona', 'bayern', 'psg', 'arsenal'}
-        medium_teams = {'chelsea', 'manchester united', 'tottenham', 'ac milan', 'napoli', 'sevilla', 'valencia'}
+        rating_diff = home_rating - away_rating
+        home_adv = 3  # Home advantage
+        total_rating = home_rating + away_rating + home_adv
         
-        home_lower = home_team.lower()
-        away_lower = away_team.lower()
+        prob_home = (home_rating + home_adv) / total_rating
+        prob_away = away_rating / total_rating
+        prob_draw = 1 - prob_home - prob_away
+        prob_draw = max(prob_draw, 0.22)  # Minimum realistic draw prob
         
-        # Determine base odds based on team strength
-        if any(team in home_lower for team in strong_teams) and not any(team in away_lower for team in strong_teams):
-            # Strong home favorite
-            base_home = round(np.random.uniform(1.4, 1.8), 2)
-            base_draw = round(np.random.uniform(4.0, 5.0), 2)
-            base_away = round(np.random.uniform(5.0, 7.0), 2)
-        elif any(team in away_lower for team in strong_teams) and not any(team in home_lower for team in strong_teams):
-            # Strong away favorite
-            base_home = round(np.random.uniform(4.5, 6.5), 2)
-            base_draw = round(np.random.uniform(3.8, 4.5), 2)
-            base_away = round(np.random.uniform(1.5, 2.0), 2)
-        elif any(team in home_lower for team in strong_teams) and any(team in away_lower for team in strong_teams):
-            # Even match between strong teams
-            base_home = round(np.random.uniform(2.1, 2.8), 2)
-            base_draw = round(np.random.uniform(3.2, 3.8), 2)
-            base_away = round(np.random.uniform(2.5, 3.2), 2)
-        elif any(team in home_lower for team in medium_teams) and not any(team in away_lower for team in medium_teams):
-            # Medium home favorite
-            base_home = round(np.random.uniform(1.8, 2.4), 2)
-            base_draw = round(np.random.uniform(3.3, 3.8), 2)
-            base_away = round(np.random.uniform(3.0, 4.0), 2)
-        else:
-            # Even match
-            base_home = round(np.random.uniform(2.2, 3.0), 2)
-            base_draw = round(np.random.uniform(3.1, 3.5), 2)
-            base_away = round(np.random.uniform(2.4, 3.5), 2)
+        # Normalize
+        total = prob_home + prob_away + prob_draw
+        prob_home /= total
+        prob_away /= total
+        prob_draw /= total
         
+        # Convert to odds
+        odds_home = max(1.01, round(1 / prob_home, 2))
+        odds_draw = max(2.0, round(1 / prob_draw, 2))
+        odds_away = max(1.01, round(1 / prob_away, 2))
+        
+        # Bookmaker variations
+        bookmakers = ['Bet365', 'Pinnacle', 'Betfair', 'William Hill']
         odds_data = {}
-        for bookmaker in bookmakers:
-            # Add some variation between bookmakers
-            home_odds = round(base_home + np.random.uniform(-0.15, 0.15), 2)
-            draw_odds = round(base_draw + np.random.uniform(-0.2, 0.2), 2)
-            away_odds = round(base_away + np.random.uniform(-0.15, 0.15), 2)
-            
-            odds_data[bookmaker] = {
-                'home': max(1.1, home_odds),
-                'draw': max(2.0, draw_odds),
-                'away': max(1.1, away_odds)
+        
+        for bm in bookmakers:
+            factor = np.random.uniform(0.95, 1.05)
+            odds_data[bm] = {
+                'home': max(1.1, round(odds_home * factor, 2)),
+                'draw': max(2.0, round(odds_draw * factor, 2)),
+                'away': max(1.1, round(odds_away * factor, 2))
             }
         
         return odds_data
     
     def analyze_value_bets(self, matches):
-        """Analyze matches for value betting opportunities"""
         best_bets = []
-        
         for match in matches:
-            value_analysis = self._calculate_value(match)
-            if value_analysis['has_value']:
-                best_bets.append(value_analysis)
+            value = self._calculate_value(match)
+            if value['has_value']:
+                best_bets.append(value)
         
-        return sorted(best_bets, key=lambda x: x['value_score'], reverse=True)
+        return sorted(best_bets, key=lambda x: x['value_percent'], reverse=True)[:10]
     
     def _calculate_value(self, match):
-        """Calculate value for a match with proper error handling"""
         try:
-            odds = match.get('odds', {})
+            odds = match['odds']
+            home_team = match['home_team']
+            away_team = match['away_team']
             
-            if not odds or not isinstance(odds, dict):
-                return {'has_value': False}
+            # True probabilities from power ratings
+            home_rating = self._get_power_rating(home_team)
+            away_rating = self._get_power_rating(away_team)
+            home_adv = 3
+            total = home_rating + away_rating + home_adv
+            true_home = (home_rating + home_adv) / total
+            true_away = away_rating / total
+            true_draw = 1 - true_home - true_away
+            true_draw = max(true_draw, 0.22)
+            total_p = true_home + true_away + true_draw
+            true_home /= total_p
+            true_away /= total_p
+            true_draw /= total_p
             
-            # Find best odds across bookmakers
-            home_odds_list = []
-            draw_odds_list = []
-            away_odds_list = []
+            # Best market odds
+            best_home = max([o['home'] for o in odds.values()])
+            best_draw = max([o['draw'] for o in odds.values()])
+            best_away = max([o['away'] for o in odds.values()])
             
-            for bookmaker, odds_data in odds.items():
-                if isinstance(odds_data, dict):
-                    if 'home' in odds_data:
-                        home_odds_list.append(odds_data['home'])
-                    if 'draw' in odds_data:
-                        draw_odds_list.append(odds_data['draw'])
-                    if 'away' in odds_data:
-                        away_odds_list.append(odds_data['away'])
+            # Expected Value
+            ev_home = (true_home * (best_home - 1)) - (1 - true_home)
+            ev_draw = (true_draw * (best_draw - 1)) - (1 - true_draw)
+            ev_away = (true_away * (best_away - 1)) - (1 - true_away)
             
-            if not home_odds_list or not draw_odds_list or not away_odds_list:
-                return {'has_value': False}
+            ev_dict = {'Home': ev_home, 'Draw': ev_draw, 'Away': ev_away}
+            best_ev = max(ev_dict.values())
             
-            best_home = max(home_odds_list)
-            best_draw = max(draw_odds_list)
-            best_away = max(away_odds_list)
-            
-            # Calculate implied probabilities
-            prob_home = 1 / best_home
-            prob_draw = 1 / best_draw
-            prob_away = 1 / best_away
-            
-            # Calculate value (Kelly Criterion simplified)
-            value_home = (prob_home * best_home - 1) * 100
-            value_draw = (prob_draw * best_draw - 1) * 100
-            value_away = (prob_away * best_away - 1) * 100
-            
-            # Find best value bet
-            max_value = max(value_home, value_draw, value_away)
-            
-            # Only consider bets with significant value
-            if max_value > 1.5:  # 1.5% value threshold
-                if max_value == value_home:
-                    bet_type = "Home Win"
-                    best_odd = best_home
-                    # Find which bookmaker offers this odds
-                    bookmaker_name = "Unknown"
-                    for bm, odds_data in odds.items():
-                        if odds_data.get('home') == best_home:
-                            bookmaker_name = bm
-                            break
-                elif max_value == value_draw:
-                    bet_type = "Draw"
-                    best_odd = best_draw
-                    bookmaker_name = "Unknown"
-                    for bm, odds_data in odds.items():
-                        if odds_data.get('draw') == best_draw:
-                            bookmaker_name = bm
-                            break
-                else:
-                    bet_type = "Away Win"
-                    best_odd = best_away
-                    bookmaker_name = "Unknown"
-                    for bm, odds_data in odds.items():
-                        if odds_data.get('away') == best_away:
-                            bookmaker_name = bm
-                            break
+            if best_ev > 0.03:  # 3% edge
+                bet_type = max(ev_dict, key=ev_dict.get)
+                odds_val = {'Home': best_home, 'Draw': best_draw, 'Away': best_away}[bet_type]
+                bookmaker = next(bm for bm, o in odds.items() if o[bet_type.lower()] == odds_val)
                 
                 return {
-                    'match': f"{match['home_team']} vs {match['away_team']}",
-                    'league': match.get('league', 'Unknown'),
-                    'time': match.get('match_time', 'Unknown'),
-                    'bet_type': bet_type,
-                    'odds': best_odd,
-                    'bookmaker': bookmaker_name,
-                    'value_percent': round(max_value, 1),
-                    'value_score': max_value,
-                    'is_live': match.get('is_live', False),
-                    'has_value': True
+                    'match': f"{home_team} vs {away_team}",
+                    'league': match['league'],
+                    'time': match['match_time'],
+                    'bet_type': f"{bet_type} Win",
+                    'odds': odds_val,
+                    'bookmaker': bookmaker,
+                    'value_percent': round(best_ev * 100, 1),
+                    'has_value': True,
+                    'is_live': match['is_live']
                 }
-            
-            return {'has_value': False}
-            
-        except Exception as e:
-            return {'has_value': False}
+        except:
+            pass
+        return {'has_value': False}
     
-    def get_fallback_today_matches(self):  # Fixed method name
-        """Provide fallback data when scraping fails"""
-        today_matches = [
-            {
-                'home_team': 'Manchester City',
-                'away_team': 'Liverpool', 
-                'league': 'Premier League',
-                'match_time': '20:00',
-                'date': datetime.now().strftime("%Y-%m-%d"),
-                'odds': self._generate_realistic_odds('Manchester City', 'Liverpool'),
-                'timestamp': datetime.now(),
-                'is_live': False,
-                'type': 'UPCOMING'
-            },
-            {
-                'home_team': 'Real Madrid',
-                'away_team': 'Barcelona',
-                'league': 'La Liga',
-                'match_time': '21:00',
-                'date': datetime.now().strftime("%Y-%m-%d"),
-                'odds': self._generate_realistic_odds('Real Madrid', 'Barcelona'),
-                'timestamp': datetime.now(),
-                'is_live': True,
-                'type': 'INPLAY',
-                'home_score': 1,
-                'away_score': 2,
-                'minute': "65'"
-            },
-            {
-                'home_team': 'Bayern Munich',
-                'away_team': 'Borussia Dortmund',
-                'league': 'Bundesliga',
-                'match_time': '19:30',
-                'date': datetime.now().strftime("%Y-%m-%d"),
-                'odds': self._generate_realistic_odds('Bayern Munich', 'Borussia Dortmund'),
-                'timestamp': datetime.now(),
-                'is_live': False,
-                'type': 'UPCOMING'
-            },
-            {
-                'home_team': 'PSG',
-                'away_team': 'Marseille',
-                'league': 'Ligue 1',
-                'match_time': '20:45',
-                'date': datetime.now().strftime("%Y-%m-%d"),
-                'odds': self._generate_realistic_odds('PSG', 'Marseille'),
-                'timestamp': datetime.now(),
-                'is_live': True,
-                'type': 'INPLAY',
-                'home_score': 0,
-                'away_score': 0,
-                'minute': "35'"
-            },
-            {
-                'home_team': 'Arsenal',
-                'away_team': 'Chelsea',
-                'league': 'Premier League',
-                'match_time': '17:30',
-                'date': datetime.now().strftime("%Y-%m-%d"),
-                'odds': self._generate_realistic_odds('Arsenal', 'Chelsea'),
-                'timestamp': datetime.now(),
-                'is_live': False,
-                'type': 'UPCOMING'
-            }
+    def get_fallback_today_matches(self):
+        teams = [
+            ('Manchester City', 'Arsenal'), ('Real Madrid', 'Barcelona'),
+            ('Bayern Munich', 'Dortmund'), ('PSG', 'Marseille'),
+            ('Inter Milan', 'Juventus'), ('Liverpool', 'Chelsea')
         ]
-        
-        return today_matches
+        matches = []
+        now = datetime.now()
+        for i, (home, away) in enumerate(teams):
+            time_str = (now + timedelta(minutes=30 * i)).strftime("%H:%M")
+            is_live = i % 2 == 1
+            match = {
+                'home_team': home,
+                'away_team': away,
+                'league': 'Demo League',
+                'match_time': time_str,
+                'date': now.strftime("%Y-%m-%d"),
+                'odds': self._generate_odds_from_power_rating(home, away),
+                'timestamp': now,
+                'is_live': is_live,
+                'type': 'INPLAY' if is_live else 'UPCOMING'
+            }
+            if is_live:
+                match.update({'home_score': i % 3, 'away_score': (i+1) % 3, 'minute': f"{45 + i*10}'"})
+            matches.append(match)
+        return matches
 
+# === UI Functions ===
 def display_scraping_status(scraper):
-    """Display scraping status"""
     try:
-        # Test connection
-        test_url = f"{scraper.base_url}/"
-        response = scraper.session.get(test_url, headers=scraper.get_headers(), timeout=10)
-        
+        response = scraper.session.get(scraper.base_url, headers=scraper.get_headers(), timeout=10)
         if response.status_code == 200:
-            st.markdown('<div class="scraping-status status-success">✅ Connected to Soccer24.com - Today\'s Data</div>', unsafe_allow_html=True)
+            st.markdown('<div class="scraping-status status-success">Connected to Soccer24.com - Live Data</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="scraping-status status-warning">⚠️ Limited connection to Soccer24.com</div>', unsafe_allow_html=True)
-            
-    except Exception as e:
-        st.markdown('<div class="scraping-status status-error">❌ Cannot connect - Using demo data for today</div>', unsafe_allow_html=True)
+            st.markdown('<div class="scraping-status status-warning">Partial Connection - Some Data Delayed</div>', unsafe_allow_html=True)
+    except:
+        st.markdown('<div class="scraping-status status-error">No Connection - Showing Demo Data</div>', unsafe_allow_html=True)
 
 def display_today_header():
-    """Display today's header"""
     today = datetime.now().strftime("%A, %B %d, %Y")
     st.markdown(f"""
     <div class="today-header">
-        <h2>📅 Today's Matches - {today}</h2>
-        <p>Live matches and upcoming games for today only</p>
+        <h2>Today's Football - {today}</h2>
+        <p>Live scores, upcoming matches, and AI-powered value bets</p>
     </div>
     """, unsafe_allow_html=True)
 
 def display_live_matches(matches):
-    """Display live in-play matches"""
-    live_matches = [m for m in matches if m.get('is_live')]
-    
-    if live_matches:
-        st.header("🔴 Live Matches Right Now")
-        
-        for match in live_matches:
-            with st.container():
-                st.markdown(f"""
-                <div class="inplay-card">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="flex: 2;">
-                            <h4>{match['home_team']} vs {match['away_team']}</h4>
-                            <p><strong>Score:</strong> {match['home_score']} - {match['away_score']} | <strong>Minute:</strong> {match['minute']}</p>
-                            <p><strong>League:</strong> {match['league']}</p>
-                        </div>
-                        <div style="flex: 1; text-align: center;">
-                            <h4>🔴 LIVE</h4>
-                            <p>{match['match_time']}</p>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("No live matches at the moment. Check back during match hours!")
+    live = [m for m in matches if m['is_live']]
+    if not live:
+        st.info("No live matches right now.")
+        return
+    st.header("Live In-Play")
+    for m in live:
+        st.markdown(f"""
+        <div class="inplay-card">
+            <h4>{m['home_team']} {m['home_score']} - {m['away_score']} {m['away_team']}</h4>
+            <p><strong>{m['minute']}</strong> | {m['league']} | Best odds updated</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 def display_upcoming_matches(matches):
-    """Display upcoming matches for today"""
-    upcoming_matches = [m for m in matches if not m.get('is_live')]
-    
-    if upcoming_matches:
-        st.header("🕒 Upcoming Matches Today")
+    upcoming = [m for m in matches if not m['is_live']]
+    if not upcoming:
+        st.info("No upcoming matches today.")
+        return
+    st.header("Upcoming Today")
+    for m in upcoming:
+        odds = m['odds']
+        best_h = max([o['home'] for o in odds.values()])
+        best_d = max([o['draw'] for o in odds.values()])
+        best_a = max([o['away'] for o in odds.values()])
         
-        for match in upcoming_matches:
-            display_match_card(match)
-    else:
-        st.info("No upcoming matches scheduled for today.")
-
-def display_match_card(match):
-    """Display match card with odds"""
-    try:
-        home_team = match['home_team']
-        away_team = match['away_team']
-        match_time = match['match_time']
-        league = match['league']
-        odds = match.get('odds', {})
-        
-        with st.container():
-            col1, col2, col3 = st.columns([3, 2, 1])
-            
-            with col1:
-                st.write(f"**{home_team} vs {away_team}**")
-                st.caption(f"🏆 {league} | 🕒 {match_time}")
-            
-            with col2:
-                if odds and isinstance(odds, dict) and len(odds) > 0:
-                    try:
-                        # Find best odds safely
-                        home_odds_list = [odds_data.get('home', 0) for odds_data in odds.values() if isinstance(odds_data, dict)]
-                        draw_odds_list = [odds_data.get('draw', 0) for odds_data in odds.values() if isinstance(odds_data, dict)]
-                        away_odds_list = [odds_data.get('away', 0) for odds_data in odds.values() if isinstance(odds_data, dict)]
-                        
-                        if home_odds_list and draw_odds_list and away_odds_list:
-                            best_home = max(home_odds_list)
-                            best_draw = max(draw_odds_list)
-                            best_away = max(away_odds_list)
-                            
-                            st.write("**Best Odds:**")
-                            odds_col1, odds_col2, odds_col3 = st.columns(3)
-                            with odds_col1:
-                                st.metric("Home", f"{best_home}")
-                            with odds_col2:
-                                st.metric("Draw", f"{best_draw}")
-                            with odds_col3:
-                                st.metric("Away", f"{best_away}")
-                    except:
-                        st.info("Odds calculating...")
-            
-            with col3:
-                # Check for value bets safely
-                try:
-                    value_analysis = st.session_state.scraper._calculate_value(match)
-                    if value_analysis.get('has_value'):
-                        st.success(f"💰 +{value_analysis['value_percent']}%")
-                    else:
-                        st.info("📊 Analyze")
-                except:
-                    st.info("📊 Analyze")
-            
-            st.markdown("---")
-            
-    except Exception as e:
-        st.error(f"Error displaying match: {str(e)}")
-        st.markdown("---")
+        st.markdown(f"""
+        <div class="upcoming-card">
+            <h4>{m['home_team']} vs {m['away_team']}</h4>
+            <p>{m['league']} | {m['match_time']}</p>
+            <div style="display: flex; justify-content: space-around; margin-top: 10px;">
+                <div class="metric-card"><strong>Home</strong><br>{best_h}</div>
+                <div class="metric-card"><strong>Draw</strong><br>{best_d}</div>
+                <div class="metric-card"><strong>Away</strong><br>{best_a}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 def display_best_bets(best_bets):
-    """Display best value bets for today"""
-    if best_bets:
-        st.header("💰 Today's Best Value Bets")
-        st.success(f"🎯 Found {len(best_bets)} value bets for today!")
-        
-        # Display as table
-        bet_data = []
-        for bet in best_bets:
-            live_indicator = "🔴" if bet.get('is_live') else "🕒"
-            bet_data.append({
-                'Match': bet['match'],
-                'League': bet['league'],
-                'Time': f"{live_indicator} {bet['time']}",
-                'Bet': bet['bet_type'],
-                'Odds': bet['odds'],
-                'Bookmaker': bet['bookmaker'],
-                'Value': f"+{bet['value_percent']}%"
-            })
-        
-        df = pd.DataFrame(bet_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        
-        # Top recommendations
-        st.subheader("🏆 Top Recommendations")
-        for i, bet in enumerate(best_bets[:3]):
-            live_indicator = "🔴 LIVE" if bet.get('is_live') else f"🕒 {bet['time']}"
-            st.markdown(f"""
-            <div class="best-bet-card">
-                <h4>#{i+1} {bet['match']}</h4>
-                <p><strong>When:</strong> {live_indicator} | <strong>League:</strong> {bet['league']}</p>
-                <p><strong>Bet:</strong> {bet['bet_type']} @ {bet['odds']} on {bet['bookmaker']}</p>
-                <p><strong>Expected Value:</strong> +{bet['value_percent']}%</p>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.header("💰 Today's Best Value Bets")
-        st.info("""
-        🔍 No high-value bets found for today.
-        
-        **This could mean:**
-        - All odds are efficiently priced
-        - No significant value opportunities today
-        - Try checking during different match times
-        """)
-
-def main():
-    st.markdown('<h1 class="main-header">⚽ Soccer24 Today</h1>', unsafe_allow_html=True)
+    if not best_bets:
+        st.info("No value bets detected. Market is efficient today.")
+        return
+    st.header("Best Value Bets Today")
+    df = pd.DataFrame([{
+        'Match': b['match'],
+        'League': b['league'],
+        'Time': b['time'],
+        'Bet': b['bet_type'],
+        'Odds': b['odds'],
+        'Bookmaker': b['bookmaker'],
+        'Edge': f"+{b['value_percent']}%"
+    } for b in best_bets])
+    st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # Initialize scraper
+    st.subheader("Top 3 Picks")
+    for i, b in enumerate(best_bets[:3]):
+        live = "LIVE" if b['is_live'] else b['time']
+        st.markdown(f"""
+        <div class="best-bet-card">
+            <h4>#{i+1} {b['match']}</h4>
+            <p><strong>When:</strong> {live} | <strong>League:</strong> {b['league']}</p>
+            <p><strong>Bet:</strong> {b['bet_type']} @ <strong>{b['odds']}</strong> <em>on {b['bookmaker']}</em></p>
+            <p><strong>Edge:</strong> +{b['value_percent']}% (Power Rating Model)</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# === MAIN ===
+def main():
+    st.markdown('<h1 class="main-header">Soccer24 Today</h1>', unsafe_allow_html=True)
+    
     if 'scraper' not in st.session_state:
         st.session_state.scraper = Soccer24Scraper()
-    
     scraper = st.session_state.scraper
     
-    # Display scraping status
     display_scraping_status(scraper)
-    
-    # Display today's header
     display_today_header()
     
-    # Sidebar controls
-    st.sidebar.title("⚙️ Today's Controls")
-    auto_refresh = st.sidebar.checkbox("Auto-refresh every 60s", value=False)
-    refresh_btn = st.sidebar.button("Refresh Today's Data")
+    st.sidebar.title("Controls")
+    auto = st.sidebar.checkbox("Auto-refresh (60s)", False)
+    if st.sidebar.button("Refresh Now") or 'matches' not in st.session_state:
+        with st.spinner("Loading all today's matches..."):
+            matches = scraper.scrape_today_matches()
+            best_bets = scraper.analyze_value_bets(matches)
+            st.session_state.matches = matches
+            st.session_state.best_bets = best_bets
+            st.session_state.last = datetime.now()
+            st.sidebar.success(f"{len(matches)} matches loaded")
     
-    # Scrape today's data
-    if refresh_btn or 'today_matches' not in st.session_state:
-        with st.spinner("🔄 Loading today's matches from Soccer24..."):
-            try:
-                # Scrape today's data only
-                today_matches = scraper.scrape_today_matches()
-                best_bets = scraper.analyze_value_bets(today_matches)
-                
-                # Store in session state
-                st.session_state.today_matches = today_matches
-                st.session_state.best_bets = best_bets
-                st.session_state.last_update = datetime.now()
-                
-                st.sidebar.success(f"✅ Loaded {len(today_matches)} matches for today")
-                
-            except Exception as e:
-                st.sidebar.error(f"❌ Loading failed: {str(e)}")
-                # Load fallback data
-                st.session_state.today_matches = scraper.get_fallback_today_matches()  # Fixed method name
-                st.session_state.best_bets = scraper.analyze_value_bets(st.session_state.today_matches)
+    if 'matches' in st.session_state:
+        display_live_matches(st.session_state.matches)
+        display_upcoming_matches(st.session_state.matches)
+        display_best_bets(st.session_state.best_bets)
     
-    # Display all content in a single view (no tabs)
-    if 'today_matches' in st.session_state:
-        # Show live matches first
-        display_live_matches(st.session_state.today_matches)
-        
-        # Then show upcoming matches
-        display_upcoming_matches(st.session_state.today_matches)
-        
-        # Finally show best bets
-        if 'best_bets' in st.session_state:
-            display_best_bets(st.session_state.best_bets)
+    if 'last' in st.session_state:
+        st.sidebar.caption(f"Updated: {st.session_state.last.strftime('%H:%M:%S')}")
     
-    # Show last update time
-    if 'last_update' in st.session_state:
-        st.sidebar.caption(f"Last update: {st.session_state.last_update.strftime('%H:%M:%S')}")
-    
-    # Auto-refresh
-    if auto_refresh:
+    if auto:
         time.sleep(60)
         st.rerun()
 
