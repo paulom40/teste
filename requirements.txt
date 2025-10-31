@@ -6,4 +6,4 @@ lxml
 fake-useragent
 plotly
 numpy
-
+matplotlib
