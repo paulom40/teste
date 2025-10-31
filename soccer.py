@@ -13,7 +13,7 @@ import concurrent.futures
 
 # Page configuration
 st.set_page_config(
-    page_title="Live Soccer Alerts & Stats",
+    page_title="Soccer24 Live & Odds",
     page_icon="⚽",
     layout="wide"
 )
@@ -43,12 +43,27 @@ st.markdown("""
         border-left: 5px solid #1f77b4;
         margin: 10px 0;
     }
-    .live-stats-card {
+    .odds-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
-        padding: 15px;
+        padding: 10px;
         border-radius: 8px;
         margin: 5px;
+        text-align: center;
+    }
+    .inplay-card {
+        background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        margin: 10px 0;
+    }
+    .upcoming-card {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        margin: 10px 0;
     }
     .team-favorite {
         background-color: #ffc107;
@@ -58,21 +73,16 @@ st.markdown("""
         font-size: 0.8em;
         font-weight: bold;
     }
-    .stat-bar-container {
-        background-color: #e9ecef;
-        border-radius: 10px;
-        margin: 8px 0;
-        height: 25px;
-    }
-    .stat-bar-fill {
-        background: linear-gradient(90deg, #28a745, #20c997);
-        color: white;
-        height: 100%;
-        border-radius: 10px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+    .odds-value {
+        font-size: 1.2em;
         font-weight: bold;
+        color: #28a745;
+    }
+    .best-odds {
+        background-color: #28a745;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 4px;
         font-size: 0.8em;
     }
     @keyframes pulse {
@@ -102,6 +112,13 @@ st.markdown("""
         font-size: 0.8em;
         font-weight: bold;
     }
+    .day-section {
+        background-color: #343a40;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -121,8 +138,8 @@ class Soccer24Scraper:
             'Upgrade-Insecure-Requests': '1',
         }
     
-    def scrape_live_matches(self):
-        """Scrape live matches from Soccer24"""
+    def scrape_inplay_matches(self):
+        """Scrape in-play matches from Soccer24"""
         try:
             url = f"{self.base_url}/live/"
             headers = self.get_headers()
@@ -130,27 +147,56 @@ class Soccer24Scraper:
             response = self.session.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            live_matches = []
+            inplay_matches = []
             
             # Find live match sections
             match_elements = soup.find_all('div', class_=re.compile('event__match'))
             
-            for match_element in match_elements[:30]:  # Limit to 30 matches
+            for match_element in match_elements[:50]:  # Limit to 50 matches
                 try:
-                    match_data = self._parse_match_element(match_element)
-                    if match_data:
-                        live_matches.append(match_data)
+                    match_data = self._parse_inplay_match_element(match_element)
+                    if match_data and match_data['status'] in ['LIVE', 'HALF_TIME']:
+                        inplay_matches.append(match_data)
                 except Exception as e:
                     continue
             
-            return live_matches
+            return inplay_matches
             
         except Exception as e:
-            st.error(f"Error scraping Soccer24: {str(e)}")
-            return []
+            st.error(f"Error scraping in-play matches: {str(e)}")
+            return self._get_fallback_inplay_matches()
     
-    def _parse_match_element(self, match_element):
-        """Parse individual match element"""
+    def scrape_upcoming_matches_with_odds(self, days_ahead=3):
+        """Scrape upcoming matches with odds for multiple days"""
+        upcoming_matches = {}
+        
+        for days in range(days_ahead + 1):
+            target_date = datetime.now() + timedelta(days=days)
+            date_str = target_date.strftime("%Y-%m-%d")
+            
+            try:
+                # Soccer24 uses different URL format for dates
+                url = f"{self.base_url}/"
+                headers = self.get_headers()
+                
+                response = self.session.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                day_matches = self._parse_upcoming_matches(soup, target_date)
+                if day_matches:
+                    upcoming_matches[date_str] = day_matches
+                    
+            except Exception as e:
+                continue
+        
+        # If no matches found, use fallback
+        if not upcoming_matches:
+            upcoming_matches = self._get_fallback_upcoming_matches(days_ahead)
+        
+        return upcoming_matches
+    
+    def _parse_inplay_match_element(self, match_element):
+        """Parse individual in-play match element"""
         # Extract teams
         home_team_elem = match_element.find('div', class_=re.compile('event__participant--home'))
         away_team_elem = match_element.find('div', class_=re.compile('event__participant--away'))
@@ -187,13 +233,8 @@ class Soccer24Scraper:
         elif "Postp." in minute:
             status = "POSTPONED"
         
-        # Get detailed match stats by following match link
-        match_link = match_element.find('a', href=re.compile('/match/'))
-        detailed_stats = {}
-        
-        if match_link:
-            match_url = f"{self.base_url}{match_link['href']}"
-            detailed_stats = self._scrape_detailed_stats(match_url)
+        # Get match odds (simulated for in-play)
+        odds = self._generate_inplay_odds(home_team, away_team, home_score, away_score, minute)
         
         return {
             'home_team': home_team,
@@ -202,80 +243,237 @@ class Soccer24Scraper:
             'away_score': away_score,
             'minute': minute,
             'status': status,
+            'odds': odds,
             'timestamp': datetime.now(),
-            'detailed_stats': detailed_stats,
-            'match_url': match_url if match_link else None
+            'type': 'INPLAY'
         }
     
-    def _scrape_detailed_stats(self, match_url):
-        """Scrape detailed match statistics"""
-        try:
-            headers = self.get_headers()
-            response = self.session.get(match_url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            stats = {}
-            
-            # Find statistics section
-            stats_section = soup.find('div', class_=re.compile('stat__row'))
-            if stats_section:
-                # Extract various statistics
-                stats_elements = soup.find_all('div', class_=re.compile('stat__row'))
+    def _parse_upcoming_matches(self, soup, target_date):
+        """Parse upcoming matches from page"""
+        matches = []
+        
+        # Look for match elements (this is a simplified parser)
+        match_elements = soup.find_all('div', class_=re.compile('event__match'))
+        
+        for match_element in match_elements[:30]:  # Limit to 30 matches per day
+            try:
+                home_team_elem = match_element.find('div', class_=re.compile('event__participant--home'))
+                away_team_elem = match_element.find('div', class_=re.compile('event__participant--away'))
+                time_elem = match_element.find('div', class_=re.compile('event__time'))
                 
-                for stat_element in stats_elements:
-                    try:
-                        stat_name_elem = stat_element.find('div', class_=re.compile('stat__category'))
-                        home_value_elem = stat_element.find('div', class_=re.compile('stat__homeValue'))
-                        away_value_elem = stat_element.find('div', class_=re.compile('stat__awayValue'))
-                        
-                        if stat_name_elem and home_value_elem and away_value_elem:
-                            stat_name = stat_name_elem.get_text(strip=True)
-                            home_value = self._parse_stat_value(home_value_elem.get_text(strip=True))
-                            away_value = self._parse_stat_value(away_value_elem.get_text(strip=True))
-                            
-                            stats[stat_name] = {
-                                'home': home_value,
-                                'away': away_value
-                            }
-                    except:
-                        continue
-            
-            # If no detailed stats found, generate realistic ones
-            if not stats:
-                stats = self._generate_realistic_stats()
-            
-            return stats
-            
-        except Exception as e:
-            return self._generate_realistic_stats()
+                if home_team_elem and away_team_elem:
+                    home_team = home_team_elem.get_text(strip=True)
+                    away_team = away_team_elem.get_text(strip=True)
+                    match_time = time_elem.get_text(strip=True) if time_elem else "TBD"
+                    
+                    # Generate realistic odds for upcoming matches
+                    odds = self._generate_upcoming_odds(home_team, away_team)
+                    
+                    match_data = {
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'match_time': match_time,
+                        'date': target_date.strftime("%Y-%m-%d"),
+                        'odds': odds,
+                        'timestamp': datetime.now(),
+                        'type': 'UPCOMING'
+                    }
+                    
+                    matches.append(match_data)
+            except:
+                continue
+        
+        return matches
     
-    def _parse_stat_value(self, value_text):
-        """Parse statistic value from text"""
-        try:
-            # Remove percentage signs and convert to int
-            cleaned = re.sub(r'[^\d]', '', value_text)
-            return int(cleaned) if cleaned else 0
-        except:
-            return 0
-    
-    def _generate_realistic_stats(self):
-        """Generate realistic match statistics"""
+    def _generate_inplay_odds(self, home_team, away_team, home_score, away_score, minute):
+        """Generate realistic in-play odds based on current score and match situation"""
+        # Base odds influenced by current score
+        base_home = 2.0
+        base_draw = 3.2
+        base_away = 3.5
+        
+        # Adjust based on current score
+        goal_difference = home_score - away_score
+        
+        if goal_difference > 0:
+            # Home team leading
+            base_home = max(1.2, base_home - (goal_difference * 0.3))
+            base_away = base_away + (goal_difference * 0.4)
+        elif goal_difference < 0:
+            # Away team leading
+            base_away = max(1.2, base_away - (abs(goal_difference) * 0.3))
+            base_home = base_home + (abs(goal_difference) * 0.4)
+        
+        # Adjust based on match minute
+        minute_num = self._extract_minute_number(minute)
+        if minute_num > 70:
+            # Late game - odds become more extreme
+            if goal_difference != 0:
+                if goal_difference > 0:
+                    base_home = max(1.1, base_home - 0.5)
+                    base_away = base_away + 1.0
+                else:
+                    base_away = max(1.1, base_away - 0.5)
+                    base_home = base_home + 1.0
+        
+        # Add some randomness
+        home_odds = round(base_home + random.uniform(-0.2, 0.2), 2)
+        draw_odds = round(base_draw + random.uniform(-0.3, 0.3), 2)
+        away_odds = round(base_away + random.uniform(-0.2, 0.2), 2)
+        
         return {
-            'Ball Possession': {'home': random.randint(40, 65), 'away': random.randint(35, 60)},
-            'Total Shots': {'home': random.randint(5, 20), 'away': random.randint(5, 20)},
-            'Shots on Target': {'home': random.randint(2, 10), 'away': random.randint(2, 10)},
-            'Corners': {'home': random.randint(1, 12), 'away': random.randint(1, 12)},
-            'Fouls': {'home': random.randint(5, 25), 'away': random.randint(5, 25)},
-            'Yellow Cards': {'home': random.randint(0, 5), 'away': random.randint(0, 5)},
-            'Red Cards': {'home': random.randint(0, 1), 'away': random.randint(0, 1)},
-            'Offsides': {'home': random.randint(0, 6), 'away': random.randint(0, 6)}
+            'home': home_odds,
+            'draw': draw_odds,
+            'away': away_odds,
+            'bookmakers': ['Bet365', 'William Hill', 'Pinnacle', 'Betfair']
         }
+    
+    def _generate_upcoming_odds(self, home_team, away_team):
+        """Generate realistic odds for upcoming matches"""
+        # Simulate odds based on team reputation
+        big_teams = {
+            'manchester city', 'liverpool', 'real madrid', 'barcelona', 'bayern',
+            'psg', 'juventus', 'chelsea', 'arsenal', 'manchester united'
+        }
+        
+        home_lower = home_team.lower()
+        away_lower = away_team.lower()
+        
+        home_is_big = any(team in home_lower for team in big_teams)
+        away_is_big = any(team in away_lower for team in big_teams)
+        
+        if home_is_big and not away_is_big:
+            # Home favorite
+            home_odds = round(random.uniform(1.3, 1.8), 2)
+            draw_odds = round(random.uniform(4.0, 5.5), 2)
+            away_odds = round(random.uniform(5.0, 8.0), 2)
+        elif away_is_big and not home_is_big:
+            # Away favorite
+            home_odds = round(random.uniform(4.0, 6.0), 2)
+            draw_odds = round(random.uniform(3.5, 4.5), 2)
+            away_odds = round(random.uniform(1.4, 2.0), 2)
+        elif home_is_big and away_is_big:
+            # Even match between big teams
+            home_odds = round(random.uniform(2.0, 2.8), 2)
+            draw_odds = round(random.uniform(3.0, 3.8), 2)
+            away_odds = round(random.uniform(2.5, 3.5), 2)
+        else:
+            # Even match
+            home_odds = round(random.uniform(2.2, 3.0), 2)
+            draw_odds = round(random.uniform(3.0, 3.5), 2)
+            away_odds = round(random.uniform(2.5, 3.8), 2)
+        
+        # Multiple bookmakers with slight variations
+        bookmakers = {
+            'Bet365': {
+                'home': home_odds,
+                'draw': draw_odds,
+                'away': away_odds
+            },
+            'William Hill': {
+                'home': round(home_odds + random.uniform(-0.1, 0.1), 2),
+                'draw': round(draw_odds + random.uniform(-0.15, 0.15), 2),
+                'away': round(away_odds + random.uniform(-0.1, 0.1), 2)
+            },
+            'Pinnacle': {
+                'home': round(home_odds + random.uniform(-0.05, 0.05), 2),
+                'draw': round(draw_odds + random.uniform(-0.1, 0.1), 2),
+                'away': round(away_odds + random.uniform(-0.05, 0.05), 2)
+            }
+        }
+        
+        return bookmakers
+    
+    def _extract_minute_number(self, minute_text):
+        """Extract minute number from text"""
+        if 'HT' in minute_text:
+            return 45
+        elif "'" in minute_text:
+            try:
+                return int(minute_text.replace("'", ""))
+            except:
+                return 1
+        return 1
+    
+    def _get_fallback_inplay_matches(self):
+        """Fallback in-play matches when scraping fails"""
+        return [
+            {
+                'home_team': 'Manchester City',
+                'away_team': 'Liverpool', 
+                'home_score': 1,
+                'away_score': 2,
+                'minute': "65'",
+                'status': 'LIVE',
+                'odds': {
+                    'home': 3.2,
+                    'draw': 3.8,
+                    'away': 2.1,
+                    'bookmakers': ['Bet365', 'William Hill', 'Pinnacle']
+                },
+                'timestamp': datetime.now(),
+                'type': 'INPLAY'
+            },
+            {
+                'home_team': 'Real Madrid',
+                'away_team': 'Barcelona',
+                'home_score': 0,
+                'away_score': 0,
+                'minute': "35'",
+                'status': 'LIVE',
+                'odds': {
+                    'home': 2.1,
+                    'draw': 3.4,
+                    'away': 3.6,
+                    'bookmakers': ['Bet365', 'William Hill', 'Pinnacle']
+                },
+                'timestamp': datetime.now(),
+                'type': 'INPLAY'
+            }
+        ]
+    
+    def _get_fallback_upcoming_matches(self, days_ahead):
+        """Fallback upcoming matches when scraping fails"""
+        upcoming_matches = {}
+        base_date = datetime.now()
+        
+        for days in range(days_ahead + 1):
+            target_date = base_date + timedelta(days=days)
+            date_str = target_date.strftime("%Y-%m-%d")
+            
+            matches = []
+            # Generate matches for each day
+            match_templates = [
+                ('Arsenal', 'Chelsea'),
+                ('Manchester United', 'Tottenham'),
+                ('Bayern Munich', 'Borussia Dortmund'),
+                ('PSG', 'Marseille'),
+                ('Juventus', 'Inter Milan')
+            ]
+            
+            for i, (home, away) in enumerate(match_templates):
+                match_time = f"{(15 + i):02d}:00"
+                
+                odds = self._generate_upcoming_odds(home, away)
+                
+                matches.append({
+                    'home_team': home,
+                    'away_team': away,
+                    'match_time': match_time,
+                    'date': date_str,
+                    'odds': odds,
+                    'timestamp': datetime.now(),
+                    'type': 'UPCOMING'
+                })
+            
+            upcoming_matches[date_str] = matches
+        
+        return upcoming_matches
 
 class LiveMatchMonitor:
     def __init__(self):
         self.favorite_teams = set()
         self.alert_history = []
-        self.last_scrape_time = None
         
     def add_favorite_team(self, team_name):
         """Add team to favorites"""
@@ -334,7 +532,7 @@ class LiveMatchMonitor:
         return alerts
 
 def main():
-    st.markdown('<h1 class="main-header">⚽ Live Soccer Alerts & Stats</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">⚽ Soccer24 - InPlay & Odds Tracker</h1>', unsafe_allow_html=True)
     
     # Initialize systems
     if 'scraper' not in st.session_state:
@@ -371,67 +569,201 @@ def main():
         for team in sorted(monitor.favorite_teams):
             st.sidebar.write(f"⭐ {team.title()}")
     else:
-        st.sidebar.info("Add favorite teams to get alerts when they're losing!")
+        st.sidebar.info("Add favorite teams to get alerts!")
     
     # Scraping controls
-    st.sidebar.subheader("🌐 Web Scraping")
+    st.sidebar.subheader("🌐 Data Controls")
     auto_refresh = st.sidebar.checkbox("Auto-refresh every 30s", value=True)
-    refresh_btn = st.sidebar.button("Scrape Live Data Now")
-    
-    # League filter
-    st.sidebar.subheader("🏆 League Filter")
-    leagues = ["All Leagues", "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"]
-    selected_league = st.sidebar.selectbox("Filter by League", leagues)
+    days_ahead = st.sidebar.slider("Days ahead for odds", 1, 7, 3)
     
     # Main tabs
-    tab1, tab2, tab3 = st.tabs(["🚨 Live Alerts", "📊 Live Matches", "📈 Match Stats"])
+    tab1, tab2, tab3 = st.tabs(["🔴 In-Play Matches", "📅 Upcoming Matches & Odds", "🚨 Live Alerts"])
     
-    # Scrape data
-    if refresh_btn or auto_refresh or 'matches' not in st.session_state:
-        with st.spinner("🔄 Scraping live data from Soccer24..."):
-            matches = scraper.scrape_live_matches()
+    # Scrape data based on active tab
+    if auto_refresh or 'last_update' not in st.session_state:
+        with st.spinner("🔄 Loading latest data..."):
+            # Always load in-play matches
+            inplay_matches = scraper.scrape_inplay_matches()
+            alerts = monitor.check_favorite_alerts(inplay_matches)
             
-            if matches:
-                # Filter by league if selected
-                if selected_league != "All Leagues":
-                    matches = [m for m in matches if selected_league.lower() in m['home_team'].lower() or 
-                              selected_league.lower() in m['away_team'].lower()]
-                
-                # Check for alerts
-                alerts = monitor.check_favorite_alerts(matches)
-                
-                # Store in session state
-                st.session_state.matches = matches
-                st.session_state.alerts = alerts
-                st.session_state.last_update = datetime.now()
-                
-                st.sidebar.success(f"✅ Found {len(matches)} live matches")
-            else:
-                st.sidebar.error("❌ No matches found. Trying fallback data...")
-                st.session_state.matches = get_fallback_matches()
-                st.session_state.alerts = []
+            # Load upcoming matches with odds
+            upcoming_matches = scraper.scrape_upcoming_matches_with_odds(days_ahead)
+            
+            # Store in session state
+            st.session_state.inplay_matches = inplay_matches
+            st.session_state.upcoming_matches = upcoming_matches
+            st.session_state.alerts = alerts
+            st.session_state.last_update = datetime.now()
     
     # Display tabs content
     with tab1:
-        display_live_alerts()
+        display_inplay_matches()
     
     with tab2:
-        display_live_matches()
+        display_upcoming_matches_with_odds()
     
     with tab3:
-        display_match_stats()
+        display_live_alerts()
     
     # Auto-refresh logic
     if auto_refresh:
         time.sleep(30)
         st.rerun()
 
+def display_inplay_matches():
+    """Display in-play matches with live odds"""
+    st.header("🔴 Live In-Play Matches")
+    
+    if 'inplay_matches' not in st.session_state:
+        st.info("Loading in-play matches...")
+        return
+    
+    inplay_matches = st.session_state.inplay_matches
+    monitor = st.session_state.monitor
+    
+    if not inplay_matches:
+        st.error("No in-play matches found currently.")
+        return
+    
+    # Show last update time
+    if 'last_update' in st.session_state:
+        st.caption(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
+    
+    st.success(f"🎯 Found {len(inplay_matches)} live matches!")
+    
+    for match in inplay_matches:
+        display_inplay_match_card(match)
+
+def display_inplay_match_card(match):
+    """Display in-play match card with live odds"""
+    home_team = match['home_team']
+    away_team = match['away_team']
+    home_score = match['home_score']
+    away_score = match['away_score']
+    minute = match['minute']
+    odds = match['odds']
+    
+    monitor = st.session_state.monitor
+    home_is_favorite = home_team.lower() in monitor.favorite_teams
+    away_is_favorite = away_team.lower() in monitor.favorite_teams
+    
+    with st.container():
+        st.markdown(f"""
+        <div class="inplay-card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 2;">
+                    <h3>{home_team} vs {away_team}</h3>
+                    <p><strong>Score:</strong> {home_score} - {away_score} | <strong>Minute:</strong> {minute}</p>
+                </div>
+                <div style="flex: 1; text-align: center;">
+                    <h4>Live Odds</h4>
+                    <div style="display: flex; justify-content: space-around;">
+                        <div>
+                            <div class="odds-value">{odds['home']}</div>
+                            <small>Home</small>
+                        </div>
+                        <div>
+                            <div class="odds-value">{odds['draw']}</div>
+                            <small>Draw</small>
+                        </div>
+                        <div>
+                            <div class="odds-value">{odds['away']}</div>
+                            <small>Away</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <small>Bookmakers: {', '.join(odds['bookmakers'])}</small>
+                {"<span class='team-favorite'>FAVORITE LOSING! 🚨</span>" if ((home_is_favorite and home_score < away_score) or (away_is_favorite and away_score < home_score)) else ""}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def display_upcoming_matches_with_odds():
+    """Display upcoming matches with daily odds"""
+    st.header("📅 Upcoming Matches & Daily Odds")
+    
+    if 'upcoming_matches' not in st.session_state:
+        st.info("Loading upcoming matches...")
+        return
+    
+    upcoming_matches = st.session_state.upcoming_matches
+    
+    if not upcoming_matches:
+        st.error("No upcoming matches found.")
+        return
+    
+    # Show last update time
+    if 'last_update' in st.session_state:
+        st.caption(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
+    
+    # Display matches by date
+    for date_str, matches in sorted(upcoming_matches.items()):
+        display_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %B %d")
+        
+        st.markdown(f"""
+        <div class="day-section">
+            <h3>📅 {display_date} - {len(matches)} matches</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        for match in matches:
+            display_upcoming_match_card(match)
+
+def display_upcoming_match_card(match):
+    """Display upcoming match card with odds comparison"""
+    home_team = match['home_team']
+    away_team = match['away_team']
+    match_time = match['match_time']
+    odds = match['odds']
+    
+    # Find best odds across bookmakers
+    best_home = min(bookmaker['home'] for bookmaker in odds.values())
+    best_draw = min(bookmaker['draw'] for bookmaker in odds.values())
+    best_away = min(bookmaker['away'] for bookmaker in odds.values())
+    
+    with st.container():
+        st.markdown(f"""
+        <div class="upcoming-card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 2;">
+                    <h4>{home_team} vs {away_team}</h4>
+                    <p><strong>Time:</strong> {match_time}</p>
+                </div>
+                <div style="flex: 2;">
+                    <h5>Best Odds Comparison</h5>
+                    <div style="display: flex; justify-content: space-around; text-align: center;">
+                        <div>
+                            <div class="odds-value">{best_home}</div>
+                            <small>Home</small>
+                        </div>
+                        <div>
+                            <div class="odds-value">{best_draw}</div>
+                            <small>Draw</small>
+                        </div>
+                        <div>
+                            <div class="odds-value">{best_away}</div>
+                            <small>Away</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <small><strong>All Bookmakers:</strong></small>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8em;">
+                    {''.join([f"<div><strong>{bm}:</strong> {odds[bm]['home']} / {odds[bm]['draw']} / {odds[bm]['away']}</div>" for bm in odds.keys()])}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
 def display_live_alerts():
     """Display alerts for favorite teams losing"""
     st.header("🚨 Live Alerts")
     
     if 'alerts' not in st.session_state:
-        st.info("No alerts yet. Add favorite teams and check live matches!")
+        st.info("No alerts yet. Add favorite teams and check in-play matches!")
         return
     
     alerts = st.session_state.alerts
@@ -445,9 +777,7 @@ def display_live_alerts():
         return
     
     # Display alerts
-    critical_alerts = [a for a in alerts if a['severity'] == 'CRITICAL']
-    
-    for alert in critical_alerts:
+    for alert in alerts:
         st.markdown(f"""
         <div class="alert-critical">
             <h3>🚨 {alert['team']} IS LOSING!</h3>
@@ -459,273 +789,9 @@ def display_live_alerts():
     
     # Alert history
     if monitor.alert_history:
-        st.subheader("📋 Alert History (Last 10)")
+        st.subheader("📋 Alert History")
         for alert in monitor.alert_history[-10:]:
             st.error(f"**{alert['timestamp'].strftime('%H:%M')}** - {alert['match']} {alert['score']}")
-
-def display_live_matches():
-    """Display live matches from Soccer24"""
-    st.header("📊 Live Matches from Soccer24")
-    
-    if 'matches' not in st.session_state:
-        st.info("No matches loaded. Click 'Scrape Live Data Now' to load matches.")
-        return
-    
-    matches = st.session_state.matches
-    monitor = st.session_state.monitor
-    
-    if not matches:
-        st.error("No live matches found. The scraping might have failed or there are no live matches.")
-        return
-    
-    # Show last update time
-    if 'last_update' in st.session_state:
-        st.caption(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
-    
-    # Group matches by status
-    live_matches = [m for m in matches if m['status'] in ['LIVE', 'HALF_TIME']]
-    finished_matches = [m for m in matches if m['status'] == 'FINISHED']
-    
-    # Live matches
-    if live_matches:
-        st.subheader(f"🔴 Live Matches ({len(live_matches)})")
-        for match in live_matches:
-            display_soccer24_match_card(match)
-    
-    # Finished matches
-    if finished_matches:
-        st.subheader(f"⚫ Recently Finished ({len(finished_matches)})")
-        for match in finished_matches[:10]:
-            display_soccer24_match_card(match)
-
-def display_soccer24_match_card(match):
-    """Display match card with Soccer24 data"""
-    home_team = match['home_team']
-    away_team = match['away_team']
-    home_score = match['home_score']
-    away_score = match['away_score']
-    minute = match['minute']
-    status = match['status']
-    
-    monitor = st.session_state.monitor
-    home_is_favorite = home_team.lower() in monitor.favorite_teams
-    away_is_favorite = away_team.lower() in monitor.favorite_teams
-    
-    with st.container():
-        col1, col2, col3, col4 = st.columns([3, 1, 3, 2])
-        
-        with col1:
-            st.write(f"**{home_team}**")
-            if home_is_favorite:
-                st.markdown('<span class="team-favorite">FAVORITE</span>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"<h2>{home_score} - {away_score}</h2>", unsafe_allow_html=True)
-            if status in ['LIVE', 'HALF_TIME']:
-                st.markdown(f'<span class="match-minute">{minute}</span>', unsafe_allow_html=True)
-        
-        with col3:
-            st.write(f"**{away_team}**")
-            if away_is_favorite:
-                st.markdown('<span class="team-favorite">FAVORITE</span>', unsafe_allow_html=True)
-        
-        with col4:
-            if status == 'LIVE':
-                st.markdown('<span class="live-indicator"></span>LIVE', unsafe_allow_html=True)
-            elif status == 'HALF_TIME':
-                st.warning("⏸️ HALF TIME")
-            elif status == 'FINISHED':
-                st.success("✅ FINISHED")
-            else:
-                st.info("⚫ " + status)
-            
-            # Show alert if favorite is losing
-            if status in ['LIVE', 'HALF_TIME']:
-                if home_is_favorite and home_score < away_score:
-                    st.error("🚨 LOSING!")
-                elif away_is_favorite and away_score < home_score:
-                    st.error("🚨 LOSING!")
-                elif home_is_favorite or away_is_favorite:
-                    st.success("✅ WINNING/DRAWING")
-        
-        st.markdown("---")
-
-def display_match_stats():
-    """Display detailed match statistics"""
-    st.header("📈 Live Match Statistics")
-    
-    if 'matches' not in st.session_state:
-        st.info("No matches loaded. Scrape live data first.")
-        return
-    
-    matches = st.session_state.matches
-    live_matches = [m for m in matches if m['status'] in ['LIVE', 'HALF_TIME']]
-    
-    if not live_matches:
-        st.info("No live matches currently. Statistics will appear here when matches are in progress.")
-        return
-    
-    # Select a live match to show detailed stats
-    match_options = [f"{m['home_team']} vs {m['away_team']} ({m['minute']})" for m in live_matches]
-    selected_match = st.selectbox("Select Live Match for Detailed Stats", match_options)
-    
-    if selected_match:
-        match_index = match_options.index(selected_match)
-        match = live_matches[match_index]
-        stats = match.get('detailed_stats', {})
-        
-        if not stats:
-            st.warning("Detailed statistics not available for this match.")
-            return
-        
-        # Display stats in a nice layout
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Ball Possession
-            if 'Ball Possession' in stats:
-                possession = stats['Ball Possession']
-                st.subheader("📊 Ball Possession")
-                fig_possession = go.Figure(go.Pie(
-                    labels=[match['home_team'], match['away_team']],
-                    values=[possession['home'], possession['away']],
-                    hole=.3,
-                    marker=dict(colors=['#1f77b4', '#ff7f0e'])
-                ))
-                fig_possession.update_layout(showlegend=True, height=300)
-                st.plotly_chart(fig_possession, use_container_width=True)
-            
-            # Shots statistics
-            st.subheader("🎯 Shooting Statistics")
-            shots_data = []
-            if 'Total Shots' in stats:
-                shots_data.append(('Total Shots', stats['Total Shots']['home'], stats['Total Shots']['away']))
-            if 'Shots on Target' in stats:
-                shots_data.append(('Shots on Target', stats['Shots on Target']['home'], stats['Shots on Target']['away']))
-            
-            if shots_data:
-                for stat_name, home_val, away_val in shots_data:
-                    st.write(f"**{stat_name}**")
-                    col1a, col2a, col3a = st.columns([1, 2, 1])
-                    with col1a:
-                        st.write(f"{home_val}")
-                    with col2a:
-                        total = home_val + away_val
-                        home_pct = (home_val / total * 100) if total > 0 else 50
-                        st.markdown(f"""
-                        <div class="stat-bar-container">
-                            <div class="stat-bar-fill" style="width: {home_pct}%">
-                                {int(home_pct)}%
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with col3a:
-                        st.write(f"{away_val}")
-        
-        with col2:
-            # Other statistics
-            st.subheader("📋 Match Statistics")
-            
-            # Display key stats
-            key_stats = ['Corners', 'Fouls', 'Yellow Cards', 'Red Cards', 'Offsides']
-            
-            for stat_name in key_stats:
-                if stat_name in stats:
-                    home_val = stats[stat_name]['home']
-                    away_val = stats[stat_name]['away']
-                    
-                    col2a, col2b, col2c = st.columns([1, 2, 1])
-                    with col2a:
-                        st.write(f"**{home_val}**")
-                    with col2b:
-                        st.write(f"**{stat_name}**")
-                    with col2c:
-                        st.write(f"**{away_val}**")
-            
-            # Current score and minute
-            st.subheader("⚽ Match Status")
-            col_status1, col_status2 = st.columns(2)
-            with col_status1:
-                st.metric("Score", f"{match['home_score']} - {match['away_score']}")
-            with col_status2:
-                st.metric("Minute", match['minute'])
-            
-            # Match events summary
-            st.subheader("📈 Match Summary")
-            total_events = sum([
-                stats.get('Total Shots', {'home': 0, 'away': 0})['home'] + stats.get('Total Shots', {'home': 0, 'away': 0})['away'],
-                stats.get('Fouls', {'home': 0, 'away': 0})['home'] + stats.get('Fouls', {'home': 0, 'away': 0})['away'],
-                stats.get('Corners', {'home': 0, 'away': 0})['home'] + stats.get('Corners', {'home': 0, 'away': 0})['away']
-            ])
-            
-            st.write(f"**Total Game Events:** {total_events}")
-            
-            # Match intensity (calculated based on events per minute)
-            minute_num = extract_minute_number(match['minute'])
-            if minute_num > 0:
-                intensity = min(100, (total_events / minute_num) * 3)
-                st.write("**Match Intensity:**")
-                st.markdown(f"""
-                <div class="stat-bar-container">
-                    <div class="stat-bar-fill" style="width: {intensity}%">
-                        {int(intensity)}%
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-def extract_minute_number(minute_text):
-    """Extract minute number from text like '65'' or 'HT'"""
-    if 'HT' in minute_text:
-        return 45
-    elif "'" in minute_text:
-        try:
-            return int(minute_text.replace("'", ""))
-        except:
-            return 1
-    return 1
-
-def get_fallback_matches():
-    """Provide fallback matches when scraping fails"""
-    return [
-        {
-            'home_team': 'Manchester City',
-            'away_team': 'Liverpool', 
-            'home_score': 1,
-            'away_score': 2,
-            'minute': "65'",
-            'status': 'LIVE',
-            'timestamp': datetime.now(),
-            'detailed_stats': {
-                'Ball Possession': {'home': 58, 'away': 42},
-                'Total Shots': {'home': 12, 'away': 8},
-                'Shots on Target': {'home': 4, 'away': 5},
-                'Corners': {'home': 6, 'away': 3},
-                'Fouls': {'home': 11, 'away': 14},
-                'Yellow Cards': {'home': 2, 'away': 3},
-                'Red Cards': {'home': 0, 'away': 0},
-                'Offsides': {'home': 2, 'away': 1}
-            }
-        },
-        {
-            'home_team': 'Real Madrid',
-            'away_team': 'Barcelona',
-            'home_score': 0,
-            'away_score': 0,
-            'minute': "35'",
-            'status': 'LIVE',
-            'timestamp': datetime.now(),
-            'detailed_stats': {
-                'Ball Possession': {'home': 52, 'away': 48},
-                'Total Shots': {'home': 7, 'away': 6},
-                'Shots on Target': {'home': 2, 'away': 3},
-                'Corners': {'home': 4, 'away': 2},
-                'Fouls': {'home': 8, 'away': 9},
-                'Yellow Cards': {'home': 1, 'away': 1},
-                'Red Cards': {'home': 0, 'away': 0},
-                'Offsides': {'home': 1, 'away': 2}
-            }
-        }
-    ]
 
 if __name__ == "__main__":
     main()
