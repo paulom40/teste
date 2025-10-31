@@ -127,7 +127,7 @@ class Soccer24Scraper:
             
         except Exception as e:
             st.error(f"Error scraping today's matches: {str(e)}")
-            return self._get_fallback_today_matches()
+            return self.get_fallback_today_matches()  # Fixed method name
     
     def _parse_match(self, match_element):
         """Parse individual match element"""
@@ -354,7 +354,7 @@ class Soccer24Scraper:
         except Exception as e:
             return {'has_value': False}
     
-    def _get_fallback_today_matches(self):
+    def get_fallback_today_matches(self):  # Fixed method name
         """Provide fallback data when scraping fails"""
         today_matches = [
             {
@@ -406,6 +406,17 @@ class Soccer24Scraper:
                 'home_score': 0,
                 'away_score': 0,
                 'minute': "35'"
+            },
+            {
+                'home_team': 'Arsenal',
+                'away_team': 'Chelsea',
+                'league': 'Premier League',
+                'match_time': '17:30',
+                'date': datetime.now().strftime("%Y-%m-%d"),
+                'odds': self._generate_realistic_odds('Arsenal', 'Chelsea'),
+                'timestamp': datetime.now(),
+                'is_live': False,
+                'type': 'UPCOMING'
             }
         ]
         
@@ -616,7 +627,7 @@ def main():
             except Exception as e:
                 st.sidebar.error(f"❌ Loading failed: {str(e)}")
                 # Load fallback data
-                st.session_state.today_matches = scraper._get_fallback_today_matches()
+                st.session_state.today_matches = scraper.get_fallback_today_matches()  # Fixed method name
                 st.session_state.best_bets = scraper.analyze_value_bets(st.session_state.today_matches)
     
     # Display all content in a single view (no tabs)
