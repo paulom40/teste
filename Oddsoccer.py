@@ -1,6 +1,3 @@
-Here's a complete Streamlit app for scraping soccer odds from Oddsportal, merging with 2025/2026 season power ratings, and running predictive analysis. **Important: Scraping Oddsportal may violate their Terms of Service — use this responsibly for educational purposes only.**
-
-```python
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
