@@ -379,3 +379,8 @@ if "merged_data" in st.session_state:
 st.subheader("Key Notes & Limitations")
 st.markdown("""
 - **Scraping Reliability**: Oddsportal frequently updates its HTML structure — you may need to adjust selectors
+- **Demo Data**: Current predictions use simulated targets; real-world use requires historical match outcomes
+- **Power Ratings**: Team performance data should be updated regularly for accurate predictions
+- **Model Limitations**: Logistic regression is a basic starting point; consider more advanced ML models for production
+- **Legal Compliance**: Always respect website terms of service and implement proper rate limiting
+""")
