@@ -7,4 +7,5 @@ numpy
 scipy
 requests
 urllib3
-LogisticRegression
+scikit-learn
+lxml
