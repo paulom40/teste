@@ -8,12 +8,6 @@ from typing import Dict, Any
 import requests
 from PIL import Image
 from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocCanvas, Paragraph, Spacer, Table, TableStyle, Image as RLImage
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-import base64
 
 # ================================
 # CONFIG
@@ -29,7 +23,7 @@ st.markdown("""
 - **Shots on Target** (HS/AS) – Auto
 - **Expected Goals (xG)** – Auto
 
-**Logos + PDF Export**
+**Logos:** Auto-fetched
 """)
 
 # ================================
@@ -62,90 +56,6 @@ def load_image(url: str):
         return img
     except:
         return None
-
-# ================================
-# PDF GENERATOR
-# ================================
-def generate_pdf(home_team: str, away_team: str, pred: Dict[str, Any]):
-    buffer = BytesIO()
-    doc = SimpleDocCanvas(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-
-    # Title
-    story.append(Paragraph(f"<font size=18><b>{home_team} vs {away_team}</b></font>", styles["Title"]))
-    story.append(Spacer(1, 0.2 * inch))
-
-    # Logos
-    logo1 = get_team_logo(home_team)
-    img1 = load_image(logo1) if logo1 else None
-    logo2 = get_team_logo(away_team)
-    img2 = load_image(logo2) if logo2 else None
-
-    logo_data = []
-    if img1:
-        img1 = img1.resize((80, 80), Image.LANCZOS)
-        img1_io = BytesIO()
-        img1.save(img1_io, format="PNG")
-        logo_data.append(RLImage(img1_io, width=80, height=80))
-    else:
-        logo_data.append(Paragraph(f"<b>{home_team}</b>", styles["Normal"]))
-
-    logo_data.append(Spacer(1, 0.1 * inch))
-
-    if img2:
-        img2 = img2.resize((80, 80), Image.LANCZOS)
-        img2_io = BytesIO()
-        img2.save(img2_io, format="PNG")
-        logo_data.append(RLImage(img2_io, width=80, height=80))
-    else:
-        logo_data.append(Paragraph(f"<b>{away_team}</b>", styles["Normal"]))
-
-    logo_table = Table([[logo_data[0], "", logo_data[2]]], colWidths=[1.2*inch, 3*inch, 1.2*inch])
-    logo_table.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-    ]))
-    story.append(logo_table)
-    story.append(Spacer(1, 0.3 * inch))
-
-    # Predictions
-    data = [["Category", "Prediction", "Probabilities"]]
-    g = pred["goals"]
-    data.append(["Goals", f"{g['score']} → {g['result']}",
-                 f"H: {g['home_win']:.1%} | D: {g['draw']:.1%} | A: {g['away_win']:.1%}"])
-
-    if "corners" in pred:
-        c = pred["corners"]
-        data.append(["Corners", c['score'],
-                     f"Over 10.5: {c['over']:.1%} | Under: {c['under']:.1%}"])
-
-    if "shots" in pred:
-        s = pred["shots"]
-        data.append(["Shots on Target", s['score'],
-                     f"Over 20.5: {s['over']:.1%} | Under: {s['under']:.1%}"])
-
-    if "xg" in pred:
-        x = pred["xg"]
-        data.append(["xG", x['score'],
-                     f"Over 2.5: {x['over']:.1%} | Under: {x['under']:.1%}"])
-
-    table = Table(data, colWidths=[1.8*inch, 1.8*inch, 3*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4CAF50")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,0), 12),
-        ('BOTTOMPADDING', (0,0), (-1,0), 12),
-        ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-    ]))
-    story.append(table)
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
 
 # ================================
 # HELPERS
@@ -247,9 +157,6 @@ def compute_team_stats(
 
     return stats
 
-# ================================
-# PREDICT MATCH (FIXED INDENTATION)
-# ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     max_g = 10
@@ -267,12 +174,9 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     for h in range(max_g + 1):
         for a in range(max_g + 1):
             p = hp[h] * ap[a]
-            if h > a:
-                prob_h += p
-            elif h == a:
-                prob_d += p
-            else:
-                prob_a += p
+            if h > a:   prob_h += p
+            elif h == a: prob_d += p
+            else:       prob_a += p
             if p > best_p:
                 best_p = p
                 best = (h, a)
@@ -285,10 +189,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
-    # GENERIC PREDICTOR
     def predict_stat(name, threshold=None, is_float=False):
-        if name not in stats:
-            return None
+        if name not in stats: return None
         s = stats[name]
         lh = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
         la = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
@@ -312,12 +214,9 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             res["under"] = 1 - over
         return res
 
-    if "corners" in stats:
-        predictions["corners"] = predict_stat("corners", 10.5)
-    if "shots" in stats:
-        predictions["shots"] = predict_stat("shots", 20.5)
-    if "xg" in stats:
-        predictions["xg"] = predict_stat("xg", 2.5, True)
+    if "corners" in stats: predictions["corners"] = predict_stat("corners", 10.5)
+    if "shots" in stats:   predictions["shots"]   = predict_stat("shots",   20.5)
+    if "xg" in stats:      predictions["xg"]      = predict_stat("xg",      2.5, True)
 
     return predictions
 
@@ -381,7 +280,7 @@ if uploaded_file:
         st.cache_data.clear()
         st.success("Cleared!")
 
-    # PREDICTION + PDF
+    # PREDICTION
     if st.session_state.get("stats") and st.session_state.get("teams"):
         st.subheader("Predict Match")
         t1, t2 = st.columns(2)
@@ -391,64 +290,52 @@ if uploaded_file:
         if home_team == away_team:
             st.error("Select different teams.")
         else:
-            col_pred, col_pdf = st.columns([1, 1])
-            with col_pred:
-                predict_key = f"predict_{home_team}_{away_team}"
-                if st.button("Predict", key=predict_key):
-                    pred = predict_match(home_team, away_team, st.session_state.stats)
-                    st.session_state.prediction = pred
-                    st.session_state.match = (home_team, away_team)
+            predict_key = f"predict_{home_team}_{away_team}"
+            if st.button("Predict", key=predict_key):
+                pred = predict_match(home_team, away_team, st.session_state.stats)
+                st.session_state.prediction = pred
+                st.session_state.match = (home_team, away_team)
 
-            # SHOW RESULT + PDF BUTTON
-            if st.session_state.get("prediction"):
-                home_team, away_team = st.session_state.match
-                pred = st.session_state.prediction
+        # SHOW ONLY ONE RESULT
+        if st.session_state.get("prediction"):
+            home_team, away_team = st.session_state.match
+            pred = st.session_state.prediction
 
-                # Display
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col1:
-                    logo = get_team_logo(home_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
-                    else:
-                        st.markdown(f"**{home_team}**")
-                with col2:
-                    st.markdown(f"### **{home_team} vs {away_team}**")
-                with col3:
-                    logo = get_team_logo(away_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
-                    else:
-                        st.markdown(f"**{away_team}**")
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col1:
+                logo = get_team_logo(home_team)
+                if logo and load_image(logo):
+                    st.image(load_image(logo), width=80)
+                else:
+                    st.markdown(f"**{home_team}**")
+            with col2:
+                st.markdown(f"### **{home_team} vs {away_team}**")
+            with col3:
+                logo = get_team_logo(away_team)
+                if logo and load_image(logo):
+                    st.image(load_image(logo), width=80)
+                else:
+                    st.markdown(f"**{away_team}**")
 
-                g = pred["goals"]
+            g = pred["goals"]
+            st.markdown(f"""
+            #### Goals
+            **{g['score']}** → **{g['result']}**  
+            H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+            """)
+
+            if "corners" in pred:
+                c = pred["corners"]
                 st.markdown(f"""
-                #### Goals
-                **{g['score']}** → **{g['result']}**  
-                H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+                #### Corners
+                **{c['score']}**  
+                Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
                 """)
 
-                if "corners" in pred:
-                    c = pred["corners"]
-                    st.markdown(f"""
-                    #### Corners
-                    **{c['score']}**  
-                    Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
-                    """)
-
-                if "shots" in pred:
-                    s = pred["shots"]
-                    st.markdown(f"""
-                    #### Shots on Target
-                    **{s['score']}**  
-                    Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
-                    """)
-
-                # PDF BUTTON
-                with col_pdf:
-                    if st.button("Export to PDF"):
-                        pdf_buffer = generate_pdf(home_team, away_team, pred)
-                        b64 = base64.b64encode(pdf_buffer.read()).decode()
-                        href = f'<a href="data:application/pdf;base64,{b64}" download="{home_team}_vs_{away_team}.pdf">Download PDF</a>'
-                        st.markdown(href, unsafe_allow_html=True)
-                        st.success("PDF ready!")
+            if "shots" in pred:
+                s = pred["shots"]
+                st.markdown(f"""
+                #### Shots on Target
+                **{s['score']}**  
+                Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
+                """)
