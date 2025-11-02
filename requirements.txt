@@ -11,4 +11,4 @@ scikit-learn
 lxml
 reportlab
 pillow
-
+plotly
