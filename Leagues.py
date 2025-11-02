@@ -1,4 +1,3 @@
-
 # app.py
 import streamlit as st
 import pandas as pd
@@ -36,6 +35,11 @@ st.set_page_config(page_title="Football Predictor", layout="wide")
 st.title("Football Match Outcome Predictor")
 st.markdown("""
 **Full Prediction Suite + Export to PDF**
+
+**Enhanced Accuracy Features:**
+- ✅ **Recency Weighting** — Recent matches weighted more heavily
+- ✅ **Dixon-Coles Adjustment** — Corrects low-score correlations
+- ✅ **Minimum Sample Size** — Teams need 3+ matches for reliable stats
 
 **Predicts:**
 - Full-Time Score | BTTS | Over 2.5
@@ -205,19 +209,44 @@ def compute_team_stats(
 
     stats = {}
 
-    # === GOALS ===
+    # === GOALS WITH RECENCY WEIGHTING ===
     ft_mask = df[hg_col].notna() & df[ag_col].notna()
-    clean_ft = df[ft_mask][[home_col, away_col, hg_col, ag_col]]
+    clean_ft = df[ft_mask][[home_col, away_col, hg_col, ag_col]].copy()
     if len(clean_ft) < 5:
         raise ValueError(f"Only {len(clean_ft)} valid matches.")
-    avg_home = clean_ft[hg_col].mean()
-    avg_away = clean_ft[ag_col].mean()
+    
+    # Apply exponential decay weighting (recent matches matter more)
+    clean_ft['weight'] = np.exp(np.linspace(-2, 0, len(clean_ft)))
+    
+    avg_home = np.average(clean_ft[hg_col], weights=clean_ft['weight'])
+    avg_away = np.average(clean_ft[ag_col], weights=clean_ft['weight'])
+    
+    # Weighted team strength calculation
+    def weighted_mean(group, col, weight_col='weight'):
+        return np.average(group[col], weights=group[weight_col])
+    
+    home_attack_weighted = clean_ft.groupby(home_col).apply(
+        lambda g: weighted_mean(g, hg_col) / avg_home if len(g) >= 3 else 1.0
+    ).to_dict()
+    
+    away_attack_weighted = clean_ft.groupby(away_col).apply(
+        lambda g: weighted_mean(g, ag_col) / avg_away if len(g) >= 3 else 1.0
+    ).to_dict()
+    
+    home_defence_weighted = clean_ft.groupby(home_col).apply(
+        lambda g: weighted_mean(g, ag_col) / avg_away if len(g) >= 3 else 1.0
+    ).to_dict()
+    
+    away_defence_weighted = clean_ft.groupby(away_col).apply(
+        lambda g: weighted_mean(g, hg_col) / avg_home if len(g) >= 3 else 1.0
+    ).to_dict()
+    
     stats["goals"] = {
         "league_avg_home": avg_home, "league_avg_away": avg_away,
-        "home_attack": (clean_ft.groupby(home_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
-        "away_attack": (clean_ft.groupby(away_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
-        "home_defence": (clean_ft.groupby(home_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
-        "away_defence": (clean_ft.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
+        "home_attack": home_attack_weighted,
+        "away_attack": away_attack_weighted,
+        "home_defence": home_defence_weighted,
+        "away_defence": away_defence_weighted,
     }
 
     # === GOAL TIMING ===
@@ -258,52 +287,79 @@ def compute_team_stats(
             "most_likely": intervals[np.argmax(probs)]
         }
 
-    # === CORNERS ===
+    # === CORNERS WITH RECENCY WEIGHTING ===
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
         c_mask = df[hc_col].notna() & df[ac_col].notna()
-        clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]]
+        clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]].copy()
         if len(clean_c) >= 5:
-            avg_hc = clean_c[hc_col].mean()
-            avg_ac = clean_c[ac_col].mean()
+            clean_c['weight'] = np.exp(np.linspace(-2, 0, len(clean_c)))
+            avg_hc = np.average(clean_c[hc_col], weights=clean_c['weight'])
+            avg_ac = np.average(clean_c[ac_col], weights=clean_c['weight'])
             if avg_hc > 0 and avg_ac > 0:
                 stats["corners"] = {
                     "league_avg_home": avg_hc, "league_avg_away": avg_ac,
-                    "home_attack": (clean_c.groupby(home_col)[hc_col].mean() / avg_hc).fillna(1.0).to_dict(),
-                    "away_attack": (clean_c.groupby(away_col)[ac_col].mean() / avg_ac).fillna(1.0).to_dict(),
-                    "home_defence": (clean_c.groupby(home_col)[ac_col].mean() / avg_ac).fillna(1.0).to_dict(),
-                    "away_defence": (clean_c.groupby(away_col)[hc_col].mean() / avg_hc).fillna(1.0).to_dict(),
+                    "home_attack": clean_c.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, hc_col) / avg_hc if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_attack": clean_c.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, ac_col) / avg_ac if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "home_defence": clean_c.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, ac_col) / avg_ac if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_defence": clean_c.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, hc_col) / avg_hc if len(g) >= 3 else 1.0
+                    ).to_dict(),
                 }
 
-    # === xG ===
+    # === xG WITH RECENCY WEIGHTING ===
     if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
         xg_mask = df[hxg_col].notna() & df[axg_col].notna()
-        clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]]
+        clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]].copy()
         if len(clean_xg) >= 5:
-            avg_hxg = clean_xg[hxg_col].mean()
-            avg_axg = clean_xg[axg_col].mean()
+            clean_xg['weight'] = np.exp(np.linspace(-2, 0, len(clean_xg)))
+            avg_hxg = np.average(clean_xg[hxg_col], weights=clean_xg['weight'])
+            avg_axg = np.average(clean_xg[axg_col], weights=clean_xg['weight'])
             if avg_hxg > 0 and avg_axg > 0:
                 stats["xg"] = {
                     "league_avg_home": avg_hxg, "league_avg_away": avg_axg,
-                    "home_attack": (clean_xg.groupby(home_col)[hxg_col].mean() / avg_hxg).fillna(1.0).to_dict(),
-                    "away_attack": (clean_xg.groupby(away_col)[axg_col].mean() / avg_axg).fillna(1.0).to_dict(),
-                    "home_defence": (clean_xg.groupby(home_col)[axg_col].mean() / avg_axg).fillna(1.0).to_dict(),
-                    "away_defence": (clean_xg.groupby(away_col)[hxg_col].mean() / avg_hxg).fillna(1.0).to_dict(),
+                    "home_attack": clean_xg.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, hxg_col) / avg_hxg if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_attack": clean_xg.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, axg_col) / avg_axg if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "home_defence": clean_xg.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, axg_col) / avg_axg if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_defence": clean_xg.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, hxg_col) / avg_hxg if len(g) >= 3 else 1.0
+                    ).to_dict(),
                 }
 
-    # === SHOTS ON TARGET ===
+    # === SHOTS ON TARGET WITH RECENCY WEIGHTING ===
     if hs_col and as_col and hs_col in df.columns and as_col in df.columns:
         s_mask = df[hs_col].notna() & df[as_col].notna()
-        clean_s = df[s_mask][[home_col, away_col, hs_col, as_col]]
+        clean_s = df[s_mask][[home_col, away_col, hs_col, as_col]].copy()
         if len(clean_s) >= 5:
-            avg_hs = clean_s[hs_col].mean()
-            avg_as = clean_s[as_col].mean()
+            clean_s['weight'] = np.exp(np.linspace(-2, 0, len(clean_s)))
+            avg_hs = np.average(clean_s[hs_col], weights=clean_s['weight'])
+            avg_as = np.average(clean_s[as_col], weights=clean_s['weight'])
             if avg_hs > 0 and avg_as > 0:
                 stats["shots"] = {
                     "league_avg_home": avg_hs, "league_avg_away": avg_as,
-                    "home_attack": (clean_s.groupby(home_col)[hs_col].mean() / avg_hs).fillna(1.0).to_dict(),
-                    "away_attack": (clean_s.groupby(away_col)[as_col].mean() / avg_as).fillna(1.0).to_dict(),
-                    "home_defence": (clean_s.groupby(home_col)[as_col].mean() / avg_as).fillna(1.0).to_dict(),
-                    "away_defence": (clean_s.groupby(away_col)[hs_col].mean() / avg_hs).fillna(1.0).to_dict(),
+                    "home_attack": clean_s.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, hs_col) / avg_hs if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_attack": clean_s.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, as_col) / avg_as if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "home_defence": clean_s.groupby(home_col).apply(
+                        lambda g: weighted_mean(g, as_col) / avg_as if len(g) >= 3 else 1.0
+                    ).to_dict(),
+                    "away_defence": clean_s.groupby(away_col).apply(
+                        lambda g: weighted_mean(g, hs_col) / avg_hs if len(g) >= 3 else 1.0
+                    ).to_dict(),
                 }
 
     return stats
@@ -323,15 +379,42 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     }
     chart_data = {}
 
-    # === GOALS ===
+    # === GOALS WITH DIXON-COLES ADJUSTMENT ===
     if "goals" in stats:
         g = stats["goals"]
         lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
         lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
+        
+        # Clamp lambdas to reasonable ranges
+        lambda_home = max(0.3, min(lambda_home, 5.0))
+        lambda_away = max(0.3, min(lambda_away, 5.0))
+        
         hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
         ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
 
-        matrix = np.outer(hp, ap)
+        # Dixon-Coles correlation adjustment for low scores
+        def dixon_coles_adjustment(h, a, lambda_h, lambda_a):
+            tau = -0.13  # typical correlation parameter
+            if h == 0 and a == 0:
+                return 1 - lambda_h * lambda_a * tau
+            elif h == 0 and a == 1:
+                return 1 + lambda_h * tau
+            elif h == 1 and a == 0:
+                return 1 + lambda_a * tau
+            elif h == 1 and a == 1:
+                return 1 - tau
+            return 1.0
+
+        matrix = np.zeros((max_g + 1, max_g + 1))
+        for h in range(max_g + 1):
+            for a in range(max_g + 1):
+                base_prob = hp[h] * ap[a]
+                adjustment = dixon_coles_adjustment(h, a, lambda_home, lambda_away)
+                matrix[h, a] = base_prob * adjustment
+        
+        # Normalize
+        matrix = matrix / matrix.sum()
+        
         chart_data["ft_matrix"] = pd.DataFrame(
             matrix,
             index=[f"{home} {i}" for i in range(max_g + 1)],
@@ -343,7 +426,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         best_p = 0.0
         for h in range(max_g + 1):
             for a in range(max_g + 1):
-                p = hp[h] * ap[a]
+                p = matrix[h, a]
                 if h > a: prob_h += p
                 elif h == a: prob_d += p
                 else: prob_a += p
@@ -365,11 +448,16 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             "over_25": over_25, "under_25": 1 - over_25, "over_under_result": over_under_result
         }
 
-    # === CORNERS ===
+    # === CORNERS WITH IMPROVED DISTRIBUTION ===
     if "corners" in stats:
         c = stats["corners"]
         lambda_hc = c["home_attack"].get(home, 1.0) * c["away_defence"].get(away, 1.0) * c["league_avg_home"]
         lambda_ac = c["away_attack"].get(away, 1.0) * c["home_defence"].get(home, 1.0) * c["league_avg_away"]
+        
+        # Clamp to reasonable ranges
+        lambda_hc = max(1.0, min(lambda_hc, 12.0))
+        lambda_ac = max(1.0, min(lambda_ac, 12.0))
+        
         hc_probs = poisson.pmf(np.arange(max_c + 1), lambda_hc)
         ac_probs = poisson.pmf(np.arange(max_c + 1), lambda_ac)
 
@@ -377,6 +465,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         best_total = int(round(lambda_hc + lambda_ac))
         best_p = 0.0
         over_10_5 = 0.0
+        
+        # Use convolution for total corners distribution
         for h in range(max_c + 1):
             for a in range(max_c + 1):
                 p = hc_probs[h] * ac_probs[a]
@@ -385,11 +475,9 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
                     total_probs[total] += p
                 if total > 10.5:
                     over_10_5 += p
-                if p > best_p:
-                    best_p = p
-                    best_total = total
-        if best_p == 0:
-            best_total = int(round(lambda_hc + lambda_ac))
+        
+        # Find mode (most likely)
+        best_total = np.argmax(total_probs)
 
         predictions["corners"] = {
             "total": best_total,
@@ -739,8 +827,8 @@ if uploaded_file:
                 <div class="prediction">
                     <div class="score">Goal Timing: <b>{t['most_likely']}</b></div>
                     <div class="prob" style="font-size:13px; line-height:1.4;">
-                        1–15: {eg[0]:.2f} 16–30: {eg[1]:.2f} 31–45: {eg[2]:.2f}<br>
-                        46–60: {eg[3]:.2f} 61–75: {eg[4]:.2f} 76–90: {eg[5]:.2f}
+                        1–15: {eg[0]:.2f} 16–30: {eg[1]:.2f} 31–45: {eg[2]:.2f}<br>
+                        46–60: {eg[3]:.2f} 61–75: {eg[4]:.2f} 76–90: {eg[5]:.2f}
                     </div>
                 </div>
                 """
