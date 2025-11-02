@@ -19,9 +19,9 @@ st.markdown("""
 
 **Predicts:**
 - **Goals** (FTHG/FTAG) – Required
-- **Corners** (HC/AC) – Auto if present
-- **Shots on Target** (HS/AS) – Auto if present
-- **Expected Goals (xG)** – Auto if present
+- **Corners** (HC/AC) – Auto
+- **Shots on Target** (HS/AS) – Auto
+- **Expected Goals (xG)** – Auto
 
 **Logos:** Auto-fetched
 """)
@@ -33,24 +33,16 @@ st.markdown("""
 def get_team_logo(team_name: str) -> str:
     team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "").replace("'", "")
     replacements = {
-        "man_utd": "Manchester_United_F.C.", "manchester_united": "Manchester_United_F.C.",
-        "man_city": "Manchester_City_F.C.", "manchester_city": "Manchester_City_F.C.",
+        "man_utd": "Manchester_United_F.C.", "man_city": "Manchester_City_F.C.",
         "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
-        "spurs": "Tottenham_Hotspur_F.C.", "tottenham": "Tottenham_Hotspur_F.C.",
-        "nottm_forest": "Nottingham_Forest_F.C.", "nottmforest": "Nottingham_Forest_F.C.",
-        "nott'm_forest": "Nottingham_Forest_F.C.",
+        "nottm_forest": "Nottingham_Forest_F.C.", "nacional": "C.D._Nacional",
+        "famalicao": "F.C._Famalicão", "fc_famalicao": "F.C._Famalicão"
     }
     wiki_name = replacements.get(team_clean, team_name.replace(" ", "_").replace("'", "") + "_F.C.")
     url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
     try:
         if requests.head(url, timeout=5).status_code == 200:
             return f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
-    except:
-        pass
-    fd_url = f"https://www.football-data.co.uk/mmz4281/logos/{team_clean}.gif"
-    try:
-        if requests.head(fd_url, timeout=5).status_code == 200:
-            return fd_url
     except:
         pass
     return None
@@ -116,23 +108,14 @@ def compute_team_stats(
     axg_col: str = None
 ) -> Dict[str, Any]:
     df = _df.copy()
-
-    # Convert all numeric columns
     for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # REQUIRED: GOALS
-    # Select only rows where both goals are valid
     valid_mask = df[hg_col].notna() & df[ag_col].notna()
     clean = df[valid_mask][[home_col, away_col, hg_col, ag_col]]
-
-    if len(clean) == 0:
-        raise ValueError("No matches with valid FTHG and FTAG values.")
     if len(clean) < 5:
-        raise ValueError(f"Only {len(clean)} valid matches. Need at least 5 to train.")
-
-    st.info(f"Using **{len(clean)} valid matches** for training.")
+        raise ValueError(f"Only {len(clean)} valid matches. Need at least 5.")
 
     avg_home = clean[hg_col].mean()
     avg_away = clean[ag_col].mean()
@@ -150,7 +133,6 @@ def compute_team_stats(
         }
     }
 
-    # OPTIONAL: CORNERS, SHOTS, xG
     def add(name, h_col, a_col):
         if h_col and a_col and h_col in df.columns and a_col in df.columns:
             sub_mask = df[h_col].notna() & df[a_col].notna()
@@ -176,11 +158,8 @@ def compute_team_stats(
 
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(stats, dict) or "goals" not in stats:
-        raise ValueError("Invalid model. Re-train.")
-
-    predictions = {}
     max_g = 10
+    predictions = {}
 
     # GOALS
     g = stats["goals"]
@@ -209,10 +188,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
-    # GENERIC PREDICTOR
     def predict_stat(name, threshold=None, is_float=False):
-        if name not in stats:
-            return None
+        if name not in stats: return None
         s = stats[name]
         lh = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
         la = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
@@ -236,12 +213,9 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             res["under"] = 1 - over
         return res
 
-    if "corners" in stats:
-        predictions["corners"] = predict_stat("corners", 10.5)
-    if "shots" in stats:
-        predictions["shots"] = predict_stat("shots", 20.5)
-    if "xg" in stats:
-        predictions["xg"] = predict_stat("xg", 2.5, True)
+    if "corners" in stats: predictions["corners"] = predict_stat("corners", 10.5)
+    if "shots" in stats:   predictions["shots"]   = predict_stat("shots",   20.5)
+    if "xg" in stats:      predictions["xg"]      = predict_stat("xg",      2.5, True)
 
     return predictions
 
@@ -262,23 +236,18 @@ if uploaded_file:
     c1, c2, c3, c4, c5 = st.columns(5)
     home_col = c2.selectbox("Home Team", df.columns, index=_safe_index(df, guessed.get("HomeTeam")))
     away_col = c3.selectbox("Away Team", df.columns, index=_safe_index(df, guessed.get("AwayTeam")))
-    hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
+    hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("F');
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
-    # Validate
     try:
-        df[hg_col] = pd.to_numeric(df[hg_col], errors='coerce')
-        df[ag_col] = pd.to_numeric(df[ag_col], errors='coerce')
-        valid_matches = df[hg_col].notna() & df[ag_col].notna()
-        valid_count = valid_matches.sum()
-        if valid_count == 0:
-            st.error("No valid numeric values in FTHG or FTAG columns.")
-        elif valid_count < 5:
-            st.warning(f"Only **{valid_count} valid matches**. Need at least 5.")
+        valid_count = (pd.to_numeric(df[hg_col], errors='coerce').notna() & 
+                      pd.to_numeric(df[ag_col], errors='coerce').notna()).sum()
+        if valid_count < 5:
+            st.warning(f"Only {valid_count} valid matches. Need at least 5.")
         else:
-            st.success(f"**{valid_count} valid matches** found!")
+            st.success(f"{valid_count} valid matches!")
     except:
-        st.error("Cannot convert FTHG/FTAG to numbers.")
+        st.error("Cannot convert goals to numbers.")
 
     st.subheader("Optional Columns")
     o1, o2, o3, o4, o5, o6 = st.columns(6)
@@ -289,20 +258,18 @@ if uploaded_file:
     hxg_col = o5.selectbox("HxG", [""] + list(df.columns))
     axg_col = o6.selectbox("AxG", [""] + list(df.columns))
 
-    train_disabled = valid_count < 5 if 'valid_count' in locals() else True
-    if st.button("Train Model", disabled=train_disabled):
+    if st.button("Train Model", disabled=valid_count < 5 if 'valid_count' in locals() else True):
         with st.spinner("Training..."):
             try:
-                stats = compute_team_stats(
-                    df, home_col, away_col, hg_col, ag_col,
-                    hc_col or None, ac_col or None,
-                    hs_col or None, as_col or None,
-                    hxg_col or None, axg_col or None
-                )
+                stats = compute_team_stats(df, home_col, away_col, hg_col, ag_col,
+                                         hc_col or None, ac_col or None,
+                                         hs_col or None, as_col or None,
+                                         hxg_col or None, axg_col or None)
                 teams = sorted(set(df[home_col]).union(df[away_col]))
                 st.session_state.stats = stats
                 st.session_state.teams = teams
-                st.success("Model trained successfully!")
+                st.session_state.prediction = None  # Reset
+                st.success("Model trained!")
             except Exception as e:
                 st.error(f"Training failed: {e}")
 
@@ -312,6 +279,7 @@ if uploaded_file:
         st.cache_data.clear()
         st.success("Cleared!")
 
+    # PREDICTION
     if st.session_state.get("stats") and st.session_state.get("teams"):
         st.subheader("Predict Match")
         t1, t2 = st.columns(2)
@@ -320,10 +288,18 @@ if uploaded_file:
 
         if home_team == away_team:
             st.error("Select different teams.")
-        elif st.button("Predict"):
-            pred = predict_match(home_team, away_team, st.session_state.stats)
+        else:
+            predict_key = f"predict_{home_team}_{away_team}"
+            if st.button("Predict", key=predict_key):
+                pred = predict_match(home_team, away_team, st.session_state.stats)
+                st.session_state.prediction = pred
+                st.session_state.match = (home_team, away_team)
 
-            # LOGOS
+        # SHOW ONLY ONE RESULT
+        if st.session_state.get("prediction"):
+            home_team, away_team = st.session_state.match
+            pred = st.session_state.prediction
+
             col1, col2, col3 = st.columns([1, 2, 1])
             with col1:
                 logo = get_team_logo(home_team)
@@ -340,7 +316,6 @@ if uploaded_file:
                 else:
                     st.markdown(f"**{away_team}**")
 
-            # RESULTS
             g = pred["goals"]
             st.markdown(f"""
             #### Goals
@@ -362,12 +337,4 @@ if uploaded_file:
                 #### Shots on Target
                 **{s['score']}**  
                 Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
-                """)
-
-            if "xg" in pred:
-                x = pred["xg"]
-                st.markdown(f"""
-                #### Expected Goals (xG)
-                **{x['score']}**  
-                Over 2.5: `{x['over']:.1%}` | Under: `{x['under']:.1%}`
                 """)
