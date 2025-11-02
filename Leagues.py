@@ -35,7 +35,8 @@ def get_team_logo(team_name: str) -> str:
     replacements = {
         "man_utd": "Manchester_United_F.C.", "man_city": "Manchester_City_F.C.",
         "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
-        "nottm_forest": "Nottingham_Forest_F.C.", "nacional": "C.D._Nacional",
+        "nottm_forest": "Nottingham_Forest_F.C.", "nottmforest": "Nottingham_Forest_F.C.",
+        "nott'm_forest": "Nottingham_Forest_F.C.", "nacional": "C.D._Nacional",
         "famalicao": "F.C._Famalicão", "fc_famalicao": "F.C._Famalicão"
     }
     wiki_name = replacements.get(team_clean, team_name.replace(" ", "_").replace("'", "") + "_F.C.")
@@ -236,7 +237,7 @@ if uploaded_file:
     c1, c2, c3, c4, c5 = st.columns(5)
     home_col = c2.selectbox("Home Team", df.columns, index=_safe_index(df, guessed.get("HomeTeam")))
     away_col = c3.selectbox("Away Team", df.columns, index=_safe_index(df, guessed.get("AwayTeam")))
-    hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("F');
+    hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
     try:
@@ -268,7 +269,7 @@ if uploaded_file:
                 teams = sorted(set(df[home_col]).union(df[away_col]))
                 st.session_state.stats = stats
                 st.session_state.teams = teams
-                st.session_state.prediction = None  # Reset
+                st.session_state.prediction = None
                 st.success("Model trained!")
             except Exception as e:
                 st.error(f"Training failed: {e}")
