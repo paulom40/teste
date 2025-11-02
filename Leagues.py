@@ -77,13 +77,10 @@ def generate_pdf(home_team: str, away_team: str, pred: Dict[str, Any]):
     story.append(Spacer(1, 0.2 * inch))
 
     # Logos
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col1:
-        logo1 = get_team_logo(home_team)
-        img1 = load_image(logo1) if logo1 else None
-    with col3:
-        logo2 = get_team_logo(away_team)
-        img2 = load_image(logo2) if logo2 else None
+    logo1 = get_team_logo(home_team)
+    img1 = load_image(logo1) if logo1 else None
+    logo2 = get_team_logo(away_team)
+    img2 = load_image(logo2) if logo2 else None
 
     logo_data = []
     if img1:
@@ -151,11 +148,14 @@ def generate_pdf(home_team: str, away_team: str, pred: Dict[str, Any]):
     return buffer
 
 # ================================
-# REST OF THE CODE (unchanged until UI)
+# HELPERS
 # ================================
 def _safe_index(df: pd.DataFrame, col: str):
     return df.columns.get_loc(col) if col in df.columns else 0
 
+# ================================
+# DATA LOADER
+# ================================
 @st.cache_data(show_spinner="Loading CSV...")
 def load_csv(uploaded_file_bytes: bytes) -> pd.DataFrame:
     try:
@@ -181,6 +181,9 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
         elif lower in ["axg", "away_xg"]:        mapping["AxG"] = col
     return mapping
 
+# ================================
+# MODEL
+# ================================
 @st.cache_data(show_spinner="Training model...")
 def compute_team_stats(
     _df: pd.DataFrame,
@@ -244,11 +247,15 @@ def compute_team_stats(
 
     return stats
 
+# ================================
+# PREDICT MATCH (FIXED INDENTATION)
+# ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     max_g = 10
-   predictions = {}
+    predictions = {}
 
+    # GOALS
     g = stats["goals"]
     lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
@@ -260,9 +267,12 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     for h in range(max_g + 1):
         for a in range(max_g + 1):
             p = hp[h] * ap[a]
-            if h > a:   prob_h += p
-            elif h == a: prob_d += p
-            else:       prob_a += p
+            if h > a:
+                prob_h += p
+            elif h == a:
+                prob_d += p
+            else:
+                prob_a += p
             if p > best_p:
                 best_p = p
                 best = (h, a)
@@ -275,8 +285,10 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
+    # GENERIC PREDICTOR
     def predict_stat(name, threshold=None, is_float=False):
-        if name not in stats: return None
+        if name not in stats:
+            return None
         s = stats[name]
         lh = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
         la = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
@@ -300,9 +312,12 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             res["under"] = 1 - over
         return res
 
-    if "corners" in stats: predictions["corners"] = predict_stat("corners", 10.5)
-    if "shots" in stats:   predictions["shots"]   = predict_stat("shots",   20.5)
-    if "xg" in stats:      predictions["xg"]      = predict_stat("xg",      2.5, True)
+    if "corners" in stats:
+        predictions["corners"] = predict_stat("corners", 10.5)
+    if "shots" in stats:
+        predictions["shots"] = predict_stat("shots", 20.5)
+    if "xg" in stats:
+        predictions["xg"] = predict_stat("xg", 2.5, True)
 
     return predictions
 
@@ -376,9 +391,9 @@ if uploaded_file:
         if home_team == away_team:
             st.error("Select different teams.")
         else:
-            predict_key = f"predict_{home_team}_{away_team}"
             col_pred, col_pdf = st.columns([1, 1])
             with col_pred:
+                predict_key = f"predict_{home_team}_{away_team}"
                 if st.button("Predict", key=predict_key):
                     pred = predict_match(home_team, away_team, st.session_state.stats)
                     st.session_state.prediction = pred
