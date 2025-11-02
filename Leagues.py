@@ -8,11 +8,6 @@ from typing import Dict, Any
 import requests
 from PIL import Image
 from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocCanvas, Paragraph, Spacer, Table, TableStyle, Image as RLImage
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from reportlab.lib.units import inch
 import base64
 
 # ================================
@@ -24,13 +19,11 @@ st.markdown("""
 **Poisson-based predictions** from **football-data.co.uk** CSVs.
 
 **Predicts:**
-- **Full-Time Goals** (FTHG/FTAG)
-- **Half-Time Goals** (HTHG/HTAG) **NEW**
-- **Corners** (HC/AC)
-- **Shots on Target** (HS/AS)
-- **Expected Goals (xG)**
+- **Full-Time** (FTHG/FTAG)
+- **Half-Time** (HTHG/HTAG) **NEW**
+- **Corners, Shots, xG**
 
-**Logos + PDF Export**
+**Logos + Print-to-PDF (Ctrl+P)**
 """)
 
 # ================================
@@ -64,90 +57,22 @@ def load_image(url: str):
         return None
 
 # ================================
-# PDF GENERATOR
+# PRINT CSS (for Ctrl+P → PDF)
 # ================================
-def generate_pdf(home_team: str, away_team: str, pred: Dict[str, Any]):
-    buffer = BytesIO()
-    doc = SimpleDocCanvas(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-
-    # Title
-    story.append(Paragraph(f"<font size=18><b>{home_team} vs {away_team}</b></font>", styles["Title"]))
-    story.append(Spacer(1, 0.2 * inch))
-
-    # Logos
-    logo1 = get_team_logo(home_team)
-    img1 = load_image(logo1) if logo1 else None
-    logo2 = get_team_logo(away_team)
-    img2 = load_image(logo2) if logo2 else None
-
-    logo_data = []
-    if img1:
-        img1 = img1.resize((80, 80), Image.LANCZOS)
-        img1_io = BytesIO()
-        img1.save(img1_io, format="PNG")
-        logo_data.append(RLImage(img1_io, width=80, height=80))
-    else:
-        logo_data.append(Paragraph(f"<b>{home_team}</b>", styles["Normal"]))
-
-    logo_data.append(Spacer(1, 0.1 * inch))
-
-    if img2:
-        img2 = img2.resize((80, 80), Image.LANCZOS)
-        img2_io = BytesIO()
-        img2.save(img2_io, format="PNG")
-        logo_data.append(RLImage(img2_io, width=80, height=80))
-    else:
-        logo_data.append(Paragraph(f"<b>{away_team}</b>", styles["Normal"]))
-
-    logo_table = Table([[logo_data[0], "", logo_data[2]]], colWidths=[1.2*inch, 3*inch, 1.2*inch])
-    logo_table.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-    ]))
-    story.append(logo_table)
-    story.append(Spacer(1, 0.3 * inch))
-
-    # Predictions Table
-    data = [["Category", "Prediction", "Probabilities"]]
-    g = pred["goals"]
-    data.append(["Full-Time", f"{g['score']} → {g['result']}",
-                 f"H: {g['home_win']:.1%} | D: {g['draw']:.1%} | A: {g['away_win']:.1%}"])
-
-    if "half_time" in pred:
-        ht = pred["half_time"]
-        data.append(["Half-Time", f"{ht['score']} → {ht['result']}",
-                     f"H: {ht['home_win']:.1%} | D: {ht['draw']:.1%} | A: {ht['away_win']:.1%}"])
-
-    if "corners" in pred:
-        c = pred["corners"]
-        data.append(["Corners", c['score'], f"Over 10.5: {c['over']:.1%} | Under: {c['under']:.1%}"])
-
-    if "shots" in pred:
-        s = pred["shots"]
-        data.append(["Shots on Target", s['score'], f"Over 20.5: {s['over']:.1%} | Under: {s['under']:.1%}"])
-
-    if "xg" in pred:
-        x = pred["xg"]
-        data.append(["xG", x['score'], f"Over 2.5: {x['over']:.1%} | Under: {x['under']:.1%}"])
-
-    table = Table(data, colWidths=[1.8*inch, 1.8*inch, 3*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4CAF50")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,0), 12),
-        ('BOTTOMPADDING', (0,0), (-1,0), 12),
-        ('BACKGROUND', (0,1), (-1,-1), colors.beige),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-    ]))
-    story.append(table)
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+print_css = """
+<style>
+@media print {
+    body { font-family: Arial; margin: 1in; }
+    .print-title { font-size: 24px; font-weight: bold; text-align: center; margin-bottom: 20px; }
+    .team-box { text-align: center; }
+    .logo { width: 80px; height: 80px; }
+    .prediction { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+    .score { font-size: 20px; font-weight: bold; }
+    .prob { font-size: 14px; color: #555; }
+    .no-print { display: none; }
+}
+</style>
+"""
 
 # ================================
 # HELPERS
@@ -244,7 +169,7 @@ def compute_team_stats(
                     "away_defence": (clean_ht.groupby(away_col)[hthg_col].mean() / avg_h).fillna(1.0).to_dict(),
                 }
 
-    # OPTIONAL: CORNERS, SHOTS, xG
+    # OPTIONAL
     def add(name, h_col, a_col):
         if h_col and a_col and h_col in df.columns and a_col in df.columns:
             sub_mask = df[h_col].notna() & df[a_col].notna()
@@ -426,7 +351,7 @@ if uploaded_file:
         st.cache_data.clear()
         st.success("Cleared!")
 
-    # PREDICTION + PDF
+    # PREDICTION
     if st.session_state.get("stats") and st.session_state.get("teams"):
         st.subheader("Predict Match")
         t1, t2 = st.columns(2)
@@ -436,74 +361,78 @@ if uploaded_file:
         if home_team == away_team:
             st.error("Select different teams.")
         else:
-            col_pred, col_pdf = st.columns([1, 1])
-            with col_pred:
-                predict_key = f"predict_{home_team}_{away_team}"
-                if st.button("Predict", key=predict_key):
-                    pred = predict_match(home_team, away_team, st.session_state.stats)
-                    st.session_state.prediction = pred
-                    st.session_state.match = (home_team, away_team)
+            predict_key = f"predict_{home_team}_{away_team}"
+            if st.button("Predict", key=predict_key):
+                pred = predict_match(home_team, away_team, st.session_state.stats)
+                st.session_state.prediction = pred
+                st.session_state.match = (home_team, away_team)
 
-            if st.session_state.get("prediction"):
-                home_team, away_team = st.session_state.match
-                pred = st.session_state.prediction
+        # SHOW RESULT + PRINT BUTTON
+        if st.session_state.get("prediction"):
+            home_team, away_team = st.session_state.match
+            pred = st.session_state.prediction
 
-                # Display
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col1:
-                    logo = get_team_logo(home_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
-                    else:
-                        st.markdown(f"**{home_team}**")
-                with col2:
-                    st.markdown(f"### **{home_team} vs {away_team}**")
-                with col3:
-                    logo = get_team_logo(away_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
-                    else:
-                        st.markdown(f"**{away_team}**")
+            # LOGOS
+            logo1 = get_team_logo(home_team)
+            logo2 = get_team_logo(away_team)
+            img1 = load_image(logo1) if logo1 else None
+            img2 = load_image(logo2) if logo2 else None
 
-                # FULL-TIME
-                g = pred["goals"]
-                st.markdown(f"""
-                #### Full-Time
-                **{g['score']}** → **{g['result']}**  
-                H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
-                """)
+            # PRINTABLE CONTENT
+            st.markdown(print_css, unsafe_allow_html=True)
+            st.markdown("### Print Prediction (Ctrl+P → Save as PDF)", unsafe_allow_html=True)
 
-                # HALF-TIME
-                if "half_time" in pred:
-                    ht = pred["half_time"]
-                    st.markdown(f"""
-                    #### Half-Time
-                    **{ht['score']}** → **{ht['result']}**  
-                    H: `{ht['home_win']:.1%}` | D: `{ht['draw']:.1%}` | A: `{ht['away_win']:.1%}`
-                    """)
+            print_html = f"""
+            <div class="print-title">{home_team} vs {away_team}</div>
+            <div style="display: flex; justify-content: center; gap: 50px; margin: 20px 0;">
+                <div class="team-box">
+                    {f'<img src="data:image/png;base64,{base64.b64encode(BytesIO(open(img1.filename, "rb").read()) if False else img1_to_base64(img1)).decode()}" class="logo">' if img1 else f'<b>{home_team}</b>'}
+                </div>
+                <div style="font-size: 24px; font-weight: bold; align-self: center;">VS</div>
+                <div class="team-box">
+                    {f'<img src="data:image/png;base64,{img2_to_base64(img2)}" class="logo">' if img2 else f'<b>{away_team}</b>'}
+                </div>
+            </div>
+            """
 
-                # OTHERS
-                if "corners" in pred:
-                    c = pred["corners"]
-                    st.markdown(f"""
-                    #### Corners
-                    **{c['score']}**  
-                    Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
-                    """)
+            def img_to_base64(img):
+                if not img: return ""
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                return base64.b64encode(buffered.getvalue()).decode()
 
-                if "shots" in pred:
-                    s = pred["shots"]
-                    st.markdown(f"""
-                    #### Shots on Target
-                    **{s['score']}**  
-                    Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
-                    """)
+            # Predictions
+            g = pred["goals"]
+            print_html += f"""
+            <div class="prediction">
+                <div class="score">Full-Time: {g['score']} → {g['result']}</div>
+                <div class="prob">H: {g['home_win']:.1%} | D: {g['draw']:.1%} | A: {g['away_win']:.1%}</div>
+            </div>
+            """
 
-                # PDF
-                with col_pdf:
-                    if st.button("Export to PDF"):
-                        pdf_buffer = generate_pdf(home_team, away_team, pred)
-                        b64 = base64.b64encode(pdf_buffer.read()).decode()
-                        href = f'<a href="data:application/pdf;base64,{b64}" download="{home_team}_vs_{away_team}.pdf">Download PDF</a>'
-                        st.markdown(href, unsafe_allow_html=True)
-                        st.success("PDF ready!")
+            if "half_time" in pred:
+                ht = pred["half_time"]
+                print_html += f"""
+                <div class="prediction">
+                    <div class="score">Half-Time: {ht['score']} → {ht['result']}</div>
+                    <div class="prob">H: {ht['home_win']:.1%} | D: {ht['draw']:.1%} | A: {ht['away_win']:.1%}</div>
+                </div>
+                """
+
+            for key in ["corners", "shots", "xg"]:
+                if key in pred:
+                    item = pred[key]
+                    over = item.get("over", 0)
+                    under = item.get("under", 0)
+                    print_html += f"""
+                    <div class="prediction">
+                        <div class="score">{key.title()}: {item['score']}</div>
+                        <div class="prob">Over: {over:.1%} | Under: {under:.1%}</div>
+                    </div>
+                    """
+
+            st.markdown(print_html, unsafe_allow_html=True)
+
+            # PRINT BUTTON
+            st.markdown("**Click below then press Ctrl+P (or Cmd+P) to save as PDF**")
+            st.markdown('<button onclick="window.print()" class="no-print" style="padding:10px 20px; font-size:16px;">Print / Save as PDF</button>', unsafe_allow_html=True)
