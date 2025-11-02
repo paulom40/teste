@@ -510,12 +510,15 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         s = stats["shots"]
         lambda_hs = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
         lambda_as = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
+        
+        # Clamp to reasonable ranges (typical shots on target per team: 2-8)
+        lambda_hs = max(2.0, min(lambda_hs, 8.0))
+        lambda_as = max(2.0, min(lambda_as, 8.0))
+        
         hs_probs = poisson.pmf(np.arange(max_s + 1), lambda_hs)
         as_probs = poisson.pmf(np.arange(max_s + 1), lambda_as)
 
         total_probs = np.zeros(max_s + 1)
-        best_total = int(round(lambda_hs + lambda_as))
-        best_p = 0.0
         over_8_5 = 0.0
         for h in range(max_s + 1):
             for a in range(max_s + 1):
@@ -525,14 +528,16 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
                     total_probs[total] += p
                 if total > 8.5:
                     over_8_5 += p
-                if p > best_p:
-                    best_p = p
-                    best_total = total
-        if best_p == 0:
-            best_total = int(round(lambda_hs + lambda_as))
+        
+        # Find mode (most likely total)
+        best_total = np.argmax(total_probs)
+        
+        # Also calculate expected value for reference
+        expected_total = lambda_hs + lambda_as
 
         predictions["shots"] = {
             "total": best_total,
+            "expected": expected_total,
             "over_8_5": over_8_5,
             "under_8_5": 1 - over_8_5,
             "result": "Over" if over_8_5 > 0.5 else "Under",
@@ -732,8 +737,8 @@ if uploaded_file:
             if s and "distribution" in s:
                 st.markdown("### Shots on Target Distribution")
                 fig = px.bar(x=range(len(s["distribution"])), y=s["distribution"],
-                            labels=dict(x="Total Shots", y="Probability"),
-                            title=f"Most Likely: {s['total']} | Over 8.5: {s['over_8_5']:.1%}")
+                            labels=dict(x="Total Shots on Target", y="Probability"),
+                            title=f"Most Likely: {s['total']} | Expected: {s['expected']:.1f} | Over 8.5: {s['over_8_5']:.1%}")
                 fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -813,10 +818,11 @@ if uploaded_file:
 
             if s:
                 total_s = s.get('total')
+                expected_s = s.get('expected')
                 if total_s is not None:
                     print_html += f"""
                     <div class="prediction">
-                        <div class="score">Shots on Target: {total_s} (Most Likely)</div>
+                        <div class="score">Shots on Target: {total_s} (Mode) | Expected: {expected_s:.1f}</div>
                         <div class="prob">Over 8.5: {s['over_8_5']:.1%} | Under: {s['under_8_5']:.1%}</div>
                     </div>
                     """
