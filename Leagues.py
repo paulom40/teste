@@ -16,17 +16,23 @@ import os
 import tempfile
 
 # --- PDF EXPORT ---
+# Try to import WeasyPrint with better error handling
+WEASYPRINT_AVAILABLE = False
+PDFKIT_AVAILABLE = False
+
 try:
     from weasyprint import HTML
     WEASYPRINT_AVAILABLE = True
-except:
-    WEASYPRINT_AVAILABLE = False
+    st.success("✓ WeasyPrint available for PDF export")
+except ImportError as e:
+    st.warning(f"✗ WeasyPrint not available: {e}")
 
 try:
     import pdfkit
     PDFKIT_AVAILABLE = True
-except:
-    PDFKIT_AVAILABLE = False
+    st.info("✓ PDFKit available (but requires wkhtmltopdf)")
+except ImportError:
+    st.warning("✗ PDFKit not available")
 
 # ================================
 # CONFIG
@@ -43,6 +49,14 @@ st.markdown("""
 
 **Export to PDF with one click**
 """)
+
+# Show PDF export status
+if WEASYPRINT_AVAILABLE:
+    st.success("✅ PDF Export: WeasyPrint is ready to use!")
+elif PDFKIT_AVAILABLE:
+    st.warning("⚠️ PDF Export: PDFKit available but wkhtmltopdf needed")
+else:
+    st.error("❌ PDF Export: No PDF libraries available. Install WeasyPrint.")
 
 # ================================
 # LOGO & CSS
@@ -469,78 +483,52 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     return predictions
 
 # ================================
-# EXPORT TO PDF - FIXED VERSION
+# EXPORT TO PDF - SIMPLIFIED VERSION
 # ================================
 def export_to_pdf(html_content: str, filename: str = "prediction.pdf"):
-    # Try WeasyPrint first (works on Streamlit Cloud)
     if WEASYPRINT_AVAILABLE:
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
-                f.write(html_content.encode('utf-8'))
+            # Create temporary files
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode='w', encoding='utf-8') as f:
+                f.write(html_content)
                 html_path = f.name
+            
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
                 pdf_path = f.name
             
+            # Generate PDF
             HTML(html_path).write_pdf(pdf_path)
             
+            # Read PDF bytes
             with open(pdf_path, "rb") as f:
                 pdf_bytes = f.read()
             
-            # Clean up temp files
+            # Clean up temporary files
             os.unlink(html_path)
             os.unlink(pdf_path)
             
             return pdf_bytes
-        except Exception as e:
-            st.error(f"WeasyPrint PDF generation failed: {e}")
-    
-    # Fall back to pdfkit with wkhtmltopdf check
-    elif PDFKIT_AVAILABLE:
-        try:
-            # Check if wkhtmltopdf is available
-            import subprocess
-            try:
-                subprocess.run(['wkhtmltopdf', '--version'], capture_output=True, check=True)
-                wkhtmltopdf_available = True
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                wkhtmltopdf_available = False
-                st.warning("wkhtmltopdf not found. PDF export may not work on Streamlit Cloud.")
             
-            if wkhtmltopdf_available:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
-                    f.write(html_content.encode('utf-8'))
-                    html_path = f.name
-                pdf_path = html_path.replace(".html", ".pdf")
-                
-                pdfkit.from_file(html_path, pdf_path)
-                
-                with open(pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                
-                os.unlink(html_path)
-                os.unlink(pdf_path)
-                
-                return pdf_bytes
-            else:
-                st.error("wkhtmltopdf not available. Install it or use WeasyPrint.")
-                return None
-                
         except Exception as e:
-            st.error(f"PDFKit PDF generation failed: {e}")
+            st.error(f"PDF generation failed: {str(e)}")
             return None
+    
     else:
         st.error("""
-        PDF export not available. 
+        **PDF export not available!**
         
-        **For Streamlit Cloud, install WeasyPrint:**
-        ```bash
-        pip install weasyprint
+        To enable PDF export on Streamlit Cloud:
+        
+        1. Make sure `weasyprint` is in your `requirements.txt`
+        2. Add these system dependencies to `.streamlit/packages.txt`:
         ```
-        
-        **For local development with pdfkit, install wkhtmltopdf:**
-        - Windows: Download from https://wkhtmltopdf.org/downloads.html
-        - Mac: `brew install wkhtmltopdf`
-        - Linux: `sudo apt-get install wkhtmltopdf`
+        libcairo2
+        libpango-1.0-0
+        libpangocairo-1.0-0
+        libgdk-pixbuf2.0-0
+        libffi-dev
+        shared-mime-info
+        ```
         """)
         return None
 
@@ -792,25 +780,29 @@ if uploaded_file:
             st.markdown(print_html, unsafe_allow_html=True)
 
             # EXPORT TO PDF BUTTON
-            if st.button("Export to PDF"):
-                full_html = f"""
-                <!DOCTYPE html><html><head><meta charset="utf-8">
-                <style>
-                    body {{ font-family: Arial; padding: 40px; }}
-                    .title {{ font-size: 28px; text-align: center; font-weight: bold; margin-bottom: 20px; }}
-                    .team {{ text-align: center; }}
-                    .prediction {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }}
-                    .score {{ font-weight: bold; }}
-                    .prob {{ font-size: 13px; color: #555; }}
-                </style></head><body>
-                {print_html}
-                </body></html>
-                """
-                pdf_bytes = export_to_pdf(full_html)
-                if pdf_bytes:
-                    st.download_button(
-                        label="Download PDF",
-                        data=pdf_bytes,
-                        file_name=f"{home_team}_vs_{away_team}_prediction.pdf",
-                        mime="application/pdf"
-                    )
+            if WEASYPRINT_AVAILABLE:
+                if st.button("Export to PDF"):
+                    full_html = f"""
+                    <!DOCTYPE html><html><head><meta charset="utf-8">
+                    <style>
+                        body {{ font-family: Arial; padding: 40px; }}
+                        .title {{ font-size: 28px; text-align: center; font-weight: bold; margin-bottom: 20px; }}
+                        .team {{ text-align: center; }}
+                        .prediction {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }}
+                        .score {{ font-weight: bold; }}
+                        .prob {{ font-size: 13px; color: #555; }}
+                    </style></head><body>
+                    {print_html}
+                    </body></html>
+                    """
+                    with st.spinner("Generating PDF..."):
+                        pdf_bytes = export_to_pdf(full_html)
+                        if pdf_bytes:
+                            st.download_button(
+                                label="Download PDF",
+                                data=pdf_bytes,
+                                file_name=f"{home_team}_vs_{away_team}_prediction.pdf",
+                                mime="application/pdf"
+                            )
+            else:
+                st.warning("PDF export is not available. WeasyPrint is not installed.")
