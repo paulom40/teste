@@ -10,3 +10,4 @@ urllib3
 scikit-learn
 lxml
 reportlab
+pillow
