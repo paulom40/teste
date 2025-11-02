@@ -5,6 +5,9 @@ import numpy as np
 from scipy.stats import poisson
 import io
 from typing import Dict, Any
+import requests
+from PIL import Image
+from io import BytesIO
 
 # ================================
 # CONFIG
@@ -15,8 +18,191 @@ st.markdown("""
 **Poisson-based predictions** from **football-data.co.uk** CSVs.
 
 **Required:** Home/Away Teams + **FTHG/FTAG**  
-**Optional:** Corners, Shots, xG
+**Optional:** Corners, Shots, xG  
+**Logos:** Automatically fetched
 """)
+
+# ================================
+# LOGO CACHE
+# ================================
+@st.cache_data(ttl=3600)
+def get_team_logo(team_name: str) -> str:
+    """Return image URL for team logo. Uses Wikipedia + football-data.co.uk."""
+    team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "")
+    
+    # Common replacements
+    replacements = {
+        "manchester_united": "Manchester_United_F.C.",
+        "man_utd": "Manchester_United_F.C.",
+        "manchester_city": "Manchester_City_F.C.",
+        "man_city": "Manchester_City_F.C.",
+        "arsenal": "Arsenal_F.C.",
+        "chelsea": "Chelsea_F.C.",
+        "liverpool": "Liverpool_F.C.",
+        "tottenham": "Tottenham_Hotspur_F.C.",
+        "spurs": "Tottenham_Hotspur_F.C.",
+        "leicester": "Leicester_City_F.C.",
+        "leicester_city": "Leicester_City_F.C.",
+        "west_ham": "West_Ham_United_F.C.",
+        "everton": "Everton_F.C.",
+        "southampton": "Southampton_F.C.",
+        "brighton": "Brighton_&_Hove_Albion_F.C.",
+        "newcastle": "Newcastle_United_F.C.",
+        "crystal_palace": "Crystal_Palace_F.C.",
+        "wolves": "Wolverhampton_Wanderers_F.C.",
+        "wolverhampton_wanderers": "Wolverhampton_Wanderers_F.C.",
+        "aston_villa": "Aston_Villa_F.C.",
+        "leeds": "Leeds_United_F.C.",
+        "leeds_united": "Leeds_United_F.C.",
+        "burnley": "Burnley_F.C.",
+        "brentford": "Brentford_F.C.",
+        "fulham": "Fulham_F.C.",
+        "nottingham_forest": "Nottingham_Forest_F.C.",
+        "luton": "Luton_Town_F.C.",
+        "luton_town": "Luton_Town_F.C.",
+        "sheffield_united": "Sheffield_United_F.C.",
+        "sheffield_wed": "Sheffield_Wednesday_F.C.",
+        "sheffield_wednesday": "Sheffield_Wednesday_F.C.",
+        "birmingham": "Birmingham_City_F.C.",
+        "birmingham_city": "Birmingham_City_F.C.",
+        "cardiff": "Cardiff_City_F.C.",
+        "cardiff_city": "Cardiff_City_F.C.",
+        "swansea": "Swansea_City_A.F.C.",
+        "swansea_city": "Swansea_City_A.F.C.",
+        "stoke": "Stoke_City_F.C.",
+        "stoke_city": "Stoke_City_F.C.",
+        "hull": "Hull_City_A.F.C.",
+        "hull_city": "Hull_City_A.F.C.",
+        "norwich": "Norwich_City_F.C.",
+        "norwich_city": "Norwich_City_F.C.",
+        "watford": "Watford_F.C.",
+        "reading": "Reading_F.C.",
+        "blackburn": "Blackburn_Rovers_F.C.",
+        "blackburn_rovers": "Blackburn_Rovers_F.C.",
+        "preston": "Preston_North_End_F.C.",
+        "preston_north_end": "Preston_North_End_F.C.",
+        "millwall": "Millwall_F.C.",
+        "qpr": "Queens_Park_Rangers_F.C.",
+        "queens_park_rangers": "Queens_Park_Rangers_F.C.",
+        "coventry": "Coventry_City_F.C.",
+        "coventry_city": "Coventry_City_F.C.",
+        "huddersfield": "Huddersfield_Town_A.F.C.",
+        "huddersfield_town": "Huddersfield_Town_A.F.C.",
+        "middlesbrough": "Middlesbrough_F.C.",
+        "sunderland": "Sunderland_A.F.C.",
+        "west_brom": "West_Bromwich_Albion_F.C.",
+        "west_bromwich_albion": "West_Bromwich_Albion_F.C.",
+        "wigan": "Wigan_Athletic_F.C.",
+        "wigan_athletic": "Wigan_Athletic_F.C.",
+        "derby": "Derby_County_F.C.",
+        "derby_county": "Derby_County_F.C.",
+        "bolton": "Bolton_Wanderers_F.C.",
+        "bolton_wanderers": "Bolton_Wanderers_F.C.",
+        "ipswich": "Ipswich_Town_F.C.",
+        "ipswich_town": "Ipswich_Town_F.C.",
+        "charlton": "Charlton_Athletic_F.C.",
+        "charlton_athletic": "Charlton_Athletic_F.C.",
+        "portsmouth": "Portsmouth_F.C.",
+        "bournemouth": "A.F.C._Bournemouth",
+        "afc_bournemouth": "A.F.C._Bournemouth",
+        "bristol_city": "Bristol_City_F.C.",
+        "peterborough": "Peterborough_United_F.C.",
+        "peterborough_united": "Peterborough_United_F.C.",
+        "oxford": "Oxford_United_F.C.",
+        "oxford_united": "Oxford_United_F.C.",
+        "wycombe": "Wycombe_Wanderers_F.C.",
+        "wycombe_wanderers": "Wycombe_Wanderers_F.C.",
+        "rotherham": "Rotherham_United_F.C.",
+        "rotherham_united": "Rotherham_United_F.C.",
+        "accrington": "Accrington_Stanley_F.C.",
+        "accrington_stanley": "Accrington_Stanley_F.C.",
+        "burton": "Burton_Albion_F.C.",
+        "burton_albion": "Burton_Albion_F.C.",
+        "fleetwood": "Fleetwood_Town_F.C.",
+        "fleetwood_town": "Fleetwood_Town_F.C.",
+        "shrewsbury": "Shrewsbury_Town_F.C.",
+        "shrewsbury_town": "Shrewsbury_Town_F.C.",
+        "doncaster": "Doncaster_Rovers_F.C.",
+        "doncaster_rovers": "Doncaster_Rovers_F.C.",
+        "gillingham": "Gillingham_F.C.",
+        "wimbledon": "AFC_Wimbledon",
+        "afc_wimbledon": "AFC_Wimbledon",
+        "crewe": "Crewe_Alexandra_F.C.",
+        "crewe_alexandra": "Crewe_Alexandra_F.C.",
+        "morecambe": "Morecambe_F.C.",
+        "crawley": "Crawley_Town_F.C.",
+        "crawley_town": "Crawley_Town_F.C.",
+        "colchester": "Colchester_United_F.C.",
+        "colchester_united": "Colchester_United_F.C.",
+        "northampton": "Northampton_Town_F.C.",
+        "northampton_town": "Northampton_Town_F.C.",
+        "walsall": "Walsall_F.C.",
+        "bradford": "Bradford_City_A.F.C.",
+        "bradford_city": "Bradford_City_A.F.C.",
+        "scunthorpe": "Scunthorpe_United_F.C.",
+        "scunthorpe_united": "Scunthorpe_United_F.C.",
+        "oldham": "Oldham_Athletic_A.F.C.",
+        "oldham_athletic": "Oldham_Athletic_A.F.C.",
+        "rochdale": "Rochdale_A.F.C.",
+        "tranmere": "Tranmere_Rovers_F.C.",
+        "tranmere_rovers": "Tranmere_Rovers_F.C.",
+        "carlisle": "Carlisle_United_F.C.",
+        "carlisle_united": "Carlisle_United_F.C.",
+        "exeter": "Exeter_City_F.C.",
+        "exeter_city": "Exeter_City_F.C.",
+        "plymouth": "Plymouth_Argyle_F.C.",
+        "plymouth_argyle": "Plymouth_Argyle_F.C.",
+        "portsmouth": "Portsmouth_F.C.",
+        "salford": "Salford_City_F.C.",
+        "salford_city": "Salford_City_F.C.",
+        "harrogate": "Harrogate_Town_A.F.C.",
+        "harrogate_town": "Harrogate_Town_A.F.C.",
+        "barrow": "Barrow_A.F.C.",
+        "forest_green": "Forest_Green_Rovers_F.C.",
+        "forest_green_rovers": "Forest_Green_Rovers_F.C.",
+        "newport": "Newport_County_A.F.C.",
+        "newport_county": "Newport_County_A.F.C.",
+        "stevenage": "Stevenage_F.C.",
+        "grimsby": "Grimsby_Town_F.C.",
+        "grimsby_town": "Grimsby_Town_F.C.",
+        "cheltenham": "Cheltenham_Town_F.C.",
+        "cheltenham_town": "Cheltenham_Town_F.C.",
+    }
+
+    wiki_name = replacements.get(team_clean, None)
+    if not wiki_name:
+        # Try direct match
+        wiki_name = team_name.replace(" ", "_") + "_F.C."
+
+    url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
+    
+    try:
+        response = requests.head(url, timeout=5)
+        if response.status_code == 200:
+            return f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
+    except:
+        pass
+
+    # Fallback: football-data.co.uk
+    fd_url = f"https://www.football-data.co.uk/mmz4281/logos/{team_clean}.gif"
+    try:
+        response = requests.head(fd_url, timeout=5)
+        if response.status_code == 200:
+            return fd_url
+    except:
+        pass
+
+    return None
+
+@st.cache_data(ttl=3600)
+def load_image(url: str):
+    try:
+        response = requests.get(url, timeout=10)
+        img = Image.open(BytesIO(response.content))
+        img = img.convert("RGBA")
+        return img
+    except:
+        return None
 
 # ================================
 # HELPERS
@@ -71,7 +257,6 @@ def compute_team_stats(
 ) -> Dict[str, Any]:
     stats = {}
 
-    # Clean data
     clean = _df[[home_col, away_col, hg_col, ag_col]].dropna()
     if clean.empty:
         raise ValueError("No valid matches after removing NaN from goal columns.")
@@ -90,7 +275,6 @@ def compute_team_stats(
         "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
     }
 
-    # Optional stats
     def add(name, h_col, a_col):
         if h_col and a_col and h_col in _df.columns and a_col in _df.columns:
             sub = _df[[home_col, away_col, h_col, a_col]].dropna()
@@ -115,10 +299,12 @@ def compute_team_stats(
 
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-    predictions = {}
+    if not isinstance(stats, dict) or "goals" not in stats:
+        raise ValueError("Invalid model. Re-train.")
 
-    # GOALS
+    predictions = {}
     g = stats["goals"]
+
     lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
 
@@ -149,7 +335,6 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
-    # Optional
     def predict(name, thresh=None, is_float=False):
         if name not in stats:
             return None
@@ -194,7 +379,6 @@ if uploaded_file:
     with st.expander("Preview Data"):
         st.dataframe(df.head())
 
-    # --- REQUIRED ---
     st.subheader("Required: Select FTHG & FTAG")
     guessed = detect_columns(df)
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -203,18 +387,16 @@ if uploaded_file:
     hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
-    # Validate required
     valid = (
         hg_col in df.columns and ag_col in df.columns and
         not df[hg_col].isna().all() and not df[ag_col].isna().all()
     )
 
     if not valid:
-        st.error("Please select **valid FTHG and FTAG columns** with real numbers.")
+        st.error("Please select valid FTHG and FTAG columns with real numbers.")
     else:
         st.success("Goal columns valid!")
 
-    # --- OPTIONAL ---
     st.subheader("Optional Columns")
     o1, o2, o3, o4, o5, o6 = st.columns(6)
     hc_col  = o1.selectbox("HC", [""] + list(df.columns))
@@ -224,9 +406,7 @@ if uploaded_file:
     hxg_col = o5.selectbox("HxG", [""] + list(df.columns))
     axg_col = o6.selectbox("AxG", [""] + list(df.columns))
 
-    # --- TRAIN ---
-    train_btn = st.button("Train Model", disabled=not valid)
-    if train_btn:
+    if st.button("Train Model", disabled=not valid):
         with st.spinner("Training..."):
             try:
                 stats = compute_team_stats(
@@ -242,40 +422,67 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"Training failed: {e}")
 
-    # --- PREDICT ---
+    if st.button("Clear Model & Cache"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.cache_data.clear()
+        st.success("Cleared!")
+
     if st.session_state.get("stats") and st.session_state.get("teams"):
-        st.subheader("Predict Match")
-        t1, t2 = st.columns(2)
-        home_team = t1.selectbox("Home", st.session_state.teams, key="ph")
-        away_team = t2.selectbox("Away", st.session_state.teams, key="pa")
+        if not isinstance(st.session_state.stats, dict) or "goals" not in st.session_state.stats:
+            st.error("Model corrupted. Click **Clear Model & Cache** and re-train.")
+        else:
+            st.subheader("Predict Match")
+            t1, t2 = st.columns(2)
+            home_team = t1.selectbox("Home", st.session_state.teams, key="ph")
+            away_team = t2.selectbox("Away", st.session_state.teams, key="pa")
 
-        if home_team == away_team:
-            st.error("Select different teams.")
-        elif st.button("Predict"):
-            pred = predict_match(home_team, away_team, st.session_state.stats)
-            st.markdown(f"### {home_team} vs {away_team}")
+            if home_team == away_team:
+                st.error("Select different teams.")
+            elif st.button("Predict"):
+                pred = predict_match(home_team, away_team, st.session_state.stats)
 
-            g = pred["goals"]
-            st.markdown(f"""
-            #### Goals
-            **{g['score']}** → **{g['result']}**  
-            H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
-            """)
+                # LOGOS
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col1:
+                    home_logo_url = get_team_logo(home_team)
+                    if home_logo_url:
+                        img = load_image(home_logo_url)
+                        if img:
+                            st.image(img, width=80)
+                        else:
+                            st.markdown(f"**{home_team}**")
+                    else:
+                        st.markdown(f"**{home_team}**")
+                with col2:
+                    st.markdown(f"### **{home_team} vs {away_team}**")
+                with col3:
+                    away_logo_url = get_team_logo(away_team)
+                    if away_logo_url:
+                        img = load_image(away_logo_url)
+                        if img:
+                            st.image(img, width=80)
+                        else:
+                            st.markdown(f"**{away_team}**")
+                    else:
+                        st.markdown(f"**{away_team}**")
 
-            for name, label, thresh in [
-                ("corners", "Corners", 10.5),
-                ("shots", "Shots", 20.5),
-                ("xg", "xG", 2.5)
-            ]:
-                if name in pred:
-                    p = pred[name]
-                    st.markdown(f"""
-                    #### {label}
-                    **{p['score']}**  
-                    Over {thresh}: `{p['over']:.1%}` | Under: `{p['under']:.1%}`
-                    """)
+                g = pred["goals"]
+                st.markdown(f"""
+                #### Goals
+                **{g['score']}** → **{g['result']}**  
+                H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+                """)
 
-# Clear Cache
-if st.button("Clear Cache"):
-    st.cache_data.clear()
-    st.success("Cache cleared!")
+                for name, label, thresh in [
+                    ("corners", "Corners", 10.5),
+                    ("shots", "Shots", 20.5),
+                    ("xg", "xG", 2.5)
+                ]:
+                    if name in pred:
+                        p = pred[name]
+                        st.markdown(f"""
+                        #### {label}
+                        **{p['score']}**  
+                        Over {thresh}: `{p['over']:.1%}` | Under: `{p['under']:.1%}`
+                        """)
