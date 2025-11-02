@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 import io
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # -------------------------------------------------
 # PAGE CONFIG
@@ -62,12 +62,12 @@ def compute_team_stats(
     away_col: str,
     hg_col: str,
     ag_col: str,
-    hc_col: str = None,
-    ac_col: str = None,
-    hs_col: str = None,
-    as_col: str = None,
-    hxg_col: str = None,
-    axg_col: str = None
+    hc_col: Optional[str] = None,
+    ac_col: Optional[str] = None,
+    hs_col: Optional[str] = None,
+    as_col: Optional[str] = None,
+    hxg_col: Optional[str] = None,
+    axg_col: Optional[str] = None
 ) -> Dict[str, Any]:
     stats: Dict[str, Any] = {}
 
@@ -124,7 +124,10 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     predictions: Dict[str, Any] = {}
 
     # ----- GOALS (always present) -----
+    if "goals" not in stats:
+        raise ValueError("Model missing required 'goals' data. Re-train with valid FTHG/FTAG columns.")
     g = stats["goals"]
+
     lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
 
