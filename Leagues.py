@@ -1,3 +1,4 @@
+
 # app.py
 import streamlit as st
 import pandas as pd
@@ -16,35 +17,17 @@ import os
 import tempfile
 
 # --- PDF EXPORT ---
-# Try different PDF libraries in order of preference
-PDF_AVAILABLE = False
-PDF_LIBRARY = None
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except:
+    WEASYPRINT_AVAILABLE = False
 
 try:
-    from xhtml2pdf import pisa
-    PDF_AVAILABLE = True
-    PDF_LIBRARY = "xhtml2pdf"
-    st.success("✓ xhtml2pdf available for PDF export")
-except ImportError:
-    st.warning("✗ xhtml2pdf not available")
-
-if not PDF_AVAILABLE:
-    try:
-        from weasyprint import HTML
-        PDF_AVAILABLE = True
-        PDF_LIBRARY = "weasyprint"
-        st.success("✓ WeasyPrint available for PDF export")
-    except ImportError:
-        st.warning("✗ WeasyPrint not available")
-
-if not PDF_AVAILABLE:
-    try:
-        import pdfkit
-        PDF_AVAILABLE = True
-        PDF_LIBRARY = "pdfkit"
-        st.info("✓ PDFKit available (but requires wkhtmltopdf)")
-    except ImportError:
-        st.warning("✗ PDFKit not available")
+    import pdfkit
+    PDFKIT_AVAILABLE = True
+except:
+    PDFKIT_AVAILABLE = False
 
 # ================================
 # CONFIG
@@ -61,12 +44,6 @@ st.markdown("""
 
 **Export to PDF with one click**
 """)
-
-# Show PDF export status
-if PDF_AVAILABLE:
-    st.success(f"✅ PDF Export: {PDF_LIBRARY} is ready to use!")
-else:
-    st.error("❌ PDF Export: No PDF libraries available. Install xhtml2pdf.")
 
 # ================================
 # LOGO & CSS
@@ -493,81 +470,34 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     return predictions
 
 # ================================
-# EXPORT TO PDF - UNIVERSAL VERSION
+# EXPORT TO PDF
 # ================================
 def export_to_pdf(html_content: str, filename: str = "prediction.pdf"):
-    if PDF_LIBRARY == "xhtml2pdf":
-        try:
-            # Create PDF using xhtml2pdf
-            result = BytesIO()
-            pdf = pisa.CreatePDF(BytesIO(html_content.encode('utf-8')), result)
-            
-            if not pdf.err:
-                return result.getvalue()
-            else:
-                st.error(f"xhtml2pdf error: {pdf.err}")
-                return None
-                
-        except Exception as e:
-            st.error(f"xhtml2pdf failed: {str(e)}")
-            return None
-            
-    elif PDF_LIBRARY == "weasyprint":
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode='w', encoding='utf-8') as f:
-                f.write(html_content)
-                html_path = f.name
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
-                pdf_path = f.name
-            
-            HTML(html_path).write_pdf(pdf_path)
-            
-            with open(pdf_path, "rb") as f:
-                pdf_bytes = f.read()
-            
-            os.unlink(html_path)
-            os.unlink(pdf_path)
-            
-            return pdf_bytes
-            
-        except Exception as e:
-            st.error(f"WeasyPrint failed: {str(e)}")
-            return None
-            
-    elif PDF_LIBRARY == "pdfkit":
-        try:
-            import subprocess
-            try:
-                subprocess.run(['wkhtmltopdf', '--version'], capture_output=True, check=True)
-                wkhtmltopdf_available = True
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                wkhtmltopdf_available = False
-                
-            if wkhtmltopdf_available:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
-                    f.write(html_content.encode('utf-8'))
-                    html_path = f.name
-                pdf_path = html_path.replace(".html", ".pdf")
-                
-                pdfkit.from_file(html_path, pdf_path)
-                
-                with open(pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                
-                os.unlink(html_path)
-                os.unlink(pdf_path)
-                
-                return pdf_bytes
-            else:
-                st.error("wkhtmltopdf not available")
-                return None
-                
-        except Exception as e:
-            st.error(f"PDFKit failed: {str(e)}")
-            return None
+    if WEASYPRINT_AVAILABLE:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+            f.write(html_content.encode('utf-8'))
+            html_path = f.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+            pdf_path = f.name
+        HTML(html_path).write_pdf(pdf_path)
+        os.unlink(html_path)
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        os.unlink(pdf_path)
+        return pdf_bytes
+    elif PDFKIT_AVAILABLE:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+            f.write(html_content.encode('utf-8'))
+            html_path = f.name
+        pdf_path = html_path.replace(".html", ".pdf")
+        pdfkit.from_file(html_path, pdf_path)
+        os.unlink(html_path)
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        os.unlink(pdf_path)
+        return pdf_bytes
     else:
-        st.error("No PDF library available")
+        st.error("PDF export not available. Install `weasyprint` or `pdfkit`.")
         return None
 
 # ================================
@@ -818,29 +748,25 @@ if uploaded_file:
             st.markdown(print_html, unsafe_allow_html=True)
 
             # EXPORT TO PDF BUTTON
-            if PDF_AVAILABLE:
-                if st.button("Export to PDF"):
-                    full_html = f"""
-                    <!DOCTYPE html><html><head><meta charset="utf-8">
-                    <style>
-                        body {{ font-family: Arial; padding: 40px; }}
-                        .title {{ font-size: 28px; text-align: center; font-weight: bold; margin-bottom: 20px; }}
-                        .team {{ text-align: center; }}
-                        .prediction {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }}
-                        .score {{ font-weight: bold; }}
-                        .prob {{ font-size: 13px; color: #555; }}
-                    </style></head><body>
-                    {print_html}
-                    </body></html>
-                    """
-                    with st.spinner("Generating PDF..."):
-                        pdf_bytes = export_to_pdf(full_html)
-                        if pdf_bytes:
-                            st.download_button(
-                                label="Download PDF",
-                                data=pdf_bytes,
-                                file_name=f"{home_team}_vs_{away_team}_prediction.pdf",
-                                mime="application/pdf"
-                            )
-            else:
-                st.warning("PDF export is not available. Install xhtml2pdf in requirements.txt")
+            if st.button("Export to PDF"):
+                full_html = f"""
+                <!DOCTYPE html><html><head><meta charset="utf-8">
+                <style>
+                    body {{ font-family: Arial; padding: 40px; }}
+                    .title {{ font-size: 28px; text-align: center; font-weight: bold; margin-bottom: 20px; }}
+                    .team {{ text-align: center; }}
+                    .prediction {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }}
+                    .score {{ font-weight: bold; }}
+                    .prob {{ font-size: 13px; color: #555; }}
+                </style></head><body>
+                {print_html}
+                </body></html>
+                """
+                pdf_bytes = export_to_pdf(full_html)
+                if pdf_bytes:
+                    st.download_button(
+                        label="Download PDF",
+                        data=pdf_bytes,
+                        file_name=f"{home_team}_vs_{away_team}_prediction.pdf",
+                        mime="application/pdf"
+                    )
