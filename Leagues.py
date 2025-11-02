@@ -25,7 +25,8 @@ st.markdown("""
 - **Half-Time** (HTHG/HTAG)
 - **BTTS** (Both Teams To Score)
 - **Over/Under 2.5 Goals**
-- **Corners (Total + Over 10.5)** **NEW**
+- **Corners (Total + Over 10.5)**
+- **xG (Home/Away/Total + Over 2.5)** **NEW**
 
 **Interactive Charts + Print-to-PDF**
 """)
@@ -192,86 +193,83 @@ def compute_team_stats(
                     "away_defence": (clean_c.groupby(away_col)[hc_col].mean() / avg_hc).fillna(1.0).to_dict(),
                 }
 
-    # OPTIONAL
-    def add(name, h_col, a_col):
-        if h_col and a_col and h_col in df.columns and a_col in df.columns:
-            sub_mask = df[h_col].notna() & df[a_col].notna()
-            sub = df[sub_mask][[home_col, away_col, h_col, a_col]]
-            if len(sub) >= 5:
-                avg_h = sub[h_col].mean()
-                avg_a = sub[a_col].mean()
-                if avg_h > 0 and avg_a > 0:
-                    stats[name] = {
-                        "league_avg_home": avg_h,
-                        "league_avg_away": avg_a,
-                        "home_attack": (sub.groupby(home_col)[h_col].mean() / avg_h).fillna(1.0).to_dict(),
-                        "away_attack": (sub.groupby(away_col)[a_col].mean() / avg_a).fillna(1.0).to_dict(),
-                        "home_defence": (sub.groupby(home_col)[a_col].mean() / avg_a).fillna(1.0).to_dict(),
-                        "away_defence": (sub.groupby(away_col)[h_col].mean() / avg_h).fillna(1.0).to_dict(),
-                    }
-
-    add("shots", hs_col, as_col)
-    add("xg", hxg_col, axg_col)
+    # xG
+    if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
+        xg_mask = df[hxg_col].notna() & df[axg_col].notna()
+        clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]]
+        if len(clean_xg) >= 5:
+            avg_hxg = clean_xg[hxg_col].mean()
+            avg_axg = clean_xg[axg_col].mean()
+            if avg_hxg > 0 and avg_axg > 0:
+                stats["xg"] = {
+                    "league_avg_home": avg_hxg,
+                    "league_avg_away": avg_axg,
+                    "home_attack": (clean_xg.groupby(home_col)[hxg_col].mean() / avg_hxg).fillna(1.0).to_dict(),
+                    "away_attack": (clean_xg.groupby(away_col)[axg_col].mean() / avg_axg).fillna(1.0).to_dict(),
+                    "home_defence": (clean_xg.groupby(home_col)[axg_col].mean() / avg_axg).fillna(1.0).to_dict(),
+                    "away_defence": (clean_xg.groupby(away_col)[hxg_col].mean() / avg_hxg).fillna(1.0).to_dict(),
+                }
 
     return stats
 
 # ================================
-# PREDICT MATCH + CORNERS
+# PREDICT MATCH + xG
 # ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     max_g = 10
-    max_c = 15  # Max corners to model
-    predictions = {}
+    max_c = 15
+    predictions = {
+        "goals": {
+            "score": "N/A", "result": "N/A",
+            "home_win": 0, "draw": 0, "away_win": 0,
+            "btts_yes": 0, "btts_no": 1, "btts_result": "N/A",
+            "over_25": 0, "under_25": 1, "over_under_result": "N/A"
+        }
+    }
     chart_data = {}
 
     # FULL-TIME GOALS
-    g = stats["goals"]
-    lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
-    lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
-    hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
-    ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
+    if "goals" in stats:
+        g = stats["goals"]
+        lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
+        lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
+        hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
+        ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
 
-    # CHART: Goal Matrix
-    matrix = np.outer(hp, ap)
-    chart_data["ft_matrix"] = pd.DataFrame(
-        matrix,
-        index=[f"{home} {i}" for i in range(max_g + 1)],
-        columns=[f"{away} {i}" for i in range(max_g + 1)]
-    )
+        matrix = np.outer(hp, ap)
+        chart_data["ft_matrix"] = pd.DataFrame(
+            matrix,
+            index=[f"{home} {i}" for i in range(max_g + 1)],
+            columns=[f"{away} {i}" for i in range(max_g + 1)]
+        )
 
-    prob_h = prob_d = prob_a = btts_yes = over_25 = 0.0
-    best = (0, 0)
-    best_p = 0.0
-    for h in range(max_g + 1):
-        for a in range(max_g + 1):
-            p = hp[h] * ap[a]
-            if h > a:   prob_h += p
-            elif h == a: prob_d += p
-            else:       prob_a += p
-            if h > 0 and a > 0: btts_yes += p
-            if h + a > 2.5: over_25 += p
-            if p > best_p:
-                best_p = p
-                best = (h, a)
+        prob_h = prob_d = prob_a = btts_yes = over_25 = 0.0
+        best = (0, 0)
+        best_p = 0.0
+        for h in range(max_g + 1):
+            for a in range(max_g + 1):
+                p = hp[h] * ap[a]
+                if h > a:   prob_h += p
+                elif h == a: prob_d += p
+                else:       prob_a += p
+                if h > 0 and a > 0: btts_yes += p
+                if h + a > 2.5: over_25 += p
+                if p > best_p:
+                    best_p = p
+                    best = (h, a)
 
-    result = "H" if prob_h > max(prob_d, prob_a) else "D" if prob_d > max(prob_h, prob_a) else "A"
-    btts_result = "Yes" if btts_yes > 0.5 else "No"
-    over_under_result = "Over" if over_25 > 0.5 else "Under"
+        result = "H" if prob_h > max(prob_d, prob_a) else "D" if prob_d > max(prob_h, prob_a) else "A"
+        btts_result = "Yes" if btts_yes > 0.5 else "No"
+        over_under_result = "Over" if over_25 > 0.5 else "Under"
 
-    predictions["goals"] = {
-        "score": f"{best[0]}-{best[1]}",
-        "home_win": prob_h,
-        "draw": prob_d,
-        "away_win": prob_a,
-        "result": result,
-        "btts_yes": btts_yes,
-        "btts_no": 1 - btts_yes,
-        "btts_result": btts_result,
-        "over_25": over_25,
-        "under_25": 1 - over_25,
-        "over_under_result": over_under_result
-    }
+        predictions["goals"] = {
+            "score": f"{best[0]}-{best[1]}",
+            "home_win": prob_h, "draw": prob_d, "away_win": prob_a,
+            "result": result,
+            "btts_yes": btts_yes, "btts_no": 1 - btts_yes, "btts_result": btts_result,
+            "over_25": over_25, "under_25": 1 - over_25, "over_under_result": over_under_result
+        }
 
     # CORNERS
     if "corners" in stats:
@@ -307,20 +305,26 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         }
         chart_data["corner_dist"] = pd.Series(total_probs, index=range(max_c + 1))
 
-    # HALF-TIME
-    if "half_time" in stats:
-        ht = stats["half_time"]
-        lh = ht["home_attack"].get(home, 1.0) * ht["away_defence"].get(away, 1.0) * ht["league_avg_home"]
-        la = ht["away_attack"].get(away, 1.0) * ht["home_defence"].get(home, 1.0) * ht["league_avg_away"]
-        ph = poisson.pmf(np.arange(6), lh)
-        pa = poisson.pmf(np.arange(6), la)
-        ht_matrix = np.outer(ph, pa)
-        chart_data["ht_matrix"] = pd.DataFrame(
-            ht_matrix,
-            index=[f"{home} {i}" for i in range(6)],
-            columns=[f"{away} {i}" for i in range(6)]
-        )
-        # ... (HT logic same as before)
+    # xG
+    if "xg" in stats:
+        xg = stats["xg"]
+        lambda_hxg = xg["home_attack"].get(home, 1.0) * xg["away_defence"].get(away, 1.0) * xg["league_avg_home"]
+        lambda_axg = xg["away_attack"].get(away, 1.0) * xg["home_defence"].get(home, 1.0) * xg["league_avg_away"]
+
+        # Expected xG values
+        home_xg = lambda_hxg
+        away_xg = lambda_axg
+        total_xg = home_xg + away_xg
+        over_25_xg = poisson.sf(2, total_xg)  # P(total_xg > 2.5)
+
+        predictions["xg"] = {
+            "home_xg": home_xg,
+            "away_xg": away_xg,
+            "total_xg": total_xg,
+            "over_25_xg": over_25_xg,
+            "under_25_xg": 1 - over_25_xg,
+            "result": "Over" if over_25_xg > 0.5 else "Under"
+        }
 
     predictions["chart_data"] = chart_data
     return predictions
@@ -363,8 +367,8 @@ if uploaded_file:
     ac_col   = o4.selectbox("AC (Away Corners)", [""] + list(df.columns))
     hs_col   = o5.selectbox("HS", [""] + list(df.columns))
     as_col   = o6.selectbox("AS", [""] + list(df.columns))
-    hxg_col  = o7.selectbox("HxG", [""] + list(df.columns))
-    axg_col  = o8.selectbox("AxG", [""] + list(df.columns))
+    hxg_col  = o7.selectbox("HxG (Home xG)", [""] + list(df.columns))
+    axg_col  = o8.selectbox("AxG (Away xG)", [""] + list(df.columns))
 
     if st.button("Train Model", disabled=valid_count < 5 if 'valid_count' in locals() else True):
         with st.spinner("Training..."):
@@ -407,7 +411,9 @@ if uploaded_file:
         if st.session_state.get("prediction"):
             home_team, away_team = st.session_state.match
             pred = st.session_state.prediction
-            g = pred["goals"]
+            g = pred.get("goals", {})
+            c = pred.get("corners", {})
+            x = pred.get("xg", {})
             chart_data = pred.get("chart_data", {})
 
             # LOGOS
@@ -416,7 +422,7 @@ if uploaded_file:
             img1 = load_image(logo1) if logo1 else None
             img2 = load_image(logo2) if logo2 else None
 
-            # CHARTS
+            # === CHARTS ===
             col1, col2 = st.columns([1, 1])
 
             with col1:
@@ -428,21 +434,27 @@ if uploaded_file:
                         color_continuous_scale="Blues",
                         text_auto=".1%"
                     )
-                    fig.update_layout(height=500, title_text=f"Most Likely: {g['score']}")
+                    fig.update_layout(height=500, title_text=f"Most Likely: {g.get('score', 'N/A')}")
                     st.plotly_chart(fig, use_container_width=True)
 
             with col2:
                 st.markdown("### Key Markets")
-                labels = ['Home Win', 'Draw', 'BTTS Yes', 'Over 2.5']
-                values = [g['home_win'], g['draw'], g['btts_yes'], g['over_25']]
-                fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4)])
-                fig.update_traces(textinfo='percent+label')
-                fig.update_layout(height=500)
-                st.plotly_chart(fig, use_container_width=True)
+                pie_labels = ['Home Win', 'Draw']
+                pie_values = [g.get('home_win', 0), g.get('draw', 0)]
+                if g.get('btts_yes') is not None:
+                    pie_labels.append('BTTS Yes')
+                    pie_values.append(g['btts_yes'])
+                if g.get('over_25') is not None:
+                    pie_labels.append('Over 2.5')
+                    pie_values.append(g['over_25'])
+                if len(pie_values) > 0:
+                    fig = go.Figure(data=[go.Pie(labels=pie_labels, values=pie_values, hole=0.4)])
+                    fig.update_traces(textinfo='percent+label')
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
 
-            # CORNERS CHART
-            if "corners" in pred:
-                c = pred["corners"]
+            # CORNERS
+            if c and "distribution" in c:
                 st.markdown("### Corner Kicks Distribution")
                 fig = px.bar(
                     x=range(len(c["distribution"])),
@@ -451,6 +463,17 @@ if uploaded_file:
                     title=f"Most Likely: {c['total']} | Over 10.5: {c['over_10_5']:.1%}"
                 )
                 fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+            # xG
+            if x:
+                st.markdown("### Expected Goals (xG)")
+                fig = go.Figure(data=[
+                    go.Bar(name='Home xG', x=['xG'], y=[x['home_xg']], marker_color='lightgreen'),
+                    go.Bar(name='Away xG', x=['xG'], y=[x['away_xg']], marker_color='salmon')
+                ])
+                fig.add_hline(y=2.5, line_dash="dash", line_color="gray", annotation_text="2.5 Line")
+                fig.update_layout(barmode='stack', height=400, title_text=f"Total xG: {x['total_xg']:.2f} | Over 2.5: {x['over_25_xg']:.1%}")
                 st.plotly_chart(fig, use_container_width=True)
 
             # PRINT SECTION
@@ -474,27 +497,46 @@ if uploaded_file:
                     {f'<img src="data:image/png;base64,{img_to_base64(img2)}" class="logo">' if img2 else f'<b>{away_team}</b>'}
                 </div>
             </div>
-            <div class="prediction">
-                <div class="score">Full-Time: {g['score']} to {g['result']}</div>
-                <div class="prob">H: {g['home_win']:.1%} | D: {g['draw']:.1%} | A: {g['away_win']:.1%}</div>
-            </div>
-            <div class="prediction">
-                <div class="score">BTTS: {g['btts_result']}</div>
-                <div class="prob">Yes: {g['btts_yes']:.1%} | No: {g['btts_no']:.1%}</div>
-            </div>
-            <div class="prediction">
-                <div class="score">Over/Under 2.5: {g['over_under_result']} 2.5</div>
-                <div class="prob">Over: {g['over_25']:.1%} | Under: {g['under_25']:.1%}</div>
-            </div>
             """
-            if "corners" in pred:
-                c = pred["corners"]
+
+            if g:
+                print_html += f"""
+                <div class="prediction">
+                    <div class="score">Full-Time: {g.get('score', 'N/A')} to {g.get('result', 'N/A')}</div>
+                    <div class="prob">H: {g.get('home_win', 0):.1%} | D: {g.get('draw', 0):.1%} | A: {g.get('away_win', 0):.1%}</div>
+                </div>
+                """
+                if g.get('btts_result'):
+                    print_html += f"""
+                    <div class="prediction">
+                        <div class="score">BTTS: {g['btts_result']}</div>
+                        <div class="prob">Yes: {g.get('btts_yes', 0):.1%} | No: {g.get('btts_no', 0):.1%}</div>
+                    </div>
+                    """
+                if g.get('over_under_result'):
+                    print_html += f"""
+                    <div class="prediction">
+                        <div class="score">Over/Under 2.5: {g['over_under_result']} 2.5</div>
+                        <div class="prob">Over: {g.get('over_25', 0):.1%} | Under: {g.get('under_25', 0):.1%}</div>
+                    </div>
+                    """
+
+            if c:
                 print_html += f"""
                 <div class="prediction">
                     <div class="score">Corners: {c['total']} (Most Likely)</div>
                     <div class="prob">Over 10.5: {c['over_10_5']:.1%} | Under: {c['under_10_5']:.1%}</div>
                 </div>
                 """
+
+            if x:
+                print_html += f"""
+                <div class="prediction">
+                    <div class="score">xG: {home_team} {x['home_xg']:.2f} – {away_team} {x['away_xg']:.2f}</div>
+                    <div class="prob">Total: {x['total_xg']:.2f} | Over 2.5: {x['over_25_xg']:.1%}</div>
+                </div>
+                """
+
             st.markdown(print_html, unsafe_allow_html=True)
 
             # PRINT BUTTON
