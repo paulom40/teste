@@ -4,34 +4,34 @@ import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 import io
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-# -------------------------------------------------
-# PAGE CONFIG
-# -------------------------------------------------
+# ================================
+# CONFIG
+# ================================
 st.set_page_config(page_title="Football Predictor", layout="wide")
 st.title("Football Match Outcome Predictor")
 st.markdown("""
-**Poisson-based predictions** from any **football-data.co.uk** CSV.
+**Poisson-based predictions** from **football-data.co.uk** CSVs.
 
-**Required:** Home/away teams + goals (FTHG/FTAG)  
-**Optional:** Corners (HC/AC), Shots on target (HS/AS), Expected Goals (HxG/AxG)
+**Required:** Home/Away Teams + **FTHG/FTAG**  
+**Optional:** Corners, Shots, xG
 """)
 
-# -------------------------------------------------
+# ================================
 # HELPERS
-# -------------------------------------------------
+# ================================
 def _safe_index(df: pd.DataFrame, col: str):
     return df.columns.get_loc(col) if col in df.columns else 0
 
-# -------------------------------------------------
+# ================================
 # DATA LOADER
-# -------------------------------------------------
+# ================================
 @st.cache_data(show_spinner="Loading CSV...")
 def load_csv(uploaded_file_bytes: bytes) -> pd.DataFrame:
     try:
         return pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="utf-8")
-    except UnicodeDecodeError:
+    except:
         return pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="latin1")
 
 @st.cache_data(show_spinner=False)
@@ -52,9 +52,9 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
         elif lower in ["axg", "away_xg"]:        mapping["AxG"] = col
     return mapping
 
-# -------------------------------------------------
+# ================================
 # MODEL
-# -------------------------------------------------
+# ================================
 @st.cache_data(show_spinner="Training model...")
 def compute_team_stats(
     _df: pd.DataFrame,
@@ -62,21 +62,16 @@ def compute_team_stats(
     away_col: str,
     hg_col: str,
     ag_col: str,
-    hc_col: Optional[str] = None,
-    ac_col: Optional[str] = None,
-    hs_col: Optional[str] = None,
-    as_col: Optional[str] = None,
-    hxg_col: Optional[str] = None,
-    axg_col: Optional[str] = None
+    hc_col: str = None,
+    ac_col: str = None,
+    hs_col: str = None,
+    as_col: str = None,
+    hxg_col: str = None,
+    axg_col: str = None
 ) -> Dict[str, Any]:
-    stats: Dict[str, Any] = {}
+    stats = {}
 
-    # ----- REQUIRED: GOALS -----
-    required = [home_col, away_col, hg_col, ag_col]
-    missing = [c for c in required if c not in _df.columns]
-    if missing:
-        raise ValueError(f"Missing required column(s): {', '.join(missing)}")
-
+    # Clean data
     clean = _df[[home_col, away_col, hg_col, ag_col]].dropna()
     if clean.empty:
         raise ValueError("No valid matches after removing NaN from goal columns.")
@@ -84,7 +79,7 @@ def compute_team_stats(
     avg_home = clean[hg_col].mean()
     avg_away = clean[ag_col].mean()
     if avg_home == 0 or avg_away == 0:
-        raise ValueError("League average goals are zero – check the data.")
+        raise ValueError("League average goals are zero.")
 
     stats["goals"] = {
         "league_avg_home": avg_home,
@@ -95,8 +90,8 @@ def compute_team_stats(
         "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
     }
 
-    # ----- OPTIONAL STATS (generic helper) -----
-    def add_optional(name: str, h_col: str, a_col: str):
+    # Optional stats
+    def add(name, h_col, a_col):
         if h_col and a_col and h_col in _df.columns and a_col in _df.columns:
             sub = _df[[home_col, away_col, h_col, a_col]].dropna()
             if not sub.empty:
@@ -112,22 +107,18 @@ def compute_team_stats(
                         "away_defence": (sub.groupby(away_col)[h_col].mean() / avg_h).fillna(1.0).to_dict(),
                     }
 
-    add_optional("corners", hc_col, ac_col)
-    add_optional("shots",   hs_col, as_col)
-    add_optional("xg",      hxg_col, axg_col)
+    add("corners", hc_col, ac_col)
+    add("shots",   hs_col, as_col)
+    add("xg",      hxg_col, axg_col)
 
     return stats
 
-
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-    predictions: Dict[str, Any] = {}
+    predictions = {}
 
-    # ----- GOALS (always present) -----
-    if "goals" not in stats:
-        raise ValueError("Model missing required 'goals' data. Re-train with valid FTHG/FTAG columns.")
+    # GOALS
     g = stats["goals"]
-
     lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
 
@@ -158,133 +149,133 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
-    # ----- OPTIONAL STATS (generic) -----
-    def predict_optional(name: str, threshold: float = None, fmt_float: bool = False):
+    # Optional
+    def predict(name, thresh=None, is_float=False):
         if name not in stats:
             return None
         s = stats[name]
         lh = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
         la = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
-
-        probs_h = poisson.pmf(np.arange(max_g + 1), lh)
-        probs_a = poisson.pmf(np.arange(max_g + 1), la)
-
+        ph = poisson.pmf(np.arange(max_g + 1), lh)
+        pa = poisson.pmf(np.arange(max_g + 1), la)
         best_h = best_a = 0
         best_p = 0.0
         over = 0.0
-
         for h in range(max_g + 1):
             for a in range(max_g + 1):
-                p = probs_h[h] * probs_a[a]
+                p = ph[h] * pa[a]
                 if p > best_p:
                     best_p = p
                     best_h, best_a = h, a
-                if threshold and h + a > threshold:
+                if thresh and h + a > thresh:
                     over += p
-
-        score = f"{best_h:.1f}-{best_a:.1f}" if fmt_float else f"{best_h}-{best_a}"
+        score = f"{best_h:.1f}-{best_a:.1f}" if is_float else f"{best_h}-{best_a}"
         res = {"score": score}
-        if threshold is not None:
+        if thresh:
             res["over"] = over
             res["under"] = 1 - over
         return res
 
-    predictions["corners"] = predict_optional("corners", 10.5)
-    predictions["shots"]   = predict_optional("shots",   20.5)
-    predictions["xg"]      = predict_optional("xg",      2.5, fmt_float=True)
+    predictions["corners"] = predict("corners", 10.5)
+    predictions["shots"]   = predict("shots",   20.5)
+    predictions["xg"]      = predict("xg",      2.5, True)
 
-    # Keep only keys that have a value
     return {k: v for k, v in predictions.items() if v is not None}
 
-# -------------------------------------------------
+# ================================
 # UI
-# -------------------------------------------------
+# ================================
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
     df = load_csv(uploaded_file.getvalue())
     st.success(f"Loaded {len(df)} rows.")
 
-    with st.expander("Preview"):
-        st.dataframe(df.head(10))
+    with st.expander("Preview Data"):
+        st.dataframe(df.head())
 
-    # ---- REQUIRED COLUMNS ----
-    st.subheader("Required Columns")
+    # --- REQUIRED ---
+    st.subheader("Required: Select FTHG & FTAG")
     guessed = detect_columns(df)
     c1, c2, c3, c4, c5 = st.columns(5)
-    date_col = c1.selectbox("Date", df.columns, index=_safe_index(df, guessed.get("Date")))
     home_col = c2.selectbox("Home Team", df.columns, index=_safe_index(df, guessed.get("HomeTeam")))
     away_col = c3.selectbox("Away Team", df.columns, index=_safe_index(df, guessed.get("AwayTeam")))
     hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
-    # ---- OPTIONAL COLUMNS ----
+    # Validate required
+    valid = (
+        hg_col in df.columns and ag_col in df.columns and
+        not df[hg_col].isna().all() and not df[ag_col].isna().all()
+    )
+
+    if not valid:
+        st.error("Please select **valid FTHG and FTAG columns** with real numbers.")
+    else:
+        st.success("Goal columns valid!")
+
+    # --- OPTIONAL ---
     st.subheader("Optional Columns")
     o1, o2, o3, o4, o5, o6 = st.columns(6)
-    hc_col  = o1.selectbox("Home Corners (HC)", [""] + list(df.columns))
-    ac_col  = o2.selectbox("Away Corners (AC)", [""] + list(df.columns))
-    hs_col  = o3.selectbox("Home Shots (HS)",   [""] + list(df.columns))
-    as_col  = o4.selectbox("Away Shots (AS)",   [""] + list(df.columns))
-    hxg_col = o5.selectbox("Home xG (HxG)",     [""] + list(df.columns))
-    axg_col = o6.selectbox("Away xG (AxG)",     [""] + list(df.columns))
+    hc_col  = o1.selectbox("HC", [""] + list(df.columns))
+    ac_col  = o2.selectbox("AC", [""] + list(df.columns))
+    hs_col  = o3.selectbox("HS", [""] + list(df.columns))
+    as_col  = o4.selectbox("AS", [""] + list(df.columns))
+    hxg_col = o5.selectbox("HxG", [""] + list(df.columns))
+    axg_col = o6.selectbox("AxG", [""] + list(df.columns))
 
-    # ---- TRAIN ----
-    if st.button("Train Model"):
-        try:
-            stats = compute_team_stats(
-                df, home_col, away_col, hg_col, ag_col,
-                hc_col or None, ac_col or None,
-                hs_col or None, as_col or None,
-                hxg_col or None, axg_col or None
-            )
-            teams = sorted(set(df[home_col]).union(df[away_col]))
-            st.session_state.stats = stats
-            st.session_state.teams = teams
-            st.success("Model trained successfully!")
-        except Exception as e:
-            st.error(f"Training failed: {e}")
+    # --- TRAIN ---
+    train_btn = st.button("Train Model", disabled=not valid)
+    if train_btn:
+        with st.spinner("Training..."):
+            try:
+                stats = compute_team_stats(
+                    df, home_col, away_col, hg_col, ag_col,
+                    hc_col or None, ac_col or None,
+                    hs_col or None, as_col or None,
+                    hxg_col or None, axg_col or None
+                )
+                teams = sorted(set(df[home_col]).union(df[away_col]))
+                st.session_state.stats = stats
+                st.session_state.teams = teams
+                st.success("Model trained!")
+            except Exception as e:
+                st.error(f"Training failed: {e}")
 
-    # ---- PREDICT ----
+    # --- PREDICT ---
     if st.session_state.get("stats") and st.session_state.get("teams"):
-        st.subheader("Predict a Match")
+        st.subheader("Predict Match")
         t1, t2 = st.columns(2)
-        home_team = t1.selectbox("Home Team", st.session_state.teams, key="ph")
-        away_team = t2.selectbox("Away Team", st.session_state.teams, key="pa")
+        home_team = t1.selectbox("Home", st.session_state.teams, key="ph")
+        away_team = t2.selectbox("Away", st.session_state.teams, key="pa")
 
         if home_team == away_team:
-            st.error("Select two different teams.")
+            st.error("Select different teams.")
         elif st.button("Predict"):
-            try:
-                pred = predict_match(home_team, away_team, st.session_state.stats)
-                st.markdown(f"### {home_team} vs {away_team}")
+            pred = predict_match(home_team, away_team, st.session_state.stats)
+            st.markdown(f"### {home_team} vs {away_team}")
 
-                # Goals (always shown)
-                g = pred["goals"]
-                st.markdown(f"""
-                #### Goals
-                **{g['score']}** → **{g['result']}**  
-                H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
-                """)
+            g = pred["goals"]
+            st.markdown(f"""
+            #### Goals
+            **{g['score']}** → **{g['result']}**  
+            H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+            """)
 
-                # Optional sections
-                for name, label, thresh in [
-                    ("corners", "Corners", 10.5),
-                    ("shots",   "Shots on Target", 20.5),
-                    ("xg",      "Expected Goals (xG)", 2.5)
-                ]:
-                    if name in pred:
-                        p = pred[name]
-                        st.markdown(f"""
-                        #### {label}
-                        **{p['score']}**  
-                        Over {thresh}: `{p['over']:.1%}` | Under {thresh}: `{p['under']:.1%}`
-                        """)
-            except Exception as e:
-                st.error(f"Prediction error: {e}")
+            for name, label, thresh in [
+                ("corners", "Corners", 10.5),
+                ("shots", "Shots", 20.5),
+                ("xg", "xG", 2.5)
+            ]:
+                if name in pred:
+                    p = pred[name]
+                    st.markdown(f"""
+                    #### {label}
+                    **{p['score']}**  
+                    Over {thresh}: `{p['over']:.1%}` | Under: `{p['under']:.1%}`
+                    """)
 
-# -------------------------------------------------
-# CACHE CLEAR
-# -------------------------------------------------
+# Clear Cache
 if st.button("Clear Cache"):
     st.cache_data.clear()
     st.success("Cache cleared!")
