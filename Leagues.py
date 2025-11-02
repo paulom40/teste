@@ -23,7 +23,7 @@ st.markdown("""
 - **Shots on Target** (HS/AS) – Optional
 - **Expected Goals (xG)** – Optional
 
-**Logos:** Automatically fetched
+**Logos:** Auto-fetched
 """)
 
 # ================================
@@ -31,7 +31,7 @@ st.markdown("""
 # ================================
 @st.cache_data(ttl=3600)
 def get_team_logo(team_name: str) -> str:
-    team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "")
+    team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "").replace("'", "")
     replacements = {
         "man_utd": "Manchester_United_F.C.", "manchester_united": "Manchester_United_F.C.",
         "man_city": "Manchester_City_F.C.", "manchester_city": "Manchester_City_F.C.",
@@ -44,14 +44,14 @@ def get_team_logo(team_name: str) -> str:
         "aston_villa": "Aston_Villa_F.C.", "leeds": "Leeds_United_F.C.",
         "burnley": "Burnley_F.C.", "brentford": "Brentford_F.C.",
         "fulham": "Fulham_F.C.", "nottingham_forest": "Nottingham_Forest_F.C.",
+        "nottm_forest": "Nottingham_Forest_F.C.", "nottmforest": "Nottingham_Forest_F.C.",
         "luton": "Luton_Town_F.C.", "sheffield_united": "Sheffield_United_F.C.",
         "bournemouth": "A.F.C._Bournemouth", "afc_bournemouth": "A.F.C._Bournemouth",
         "wimbledon": "AFC_Wimbledon", "afc_wimbledon": "AFC_Wimbledon",
-        "forest_green": "Forest_Green_Rovers_F.C.", "forest_green_rovers": "Forest_Green_Rovers_F.C.",
     }
     wiki_name = replacements.get(team_clean, None)
     if not wiki_name:
-        wiki_name = team_name.replace(" ", "_") + "_F.C."
+        wiki_name = team_name.replace(" ", "_").replace("'", "") + "_F.C."
     url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
     try:
         if requests.head(url, timeout=5).status_code == 200:
@@ -128,14 +128,21 @@ def compute_team_stats(
 ) -> Dict[str, Any]:
     stats = {}
 
-    # REQUIRED: GOALS
-    clean = _df[[home_col, away_col, hg_col, ag_col]].dropna()
+    # === CONVERT GOAL COLUMNS TO NUMERIC ===
+    df = _df.copy()
+    df[hg_col] = pd.to_numeric(df[hg_col], errors='coerce')
+    df[ag_col] = pd.to_numeric(df[ag_col], errors='coerce')
+
+    # === REQUIRED: GOALS ===
+    clean = df[[home_col, away_col, hg_col, ag_col]].dropna()
     if clean.empty:
-        raise ValueError("No valid matches after removing NaN from goal columns.")
+        raise ValueError("No valid matches after cleaning goal data.")
+
     avg_home = clean[hg_col].mean()
     avg_away = clean[ag_col].mean()
     if avg_home == 0 or avg_away == 0:
         raise ValueError("League average goals are zero.")
+
     stats["goals"] = {
         "league_avg_home": avg_home,
         "league_avg_away": avg_away,
@@ -145,10 +152,13 @@ def compute_team_stats(
         "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
     }
 
-    # OPTIONAL: CORNERS, SHOTS, xG
+    # === OPTIONAL: CORNERS, SHOTS, xG ===
     def add(name, h_col, a_col):
-        if h_col and a_col and h_col in _df.columns and a_col in _df.columns:
-            sub = _df[[home_col, away_col, h_col, a_col]].dropna()
+        if h_col and a_col and h_col in df.columns and a_col in df.columns:
+            # Convert to numeric
+            df[h_col] = pd.to_numeric(df[h_col], errors='coerce')
+            df[a_col] = pd.to_numeric(df[a_col], errors='coerce')
+            sub = df[[home_col, away_col, h_col, a_col]].dropna()
             if not sub.empty:
                 avg_h = sub[h_col].mean()
                 avg_a = sub[a_col].mean()
@@ -203,7 +213,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         "result": result
     }
 
-    # GENERIC PREDICTOR FOR CORNERS, SHOTS, xG
+    # GENERIC PREDICTOR
     def predict_stat(name, threshold=None, is_float=False):
         if name not in stats:
             return None
@@ -256,12 +266,14 @@ if uploaded_file:
     hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
+    # Validate
     valid = (
         hg_col in df.columns and ag_col in df.columns and
-        not df[hg_col].isna().all() and not df[ag_col].isna().all()
+        pd.to_numeric(df[hg_col], errors='coerce').notna().any() and
+        pd.to_numeric(df[ag_col], errors='coerce').notna().any()
     )
     if not valid:
-        st.error("Please select valid FTHG and FTAG columns with real numbers.")
+        st.error("Please select valid FTHG and FTAG columns with numeric values.")
     else:
         st.success("Goal columns valid!")
 
@@ -313,21 +325,21 @@ if uploaded_file:
                 # LOGOS
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col1:
-                    home_logo_url = get_team_logo(home_team)
-                    if home_logo_url and load_image(home_logo_url):
-                        st.image(load_image(home_logo_url), width=80)
+                    logo = get_team_logo(home_team)
+                    if logo and load_image(logo):
+                        st.image(load_image(logo), width=80)
                     else:
                         st.markdown(f"**{home_team}**")
                 with col2:
                     st.markdown(f"### **{home_team} vs {away_team}**")
                 with col3:
-                    away_logo_url = get_team_logo(away_team)
-                    if away_logo_url and load_image(away_logo_url):
-                        st.image(load_image(away_logo_url), width=80)
+                    logo = get_team_logo(away_team)
+                    if logo and load_image(logo):
+                        st.image(load_image(logo), width=80)
                     else:
                         st.markdown(f"**{away_team}**")
 
-                # GOALS
+                # RESULTS
                 g = pred["goals"]
                 st.markdown(f"""
                 #### Goals
@@ -335,29 +347,26 @@ if uploaded_file:
                 H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
                 """)
 
-                # CORNERS
                 if "corners" in pred:
                     c = pred["corners"]
                     st.markdown(f"""
                     #### Corners
                     **{c['score']}**  
-                    Over 10.5: `{c['over']:.1%}` | Under 10.5: `{c['under']:.1%}`
+                    Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
                     """)
 
-                # SHOTS ON TARGET
                 if "shots" in pred:
                     s = pred["shots"]
                     st.markdown(f"""
                     #### Shots on Target
                     **{s['score']}**  
-                    Over 20.5: `{s['over']:.1%}` | Under 20.5: `{s['under']:.1%}`
+                    Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
                     """)
 
-                # xG
                 if "xg" in pred:
                     x = pred["xg"]
                     st.markdown(f"""
                     #### Expected Goals (xG)
                     **{x['score']}**  
-                    Over 2.5: `{x['over']:.1%}` | Under 2.5: `{x['under']:.1%}`
+                    Over 2.5: `{x['over']:.1%}` | Under: `{x['under']:.1%}`
                     """)
