@@ -22,11 +22,11 @@ st.markdown("""
 
 **Predicts:**
 - **Full-Time** (FTHG/FTAG)
-- **Half-Time** (HTHG/HTAG)
 - **BTTS** (Both Teams To Score)
 - **Over/Under 2.5 Goals**
 - **Corners (Total + Over 10.5)**
-- **xG (Home/Away/Total + Over 2.5)** **NEW**
+- **xG (Home/Away + Over 2.5)**
+- **Shots on Target (Total + Over 8.5)** **NEW**
 
 **Interactive Charts + Print-to-PDF**
 """)
@@ -159,23 +159,6 @@ def compute_team_stats(
         "away_defence": (clean_ft.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
     }
 
-    # HALF-TIME
-    if hthg_col and htag_col and hthg_col in df.columns and htag_col in df.columns:
-        ht_mask = df[hthg_col].notna() & df[htag_col].notna()
-        clean_ht = df[ht_mask][[home_col, away_col, hthg_col, htag_col]]
-        if len(clean_ht) >= 5:
-            avg_h = clean_ht[hthg_col].mean()
-            avg_a = clean_ht[htag_col].mean()
-            if avg_h > 0 and avg_a > 0:
-                stats["half_time"] = {
-                    "league_avg_home": avg_h,
-                    "league_avg_away": avg_a,
-                    "home_attack": (clean_ht.groupby(home_col)[hthg_col].mean() / avg_h).fillna(1.0).to_dict(),
-                    "away_attack": (clean_ht.groupby(away_col)[htag_col].mean() / avg_a).fillna(1.0).to_dict(),
-                    "home_defence": (clean_ht.groupby(home_col)[htag_col].mean() / avg_a).fillna(1.0).to_dict(),
-                    "away_defence": (clean_ht.groupby(away_col)[hthg_col].mean() / avg_h).fillna(1.0).to_dict(),
-                }
-
     # CORNERS
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
         corner_mask = df[hc_col].notna() & df[ac_col].notna()
@@ -210,15 +193,33 @@ def compute_team_stats(
                     "away_defence": (clean_xg.groupby(away_col)[hxg_col].mean() / avg_hxg).fillna(1.0).to_dict(),
                 }
 
+    # SHOTS ON TARGET
+    if hs_col and as_col and hs_col in df.columns and as_col in df.columns:
+        shot_mask = df[hs_col].notna() & df[as_col].notna()
+        clean_s = df[shot_mask][[home_col, away_col, hs_col, as_col]]
+        if len(clean_s) >= 5:
+            avg_hs = clean_s[hs_col].mean()
+            avg_as = clean_s[as_col].mean()
+            if avg_hs > 0 and avg_as > 0:
+                stats["shots"] = {
+                    "league_avg_home": avg_hs,
+                    "league_avg_away": avg_as,
+                    "home_attack": (clean_s.groupby(home_col)[hs_col].mean() / avg_hs).fillna(1.0).to_dict(),
+                    "away_attack": (clean_s.groupby(away_col)[as_col].mean() / avg_as).fillna(1.0).to_dict(),
+                    "home_defence": (clean_s.groupby(home_col)[as_col].mean() / avg_as).fillna(1.0).to_dict(),
+                    "away_defence": (clean_s.groupby(away_col)[hs_col].mean() / avg_hs).fillna(1.0).to_dict(),
+                }
+
     return stats
 
 # ================================
-# PREDICT MATCH + xG
+# PREDICT MATCH + SHOTS
 # ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     max_g = 10
     max_c = 15
+    max_s = 20  # Max shots on target
     predictions = {
         "goals": {
             "score": "N/A", "result": "N/A",
@@ -280,9 +281,10 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         ac_probs = poisson.pmf(np.arange(max_c + 1), lambda_ac)
 
         total_probs = np.zeros(max_c + 1)
-        best_total = 0
+        best_total = int(round(lambda_hc + lambda_ac))
         best_p = 0.0
         over_10_5 = 0.0
+        has_valid = False
         for h in range(max_c + 1):
             for a in range(max_c + 1):
                 p = hc_probs[h] * ac_probs[a]
@@ -294,13 +296,15 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
                 if p > best_p:
                     best_p = p
                     best_total = total
+                    has_valid = True
+        if not has_valid:
+            best_total = int(round(lambda_hc + lambda_ac))
 
-        corner_result = "Over" if over_10_5 > 0.5 else "Under"
         predictions["corners"] = {
             "total": best_total,
             "over_10_5": over_10_5,
             "under_10_5": 1 - over_10_5,
-            "result": corner_result,
+            "result": "Over" if over_10_5 > 0.5 else "Under",
             "distribution": total_probs.tolist()
         }
         chart_data["corner_dist"] = pd.Series(total_probs, index=range(max_c + 1))
@@ -310,21 +314,56 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         xg = stats["xg"]
         lambda_hxg = xg["home_attack"].get(home, 1.0) * xg["away_defence"].get(away, 1.0) * xg["league_avg_home"]
         lambda_axg = xg["away_attack"].get(away, 1.0) * xg["home_defence"].get(home, 1.0) * xg["league_avg_away"]
-
-        # Expected xG values
-        home_xg = lambda_hxg
-        away_xg = lambda_axg
-        total_xg = home_xg + away_xg
-        over_25_xg = poisson.sf(2, total_xg)  # P(total_xg > 2.5)
+        total_xg = lambda_hxg + lambda_axg
+        over_25_xg = poisson.sf(2, total_xg)
 
         predictions["xg"] = {
-            "home_xg": home_xg,
-            "away_xg": away_xg,
+            "home_xg": lambda_hxg,
+            "away_xg": lambda_axg,
             "total_xg": total_xg,
             "over_25_xg": over_25_xg,
             "under_25_xg": 1 - over_25_xg,
             "result": "Over" if over_25_xg > 0.5 else "Under"
         }
+
+    # SHOTS ON TARGET
+    if "shots" in stats:
+        s = stats["shots"]
+        lambda_hs = s["home_attack"].get(home, 1.0) * s["away_defence"].get(away, 1.0) * s["league_avg_home"]
+        lambda_as = s["away_attack"].get(away, 1.0) * s["home_defence"].get(home, 1.0) * s["league_avg_away"]
+        hs_probs = poisson.pmf(np.arange(max_s + 1), lambda_hs)
+        as_probs = poisson.pmf(np.arange(max_s + 1), lambda_as)
+
+        total_probs = np.zeros(max_s + 1)
+        best_total = int(round(lambda_hs + lambda_as))
+        best_p = 0.0
+        over_8_5 = 0.0
+        has_valid = False
+        for h in range(max_s + 1):
+            for a in range(max_s + 1):
+                p = hs_probs[h] * as_probs[a]
+                total = h + a
+                if total <= max_s:
+                    total_probs[total] += p
+                if total > 8.5:
+                    over_8_5 += p
+                if p > best_p:
+                    best_p = p
+                    best_total = total
+                    has_valid = True
+        if not has_valid:
+            best_total = int(round(lambda_hs + lambda_as))
+
+        predictions["shots"] = {
+            "home_shots": lambda_hs,
+            "away_shots": lambda_as,
+            "total": best_total,
+            "over_8_5": over_8_5,
+            "under_8_5": 1 - over_8_5,
+            "result": "Over" if over_8_5 > 0.5 else "Under",
+            "distribution": total_probs.tolist()
+        }
+        chart_data["shots_dist"] = pd.Series(total_probs, index=range(max_s + 1))
 
     predictions["chart_data"] = chart_data
     return predictions
@@ -365,8 +404,8 @@ if uploaded_file:
     htag_col = o2.selectbox("HTAG", [""] + list(df.columns))
     hc_col   = o3.selectbox("HC (Home Corners)", [""] + list(df.columns))
     ac_col   = o4.selectbox("AC (Away Corners)", [""] + list(df.columns))
-    hs_col   = o5.selectbox("HS", [""] + list(df.columns))
-    as_col   = o6.selectbox("AS", [""] + list(df.columns))
+    hs_col   = o5.selectbox("HS (Home Shots on Target)", [""] + list(df.columns))
+    as_col   = o6.selectbox("AS (Away Shots on Target)", [""] + list(df.columns))
     hxg_col  = o7.selectbox("HxG (Home xG)", [""] + list(df.columns))
     axg_col  = o8.selectbox("AxG (Away xG)", [""] + list(df.columns))
 
@@ -414,6 +453,7 @@ if uploaded_file:
             g = pred.get("goals", {})
             c = pred.get("corners", {})
             x = pred.get("xg", {})
+            s = pred.get("shots", {})
             chart_data = pred.get("chart_data", {})
 
             # LOGOS
@@ -473,7 +513,19 @@ if uploaded_file:
                     go.Bar(name='Away xG', x=['xG'], y=[x['away_xg']], marker_color='salmon')
                 ])
                 fig.add_hline(y=2.5, line_dash="dash", line_color="gray", annotation_text="2.5 Line")
-                fig.update_layout(barmode='stack', height=400, title_text=f"Total xG: {x['total_xg']:.2f} | Over 2.5: {x['over_25_xg']:.1%}")
+                fig.update_layout(barmode='stack', height=400, title_text=f"Total: {x['total_xg']:.2f} | Over 2.5: {x['over_25_xg']:.1%}")
+                st.plotly_chart(fig, use_container_width=True)
+
+            # SHOTS ON TARGET
+            if s and "distribution" in s:
+                st.markdown("### Shots on Target Distribution")
+                fig = px.bar(
+                    x=range(len(s["distribution"])),
+                    y=s["distribution"],
+                    labels=dict(x="Total Shots on Target", y="Probability"),
+                    title=f"Most Likely: {s['total']} | Over 8.5: {s['over_8_5']:.1%}"
+                )
+                fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
 
             # PRINT SECTION
@@ -499,35 +551,37 @@ if uploaded_file:
             </div>
             """
 
-            if g:
+            if g.get('score') != 'N/A':
                 print_html += f"""
                 <div class="prediction">
-                    <div class="score">Full-Time: {g.get('score', 'N/A')} to {g.get('result', 'N/A')}</div>
-                    <div class="prob">H: {g.get('home_win', 0):.1%} | D: {g.get('draw', 0):.1%} | A: {g.get('away_win', 0):.1%}</div>
+                    <div class="score">Full-Time: {g['score']} to {g['result']}</div>
+                    <div class="prob">H: {g['home_win']:.1%} | D: {g['draw']:.1%} | A: {g['away_win']:.1%}</div>
                 </div>
                 """
                 if g.get('btts_result'):
                     print_html += f"""
                     <div class="prediction">
                         <div class="score">BTTS: {g['btts_result']}</div>
-                        <div class="prob">Yes: {g.get('btts_yes', 0):.1%} | No: {g.get('btts_no', 0):.1%}</div>
+                        <div class="prob">Yes: {g['btts_yes']:.1%} | No: {g['btts_no']:.1%}</div>
                     </div>
                     """
                 if g.get('over_under_result'):
                     print_html += f"""
                     <div class="prediction">
                         <div class="score">Over/Under 2.5: {g['over_under_result']} 2.5</div>
-                        <div class="prob">Over: {g.get('over_25', 0):.1%} | Under: {g.get('under_25', 0):.1%}</div>
+                        <div class="prob">Over: {g['over_25']:.1%} | Under: {g['under_25']:.1%}</div>
                     </div>
                     """
 
             if c:
-                print_html += f"""
-                <div class="prediction">
-                    <div class="score">Corners: {c['total']} (Most Likely)</div>
-                    <div class="prob">Over 10.5: {c['over_10_5']:.1%} | Under: {c['under_10_5']:.1%}</div>
-                </div>
-                """
+                total_c = c.get('total')
+                if total_c is not None:
+                    print_html += f"""
+                    <div class="prediction">
+                        <div class="score">Corners: {total_c} (Most Likely)</div>
+                        <div class="prob">Over 10.5: {c['over_10_5']:.1%} | Under: {c['under_10_5']:.1%}</div>
+                    </div>
+                    """
 
             if x:
                 print_html += f"""
@@ -536,6 +590,16 @@ if uploaded_file:
                     <div class="prob">Total: {x['total_xg']:.2f} | Over 2.5: {x['over_25_xg']:.1%}</div>
                 </div>
                 """
+
+            if s:
+                total_s = s.get('total')
+                if total_s is not None:
+                    print_html += f"""
+                    <div class="prediction">
+                        <div class="score">Shots on Target: {total_s} (Most Likely)</div>
+                        <div class="prob">Over 8.5: {s['over_8_5']:.1%} | Under: {s['under_8_5']:.1%}</div>
+                    </div>
+                    """
 
             st.markdown(print_html, unsafe_allow_html=True)
 
