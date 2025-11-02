@@ -19,8 +19,8 @@ st.markdown("""
 
 **Predicts:**
 - **Goals** (FTHG/FTAG) – Required
-- **Corners** (HC/AC) – Optional
-- **Shots on Target** (HS/AS) – Optional
+- **Corners** (HC/AC) – **Always predicted if in CSV**
+- **Shots on Target** (HS/AS) – **Always predicted if in CSV**
 - **Expected Goals (xG)** – Optional
 
 **Logos:** Auto-fetched
@@ -37,21 +37,10 @@ def get_team_logo(team_name: str) -> str:
         "man_city": "Manchester_City_F.C.", "manchester_city": "Manchester_City_F.C.",
         "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
         "spurs": "Tottenham_Hotspur_F.C.", "tottenham": "Tottenham_Hotspur_F.C.",
-        "leicester": "Leicester_City_F.C.", "west_ham": "West_Ham_United_F.C.",
-        "everton": "Everton_F.C.", "southampton": "Southampton_F.C.",
-        "brighton": "Brighton_&_Hove_Albion_F.C.", "newcastle": "Newcastle_United_F.C.",
-        "crystal_palace": "Crystal_Palace_F.C.", "wolves": "Wolverhampton_Wanderers_F.C.",
-        "aston_villa": "Aston_Villa_F.C.", "leeds": "Leeds_United_F.C.",
-        "burnley": "Burnley_F.C.", "brentford": "Brentford_F.C.",
-        "fulham": "Fulham_F.C.", "nottingham_forest": "Nottingham_Forest_F.C.",
         "nottm_forest": "Nottingham_Forest_F.C.", "nottmforest": "Nottingham_Forest_F.C.",
-        "luton": "Luton_Town_F.C.", "sheffield_united": "Sheffield_United_F.C.",
-        "bournemouth": "A.F.C._Bournemouth", "afc_bournemouth": "A.F.C._Bournemouth",
-        "wimbledon": "AFC_Wimbledon", "afc_wimbledon": "AFC_Wimbledon",
+        "nott'm_forest": "Nottingham_Forest_F.C.",
     }
-    wiki_name = replacements.get(team_clean, None)
-    if not wiki_name:
-        wiki_name = team_name.replace(" ", "_").replace("'", "") + "_F.C."
+    wiki_name = replacements.get(team_clean, team_name.replace(" ", "_").replace("'", "") + "_F.C.")
     url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
     try:
         if requests.head(url, timeout=5).status_code == 200:
@@ -127,22 +116,21 @@ def compute_team_stats(
     axg_col: str = None
 ) -> Dict[str, Any]:
     stats = {}
-
-    # === CONVERT GOAL COLUMNS TO NUMERIC ===
     df = _df.copy()
-    df[hg_col] = pd.to_numeric(df[hg_col], errors='coerce')
-    df[ag_col] = pd.to_numeric(df[ag_col], errors='coerce')
 
-    # === REQUIRED: GOALS ===
+    # Convert all numeric columns safely
+    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
+        if col and col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # REQUIRED: GOALS
     clean = df[[home_col, away_col, hg_col, ag_col]].dropna()
     if clean.empty:
         raise ValueError("No valid matches after cleaning goal data.")
-
     avg_home = clean[hg_col].mean()
     avg_away = clean[ag_col].mean()
     if avg_home == 0 or avg_away == 0:
         raise ValueError("League average goals are zero.")
-
     stats["goals"] = {
         "league_avg_home": avg_home,
         "league_avg_away": avg_away,
@@ -152,12 +140,9 @@ def compute_team_stats(
         "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
     }
 
-    # === OPTIONAL: CORNERS, SHOTS, xG ===
+    # OPTIONAL: CORNERS, SHOTS, xG
     def add(name, h_col, a_col):
         if h_col and a_col and h_col in df.columns and a_col in df.columns:
-            # Convert to numeric
-            df[h_col] = pd.to_numeric(df[h_col], errors='coerce')
-            df[a_col] = pd.to_numeric(df[a_col], errors='coerce')
             sub = df[[home_col, away_col, h_col, a_col]].dropna()
             if not sub.empty:
                 avg_h = sub[h_col].mean()
@@ -240,11 +225,15 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             res["under"] = 1 - over
         return res
 
-    predictions["corners"] = predict_stat("corners", 10.5)
-    predictions["shots"]   = predict_stat("shots",   20.5)
-    predictions["xg"]      = predict_stat("xg",      2.5, True)
+    # ALWAYS PREDICT IF AVAILABLE
+    if "corners" in stats:
+        predictions["corners"] = predict_stat("corners", 10.5)
+    if "shots" in stats:
+        predictions["shots"] = predict_stat("shots", 20.5)
+    if "xg" in stats:
+        predictions["xg"] = predict_stat("xg", 2.5, True)
 
-    return {k: v for k, v in predictions.items() if v is not None}
+    return predictions
 
 # ================================
 # UI
@@ -266,7 +255,6 @@ if uploaded_file:
     hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
-    # Validate
     valid = (
         hg_col in df.columns and ag_col in df.columns and
         pd.to_numeric(df[hg_col], errors='coerce').notna().any() and
@@ -277,14 +265,14 @@ if uploaded_file:
     else:
         st.success("Goal columns valid!")
 
-    st.subheader("Optional Columns")
+    st.subheader("Optional Columns (auto-detected)")
     o1, o2, o3, o4, o5, o6 = st.columns(6)
-    hc_col  = o1.selectbox("Home Corners (HC)", [""] + list(df.columns))
-    ac_col  = o2.selectbox("Away Corners (AC)", [""] + list(df.columns))
-    hs_col  = o3.selectbox("Home Shots (HS)",   [""] + list(df.columns))
-    as_col  = o4.selectbox("Away Shots (AS)",   [""] + list(df.columns))
-    hxg_col = o5.selectbox("Home xG (HxG)",     [""] + list(df.columns))
-    axg_col = o6.selectbox("Away xG (AxG)",     [""] + list(df.columns))
+    hc_col  = o1.selectbox("Home Corners (HC)", [""] + list(df.columns), index=_safe_index(df, guessed.get("HC")))
+    ac_col  = o2.selectbox("Away Corners (AC)", [""] + list(df.columns), index=_safe_index(df, guessed.get("AC")))
+    hs_col  = o3.selectbox("Home Shots (HS)",   [""] + list(df.columns), index=_safe_index(df, guessed.get("HS")))
+    as_col  = o4.selectbox("Away Shots (AS)",   [""] + list(df.columns), index=_safe_index(df, guessed.get("AS")))
+    hxg_col = o5.selectbox("Home xG (HxG)",     [""] + list(df.columns), index=_safe_index(df, guessed.get("HxG")))
+    axg_col = o6.selectbox("Away xG (AxG)",     [""] + list(df.columns), index=_safe_index(df, guessed.get("AxG")))
 
     if st.button("Train Model", disabled=not valid):
         with st.spinner("Training..."):
@@ -335,7 +323,7 @@ if uploaded_file:
                 with col3:
                     logo = get_team_logo(away_team)
                     if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
+                        st.image(load_image(away_logo), width=80)
                     else:
                         st.markdown(f"**{away_team}**")
 
