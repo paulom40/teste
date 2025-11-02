@@ -16,23 +16,35 @@ import os
 import tempfile
 
 # --- PDF EXPORT ---
-# Try to import WeasyPrint with better error handling
-WEASYPRINT_AVAILABLE = False
-PDFKIT_AVAILABLE = False
+# Try different PDF libraries in order of preference
+PDF_AVAILABLE = False
+PDF_LIBRARY = None
 
 try:
-    from weasyprint import HTML
-    WEASYPRINT_AVAILABLE = True
-    st.success("✓ WeasyPrint available for PDF export")
-except ImportError as e:
-    st.warning(f"✗ WeasyPrint not available: {e}")
-
-try:
-    import pdfkit
-    PDFKIT_AVAILABLE = True
-    st.info("✓ PDFKit available (but requires wkhtmltopdf)")
+    from xhtml2pdf import pisa
+    PDF_AVAILABLE = True
+    PDF_LIBRARY = "xhtml2pdf"
+    st.success("✓ xhtml2pdf available for PDF export")
 except ImportError:
-    st.warning("✗ PDFKit not available")
+    st.warning("✗ xhtml2pdf not available")
+
+if not PDF_AVAILABLE:
+    try:
+        from weasyprint import HTML
+        PDF_AVAILABLE = True
+        PDF_LIBRARY = "weasyprint"
+        st.success("✓ WeasyPrint available for PDF export")
+    except ImportError:
+        st.warning("✗ WeasyPrint not available")
+
+if not PDF_AVAILABLE:
+    try:
+        import pdfkit
+        PDF_AVAILABLE = True
+        PDF_LIBRARY = "pdfkit"
+        st.info("✓ PDFKit available (but requires wkhtmltopdf)")
+    except ImportError:
+        st.warning("✗ PDFKit not available")
 
 # ================================
 # CONFIG
@@ -51,12 +63,10 @@ st.markdown("""
 """)
 
 # Show PDF export status
-if WEASYPRINT_AVAILABLE:
-    st.success("✅ PDF Export: WeasyPrint is ready to use!")
-elif PDFKIT_AVAILABLE:
-    st.warning("⚠️ PDF Export: PDFKit available but wkhtmltopdf needed")
+if PDF_AVAILABLE:
+    st.success(f"✅ PDF Export: {PDF_LIBRARY} is ready to use!")
 else:
-    st.error("❌ PDF Export: No PDF libraries available. Install WeasyPrint.")
+    st.error("❌ PDF Export: No PDF libraries available. Install xhtml2pdf.")
 
 # ================================
 # LOGO & CSS
@@ -483,12 +493,27 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     return predictions
 
 # ================================
-# EXPORT TO PDF - SIMPLIFIED VERSION
+# EXPORT TO PDF - UNIVERSAL VERSION
 # ================================
 def export_to_pdf(html_content: str, filename: str = "prediction.pdf"):
-    if WEASYPRINT_AVAILABLE:
+    if PDF_LIBRARY == "xhtml2pdf":
         try:
-            # Create temporary files
+            # Create PDF using xhtml2pdf
+            result = BytesIO()
+            pdf = pisa.CreatePDF(BytesIO(html_content.encode('utf-8')), result)
+            
+            if not pdf.err:
+                return result.getvalue()
+            else:
+                st.error(f"xhtml2pdf error: {pdf.err}")
+                return None
+                
+        except Exception as e:
+            st.error(f"xhtml2pdf failed: {str(e)}")
+            return None
+            
+    elif PDF_LIBRARY == "weasyprint":
+        try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode='w', encoding='utf-8') as f:
                 f.write(html_content)
                 html_path = f.name
@@ -496,40 +521,53 @@ def export_to_pdf(html_content: str, filename: str = "prediction.pdf"):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
                 pdf_path = f.name
             
-            # Generate PDF
             HTML(html_path).write_pdf(pdf_path)
             
-            # Read PDF bytes
             with open(pdf_path, "rb") as f:
                 pdf_bytes = f.read()
             
-            # Clean up temporary files
             os.unlink(html_path)
             os.unlink(pdf_path)
             
             return pdf_bytes
             
         except Exception as e:
-            st.error(f"PDF generation failed: {str(e)}")
+            st.error(f"WeasyPrint failed: {str(e)}")
             return None
-    
+            
+    elif PDF_LIBRARY == "pdfkit":
+        try:
+            import subprocess
+            try:
+                subprocess.run(['wkhtmltopdf', '--version'], capture_output=True, check=True)
+                wkhtmltopdf_available = True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                wkhtmltopdf_available = False
+                
+            if wkhtmltopdf_available:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+                    f.write(html_content.encode('utf-8'))
+                    html_path = f.name
+                pdf_path = html_path.replace(".html", ".pdf")
+                
+                pdfkit.from_file(html_path, pdf_path)
+                
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                os.unlink(html_path)
+                os.unlink(pdf_path)
+                
+                return pdf_bytes
+            else:
+                st.error("wkhtmltopdf not available")
+                return None
+                
+        except Exception as e:
+            st.error(f"PDFKit failed: {str(e)}")
+            return None
     else:
-        st.error("""
-        **PDF export not available!**
-        
-        To enable PDF export on Streamlit Cloud:
-        
-        1. Make sure `weasyprint` is in your `requirements.txt`
-        2. Add these system dependencies to `.streamlit/packages.txt`:
-        ```
-        libcairo2
-        libpango-1.0-0
-        libpangocairo-1.0-0
-        libgdk-pixbuf2.0-0
-        libffi-dev
-        shared-mime-info
-        ```
-        """)
+        st.error("No PDF library available")
         return None
 
 # ================================
@@ -780,7 +818,7 @@ if uploaded_file:
             st.markdown(print_html, unsafe_allow_html=True)
 
             # EXPORT TO PDF BUTTON
-            if WEASYPRINT_AVAILABLE:
+            if PDF_AVAILABLE:
                 if st.button("Export to PDF"):
                     full_html = f"""
                     <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -805,4 +843,4 @@ if uploaded_file:
                                 mime="application/pdf"
                             )
             else:
-                st.warning("PDF export is not available. WeasyPrint is not installed.")
+                st.warning("PDF export is not available. Install xhtml2pdf in requirements.txt")
