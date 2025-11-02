@@ -19,9 +19,9 @@ st.markdown("""
 
 **Predicts:**
 - **Goals** (FTHG/FTAG) – Required
-- **Corners** (HC/AC) – **Always predicted if in CSV**
-- **Shots on Target** (HS/AS) – **Always predicted if in CSV**
-- **Expected Goals (xG)** – Optional
+- **Corners** (HC/AC) – Auto if present
+- **Shots on Target** (HS/AS) – Auto if present
+- **Expected Goals (xG)** – Auto if present
 
 **Logos:** Auto-fetched
 """)
@@ -115,36 +115,47 @@ def compute_team_stats(
     hxg_col: str = None,
     axg_col: str = None
 ) -> Dict[str, Any]:
-    stats = {}
     df = _df.copy()
 
-    # Convert all numeric columns safely
+    # Convert all numeric columns
     for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # REQUIRED: GOALS
-    clean = df[[home_col, away_col, hg_col, ag_col]].dropna()
-    if clean.empty:
-        raise ValueError("No valid matches after cleaning goal data.")
+    # Select only rows where both goals are valid
+    valid_mask = df[hg_col].notna() & df[ag_col].notna()
+    clean = df[valid_mask][[home_col, away_col, hg_col, ag_col]]
+
+    if len(clean) == 0:
+        raise ValueError("No matches with valid FTHG and FTAG values.")
+    if len(clean) < 5:
+        raise ValueError(f"Only {len(clean)} valid matches. Need at least 5 to train.")
+
+    st.info(f"Using **{len(clean)} valid matches** for training.")
+
     avg_home = clean[hg_col].mean()
     avg_away = clean[ag_col].mean()
     if avg_home == 0 or avg_away == 0:
         raise ValueError("League average goals are zero.")
-    stats["goals"] = {
-        "league_avg_home": avg_home,
-        "league_avg_away": avg_away,
-        "home_attack": (clean.groupby(home_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
-        "away_attack": (clean.groupby(away_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
-        "home_defence": (clean.groupby(home_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
-        "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
+
+    stats = {
+        "goals": {
+            "league_avg_home": avg_home,
+            "league_avg_away": avg_away,
+            "home_attack": (clean.groupby(home_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
+            "away_attack": (clean.groupby(away_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
+            "home_defence": (clean.groupby(home_col)[ag_col].mean() / avg_away).fillna(1.0).to_dict(),
+            "away_defence": (clean.groupby(away_col)[hg_col].mean() / avg_home).fillna(1.0).to_dict(),
+        }
     }
 
     # OPTIONAL: CORNERS, SHOTS, xG
     def add(name, h_col, a_col):
         if h_col and a_col and h_col in df.columns and a_col in df.columns:
-            sub = df[[home_col, away_col, h_col, a_col]].dropna()
-            if not sub.empty:
+            sub_mask = df[h_col].notna() & df[a_col].notna()
+            sub = df[sub_mask][[home_col, away_col, h_col, a_col]]
+            if len(sub) >= 5:
                 avg_h = sub[h_col].mean()
                 avg_a = sub[a_col].mean()
                 if avg_h > 0 and avg_a > 0:
@@ -166,15 +177,15 @@ def compute_team_stats(
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(stats, dict) or "goals" not in stats:
-        raise ValueError("Invalid model. Re-train with valid FTHG/FTAG.")
+        raise ValueError("Invalid model. Re-train.")
 
     predictions = {}
+    max_g = 10
 
     # GOALS
     g = stats["goals"]
     lambda_home = g["home_attack"].get(home, 1.0) * g["away_defence"].get(away, 1.0) * g["league_avg_home"]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
-    max_g = 10
     hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
     ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
     prob_h = prob_d = prob_a = 0.0
@@ -225,7 +236,6 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             res["under"] = 1 - over
         return res
 
-    # ALWAYS PREDICT IF AVAILABLE
     if "corners" in stats:
         predictions["corners"] = predict_stat("corners", 10.5)
     if "shots" in stats:
@@ -245,7 +255,7 @@ if uploaded_file:
     st.success(f"Loaded {len(df)} rows.")
 
     with st.expander("Preview Data"):
-        st.dataframe(df.head())
+        st.dataframe(df.head(10))
 
     st.subheader("Required: Select FTHG & FTAG")
     guessed = detect_columns(df)
@@ -255,26 +265,32 @@ if uploaded_file:
     hg_col   = c4.selectbox("Home Goals (FTHG)", df.columns, index=_safe_index(df, guessed.get("FTHG")))
     ag_col   = c5.selectbox("Away Goals (FTAG)", df.columns, index=_safe_index(df, guessed.get("FTAG")))
 
-    valid = (
-        hg_col in df.columns and ag_col in df.columns and
-        pd.to_numeric(df[hg_col], errors='coerce').notna().any() and
-        pd.to_numeric(df[ag_col], errors='coerce').notna().any()
-    )
-    if not valid:
-        st.error("Please select valid FTHG and FTAG columns with numeric values.")
-    else:
-        st.success("Goal columns valid!")
+    # Validate
+    try:
+        df[hg_col] = pd.to_numeric(df[hg_col], errors='coerce')
+        df[ag_col] = pd.to_numeric(df[ag_col], errors='coerce')
+        valid_matches = df[hg_col].notna() & df[ag_col].notna()
+        valid_count = valid_matches.sum()
+        if valid_count == 0:
+            st.error("No valid numeric values in FTHG or FTAG columns.")
+        elif valid_count < 5:
+            st.warning(f"Only **{valid_count} valid matches**. Need at least 5.")
+        else:
+            st.success(f"**{valid_count} valid matches** found!")
+    except:
+        st.error("Cannot convert FTHG/FTAG to numbers.")
 
-    st.subheader("Optional Columns (auto-detected)")
+    st.subheader("Optional Columns")
     o1, o2, o3, o4, o5, o6 = st.columns(6)
-    hc_col  = o1.selectbox("Home Corners (HC)", [""] + list(df.columns), index=_safe_index(df, guessed.get("HC")))
-    ac_col  = o2.selectbox("Away Corners (AC)", [""] + list(df.columns), index=_safe_index(df, guessed.get("AC")))
-    hs_col  = o3.selectbox("Home Shots (HS)",   [""] + list(df.columns), index=_safe_index(df, guessed.get("HS")))
-    as_col  = o4.selectbox("Away Shots (AS)",   [""] + list(df.columns), index=_safe_index(df, guessed.get("AS")))
-    hxg_col = o5.selectbox("Home xG (HxG)",     [""] + list(df.columns), index=_safe_index(df, guessed.get("HxG")))
-    axg_col = o6.selectbox("Away xG (AxG)",     [""] + list(df.columns), index=_safe_index(df, guessed.get("AxG")))
+    hc_col  = o1.selectbox("HC", [""] + list(df.columns))
+    ac_col  = o2.selectbox("AC", [""] + list(df.columns))
+    hs_col  = o3.selectbox("HS", [""] + list(df.columns))
+    as_col  = o4.selectbox("AS", [""] + list(df.columns))
+    hxg_col = o5.selectbox("HxG", [""] + list(df.columns))
+    axg_col = o6.selectbox("AxG", [""] + list(df.columns))
 
-    if st.button("Train Model", disabled=not valid):
+    train_disabled = valid_count < 5 if 'valid_count' in locals() else True
+    if st.button("Train Model", disabled=train_disabled):
         with st.spinner("Training..."):
             try:
                 stats = compute_team_stats(
@@ -286,7 +302,7 @@ if uploaded_file:
                 teams = sorted(set(df[home_col]).union(df[away_col]))
                 st.session_state.stats = stats
                 st.session_state.teams = teams
-                st.success("Model trained!")
+                st.success("Model trained successfully!")
             except Exception as e:
                 st.error(f"Training failed: {e}")
 
@@ -297,64 +313,61 @@ if uploaded_file:
         st.success("Cleared!")
 
     if st.session_state.get("stats") and st.session_state.get("teams"):
-        if not isinstance(st.session_state.stats, dict) or "goals" not in st.session_state.stats:
-            st.error("Model corrupted. Click **Clear Model & Cache** and re-train.")
-        else:
-            st.subheader("Predict Match")
-            t1, t2 = st.columns(2)
-            home_team = t1.selectbox("Home", st.session_state.teams, key="ph")
-            away_team = t2.selectbox("Away", st.session_state.teams, key="pa")
+        st.subheader("Predict Match")
+        t1, t2 = st.columns(2)
+        home_team = t1.selectbox("Home", st.session_state.teams, key="ph")
+        away_team = t2.selectbox("Away", st.session_state.teams, key="pa")
 
-            if home_team == away_team:
-                st.error("Select different teams.")
-            elif st.button("Predict"):
-                pred = predict_match(home_team, away_team, st.session_state.stats)
+        if home_team == away_team:
+            st.error("Select different teams.")
+        elif st.button("Predict"):
+            pred = predict_match(home_team, away_team, st.session_state.stats)
 
-                # LOGOS
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col1:
-                    logo = get_team_logo(home_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(logo), width=80)
-                    else:
-                        st.markdown(f"**{home_team}**")
-                with col2:
-                    st.markdown(f"### **{home_team} vs {away_team}**")
-                with col3:
-                    logo = get_team_logo(away_team)
-                    if logo and load_image(logo):
-                        st.image(load_image(away_logo), width=80)
-                    else:
-                        st.markdown(f"**{away_team}**")
+            # LOGOS
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col1:
+                logo = get_team_logo(home_team)
+                if logo and load_image(logo):
+                    st.image(load_image(logo), width=80)
+                else:
+                    st.markdown(f"**{home_team}**")
+            with col2:
+                st.markdown(f"### **{home_team} vs {away_team}**")
+            with col3:
+                logo = get_team_logo(away_team)
+                if logo and load_image(logo):
+                    st.image(load_image(logo), width=80)
+                else:
+                    st.markdown(f"**{away_team}**")
 
-                # RESULTS
-                g = pred["goals"]
+            # RESULTS
+            g = pred["goals"]
+            st.markdown(f"""
+            #### Goals
+            **{g['score']}** → **{g['result']}**  
+            H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+            """)
+
+            if "corners" in pred:
+                c = pred["corners"]
                 st.markdown(f"""
-                #### Goals
-                **{g['score']}** → **{g['result']}**  
-                H: `{g['home_win']:.1%}` | D: `{g['draw']:.1%}` | A: `{g['away_win']:.1%}`
+                #### Corners
+                **{c['score']}**  
+                Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
                 """)
 
-                if "corners" in pred:
-                    c = pred["corners"]
-                    st.markdown(f"""
-                    #### Corners
-                    **{c['score']}**  
-                    Over 10.5: `{c['over']:.1%}` | Under: `{c['under']:.1%}`
-                    """)
+            if "shots" in pred:
+                s = pred["shots"]
+                st.markdown(f"""
+                #### Shots on Target
+                **{s['score']}**  
+                Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
+                """)
 
-                if "shots" in pred:
-                    s = pred["shots"]
-                    st.markdown(f"""
-                    #### Shots on Target
-                    **{s['score']}**  
-                    Over 20.5: `{s['over']:.1%}` | Under: `{s['under']:.1%}`
-                    """)
-
-                if "xg" in pred:
-                    x = pred["xg"]
-                    st.markdown(f"""
-                    #### Expected Goals (xG)
-                    **{x['score']}**  
-                    Over 2.5: `{x['over']:.1%}` | Under: `{x['under']:.1%}`
-                    """)
+            if "xg" in pred:
+                x = pred["xg"]
+                st.markdown(f"""
+                #### Expected Goals (xG)
+                **{x['score']}**  
+                Over 2.5: `{x['over']:.1%}` | Under: `{x['under']:.1%}`
+                """)
