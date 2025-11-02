@@ -9,3 +9,4 @@ requests
 urllib3
 scikit-learn
 lxml
+reportlab
