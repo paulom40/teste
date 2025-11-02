@@ -469,34 +469,79 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     return predictions
 
 # ================================
-# EXPORT TO PDF
+# EXPORT TO PDF - FIXED VERSION
 # ================================
 def export_to_pdf(html_content: str, filename: str = "prediction.pdf"):
+    # Try WeasyPrint first (works on Streamlit Cloud)
     if WEASYPRINT_AVAILABLE:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
-            f.write(html_content.encode('utf-8'))
-            html_path = f.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
-            pdf_path = f.name
-        HTML(html_path).write_pdf(pdf_path)
-        os.unlink(html_path)
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        os.unlink(pdf_path)
-        return pdf_bytes
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+                f.write(html_content.encode('utf-8'))
+                html_path = f.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+                pdf_path = f.name
+            
+            HTML(html_path).write_pdf(pdf_path)
+            
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            
+            # Clean up temp files
+            os.unlink(html_path)
+            os.unlink(pdf_path)
+            
+            return pdf_bytes
+        except Exception as e:
+            st.error(f"WeasyPrint PDF generation failed: {e}")
+    
+    # Fall back to pdfkit with wkhtmltopdf check
     elif PDFKIT_AVAILABLE:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
-            f.write(html_content.encode('utf-8'))
-            html_path = f.name
-        pdf_path = html_path.replace(".html", ".pdf")
-        pdfkit.from_file(html_path, pdf_path)
-        os.unlink(html_path)
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        os.unlink(pdf_path)
-        return pdf_bytes
+        try:
+            # Check if wkhtmltopdf is available
+            import subprocess
+            try:
+                subprocess.run(['wkhtmltopdf', '--version'], capture_output=True, check=True)
+                wkhtmltopdf_available = True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                wkhtmltopdf_available = False
+                st.warning("wkhtmltopdf not found. PDF export may not work on Streamlit Cloud.")
+            
+            if wkhtmltopdf_available:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+                    f.write(html_content.encode('utf-8'))
+                    html_path = f.name
+                pdf_path = html_path.replace(".html", ".pdf")
+                
+                pdfkit.from_file(html_path, pdf_path)
+                
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                os.unlink(html_path)
+                os.unlink(pdf_path)
+                
+                return pdf_bytes
+            else:
+                st.error("wkhtmltopdf not available. Install it or use WeasyPrint.")
+                return None
+                
+        except Exception as e:
+            st.error(f"PDFKit PDF generation failed: {e}")
+            return None
     else:
-        st.error("PDF export not available. Install `weasyprint` or `pdfkit`.")
+        st.error("""
+        PDF export not available. 
+        
+        **For Streamlit Cloud, install WeasyPrint:**
+        ```bash
+        pip install weasyprint
+        ```
+        
+        **For local development with pdfkit, install wkhtmltopdf:**
+        - Windows: Download from https://wkhtmltopdf.org/downloads.html
+        - Mac: `brew install wkhtmltopdf`
+        - Linux: `sudo apt-get install wkhtmltopdf`
+        """)
         return None
 
 # ================================
