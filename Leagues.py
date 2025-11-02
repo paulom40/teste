@@ -17,6 +17,13 @@ and get **instant Poisson-based predictions** using **cached modeling**.
 """)
 
 # ================================
+# HELPER FUNCTION (MUST BE DEFINED BEFORE USE)
+# ================================
+def _safe_index(df: pd.DataFrame, col: str):
+    """Return column index safely."""
+    return df.columns.get_loc(col) if col in df.columns else 0
+
+# ================================
 # UTILS: DATA LOADER
 # ================================
 @st.cache_data(show_spinner="Loading CSV...")
@@ -173,11 +180,6 @@ if uploaded_file is not None:
             - **Draw**:     `{pred['draw']:.1%}`  
             - **Away Win**: `{pred['away_win']:.1%}`
             """)
-
-# Helper
-def _safe_index(df: pd.DataFrame, col: str):
-    """Return column index safely."""
-    return df.columns.get_loc(col) if col in df.columns else 0
 
 # Optional: Clear Cache Button
 if st.button("Clear All Cache"):
