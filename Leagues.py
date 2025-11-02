@@ -9,9 +9,6 @@ import requests
 from PIL import Image
 from io import BytesIO
 import base64
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 
 # ================================
 # CONFIG
@@ -27,7 +24,7 @@ st.markdown("""
 - **BTTS** (Both Teams To Score)
 - **Corners, Shots, xG**
 
-**Interactive Charts + Print-to-PDF**
+**Native Charts + Print-to-PDF (Ctrl+P)**
 """)
 
 # ================================
@@ -74,7 +71,7 @@ print_css = """
     .score { font-size: 20px; font-weight: bold; }
     .prob { font-size: 14px; color: #555; }
     .no-print { display: none; }
-    .stPlotlyChart { display: none; }
+    .metric-container { display: none; }
 }
 </style>
 """
@@ -199,14 +196,12 @@ def compute_team_stats(
     return stats
 
 # ================================
-# PREDICT MATCH + CHARTS DATA
+# PREDICT MATCH + BTTS
 # ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
     max_g = 10
-    max_ht = 5
     predictions = {}
-    chart_data = {}
 
     # FULL-TIME
     g = stats["goals"]
@@ -214,11 +209,6 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     lambda_away = g["away_attack"].get(away, 1.0) * g["home_defence"].get(home, 1.0) * g["league_avg_away"]
     hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
     ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
-
-    # Score matrix
-    matrix = np.outer(hp, ap)
-    chart_data["ft_matrix"] = pd.DataFrame(matrix, index=range(max_g+1), columns=range(max_g+1))
-
     prob_h = prob_d = prob_a = btts_yes = 0.0
     best = (0, 0)
     best_p = 0.0
@@ -232,10 +222,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             if p > best_p:
                 best_p = p
                 best = (h, a)
-
     result = "H" if prob_h > max(prob_d, prob_a) else "D" if prob_d > max(prob_h, prob_a) else "A"
     btts_result = "Yes" if btts_yes > 0.5 else "No"
-
     predictions["goals"] = {
         "score": f"{best[0]}-{best[1]}",
         "home_win": prob_h,
@@ -252,11 +240,9 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
         ht = stats["half_time"]
         lh = ht["home_attack"].get(home, 1.0) * ht["away_defence"].get(away, 1.0) * ht["league_avg_home"]
         la = ht["away_attack"].get(away, 1.0) * ht["home_defence"].get(home, 1.0) * ht["league_avg_away"]
+        max_ht = 5
         ph = poisson.pmf(np.arange(max_ht + 1), lh)
         pa = poisson.pmf(np.arange(max_ht + 1), la)
-        ht_matrix = np.outer(ph, pa)
-        chart_data["ht_matrix"] = pd.DataFrame(ht_matrix, index=range(max_ht+1), columns=range(max_ht+1))
-
         prob_h = prob_d = prob_a = 0.0
         best = (0, 0)
         best_p = 0.0
@@ -307,7 +293,6 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     if "shots" in stats:   predictions["shots"]   = predict_stat("shots",   20.5)
     if "xg" in stats:      predictions["xg"]      = predict_stat("xg",      2.5)
 
-    predictions["chart_data"] = chart_data
     return predictions
 
 # ================================
@@ -373,7 +358,7 @@ if uploaded_file:
         st.cache_data.clear()
         st.success("Cleared!")
 
-    # PREDICTION + CHARTS
+    # PREDICTION
     if st.session_state.get("stats") and st.session_state.get("teams"):
         st.subheader("Predict Match")
         t1, t2 = st.columns(2)
@@ -393,7 +378,6 @@ if uploaded_file:
             home_team, away_team = st.session_state.match
             pred = st.session_state.prediction
             g = pred["goals"]
-            chart_data = pred.get("chart_data", {})
 
             # LOGOS
             logo1 = get_team_logo(home_team)
@@ -401,50 +385,68 @@ if uploaded_file:
             img1 = load_image(logo1) if logo1 else None
             img2 = load_image(logo2) if logo2 else None
 
-            # === CHARTS ===
-            col1, col2 = st.columns([1, 1])
-
+            # === SUMMARY ===
+            col1, col2, col3 = st.columns([1, 2, 1])
             with col1:
-                st.markdown("### Full-Time Score Matrix")
-                if "ft_matrix" in chart_data:
-                    fig = px.imshow(
-                        chart_data["ft_matrix"],
-                        labels=dict(x=f"{away_team} Goals", y=f"{home_team} Goals", color="Probability"),
-                        x=[str(i) for i in range(11)],
-                        y=[str(i) for i in range(11)],
-                        color_continuous_scale="Blues",
-                        text_auto=".1%"
-                    )
-                    fig.update_layout(height=500, title_text="Most Likely: " + g["score"])
-                    st.plotly_chart(fig, use_container_width=True)
-
+                if img1:
+                    st.image(img1, width=80)
+                else:
+                    st.markdown(f"**{home_team}**")
             with col2:
-                st.markdown("### BTTS & Result Probabilities")
-                labels = ['Home Win', 'Draw', 'Away Win', 'BTTS Yes', 'BTTS No']
-                values = [g['home_win'], g['draw'], g['away_win'], g['btts_yes'], g['btts_no']]
-                fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4)])
-                fig.update_traces(textinfo='percent+label')
-                fig.update_layout(height=500)
-                st.plotly_chart(fig, use_container_width=True)
+                st.markdown(f"### **{home_team} vs {away_team}**")
+            with col3:
+                if img2:
+                    st.image(img2, width=80)
+                else:
+                    st.markdown(f"**{away_team}**")
 
-            # Half-Time Chart
-            if "half_time" in pred and "ht_matrix" in chart_data:
-                st.markdown("### Half-Time Score Matrix")
+            # METRICS
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Full-Time Score", g['score'])
+            col2.metric("Result", g['result'])
+            col3.metric("BTTS", g['btts_result'])
+            col4.metric("BTTS Yes", f"{g['btts_yes']:.1%}")
+
+            # PROBABILITIES
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Home Win", f"{g['home_win']:.1%}")
+            col2.metric("Draw", f"{g['draw']:.1%}")
+            col3.metric("Away Win", f"{g['away_win']:.1%}")
+
+            # HALF-TIME
+            if "half_time" in pred:
                 ht = pred["half_time"]
-                fig = px.imshow(
-                    chart_data["ht_matrix"],
-                    labels=dict(x=f"{away_team} HT Goals", y=f"{home_team} HT Goals", color="Probability"),
-                    x=[str(i) for i in range(6)],
-                    y=[str(i) for i in range(6)],
-                    color_continuous_scale="Greens",
-                    text_auto=".1%"
-                )
-                fig.update_layout(height=400, title_text="HT Most Likely: " + ht["score"])
-                st.plotly_chart(fig, use_container_width=True)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("HT Score", ht['score'])
+                col2.metric("HT Result", ht['result'])
+                col3.metric("HT Home Win", f"{ht['home_win']:.1%}")
 
-            # === SUMMARY + PRINT ===
+            # === INTERACTIVE CHARTS ===
+            tab1, tab2, tab3 = st.tabs(["Full-Time Matrix", "BTTS Breakdown", "Probabilities"])
+
+            with tab1:
+                # Simple heatmap using st.dataframe
+                matrix_df = pd.DataFrame(np.outer(hp, ap), columns=[f"Away {i}" for i in range(11)], index=[f"Home {i}" for i in range(11)])
+                matrix_df = matrix_df.round(3) * 100
+                st.dataframe(matrix_df, use_container_width=True, height=400)
+
+            with tab2:
+                btts_df = pd.DataFrame({
+                    'Outcome': ['BTTS Yes', 'BTTS No'],
+                    'Probability': [g['btts_yes'], g['btts_no']]
+                })
+                st.bar_chart(btts_df.set_index('Outcome'))
+
+            with tab3:
+                prob_df = pd.DataFrame({
+                    'Outcome': ['Home Win', 'Draw', 'Away Win'],
+                    'Probability': [g['home_win'], g['draw'], g['away_win']]
+                })
+                st.bar_chart(prob_df.set_index('Outcome'))
+
+            # PRINT CSS
             st.markdown(print_css, unsafe_allow_html=True)
-            st.markdown("### Summary (Print with Ctrl+P)")
+            st.markdown("### Print Summary (Ctrl+P → Save as PDF)")
 
             def img_to_base64(img):
                 if not img: return ""
@@ -486,5 +488,6 @@ if uploaded_file:
                 """
 
             st.markdown(print_html, unsafe_allow_html=True)
+
             st.markdown("**Click below → Ctrl+P → Save as PDF**")
             st.markdown('<button onclick="window.print()" class="no-print" style="padding:12px 24px; font-size:16px; background:#4CAF50; color:white; border:none; border-radius:5px; cursor:pointer;">Print / Save as PDF</button>', unsafe_allow_html=True)
