@@ -20,7 +20,8 @@ st.markdown("""
 
 **Predicts:**
 - **Full-Time** (FTHG/FTAG)
-- **Half-Time** (HTHG/HTAG) **NEW**
+- **Half-Time** (HTHG/HTAG)
+- **BTTS** (Both Teams To Score) **NEW**
 - **Corners, Shots, xG**
 
 **Logos + Print-to-PDF (Ctrl+P)**
@@ -57,7 +58,7 @@ def load_image(url: str):
         return None
 
 # ================================
-# PRINT CSS (for Ctrl+P → PDF)
+# PRINT CSS
 # ================================
 print_css = """
 <style>
@@ -66,7 +67,7 @@ print_css = """
     .print-title { font-size: 24px; font-weight: bold; text-align: center; margin-bottom: 20px; }
     .team-box { text-align: center; }
     .logo { width: 80px; height: 80px; }
-    .prediction { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+    .prediction { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }
     .score { font-size: 20px; font-weight: bold; }
     .prob { font-size: 14px; color: #555; }
     .no-print { display: none; }
@@ -194,7 +195,7 @@ def compute_team_stats(
     return stats
 
 # ================================
-# PREDICT MATCH
+# PREDICT MATCH (WITH BTTS)
 # ================================
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,6 +209,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
     hp = poisson.pmf(np.arange(max_g + 1), lambda_home)
     ap = poisson.pmf(np.arange(max_g + 1), lambda_away)
     prob_h = prob_d = prob_a = 0.0
+    btts_yes = 0.0
     best = (0, 0)
     best_p = 0.0
     for h in range(max_g + 1):
@@ -216,16 +218,22 @@ def predict_match(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]
             if h > a:   prob_h += p
             elif h == a: prob_d += p
             else:       prob_a += p
+            if h > 0 and a > 0:  # BTTS
+                btts_yes += p
             if p > best_p:
                 best_p = p
                 best = (h, a)
     result = "H" if prob_h > max(prob_d, prob_a) else "D" if prob_d > max(prob_h, prob_a) else "A"
+    btts_result = "Yes" if btts_yes > 0.5 else "No"
     predictions["goals"] = {
         "score": f"{best[0]}-{best[1]}",
         "home_win": prob_h,
         "draw": prob_d,
         "away_win": prob_a,
-        "result": result
+        "result": result,
+        "btts_yes": btts_yes,
+        "btts_no": 1 - btts_yes,
+        "btts_result": btts_result
     }
 
     # HALF-TIME
@@ -367,10 +375,11 @@ if uploaded_file:
                 st.session_state.prediction = pred
                 st.session_state.match = (home_team, away_team)
 
-        # SHOW RESULT + PRINT BUTTON
+        # SHOW RESULT + PRINT
         if st.session_state.get("prediction"):
             home_team, away_team = st.session_state.match
             pred = st.session_state.prediction
+            g = pred["goals"]
 
             # LOGOS
             logo1 = get_team_logo(home_team)
@@ -378,22 +387,9 @@ if uploaded_file:
             img1 = load_image(logo1) if logo1 else None
             img2 = load_image(logo2) if logo2 else None
 
-            # PRINTABLE CONTENT
+            # PRINT CSS
             st.markdown(print_css, unsafe_allow_html=True)
-            st.markdown("### Print Prediction (Ctrl+P → Save as PDF)", unsafe_allow_html=True)
-
-            print_html = f"""
-            <div class="print-title">{home_team} vs {away_team}</div>
-            <div style="display: flex; justify-content: center; gap: 50px; margin: 20px 0;">
-                <div class="team-box">
-                    {f'<img src="data:image/png;base64,{base64.b64encode(BytesIO(open(img1.filename, "rb").read()) if False else img1_to_base64(img1)).decode()}" class="logo">' if img1 else f'<b>{home_team}</b>'}
-                </div>
-                <div style="font-size: 24px; font-weight: bold; align-self: center;">VS</div>
-                <div class="team-box">
-                    {f'<img src="data:image/png;base64,{img2_to_base64(img2)}" class="logo">' if img2 else f'<b>{away_team}</b>'}
-                </div>
-            </div>
-            """
+            st.markdown("### Print Prediction (Ctrl+P → Save as PDF)")
 
             def img_to_base64(img):
                 if not img: return ""
@@ -401,8 +397,21 @@ if uploaded_file:
                 img.save(buffered, format="PNG")
                 return base64.b64encode(buffered.getvalue()).decode()
 
-            # Predictions
-            g = pred["goals"]
+            # PRINT HTML
+            print_html = f"""
+            <div class="print-title">{home_team} vs {away_team}</div>
+            <div style="display: flex; justify-content: center; gap: 50px; margin: 20px 0;">
+                <div class="team-box">
+                    {f'<img src="data:image/png;base64,{img_to_base64(img1)}" class="logo">' if img1 else f'<b>{home_team}</b>'}
+                </div>
+                <div style="font-size: 24px; font-weight: bold; align-self: center;">VS</div>
+                <div class="team-box">
+                    {f'<img src="data:image/png;base64,{img_to_base64(img2)}" class="logo">' if img2 else f'<b>{away_team}</b>'}
+                </div>
+            </div>
+            """
+
+            # FULL-TIME
             print_html += f"""
             <div class="prediction">
                 <div class="score">Full-Time: {g['score']} → {g['result']}</div>
@@ -410,6 +419,15 @@ if uploaded_file:
             </div>
             """
 
+            # BTTS
+            print_html += f"""
+            <div class="prediction">
+                <div class="score">BTTS: {g['btts_result']}</div>
+                <div class="prob">Yes: {g['btts_yes']:.1%} | No: {g['btts_no']:.1%}</div>
+            </div>
+            """
+
+            # HALF-TIME
             if "half_time" in pred:
                 ht = pred["half_time"]
                 print_html += f"""
@@ -419,6 +437,7 @@ if uploaded_file:
                 </div>
                 """
 
+            # OTHERS
             for key in ["corners", "shots", "xg"]:
                 if key in pred:
                     item = pred[key]
@@ -434,5 +453,5 @@ if uploaded_file:
             st.markdown(print_html, unsafe_allow_html=True)
 
             # PRINT BUTTON
-            st.markdown("**Click below then press Ctrl+P (or Cmd+P) to save as PDF**")
-            st.markdown('<button onclick="window.print()" class="no-print" style="padding:10px 20px; font-size:16px;">Print / Save as PDF</button>', unsafe_allow_html=True)
+            st.markdown("**Click below then press Ctrl+P to save as PDF**")
+            st.markdown('<button onclick="window.print()" class="no-print" style="padding:10px 20px; font-size:16px; background:#4CAF50; color:white; border:none; border-radius:5px; cursor:pointer;">Print / Save as PDF</button>', unsafe_allow_html=True)
