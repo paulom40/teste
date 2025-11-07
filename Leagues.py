@@ -27,7 +27,7 @@ st.title("Football Match Predictor Pro")
 st.markdown("""
 **Advanced Prediction Suite**  
 - Dixon-Coles + Negative Binomial  
-- **Corners, Shots, Goal Timing**  
+- **xG, Corners, Shots, Goal Timing**  
 - Player Injury Impact  
 - Live & Pre-match  
 - **One-Click PDF Export**  
@@ -149,6 +149,8 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
         elif lower in ["ac", "awaycorners"]: mapping["AC"] = col
         elif lower in ["hs", "homeshotsontarget"]: mapping["HS"] = col
         elif lower in ["as", "awayshotsontarget"]: mapping["AS"] = col
+        elif lower in ["hxg", "home_xg"]: mapping["HxG"] = col
+        elif lower in ["axg", "away_xg"]: mapping["AxG"] = col
     return mapping
 
 # ================================
@@ -188,10 +190,11 @@ def compute_team_stats(
     _df: pd.DataFrame,
     home_col: str, away_col: str, hg_col: str, ag_col: str,
     hc_col=None, ac_col=None, hs_col=None, as_col=None,
+    hxg_col=None, axg_col=None,
     recency_weight: float = 2.0, min_matches: int = 3
 ) -> Dict[str, Any]:
     df = _df.copy()
-    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col]:
+    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -236,6 +239,41 @@ def compute_team_stats(
         "home_defence": home_defence, "away_defence": away_defence
     }
 
+    # --- xG ---
+    if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
+        xg_mask = df[hxg_col].notna() & df[axg_col].notna()
+        clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]].copy()
+        if len(clean_xg) >= 5:
+            clean_xg['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_xg)))
+            avg_hxg = np.average(clean_xg[hxg_col], weights=clean_xg['weight'])
+            avg_axg = np.average(clean_xg[axg_col], weights=clean_xg['weight'])
+            xg_stats = {
+                "league_avg_home": avg_hxg, "league_avg_away": avg_axg,
+                "home_attack": {}, "away_attack": {}, "home_defence": {}, "away_defence": {}
+            }
+            for team in teams:
+                home_xg = clean_xg[clean_xg[home_col] == team]
+                away_xg = clean_xg[clean_xg[away_col] == team]
+                if len(home_xg) >= min_matches:
+                    xg_stats["home_attack"][team] = bayesian_smoothing(
+                        weighted_mean(home_xg, hxg_col) / avg_hxg, 1.0, len(home_xg)
+                    )
+                    xg_stats["home_defence"][team] = bayesian_smoothing(
+                        weighted_mean(home_xg, axg_col) / avg_axg, 1.0, len(home_xg)
+                    )
+                else:
+                    xg_stats["home_attack"][team] = xg_stats["home_defence"][team] = 1.0
+                if len(away_xg) >= min_matches:
+                    xg_stats["away_attack"][team] = bayesian_smoothing(
+                        weighted_mean(away_xg, axg_col) / avg_axg, 1.0, len(away_xg)
+                    )
+                    xg_stats["away_defence"][team] = bayesian_smoothing(
+                        weighted_mean(away_xg, hxg_col) / avg_hxg, 1.0, len(away_xg)
+                    )
+                else:
+                    xg_stats["away_attack"][team] = xg_stats["away_defence"][team] = 1.0
+            stats["xg"] = xg_stats
+
     # --- CORNERS ---
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
         c_mask = df[hc_col].notna() & df[ac_col].notna()
@@ -244,9 +282,7 @@ def compute_team_stats(
             clean_c['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_c)))
             hc_mean = np.average(clean_c[hc_col], weights=clean_c['weight'])
             ac_mean = np.average(clean_c[ac_col], weights=clean_c['weight'])
-            hc_var = np.var(clean_c[hc_col]) * len(clean_c) / (len(clean_c) - 1)
-            ac_var = np.var(clean_c[ac_col]) * len(clean_c) / (len(clean_c) - 1)
-            use_nb = hc_var > hc_mean and ac_var > ac_mean
+            use_nb = np.var(clean_c[hc_col]) > hc_mean and np.var(clean_c[ac_col]) > ac_mean
             corner_stats = {
                 "league_avg_home": hc_mean, "league_avg_away": ac_mean,
                 "home_attack": {}, "away_attack": {}, "home_defence": {}, "away_defence": {},
@@ -346,6 +382,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
     max_g = 10; max_c = 15
     predictions = {
         "goals": {"score": "N/A", "home_win": 0, "draw": 0, "away_win": 0, "btts_yes": 0, "over_25": 0},
+        "xg": {"home": 0.0, "away": 0.0},
         "corners": {"home": 0, "away": 0, "total": 0},
         "shots": {"home": 0, "away": 0},
         "goal_timing": {"intervals": [], "prob": []},
@@ -391,6 +428,16 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         predictions["goals"]["btts_yes"] = (prob_matrix[1:, 1:]).sum()
         predictions["goals"]["over_25"] = (prob_matrix[3:, :].sum() + prob_matrix[:, 3:].sum() - prob_matrix[3:, 3:].sum())
 
+    # --- xG ---
+    x = stats.get("xg")
+    if x:
+        att_hx = x["home_attack"].get(home, 1.0); def_ax = x["away_defence"].get(away, 1.0)
+        att_ax = x["away_attack"].get(away, 1.0); def_hx = x["home_defence"].get(home, 1.0)
+        xg_h = att_hx * def_ax * x["league_avg_home"]
+        xg_a = att_ax * def_hx * x["league_avg_away"]
+        predictions["xg"]["home"] = round(xg_h, 2)
+        predictions["xg"]["away"] = round(xg_a, 2)
+
     # --- CORNERS ---
     c = stats.get("corners")
     if c:
@@ -400,10 +447,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         mu_hc = att_hc * def_ac * lhc
         mu_ac = att_ac * def_hc * lac
         if c.get("use_negbinom"):
-            n_hc, p_hc = negative_binomial_params(mu_hc, c["home_variance"] if "home_variance" in c else mu_hc*1.5)
-            n_ac, p_ac = negative_binomial_params(mu_ac, c["away_variance"] if "away_variance" in c else mu_ac*1.5)
-            hc_probs = nbinom.pmf(np.arange(max_c + 1), n_hc, p_hc) if p_hc else poisson.pmf(np.arange(max_c + 1), mu_hc)
-            ac_probs = nbinom.pmf(np.arange(max_c + 1), n_ac, p_ac) if p_ac else poisson.pmf(np.arange(max_c + 1), mu_ac)
+            hc_probs = nbinom.pmf(np.arange(max_c + 1), mu_hc, mu_hc / (mu_hc + 1))  # fallback
+            ac_probs = nbinom.pmf(np.arange(max_c + 1), mu_ac, mu_ac / (mu_ac + 1))
         else:
             hc_probs = poisson.pmf(np.arange(max_c + 1), mu_hc)
             ac_probs = poisson.pmf(np.arange(max_c + 1), mu_ac)
@@ -446,6 +491,7 @@ def generate_pdf_html(home, away, pred, logos):
         <div class="score">Score: <strong>{p['goals']['score']}</strong></div>
         <div>Home Win: {p['goals']['home_win']:.1%} | Draw: {p['goals']['draw']:.1%} | Away Win: {p['goals']['away_win']:.1%}</div>
         <div>BTTS: {p['goals']['btts_yes']:.1%} | Over 2.5: {p['goals']['over_25']:.1%}</div>
+        <div><strong>xG:</strong> {home} {p['xg']['home']} | {away} {p['xg']['away']}</div>
         <div><strong>Corners:</strong> {home} {p['corners']['home']} | {away} {p['corners']['away']} (Total: {p['corners']['total']})</div>
         <div><strong>Shots on Target:</strong> {home} {p['shots']['home']} | {away} {p['shots']['away']}</div>
         {injury}
@@ -471,7 +517,7 @@ if uploaded_file is not None:
 
         st.sidebar.subheader("Confirm Column Mapping")
         col_map = {}
-        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "HC", "AC", "HS", "AS"]:
+        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "HC", "AC", "HS", "AS", "HxG", "AxG"]:
             detected = mapping.get(label)
             options = [""] + [c for c in df.columns if c.lower() != "date"]
             default_idx = options.index(detected) if detected in options else 0
@@ -489,6 +535,7 @@ if uploaded_file is not None:
                 hg_col=col_map["FTHG"], ag_col=col_map["FTAG"],
                 hc_col=col_map.get("HC"), ac_col=col_map.get("AC"),
                 hs_col=col_map.get("HS"), as_col=col_map.get("AS"),
+                hxg_col=col_map.get("HxG"), axg_col=col_map.get("AxG"),
                 recency_weight=st.sidebar.slider("Recency", 0.5, 5.0, 2.0, 0.1),
                 min_matches=st.sidebar.number_input("Min matches", 1, 20, 3)
             )
@@ -538,12 +585,13 @@ if uploaded_file is not None:
             colB1.metric("BTTS", f"{p['goals']['btts_yes']:.1%}")
             colB2.metric("Over 2.5", f"{p['goals']['over_25']:.1%}")
 
-            # Corners & Shots
+            # xG, Corners, Shots
             st.markdown("#### Expected Stats")
-            colC1, colC2 = st.columns(2)
-            with colC1:
+            colX1, colX2 = st.columns(2)
+            with colX1:
+                st.write(f"**xG** – {home_team}: **{p['xg']['home']}** | {away_team}: **{p['xg']['away']}**")
                 st.write(f"**Corners** – {home_team}: **{p['corners']['home']}** | {away_team}: **{p['corners']['away']}** (Total: {p['corners']['total']})")
-            with colC2:
+            with colX2:
                 st.write(f"**Shots on Target** – {home_team}: **{p['shots']['home']}** | {away_team}: **{p['shots']['away']}**")
 
             # Goal Timing
