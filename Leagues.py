@@ -11,13 +11,7 @@ from io import BytesIO
 import plotly.express as px
 import re
 from datetime import datetime
-
-# --- PDF (optional) ---
-try:
-    from weasyprint import HTML
-    WEASYPRINT_AVAILABLE = True
-except:
-    WEASYPRINT_AVAILABLE = False
+import base64  # <-- NEW: for HTML logo embedding
 
 # ================================
 # CONFIG
@@ -29,8 +23,8 @@ st.markdown("""
 - Dixon-Coles + Negative Binomial  
 - **xG, Corners, Shots, Goal Timing**  
 - Player Injury Impact  
-- Live & Pre-match  
-- **One-Click PDF Export**  
+- **Offline HTML Export (with logos)**  
+- PDF via Print  
 """)
 
 # ================================
@@ -41,7 +35,8 @@ def get_team_logo(team_name: str) -> str:
     team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "").replace("'", "")
     replacements = {
         "man_utd": "Manchester_United_F.C.", "man_city": "Manchester_City_F.C.",
-        "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C."
+        "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
+        "nottm_forest": "Nottingham_Forest_F.C.", "leeds": "Leeds_United_F.C."
     }
     wiki_name = replacements.get(team_clean, team_name.replace(" ", "_") + "_F.C.")
     url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
@@ -239,7 +234,7 @@ def compute_team_stats(
         "home_defence": home_defence, "away_defence": away_defence
     }
 
-    # --- xG ---
+    # --- xG (with fallback) ---
     if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
         xg_mask = df[hxg_col].notna() & df[axg_col].notna()
         clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]].copy()
@@ -256,25 +251,30 @@ def compute_team_stats(
                 away_xg = clean_xg[clean_xg[away_col] == team]
                 if len(home_xg) >= min_matches:
                     xg_stats["home_attack"][team] = bayesian_smoothing(
-                        weighted_mean(home_xg, hxg_col) / avg_hxg, 1.0, len(home_xg)
-                    )
+                        weighted_mean(home_xg, hxg_col) / avg_hxg, 1.0, len(home_xg))
                     xg_stats["home_defence"][team] = bayesian_smoothing(
-                        weighted_mean(home_xg, axg_col) / avg_axg, 1.0, len(home_xg)
-                    )
+                        weighted_mean(home_xg, axg_col) / avg_axg, 1.0, len(home_xg))
                 else:
                     xg_stats["home_attack"][team] = xg_stats["home_defence"][team] = 1.0
                 if len(away_xg) >= min_matches:
                     xg_stats["away_attack"][team] = bayesian_smoothing(
-                        weighted_mean(away_xg, axg_col) / avg_axg, 1.0, len(away_xg)
-                    )
+                        weighted_mean(away_xg, axg_col) / avg_axg, 1.0, len(away_xg))
                     xg_stats["away_defence"][team] = bayesian_smoothing(
-                        weighted_mean(away_xg, hxg_col) / avg_hxg, 1.0, len(away_xg)
-                    )
+                        weighted_mean(away_xg, hxg_col) / avg_hxg, 1.0, len(away_xg))
                 else:
                     xg_stats["away_attack"][team] = xg_stats["away_defence"][team] = 1.0
             stats["xg"] = xg_stats
+    if "xg" not in stats:
+        stats["xg"] = {
+            "league_avg_home": stats["goals"]["league_avg_home"],
+            "league_avg_away": stats["goals"]["league_avg_away"],
+            "home_attack": stats["goals"]["home_attack"].copy(),
+            "away_attack": stats["goals"]["away_attack"].copy(),
+            "home_defence": stats["goals"]["home_defence"].copy(),
+            "away_defence": stats["goals"]["away_defence"].copy(),
+        }
 
-    # --- CORNERS ---
+    # --- CORNERS (with fallback) ---
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
         c_mask = df[hc_col].notna() & df[ac_col].notna()
         clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]].copy()
@@ -282,34 +282,36 @@ def compute_team_stats(
             clean_c['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_c)))
             hc_mean = np.average(clean_c[hc_col], weights=clean_c['weight'])
             ac_mean = np.average(clean_c[ac_col], weights=clean_c['weight'])
-            use_nb = np.var(clean_c[hc_col]) > hc_mean and np.var(clean_c[ac_col]) > ac_mean
             corner_stats = {
                 "league_avg_home": hc_mean, "league_avg_away": ac_mean,
-                "home_attack": {}, "away_attack": {}, "home_defence": {}, "away_defence": {},
-                "use_negbinom": use_nb
+                "home_attack": {}, "away_attack": {}, "home_defence": {}, "away_defence": {}
             }
             for team in teams:
                 home_c = clean_c[clean_c[home_col] == team]
                 away_c = clean_c[clean_c[away_col] == team]
                 if len(home_c) >= min_matches:
                     corner_stats["home_attack"][team] = bayesian_smoothing(
-                        weighted_mean(home_c, hc_col) / hc_mean, 1.0, len(home_c)
-                    )
+                        weighted_mean(home_c, hc_col) / hc_mean, 1.0, len(home_c))
                     corner_stats["home_defence"][team] = bayesian_smoothing(
-                        weighted_mean(home_c, ac_col) / ac_mean, 1.0, len(home_c)
-                    )
+                        weighted_mean(home_c, ac_col) / ac_mean, 1.0, len(home_c))
                 else:
                     corner_stats["home_attack"][team] = corner_stats["home_defence"][team] = 1.0
                 if len(away_c) >= min_matches:
                     corner_stats["away_attack"][team] = bayesian_smoothing(
-                        weighted_mean(away_c, ac_col) / ac_mean, 1.0, len(away_c)
-                    )
+                        weighted_mean(away_c, ac_col) / ac_mean, 1.0, len(away_c))
                     corner_stats["away_defence"][team] = bayesian_smoothing(
-                        weighted_mean(away_c, hc_col) / hc_mean, 1.0, len(away_c)
-                    )
+                        weighted_mean(away_c, hc_col) / hc_mean, 1.0, len(away_c))
                 else:
                     corner_stats["away_attack"][team] = corner_stats["away_defence"][team] = 1.0
             stats["corners"] = corner_stats
+    if "corners" not in stats:
+        stats["corners"] = {
+            "league_avg_home": 5.2, "league_avg_away": 4.8,
+            "home_attack": {t: 1.0 for t in teams},
+            "away_attack": {t: 1.0 for t in teams},
+            "home_defence": {t: 1.0 for t in teams},
+            "away_defence": {t: 1.0 for t in teams},
+        }
 
     # --- SHOTS ---
     if hs_col and as_col and hs_col in df.columns and as_col in df.columns:
@@ -328,20 +330,16 @@ def compute_team_stats(
                 away_s = clean_s[clean_s[away_col] == team]
                 if len(home_s) >= min_matches:
                     shot_stats["home_attack"][team] = bayesian_smoothing(
-                        weighted_mean(home_s, hs_col) / hs_mean, 1.0, len(home_s)
-                    )
+                        weighted_mean(home_s, hs_col) / hs_mean, 1.0, len(home_s))
                     shot_stats["home_defence"][team] = bayesian_smoothing(
-                        weighted_mean(home_s, as_col) / as_mean, 1.0, len(home_s)
-                    )
+                        weighted_mean(home_s, as_col) / as_mean, 1.0, len(home_s))
                 else:
                     shot_stats["home_attack"][team] = shot_stats["home_defence"][team] = 1.0
                 if len(away_s) >= min_matches:
                     shot_stats["away_attack"][team] = bayesian_smoothing(
-                        weighted_mean(away_s, as_col) / as_mean, 1.0, len(away_s)
-                    )
+                        weighted_mean(away_s, as_col) / as_mean, 1.0, len(away_s))
                     shot_stats["away_defence"][team] = bayesian_smoothing(
-                        weighted_mean(away_s, hs_col) / hs_mean, 1.0, len(away_s)
-                    )
+                        weighted_mean(away_s, hs_col) / hs_mean, 1.0, len(away_s))
                 else:
                     shot_stats["away_attack"][team] = shot_stats["away_defence"][team] = 1.0
             stats["shots"] = shot_stats
@@ -435,25 +433,18 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         att_ax = x["away_attack"].get(away, 1.0); def_hx = x["home_defence"].get(home, 1.0)
         xg_h = att_hx * def_ax * x["league_avg_home"]
         xg_a = att_ax * def_hx * x["league_avg_away"]
-        predictions["xg"]["home"] = round(xg_h, 2)
-        predictions["xg"]["away"] = round(xg_a, 2)
+        predictions["xg"]["home"] = max(round(xg_h, 2), 0.1)
+        predictions["xg"]["away"] = max(round(xg_a, 2), 0.1)
 
     # --- CORNERS ---
     c = stats.get("corners")
     if c:
-        lhc = c["league_avg_home"]; lac = c["league_avg_away"]
-        att_hc = c["home_attack"].get(home, 1.0); def_ac = c["away_defence"].get(away, 1.0)
-        att_ac = c["away_attack"].get(away, 1.0); def_hc = c["home_defence"].get(home, 1.0)
-        mu_hc = att_hc * def_ac * lhc
-        mu_ac = att_ac * def_hc * lac
-        if c.get("use_negbinom"):
-            hc_probs = nbinom.pmf(np.arange(max_c + 1), mu_hc, mu_hc / (mu_hc + 1))  # fallback
-            ac_probs = nbinom.pmf(np.arange(max_c + 1), mu_ac, mu_ac / (mu_ac + 1))
-        else:
-            hc_probs = poisson.pmf(np.arange(max_c + 1), mu_hc)
-            ac_probs = poisson.pmf(np.arange(max_c + 1), mu_ac)
-        predictions["corners"]["home"] = int(np.argmax(hc_probs))
-        predictions["corners"]["away"] = int(np.argmax(ac_probs))
+        mu_hc = c["home_attack"].get(home, 1.0) * c["away_defence"].get(away, 1.0) * c["league_avg_home"]
+        mu_ac = c["away_attack"].get(away, 1.0) * c["home_defence"].get(home, 1.0) * c["league_avg_away"]
+        hc_peak = int(poisson(mu_hc).pmf(np.arange(20)).argmax())
+        ac_peak = int(poisson(mu_ac).pmf(np.arange(20)).argmax())
+        predictions["corners"]["home"] = max(hc_peak, 1)
+        predictions["corners"]["away"] = max(ac_peak, 1)
         predictions["corners"]["total"] = predictions["corners"]["home"] + predictions["corners"]["away"]
 
     # --- SHOTS ---
@@ -474,32 +465,99 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
     return {"predictions": predictions}
 
 # ================================
-# PDF EXPORT
+# HTML EXPORT – EMBED LOGOS
 # ================================
-def generate_pdf_html(home, away, pred, logos):
+def generate_full_html(home: str, away: str, pred: dict, logos: dict):
     p = pred["predictions"]
-    injury = f'<div class="injury">{p.get("injury_summary","")}</div>' if p.get("injury_summary") else ""
-    html = f"""
-    <html><head><style>{print_css}</style></head><body>
-    <div class="print-title">Prediction: {home} vs {away}</div>
-    <div style="display:flex; justify-content:space-around;">
-        <div class="team-box"><img src="{logos.get(home,'')}" class="logo" onerror="this.style.display='none'"/><br><strong>{home}</strong></div>
-        <div style="font-size:36px; align-self:center;">VS</div>
-        <div class="team-box"><img src="{logos.get(away,'')}" class="logo" onerror="this.style.display='none'"/><br><strong>{away}</strong></div>
-    </div>
-    <div class="prediction">
-        <div class="score">Score: <strong>{p['goals']['score']}</strong></div>
-        <div>Home Win: {p['goals']['home_win']:.1%} | Draw: {p['goals']['draw']:.1%} | Away Win: {p['goals']['away_win']:.1%}</div>
-        <div>BTTS: {p['goals']['btts_yes']:.1%} | Over 2.5: {p['goals']['over_25']:.1%}</div>
-        <div><strong>xG:</strong> {home} {p['xg']['home']} | {away} {p['xg']['away']}</div>
-        <div><strong>Corners:</strong> {home} {p['corners']['home']} | {away} {p['corners']['away']} (Total: {p['corners']['total']})</div>
-        <div><strong>Shots on Target:</strong> {home} {p['shots']['home']} | {away} {p['shots']['away']}</div>
-        {injury}
-    </div>
-    <div style="margin-top:30px; font-size:12px; color:#555;">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
-    </body></html>
+
+    def embed_logo(url: str) -> str:
+        if not url:
+            return ""
+        try:
+            img = load_image(url)
+            if img is None:
+                return ""
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            b64 = base64.b64encode(buffered.getvalue()).decode()
+            return f"data:image/png;base64,{b64}"
+        except:
+            return ""
+
+    home_logo_b64 = embed_logo(logos.get(home))
+    away_logo_b64 = embed_logo(logos.get(away))
+
+    html_body = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>{home} vs {away} – Prediction</title>
+        <style>
+            body {{font-family: Arial, sans-serif; margin: 2cm; background:#fafafa;}}
+            .header {{text-align:center; margin-bottom:20px;}}
+            .teams {{display:flex; justify-content:space-around; align-items:center;}}
+            .team {{text-align:center;}}
+            .logo {{width:80px; height:80px; object-fit:contain;}}
+            .score {{font-size:36px; font-weight:bold; text-align:center; margin:20px 0;}}
+            .metrics {{display:grid; grid-template-columns: repeat(3,1fr); gap:10px; margin:15px 0;}}
+            .metric {{background:#fff; padding:10px; border-radius:8px; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.1);}}
+            .stats {{display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;}}
+            .stat-box {{background:#fff; padding:12px; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1);}}
+            .injury {{color:#d00; font-weight:bold; margin-top:10px;}}
+            .footer {{margin-top:40px; font-size:0.8em; color:#555; text-align:center;}}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>{home} vs {away}</h1>
+            <small>Generated {datetime.now():%Y-%m-%d %H:%M}</small>
+        </div>
+
+        <div class="teams">
+            <div class="team">
+                {f'<img src="{home_logo_b64}" class="logo"/>' if home_logo_b64 else ''}
+                <br><strong>{home}</strong>
+            </div>
+            <div style="font-size:48px;">VS</div>
+            <div class="team">
+                {f'<img src="{away_logo_b64}" class="logo"/>' if away_logo_b64 else ''}
+                <br><strong>{away}</strong>
+            </div>
+        </div>
+
+        <div class="score">{p['goals']['score']}</div>
+
+        <div class="metrics">
+            <div class="metric">Home Win<br><strong>{p['goals']['home_win']:.1%}</strong></div>
+            <div class="metric">Draw<br><strong>{p['goals']['draw']:.1%}</strong></div>
+            <div class="metric">Away Win<br><strong>{p['goals']['away_win']:.1%}</strong></div>
+            <div class="metric">BTTS<br><strong>{p['goals']['btts_yes']:.1%}</strong></div>
+            <div class="metric">Over 2.5<br><strong>{p['goals']['over_25']:.1%}</strong></div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-box">
+                <strong>xG</strong><br>
+                {home}: <strong>{p['xg']['home']}</strong> | {away}: <strong>{p['xg']['away']}</strong>
+            </div>
+            <div class="stat-box">
+                <strong>Corners</strong><br>
+                {home}: <strong>{p['corners']['home']}</strong> | {away}: <strong>{p['corners']['away']}</strong>
+                (Total: {p['corners']['total']})
+            </div>
+            <div class="stat-box">
+                <strong>Shots on Target</strong><br>
+                {home}: <strong>{p['shots']['home']}</strong> | {away}: <strong>{p['shots']['away']}</strong>
+            </div>
+        </div>
+
+        {f'<div class="injury">{p.get("injury_summary","")}</div>' if p.get("injury_summary") else ""}
+        <div class="footer">Football Predictor Pro – © {datetime.now().year}</div>
+    </body>
+    </html>
     """
-    return html
+    return html_body
 
 # ================================
 # MAIN APP
@@ -561,31 +619,28 @@ if uploaded_file is not None:
                                  col_map["FTHG"], col_map["FTAG"], injuries)
             p = pred["predictions"]
 
+            logos = {home_team: get_team_logo(home_team), away_team: get_team_logo(away_team)}
+
             st.markdown(f"### **{home_team} vs {away_team}**")
             colA, colB, colC = st.columns([1,2,1])
             with colA:
-                logo = get_team_logo(home_team)
-                if logo: st.image(load_image(logo), width=80)
+                if logos[home_team]: st.image(load_image(logos[home_team]), width=80)
                 st.write(f"**{home_team}**")
             with colC:
-                logo = get_team_logo(away_team)
-                if logo: st.image(load_image(logo), width=80)
+                if logos[away_team]: st.image(load_image(logos[away_team]), width=80)
                 st.write(f"**{away_team}**")
             with colB:
                 st.markdown(f"<h2 style='text-align:center'>{p['goals']['score']}</h2>", unsafe_allow_html=True)
 
-            # Win/Draw
             colW1, colW2, colW3 = st.columns(3)
             colW1.metric("Home Win", f"{p['goals']['home_win']:.1%}")
             colW2.metric("Draw", f"{p['goals']['draw']:.1%}")
             colW3.metric("Away Win", f"{p['goals']['away_win']:.1%}")
 
-            # BTTS & Over 2.5
             colB1, colB2 = st.columns(2)
             colB1.metric("BTTS", f"{p['goals']['btts_yes']:.1%}")
             colB2.metric("Over 2.5", f"{p['goals']['over_25']:.1%}")
 
-            # xG, Corners, Shots
             st.markdown("#### Expected Stats")
             colX1, colX2 = st.columns(2)
             with colX1:
@@ -594,22 +649,31 @@ if uploaded_file is not None:
             with colX2:
                 st.write(f"**Shots on Target** – {home_team}: **{p['shots']['home']}** | {away_team}: **{p['shots']['away']}**")
 
-            # Goal Timing
             if p["goal_timing"]["intervals"]:
                 fig = px.bar(x=p["goal_timing"]["intervals"], y=p["goal_timing"]["prob"],
-                             labels={"x": "Interval", "y": "Probability"}, title="Goal Timing Distribution")
+                             labels={"x": "Interval", "y": "Probability"}, title="Goal Timing")
                 st.plotly_chart(fig, use_container_width=True)
 
-            # Injuries
             if p["injury_summary"]:
                 st.markdown(f"**Injury Adjustments:** <span style='color:red'>{p['injury_summary']}</span>", unsafe_allow_html=True)
 
-            # PDF Export
-            logos = {home_team: get_team_logo(home_team), away_team: get_team_logo(away_team)}
-            pdf_html = generate_pdf_html(home_team, away_team, pred, logos)
-            st.markdown("### Export PDF")
-            st.markdown(f"<button onclick='window.print()'>Download PDF</button>", unsafe_allow_html=True)
-            st.markdown("<small>Click → Print → Save as PDF</small>", unsafe_allow_html=True)
+            # Export Buttons
+            st.markdown("### Export")
+            col_pdf, col_html = st.columns(2)
+            with col_pdf:
+                st.markdown(
+                    "<button onclick='window.print()' style='padding:8px 16px;'>Download PDF</button>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Print → Save as PDF")
+            with col_html:
+                html_content = generate_full_html(home_team, away_team, pred, logos)
+                st.download_button(
+                    label="Download HTML",
+                    data=html_content,
+                    file_name=f"{home_team}_vs_{away_team}_prediction.html",
+                    mime="text/html",
+                )
 
 else:
     st.info("Upload a CSV to start.")
