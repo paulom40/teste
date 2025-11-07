@@ -17,7 +17,7 @@ import tempfile
 from datetime import datetime, timedelta
 import time
 
-# --- PDF EXPORT (WeasyPrint fallback) ---
+# --- PDF EXPORT ---
 try:
     from weasyprint import HTML
     WEASYPRINT_AVAILABLE = True
@@ -44,6 +44,7 @@ st.markdown("""
 - Bayesian Smoothing  
 - **Goal Timing (1–15, 16–30, ...)**  
 - **Live Match Prediction**  
+- **NEW: Player Injury Impact** — Adjusts predictions for absences  
 **Predicts:** Full‑Time Score | BTTS | Over 2.5 | 1X2 | Corners | xG | Shots | Goal Timing  
 **Export to PDF with one click**
 """)
@@ -91,6 +92,7 @@ print_css = """
     .score { font-size: 20px; font-weight: bold; }
     .prob { font-size: 14px; color: #555; }
     .stPlotlyChart { display: none; }
+    .injury { color: #d00; font-weight: bold; }
 }
 </style>
 """
@@ -131,6 +133,47 @@ def negative_binomial_params(mean: float, variance: float) -> Tuple[float, float
     p = mean / variance
     n = mean * p / (1 - p)
     return n, p
+
+def parse_injuries(injury_str: str) -> Dict[str, Dict[str, float]]:
+    """Parse injury input: 'Team: Player1 (role:forward, impact:15%), Player2...'"""
+    injuries = {}
+    if not injury_str.strip(): return injuries
+    for line in injury_str.split('\n'):
+        match = re.match(r'(\w+):\s*(\w+)\s*\(role:(\w+),\s*impact:(\d+)%\)', line.strip())
+        if match:
+            team, player, role, impact = match.groups()
+            impact = float(impact) / 100
+            if team not in injuries: injuries[team] = {}
+            injuries[team][player] = {"role": role, "impact": impact}
+    return injuries
+
+def apply_injury_adjustment(stats: Dict[str, Any], injuries: Dict[str, Dict[str, float]]) -> Tuple[Dict[str, Any], str]:
+    """Apply injury impact: reduce attack/defence by sum of impacts for roles"""
+    adjusted = stats.copy()
+    summary = ""
+    for section in ["goals", "xg", "corners", "shots"]:
+        if section in adjusted:
+            s = adjusted[section]
+            for team, players in injuries.items():
+                attack_reduction = 0
+                defence_reduction = 0
+                for p, data in players.items():
+                    if data["role"] in ["forward", "midfielder"]:  # Attack roles
+                        attack_reduction += data["impact"]
+                    elif data["role"] in ["defender"]:  # Defence roles
+                        defence_reduction += data["impact"]
+                # Cap at 20% max reduction
+                attack_reduction = min(attack_reduction, 0.20)
+                defence_reduction = min(defence_reduction, 0.20)
+                if attack_reduction > 0:
+                    s["home_attack"][team] *= (1 - attack_reduction)
+                    s["away_attack"][team] *= (1 - attack_reduction)
+                    summary += f"{team} Attack -{attack_reduction*100:.0f}% (injuries) | "
+                if defence_reduction > 0:
+                    s["home_defence"][team] *= (1 - defence_reduction)
+                    s["away_defence"][team] *= (1 - defence_reduction)
+                    summary += f"{team} Defence -{defence_reduction*100:.0f}% (injuries) | "
+    return adjusted, summary.strip(" | ")
 
 # ================================
 # DATA LOADER
@@ -267,7 +310,7 @@ def compute_team_stats(
         "home_defence": home_defence_raw, "away_defence": away_defence_raw,
         "sample_sizes": team_sample_sizes
     }
-    # xG, corners, shots, goal timing (same as before)
+    # xG VALIDATION
     if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
         xg_mask = df[hxg_col].notna() & df[axg_col].notna() & ft_mask
         if xg_mask.sum() >= 5:
@@ -285,6 +328,7 @@ def compute_team_stats(
                     "sample_size": len(home_xg) + len(away_xg)
                 }
             stats["xg_validation"] = xg_performance
+    # GOAL TIMING
     intervals = ["1–15", "16–30", "31–45", "46–60", "61–75", "76–90"]
     interval_bins = [(1,15), (16,30), (31,45), (46,60), (61,75), (76,90)]
     goals_per_interval = {i: 0 for i in intervals}
@@ -318,6 +362,7 @@ def compute_team_stats(
             "prob": probs,
             "most_likely": intervals[np.argmax(probs)]
         }
+    # CORNERS
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
         c_mask = df[hc_col].notna() & df[ac_col].notna()
         clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]].copy()
@@ -356,6 +401,7 @@ def compute_team_stats(
                     else:
                         corner_stats["away_attack"][team] = corner_stats["away_defence"][team] = 1.0
                 stats["corners"] = corner_stats
+    # xG
     if hxg_col and axg_col and hxg_col in df.columns and axg_col in df.columns:
         xg_mask = df[hxg_col].notna() & df[axg_col].notna()
         clean_xg = df[xg_mask][[home_col, away_col, hxg_col, axg_col]].copy()
@@ -390,6 +436,7 @@ def compute_team_stats(
                     else:
                         xg_stats["away_attack"][team] = xg_stats["away_defence"][team] = 1.0
                 stats["xg"] = xg_stats
+    # SHOTS
     if hs_col and as_col and hs_col in df.columns and as_col in df.columns:
         s_mask = df[hs_col].notna() & df[as_col].notna()
         clean_s = df[s_mask][[home_col, away_col, hs_col, as_col]].copy()
@@ -432,7 +479,12 @@ def compute_team_stats(
 @st.cache_data(show_spinner=False)
 def predict_match(home: str, away: str, stats: Dict[str, Any],
                   _df: pd.DataFrame = None, home_col: str = None,
-                  away_col: str = None, hg_col: str = None, ag_col: str = None) -> Dict[str, Any]:
+                  away_col: str = None, hg_col: str = None, ag_col: str = None,
+                  injuries: Dict[str, Dict[str, float]] = None) -> Dict[str, Any]:
+    if injuries:
+        stats, injury_summary = apply_injury_adjustment(stats, injuries)
+    else:
+        injury_summary = ""
     max_g = 10; max_c = 15; max_s = 20
     predictions = {
         "goals": {"score": "N/A", "result": "N/A", "home_win": 0, "draw": 0, "away_win": 0,
@@ -442,7 +494,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         "shots": {"home": 0, "away": 0},
         "xg": {"home": 0, "away": 0},
         "goal_timing": {"intervals": [], "prob": []},
-        "form": {"home": {}, "away": {}}
+        "form": {"home": {}, "away": {}},
+        "injury_summary": injury_summary
     }
     chart_data = {}
     g = stats.get("goals", {})
@@ -464,7 +517,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
                 rho = max(min(rho, 0.3), -0.3)
         prob_matrix = np.zeros((max_g + 1, max_g + 1))
         for h in range(max_g + 1):
-            for a in range(max_g + :max_g + 1):
+            for a in range(max_g + 1):
                 p = poisson.pmf(h, lambda_h) * poisson.pmf(a, lambda_a)
                 if h <= 1 and a <= 1:
                     tau = 1.0
@@ -495,6 +548,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         predictions["goals"]["over_under_result"] = "Over" if over_25 > 0.5 else "Under"
         chart_data["goal_matrix"] = prob_matrix
         predictions["expected_goals"] = {"home": lambda_h, "away": lambda_a}
+    # CORNERS (similar, with injury-adjusted stats)
     c = stats.get("corners")
     if c and c.get("use_negbinom"):
         lhc = c["league_avg_home"]; lac = c["league_avg_away"]
@@ -518,6 +572,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         predictions["corners"]["most_likely"] = f"{predictions['corners']['home']}–{predictions['corners']['away']}"
         chart_data["corner_home"] = hc_probs
         chart_data["corner_away"] = ac_probs
+    # SHOTS
     s = stats.get("shots")
     if s:
         att_hs = s["home_attack"].get(home, 1.0); def_hs = s["home_defence"].get(home, 1.0)
@@ -526,6 +581,7 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         mu_as = att_as * def_hs * s["league_avg_away"]
         predictions["shots"]["home"] = round(mu_hs, 1)
         predictions["shots"]["away"] = round(mu_as, 1)
+    # xG
     x = stats.get("xg")
     if x:
         att_hx = x["home_attack"].get(home, 1.0); def_hx = x["home_defence"].get(home, 1.0)
@@ -534,10 +590,12 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         xg_a = att_ax * def_hx * x["league_avg_away"]
         predictions["xg"]["home"] = round(xg_h, 2)
         predictions["xg"]["away"] = round(xg_a, 2)
+    # GOAL TIMING
     gt = stats.get("goal_timing")
     if gt:
         predictions["goal_timing"]["intervals"] = gt["intervals"]
         predictions["goal_timing"]["prob"] = gt["prob"]
+    # FORM
     if _df is not None and home_col and away_col and hg_col and ag_col:
         predictions["form"]["home"] = calculate_form(_df, home, home_col, away_col, hg_col, ag_col)
         predictions["form"]["away"] = calculate_form(_df, away, home_col, away_col, hg_col, ag_col)
@@ -545,7 +603,8 @@ def predict_match(home: str, away: str, stats: Dict[str, Any],
         "predictions": predictions,
         "chart_data": chart_data,
         "lambda_home": predictions.get("expected_goals", {}).get("home", 0),
-        "lambda_away": predictions.get("expected_goals", {}).get("away", 0)
+        "lambda_away": predictions.get("expected_goals", {}).get("away", 0),
+        "injury_summary": injury_summary
     }
 
 # ================================
@@ -557,6 +616,7 @@ def generate_pdf_html(home, away, pred, logos, subtitle: str = None):
     title = f"Match Prediction: {home} vs {away}"
     if subtitle:
         title = f"{title}<br><small style='font-weight:normal;'>{subtitle}</small>"
+    injury_html = f'<div class="injury">{pred.get("injury_summary", "")}</div>' if pred.get("injury_summary") else ""
     html = f"""
     <html><head><style>{print_css}</style></head><body>
     <div class="print-title">{title}</div>
@@ -576,6 +636,7 @@ def generate_pdf_html(home, away, pred, logos, subtitle: str = None):
         <div class="prob">Home Win: {pred['goals']['home_win']:.1%} | Draw: {pred['goals']['draw']:.1%} | Away Win: {pred['goals']['away_win']:.1%}</div>
         <div class="prob">BTTS {pred['goals']['btts_result']}: {pred['goals']['btts_yes']:.1%}</div>
         <div class="prob">Over 2.5 {pred['goals']['over_under_result']}: {pred['goals']['over_25']:.1%}</div>
+        {injury_html}
     </div>
     <div class="prediction" style="margin-top:20px;">
         <div><strong>Expected Goals</strong>: {home} {pred.get('xg',{}).get('home','—')} | {away} {pred.get('xg',{}).get('away','—')}</div>
@@ -656,10 +717,20 @@ if uploaded_file and teams:
     with col2:
         away_team = st.selectbox("Away Team", options=teams)
 
+    # NEW: Injury Input
+    st.sidebar.subheader("Player Injuries")
+    injury_input = st.sidebar.text_area(
+        "Format: Team: Player (role:forward/defender/midfielder, impact:10%)",
+        placeholder="Arsenal: Saka (role:forward, impact:15%)\nChelsea: James (role:defender, impact:12%)",
+        help="Impact: 5-20% reduction in attack/defence based on role. Evidence: Injuries reduce performance 10-15% on avg."
+    )
+    injuries = parse_injuries(injury_input)
+
     if st.button("Predict Match"):
         pred = predict_match(home_team, away_team, team_stats, _df=df_clean,
                              home_col=col_map["HomeTeam"], away_col=col_map["AwayTeam"],
-                             hg_col=col_map["FTHG"], ag_col=col_map["FTAG"])
+                             hg_col=col_map["FTHG"], ag_col=col_map["FTAG"],
+                             injuries=injuries)
         p = pred["predictions"]
         st.markdown(f"### **{home_team} vs {away_team}**")
         colA, colB, colC = st.columns([1,2,1])
@@ -692,6 +763,10 @@ if uploaded_file and teams:
             fig = px.bar(x=p["goal_timing"]["intervals"], y=p["goal_timing"]["prob"],
                          labels={"x":"Interval","y":"Probability"}, title="Goal Timing")
             st.plotly_chart(fig, use_container_width=True)
+        # NEW: Display Injury Summary
+        if p["injury_summary"]:
+            st.markdown(f"#### **Injury Adjustments**")
+            st.markdown(f"<span class='injury'>{p['injury_summary']}</span>", unsafe_allow_html=True)
 
         # HTML BUTTON FOR PDF
         logos = {home_team: get_team_logo(home_team), away_team: get_team_logo(away_team)}
@@ -708,7 +783,7 @@ if uploaded_file and teams:
         st.markdown("<small>Click button → Print → Save as PDF</small>", unsafe_allow_html=True)
 
 # ================================
-# LIVE MATCH PREDICTION (same as before)
+# LIVE MATCH PREDICTION
 # ================================
 if uploaded_file and team_stats:
     st.markdown("---")
@@ -722,17 +797,27 @@ if uploaded_file and team_stats:
         col_score1, col_score2 = st.columns(2)
         with col_score1: live_home_score = st.number_input("Home Score", 0, 15, 0, step=1)
         with col_score2: live_away_score = st.number_input("Away Score", 0, 15, 0, step=1)
+    # NEW: Live Injury Input (same format)
+    st.sidebar.subheader("Live Injuries")
+    live_injury_input = st.sidebar.text_area(
+        "Same format as above",
+        placeholder="ManCity: Haaland (role:forward, impact:18%)",
+        key="live_injuries"
+    )
+    live_injuries = parse_injuries(live_injury_input)
     if st.button("Update Live Prediction"):
+        # Apply injuries to stats for live calc
+        adjusted_stats, live_injury_summary = apply_injury_adjustment(team_stats, live_injuries)
         remaining = max((90 - live_minute) / 90.0, 0.0)
         if remaining == 0: remaining = 1e-9
-        g = team_stats["goals"]
+        g = adjusted_stats["goals"]
         lambda_full_h = g["home_attack"].get(live_home, 1.0) * g["away_defence"].get(live_away, 1.0) * g["league_avg_home"]
         lambda_full_a = g["away_attack"].get(live_away, 1.0) * g["home_defence"].get(live_home, 1.0) * g["league_avg_away"]
         lambda_rem_h = lambda_full_h * remaining; lambda_rem_a = lambda_full_a * remaining
         max_g_rem = 8
         prob_rem = np.zeros((max_g_rem + 1, max_g_rem + 1))
         rho = 0.0
-        if hg_col and ag_col and df_clean is not None:
+        if "FTHG" in col_map and "FTAG" in col_map and df_clean is not None:
             ft = df_clean[[col_map["FTHG"], col_map["FTAG"]]].dropna()
             if len(ft) > 0:
                 p00 = (ft[col_map["FTHG"]] == 0).mean() * (ft[col_map["FTAG"]] == 0).mean()
@@ -802,12 +887,17 @@ if uploaded_file and team_stats:
             timing_probs = [p/total for p in timing_probs]
             fig_timing = px.bar(x=gt["intervals"], y=timing_probs, title="Next Goal Timing")
             st.plotly_chart(fig_timing, use_container_width=True)
+        # NEW: Live Injury Summary
+        if live_injury_summary:
+            st.markdown(f"#### **Live Injury Adjustments**")
+            st.markdown(f"<span class='injury'>{live_injury_summary}</span>", unsafe_allow_html=True)
         live_pred = {
             "goals": {"score": most_likely_score, "home_win": home_win_live, "draw": draw_live, "away_win": away_win_live,
                       "btts_yes": btts_yes_live, "btts_result": "Yes" if btts_yes_live > 0.5 else "No",
                       "over_25": over25_live, "over_under_result": "Over" if over25_live > 0.5 else "Under"},
             "xg": {"home": round(lambda_full_h, 2), "away": round(lambda_full_a, 2)},
-            "current": f"{live_home_score}–{live_away_score}", "minute": live_minute
+            "current": f"{live_home_score}–{live_away_score}", "minute": live_minute,
+            "injury_summary": live_injury_summary
         }
         live_html = generate_pdf_html(f"{live_home} {live_home_score}–{live_away_score} {live_away}",
                                       f"Minute {live_minute}", live_pred,
