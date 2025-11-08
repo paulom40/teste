@@ -4,13 +4,14 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+import time  # For real-time simulation
 
 # -------------------------------------------------
 # App configuration
 # -------------------------------------------------
 st.set_page_config(page_title="Multi-Tipster + Bankroll Tracker", layout="wide")
 st.title("Multi-Tipster Soccer Dashboard + Bankroll Tracker")
-st.markdown("**Track Free Tipsters + Manage Your Betting Bankroll | 100% Free | Updated Daily**")
+st.markdown("**Track Free Tipsters + Manage Your Betting Bankroll | 100% Free | Real-Time Updates**")
 st.markdown("---")
 
 # -------------------------------------------------
@@ -40,6 +41,9 @@ if st.sidebar.button("Reset Bankroll"):
         'Date', 'Tipster', 'Match', 'Selection', 'Odds', 'Stake', 'Result', 'P/L'
     ])
     st.success(f"Bankroll reset to £{start_balance:.2f}")
+
+# Real-time toggle
+enable_realtime = st.sidebar.checkbox("Enable Real-Time Updates (Simulated)", value=True)
 
 # -------------------------------------------------
 # FULL TIPSTER DATA (ALL ARRAYS SAME LENGTH)
@@ -306,7 +310,7 @@ else:
         st.info("No bets yet.")
 
     # -------------------------------------------------
-    # Mega Acca
+    # MEGA ACCA
     # -------------------------------------------------
     st.header("Mega Acca (All Tipsters)")
     all_future = pd.DataFrame()
@@ -331,8 +335,36 @@ else:
             st.table(mega_df[['Tipster', 'Match', 'Selection', 'Odds']])
 
 # -------------------------------------------------
+# REAL-TIME BET UPDATES (Simulated)
+# -------------------------------------------------
+if enable_realtime:
+    st.header("Real-Time Bet Updates")
+    st.markdown("**Simulated live updates for demo (in production, integrate API like Sportradar or FlashScore).**")
+    
+    # Simulate real-time updates with st.rerun
+    if st.button("Simulate Live Update"):
+        # Randomly "resolve" a pending bet
+        for t in selected_tipsters:
+            df = pd.DataFrame(tipsters_data[t]["tips"])
+            pending_idx = df[df['Outcome'] == 'Pending'].index
+            if not pending_idx.empty:
+                update_idx = np.random.choice(pending_idx)
+                df.loc[update_idx, 'Outcome'] = np.random.choice(['Win', 'Loss'])
+                tipsters_data[t]["tips"] = df.to_dict('list')  # Update in place
+                st.rerun()
+    
+    # Live feed placeholder
+    st.subheader("Live Bet Feed")
+    with st.empty():
+        for _ in range(3):  # Simulate 3 updates
+            time.sleep(1)
+            st.write(f"🔄 Updating {datetime.now().strftime('%H:%M:%S')} - New tip from NorthSea: BTTS Yes on Union Berlin vs Bayern @ 2.10")
+    
+    st.info("For true real-time: Use WebSockets or polling from soccer APIs. Refresh page to see changes.")
+
+# -------------------------------------------------
 # Footer
 # -------------------------------------------------
 st.markdown("---")
-st.caption("Data from ProTipster.com | All arrays equal length | Gamble responsibly. 18+")
+st.caption("Data from ProTipster.com | Real-time simulated | Gamble responsibly. 18+")
 st.markdown("[**ProTipster Free Tips**](https://www.protipster.com/betting-tips/football)")
