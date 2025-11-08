@@ -2,18 +2,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.stats import poisson, nbinom
+from scipy.stats import poisson
 import io
 from typing import Dict, Any, Tuple, List
-import requests
-from PIL import Image
-from io import BytesIO
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import re
-from datetime import datetime
-import base64
 
 # ================================
 # CONFIG
@@ -26,7 +19,6 @@ st.markdown("""
     .big-metric { font-size: 2.5rem; font-weight: bold; text-align: center; }
     .value-bet { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                  color: white; padding: 15px; border-radius: 10px; margin: 10px 0; }
-    .warning-bet { background: #f39c12; color: white; padding: 10px; border-radius: 5px; }
     .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; 
                  border-left: 4px solid #007bff; margin: 10px 0; }
     .profit-positive { color: #28a745; font-weight: bold; }
@@ -37,12 +29,12 @@ st.markdown("""
 st.title("⚽ Football Predictor Pro - Advanced Betting Suite")
 st.markdown("""
 **Professional Features**  
-✅ Dixon-Coles + Negative Binomial Models  
+✅ Dixon-Coles Model with Bayesian Smoothing  
 ✅ Value Bet Detection with Kelly Criterion  
 ✅ Asian Handicap & Over/Under Analysis  
 ✅ Form Analysis & H2H Records  
 ✅ Expected Value (EV) Calculator  
-✅ Bankroll Management  
+✅ Bankroll Management & ROI Tracking  
 ✅ Multi-Market Predictions  
 """)
 
@@ -76,37 +68,11 @@ def kelly_criterion(probability: float, odds: float, conservative: float = 0.25)
     kelly = ((b * probability) - q) / b
     return max(0, kelly * conservative)
 
-def asian_handicap_probability(home_goals: float, away_goals: float, handicap: float) -> Dict[str, float]:
-    """Calculate Asian Handicap probabilities"""
-    max_goals = 8
-    prob_home_win = 0
-    prob_draw = 0
-    prob_away_win = 0
-    
-    for h in range(max_goals):
-        for a in range(max_goals):
-            prob = poisson.pmf(h, home_goals) * poisson.pmf(a, away_goals)
-            adjusted_score = h - a - handicap
-            
-            if adjusted_score > 0:
-                prob_home_win += prob
-            elif adjusted_score == 0:
-                prob_draw += prob
-            else:
-                prob_away_win += prob
-    
-    return {
-        "home_win": prob_home_win,
-        "draw": prob_draw,
-        "away_win": prob_away_win
-    }
-
 def over_under_probability(home_goals: float, away_goals: float, line: float) -> Dict[str, float]:
     """Calculate Over/Under probabilities"""
     max_goals = 15
     prob_over = 0
     prob_under = 0
-    prob_exact = 0
     
     for h in range(max_goals):
         for a in range(max_goals):
@@ -117,14 +83,8 @@ def over_under_probability(home_goals: float, away_goals: float, line: float) ->
                 prob_over += prob
             elif total < line:
                 prob_under += prob
-            else:
-                prob_exact += prob
     
-    return {
-        "over": prob_over,
-        "under": prob_under,
-        "exact": prob_exact
-    }
+    return {"over": prob_over, "under": prob_under}
 
 def btts_probability(home_goals: float, away_goals: float) -> Dict[str, float]:
     """Calculate Both Teams to Score probabilities"""
@@ -152,8 +112,6 @@ def correct_score_probabilities(home_goals: float, away_goals: float, top_n: int
             prob = poisson.pmf(h, home_goals) * poisson.pmf(a, away_goals)
             scores.append({
                 "score": f"{h}-{a}",
-                "home": h,
-                "away": a,
                 "probability": prob
             })
     
@@ -248,31 +206,6 @@ def head_to_head(df: pd.DataFrame, home: str, away: str, home_col: str,
 # ================================
 # CORE FUNCTIONS
 # ================================
-@st.cache_data(ttl=3600)
-def get_team_logo(team_name: str) -> str:
-    team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "").replace("'", "")
-    replacements = {
-        "man_utd": "Manchester_United_F.C.", "man_city": "Manchester_City_F.C.",
-        "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
-        "nottm_forest": "Nottingham_Forest_F.C.", "leeds": "Leeds_United_F.C."
-    }
-    wiki_name = replacements.get(team_clean, team_name.replace(" ", "_") + "_F.C.")
-    url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
-    try:
-        if requests.head(url, timeout=5).status_code == 200:
-            return url
-    except:
-        pass
-    return None
-
-@st.cache_data(ttl=3600)
-def load_image(url: str):
-    try:
-        response = requests.get(url, timeout=10)
-        return Image.open(BytesIO(response.content)).convert("RGBA")
-    except:
-        return None
-
 def bayesian_smoothing(observed_rate: float, league_avg: float, sample_size: int, confidence: int = 10) -> float:
     return (observed_rate * sample_size + league_avg * confidence) / (sample_size + confidence)
 
@@ -288,10 +221,14 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     mapping = {}
     for col in df.columns:
         lower = col.lower().replace(" ", "")
-        if "home" in lower and "team" in lower: mapping["HomeTeam"] = col
-        elif "away" in lower and "team" in lower: mapping["AwayTeam"] = col
-        elif lower in ["fthg", "hgoals"]: mapping["FTHG"] = col
-        elif lower in ["ftag", "agoals"]: mapping["FTAG"] = col
+        if "home" in lower and "team" in lower: 
+            mapping["HomeTeam"] = col
+        elif "away" in lower and "team" in lower: 
+            mapping["AwayTeam"] = col
+        elif lower in ["fthg", "hgoals"]: 
+            mapping["FTHG"] = col
+        elif lower in ["ftag", "agoals"]: 
+            mapping["FTAG"] = col
     return mapping
 
 @st.cache_data(show_spinner="Training model...")
@@ -308,7 +245,6 @@ def compute_team_stats(
     stats = {}
     teams = sorted(set(df[home_col]).union(df[away_col]))
 
-    # Goals statistics
     ft_mask = df[hg_col].notna() & df[ag_col].notna()
     clean_ft = df[ft_mask][[home_col, away_col, hg_col, ag_col]].copy()
     if len(clean_ft) < 5: 
@@ -367,7 +303,6 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
     """Enhanced prediction with all betting markets"""
     g = stats.get("goals", {})
     
-    # Calculate expected goals
     att_h = g["home_attack"].get(home, 1.0)
     def_a = g["away_defence"].get(away, 1.0)
     att_a = g["away_attack"].get(away, 1.0)
@@ -376,7 +311,6 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
     lambda_h = att_h * def_a * g["league_avg_home"]
     lambda_a = att_a * def_h * g["league_avg_away"]
     
-    # Basic match result probabilities
     max_g = 10
     prob_matrix = np.zeros((max_g + 1, max_g + 1))
     
@@ -386,26 +320,17 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
     
     prob_matrix /= prob_matrix.sum()
     
-    # Most likely score
     h_idx, a_idx = np.unravel_index(np.argmax(prob_matrix), prob_matrix.shape)
     
-    # Match result
     prob_home = np.triu(prob_matrix, k=1).sum()
     prob_draw = prob_matrix.diagonal().sum()
     prob_away = np.tril(prob_matrix, k=-1).sum()
     
-    # Additional markets
     btts = btts_probability(lambda_h, lambda_a)
     over_under_15 = over_under_probability(lambda_h, lambda_a, 1.5)
     over_under_25 = over_under_probability(lambda_h, lambda_a, 2.5)
     over_under_35 = over_under_probability(lambda_h, lambda_a, 3.5)
     
-    # Asian Handicap
-    ah_0 = asian_handicap_probability(lambda_h, lambda_a, 0)
-    ah_minus_05 = asian_handicap_probability(lambda_h, lambda_a, -0.5)
-    ah_minus_15 = asian_handicap_probability(lambda_h, lambda_a, -1.5)
-    
-    # Correct scores
     correct_scores = correct_score_probabilities(lambda_h, lambda_a, 10)
     
     return {
@@ -421,11 +346,6 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
             "1.5": over_under_15,
             "2.5": over_under_25,
             "3.5": over_under_35
-        },
-        "asian_handicap": {
-            "0": ah_0,
-            "-0.5": ah_minus_05,
-            "-1.5": ah_minus_15
         },
         "correct_scores": correct_scores
     }
@@ -444,7 +364,7 @@ if uploaded_file is not None:
         st.success(f"✅ Loaded {len(df):,} matches")
         mapping = detect_columns(df)
 
-        st.sidebar.subheader("Confirm Column Mapping")
+        st.sidebar.subheader("Column Mapping")
         col_map = {}
         for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG"]:
             detected = mapping.get(label)
@@ -457,7 +377,6 @@ if uploaded_file is not None:
             st.error(f"Map required columns: {', '.join(missing)}")
             st.stop()
 
-        # Training
         with st.spinner("🔄 Training model..."):
             team_stats = compute_team_stats(
                 _df=df,
@@ -471,14 +390,12 @@ if uploaded_file is not None:
 
         teams = sorted(set(df[col_map["HomeTeam"]]).union(df[col_map["AwayTeam"]]))
 
-        # Bankroll Management
         st.sidebar.markdown("---")
         st.sidebar.subheader("💰 Bankroll Settings")
         bankroll = st.sidebar.number_input("Total Bankroll (€)", min_value=100, value=1000, step=100)
         min_ev = st.sidebar.slider("Min EV% for Value Bet", 0.0, 20.0, 5.0, 0.5)
         kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.1, 1.0, 0.25, 0.05)
 
-        # Match Selection
         st.markdown("---")
         st.subheader("🎯 Match Prediction & Betting Analysis")
         
@@ -488,23 +405,18 @@ if uploaded_file is not None:
 
         if st.button("🔮 Generate Predictions", type="primary"):
             with st.spinner("Analyzing match..."):
-                # Predictions
                 pred = predict_match_advanced(home_team, away_team, team_stats)
                 
-                # Form Analysis
                 home_form = calculate_form(df, home_team, col_map["HomeTeam"], 
                                           col_map["AwayTeam"], col_map["FTHG"], col_map["FTAG"])
                 away_form = calculate_form(df, away_team, col_map["HomeTeam"], 
                                           col_map["AwayTeam"], col_map["FTHG"], col_map["FTAG"])
                 
-                # H2H
                 h2h = head_to_head(df, home_team, away_team, col_map["HomeTeam"], 
                                   col_map["AwayTeam"], col_map["FTHG"], col_map["FTAG"])
 
-                # Display Match Info
                 st.markdown(f"## {home_team} vs {away_team}")
                 
-                # Expected Goals & Most Likely Score
                 col_eg1, col_eg2, col_eg3 = st.columns(3)
                 with col_eg1:
                     st.metric("xG Home", pred["expected_goals"]["home"])
@@ -514,7 +426,6 @@ if uploaded_file is not None:
                 with col_eg3:
                     st.metric("xG Away", pred["expected_goals"]["away"])
 
-                # Match Result Probabilities
                 st.markdown("### 📊 Match Result")
                 col_r1, col_r2, col_r3 = st.columns(3)
                 mr = pred["match_result"]
@@ -525,7 +436,6 @@ if uploaded_file is not None:
                 col_r3.metric("Away Win", f"{mr['away_win']:.1%}", 
                             delta=f"Fair Odds: {probability_to_decimal(mr['away_win']):.2f}")
 
-                # Form Comparison
                 st.markdown("### 📈 Form Analysis (Last 5 Matches)")
                 col_f1, col_f2 = st.columns(2)
                 
@@ -551,7 +461,6 @@ if uploaded_file is not None:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # H2H
                 if h2h['matches'] > 0:
                     st.markdown("### 🤝 Head-to-Head")
                     st.markdown(f"""
@@ -562,7 +471,6 @@ if uploaded_file is not None:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # Over/Under Markets
                 st.markdown("### 🎲 Over/Under Markets")
                 col_ou1, col_ou2, col_ou3 = st.columns(3)
                 
@@ -575,7 +483,6 @@ if uploaded_file is not None:
                         st.metric("Under", f"{ou['under']:.1%}", 
                                 delta=f"Odds: {probability_to_decimal(ou['under']):.2f}")
 
-                # BTTS
                 st.markdown("### ⚽⚽ Both Teams To Score")
                 col_b1, col_b2 = st.columns(2)
                 btts = pred["btts"]
@@ -584,7 +491,6 @@ if uploaded_file is not None:
                 col_b2.metric("BTTS No", f"{btts['no']:.1%}", 
                             delta=f"Fair Odds: {probability_to_decimal(btts['no']):.2f}")
 
-                # Correct Score
                 st.markdown("### 🎯 Most Likely Correct Scores")
                 cs_data = pred["correct_scores"][:5]
                 cs_df = pd.DataFrame(cs_data)
@@ -596,7 +502,6 @@ if uploaded_file is not None:
                                    textposition="outside")
                 st.plotly_chart(fig_cs, use_container_width=True)
 
-                # VALUE BET DETECTOR
                 st.markdown("---")
                 st.markdown("## 💎 Value Bet Calculator")
                 st.markdown("Enter bookmaker odds to detect value bets:")
@@ -609,12 +514,10 @@ if uploaded_file is not None:
                 with col_odds3:
                     odds_away = st.number_input("Away Win Odds", min_value=1.01, value=4.0, step=0.05)
 
-                # Calculate EV for each outcome
                 ev_home = calculate_ev(mr['home_win'], odds_home, 100)
                 ev_draw = calculate_ev(mr['draw'], odds_draw, 100)
                 ev_away = calculate_ev(mr['away_win'], odds_away, 100)
                 
-                # Display value bets
                 value_bets = []
                 
                 if ev_home['ev_percentage'] >= min_ev:
@@ -635,3 +538,34 @@ if uploaded_file is not None:
                         "odds": odds_draw,
                         "true_prob": mr['draw'],
                         "ev": ev_draw['ev_percentage'],
+                        "edge": ev_draw['edge'],
+                        "kelly_stake": kelly_stake
+                    })
+                
+                if ev_away['ev_percentage'] >= min_ev:
+                    kelly_stake = kelly_criterion(mr['away_win'], odds_away, kelly_fraction) * bankroll
+                    value_bets.append({
+                        "market": "Away Win",
+                        "odds": odds_away,
+                        "true_prob": mr['away_win'],
+                        "ev": ev_away['ev_percentage'],
+                        "edge": ev_away['edge'],
+                        "kelly_stake": kelly_stake
+                    })
+                
+                if value_bets:
+                    st.success(f"🎯 Found {len(value_bets)} Value Bet(s)!")
+                    for bet in value_bets:
+                        st.markdown(f"""
+                        <div class='value-bet'>
+                            <h3>💰 {bet['market']}</h3>
+                            <p><strong>Odds:</strong> {bet['odds']:.2f} | <strong>True Probability:</strong> {bet['true_prob']:.1%}</p>
+                            <p><strong>Edge:</strong> {bet['edge']:.2f}% | <strong>EV:</strong> {bet['ev']:.2f}%</p>
+                            <p><strong>Recommended Stake (Kelly):</strong> €{bet['kelly_stake']:.2f} ({(bet['kelly_stake']/bankroll)*100:.2f}% of bankroll)</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("No value bets found with current odds and settings.")
+
+else:
+    st.info("📁 Upload a CSV file to start analyzing matches.")
