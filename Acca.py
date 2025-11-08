@@ -22,7 +22,7 @@ selected_tipsters = st.sidebar.multiselect(
 )
 
 # -------------------------------------------------
-# Tipster data (static demo – replace with API later)
+# Tipster data (ALL FOUR INCLUDED)
 # -------------------------------------------------
 tipsters_data = {
     "NorthSea": {
@@ -86,13 +86,67 @@ tipsters_data = {
             ]
         }
     },
-    # -----------------------------------------------------------------
-    # Add GoalMaster & ValueHunter exactly as in the previous version
-    # -----------------------------------------------------------------
-    "GoalMaster": { ... },   # <-- paste the dict from the previous answer
-    "ValueHunter": { ... }   # <-- paste the dict from the previous answer
+    "GoalMaster": {
+        "subtitle": "Win/Draw/Win & BTTS Combo Master",
+        "stats": {"Profit": "+£4,120", "Strike Rate": "68%", "Tips": "245"},
+        "tips": {
+            'Date': ['2025-10-27', '2025-10-24', '2025-10-21', '2025-10-17', '2025-10-14',
+                     '2025-10-10', '2025-10-07', '2025-11-08', '2025-11-09', '2025-11-10'],
+            'Match': ['Arsenal vs Tottenham (PL)', 'Lille vs PSG (Ligue 1)', 'Inter vs Napoli (Serie A)',
+                      'Dortmund vs Leverkusen (Bundesliga)', 'Atletico vs Real Madrid (La Liga)', 'Man Utd vs Liverpool (PL)',
+                      'Juventus vs Roma (Serie A)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
+                      'Barcelona vs Real Sociedad (La Liga)'],
+            'Selection': ['Arsenal to Win', 'BTTS - Yes', 'Inter to Win & Over 1.5', 'Draw', 'BTTS & Over 2.5',
+                          'Man Utd to Win', 'Under 2.5 Goals', 'Bayern to Win', 'Milan to Win', 'Barcelona to Win & BTTS'],
+            'Market': ['1X2', 'BTTS', 'Win + O/U', '1X2', 'BTTS + O/U', '1X2', 'Over/Under', '1X2', '1X2', 'Win + BTTS'],
+            'Odds': [1.90, 1.80, 2.50, 3.20, 2.80, 2.10, 1.75, 1.40, 2.20, 3.00],
+            'Outcome': ['Win', 'Win', 'Win', 'Loss', 'Win', 'Loss', 'Win', 'Pending', 'Pending', 'Pending'],
+            'Reasoning': [
+                'Arsenal home dominance; Spurs poor record at Emirates.',
+                'PSG leaky; Lille score consistently in big games.',
+                'Inter form unbeatable; Napoli travel fatigue.',
+                'Evenly matched; history shows draws in 4/5.',
+                'Derby chaos: BTTS in 7/8, goals galore.',
+                'Home advantage for Utd; Liverpool midweek fatigue.',
+                'Defensive masterclass expected in Italian clash.',
+                'Bayern machine; Union no match.',
+                'Milan revival; Juve inconsistent.',
+                'Barca attack vs Sociedad defense—expect scores both ways.'
+            ]
+        }
+    },
+    "ValueHunter": {
+        "subtitle": "Value Bets & Asian Lines Pro",
+        "stats": {"Profit": "+£1,850", "Strike Rate": "65%", "Tips": "150"},
+        "tips": {
+            'Date': ['2025-10-28', '2025-10-25', '2025-10-22', '2025-10-18', '2025-10-15',
+                     '2025-10-11', '2025-10-08', '2025-11-08', '2025-11-09', '2025-11-10'],
+            'Match': ['Chelsea vs Newcastle (PL)', 'Monaco vs Marseille (Ligue 1)', 'Bayern vs Leipzig (Bundesliga)',
+                      'Milan vs Fiorentina (Serie A)', 'Valencia vs Girona (La Liga)', 'Everton vs Brighton (PL)',
+                      'Lyon vs St Etienne (Ligue 1)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
+                      'Barcelona vs Real Sociedad (La Liga)'],
+            'Selection': ['Asian Handicap -1 Chelsea', 'Over 2.5 Goals', 'Bayern -1.5 AH', 'Milan to Win',
+                          'Under 2.5 Goals', 'BTTS - Yes', 'Lyon to Win & BTTS', 'Over 3.5 Goals', 'Under 2.5 Goals',
+                          'Asian Handicap 0 Barca'],
+            'Market': ['Asian Handicap', 'Over/Under', 'Asian Handicap', '1X2', 'Over/Under', 'BTTS',
+                       'Win + BTTS', 'Over/Under', 'Over/Under', 'Asian Handicap'],
+            'Odds': [2.00, 1.95, 1.80, 1.70, 1.85, 1.90, 2.30, 2.50, 1.90, 1.65],
+            'Outcome': ['Win', 'Win', 'Loss', 'Win', 'Win', 'Win', 'Win', 'Pending', 'Pending', 'Pending'],
+            'Reasoning': [
+                'Chelsea firepower; Newcastle defensive issues.',
+                'French flair: Goals in 6/7 h2h.',
+                'Bayern cruise; Leipzig vulnerable.',
+                'Milan solid at home; Fiorentina away struggles.',
+                'Cautious Spanish affair; low scores typical.',
+                'Both mid-table, leaky defenses.',
+                'Derby passion: Lyon edge with goals.',
+                'Bayern onslaught expected.',
+                'Tactical chess match; low goals.',
+                'Barca edge but Sociedad resilient.'
+            ]
+        }
+    }
 }
-# (For brevity the two extra tipsters are omitted here – copy them from the previous reply.)
 
 # -------------------------------------------------
 # Helper: styling functions
@@ -203,7 +257,7 @@ else:
     if all_future.empty:
         st.info("No future tips across the selected tipsters.")
     else:
-        # ---- create a nicely formatted label column ----
+        # Create a nicely formatted label column
         all_future['Label'] = all_future['Match'] + " (" + all_future['Tipster'] + ")"
 
         mega_sel = st.multiselect(
@@ -212,7 +266,7 @@ else:
             default=all_future['Label'].head(5).tolist(),
             key="mega_acca"
         )
-        # ---- extract the rows that were chosen ----
+        # Extract the rows that were chosen
         mega_df = all_future[all_future['Label'].isin(mega_sel)].copy()
         if not mega_df.empty:
             mega_odds = np.prod(mega_df['Odds'])
