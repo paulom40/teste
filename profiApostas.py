@@ -20,7 +20,7 @@ st.markdown("""
     .value-bet { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                  color: white; padding: 15px; border-radius: 10px; margin: 10px 0; }
     .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; 
-                 border-left: 4px solid #007bff; margin: 10px 0; }
+                 border-left: 4px solid #007bff; margin: 10px 0; color: #212529; }
     .profit-positive { color: #28a745; font-weight: bold; }
     .profit-negative { color: #dc3545; font-weight: bold; }
 </style>
@@ -229,16 +229,25 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
             mapping["FTHG"] = col
         elif lower in ["ftag", "agoals"]: 
             mapping["FTAG"] = col
+        elif lower in ["hc", "homecorners", "hcorners"]:
+            mapping["HC"] = col
+        elif lower in ["ac", "awaycorners", "acorners"]:
+            mapping["AC"] = col
+        elif lower in ["hs", "hst", "homeshotsontarget", "homeshots"]:
+            mapping["HST"] = col
+        elif lower in ["as", "ast", "awayshotsontarget", "awayshots"]:
+            mapping["AST"] = col
     return mapping
 
 @st.cache_data(show_spinner="Training model...")
 def compute_team_stats(
     _df: pd.DataFrame,
     home_col: str, away_col: str, hg_col: str, ag_col: str,
+    hc_col=None, ac_col=None, hst_col=None, ast_col=None,
     recency_weight: float = 2.0, min_matches: int = 3
 ) -> Dict[str, Any]:
     df = _df.copy()
-    for col in [hg_col, ag_col]:
+    for col in [hg_col, ag_col, hc_col, ac_col, hst_col, ast_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -297,6 +306,98 @@ def compute_team_stats(
         "away_defence": away_defence
     }
 
+    # CORNERS ANALYSIS
+    if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
+        c_mask = df[hc_col].notna() & df[ac_col].notna()
+        clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]].copy()
+        
+        if len(clean_c) >= 5:
+            clean_c['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_c)))
+            avg_hc = np.average(clean_c[hc_col], weights=clean_c['weight'])
+            avg_ac = np.average(clean_c[ac_col], weights=clean_c['weight'])
+            
+            corner_home_attack = {}
+            corner_away_attack = {}
+            corner_home_defence = {}
+            corner_away_defence = {}
+            
+            for team in teams:
+                home_c = clean_c[clean_c[home_col] == team]
+                away_c = clean_c[clean_c[away_col] == team]
+                
+                if len(home_c) >= min_matches:
+                    corner_home_attack[team] = bayesian_smoothing(
+                        weighted_mean(home_c, hc_col) / avg_hc, 1.0, len(home_c))
+                    corner_home_defence[team] = bayesian_smoothing(
+                        weighted_mean(home_c, ac_col) / avg_ac, 1.0, len(home_c))
+                else:
+                    corner_home_attack[team] = 1.0
+                    corner_home_defence[team] = 1.0
+                    
+                if len(away_c) >= min_matches:
+                    corner_away_attack[team] = bayesian_smoothing(
+                        weighted_mean(away_c, ac_col) / avg_ac, 1.0, len(away_c))
+                    corner_away_defence[team] = bayesian_smoothing(
+                        weighted_mean(away_c, hc_col) / avg_hc, 1.0, len(away_c))
+                else:
+                    corner_away_attack[team] = 1.0
+                    corner_away_defence[team] = 1.0
+            
+            stats["corners"] = {
+                "league_avg_home": avg_hc,
+                "league_avg_away": avg_ac,
+                "home_attack": corner_home_attack,
+                "away_attack": corner_away_attack,
+                "home_defence": corner_home_defence,
+                "away_defence": corner_away_defence
+            }
+
+    # SHOTS ON TARGET ANALYSIS
+    if hst_col and ast_col and hst_col in df.columns and ast_col in df.columns:
+        s_mask = df[hst_col].notna() & df[ast_col].notna()
+        clean_s = df[s_mask][[home_col, away_col, hst_col, ast_col]].copy()
+        
+        if len(clean_s) >= 5:
+            clean_s['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_s)))
+            avg_hst = np.average(clean_s[hst_col], weights=clean_s['weight'])
+            avg_ast = np.average(clean_s[ast_col], weights=clean_s['weight'])
+            
+            shot_home_attack = {}
+            shot_away_attack = {}
+            shot_home_defence = {}
+            shot_away_defence = {}
+            
+            for team in teams:
+                home_s = clean_s[clean_s[home_col] == team]
+                away_s = clean_s[clean_s[away_col] == team]
+                
+                if len(home_s) >= min_matches:
+                    shot_home_attack[team] = bayesian_smoothing(
+                        weighted_mean(home_s, hst_col) / avg_hst, 1.0, len(home_s))
+                    shot_home_defence[team] = bayesian_smoothing(
+                        weighted_mean(home_s, ast_col) / avg_ast, 1.0, len(home_s))
+                else:
+                    shot_home_attack[team] = 1.0
+                    shot_home_defence[team] = 1.0
+                    
+                if len(away_s) >= min_matches:
+                    shot_away_attack[team] = bayesian_smoothing(
+                        weighted_mean(away_s, ast_col) / avg_ast, 1.0, len(away_s))
+                    shot_away_defence[team] = bayesian_smoothing(
+                        weighted_mean(away_s, hst_col) / avg_hst, 1.0, len(away_s))
+                else:
+                    shot_away_attack[team] = 1.0
+                    shot_away_defence[team] = 1.0
+            
+            stats["shots"] = {
+                "league_avg_home": avg_hst,
+                "league_avg_away": avg_ast,
+                "home_attack": shot_home_attack,
+                "away_attack": shot_away_attack,
+                "home_defence": shot_home_defence,
+                "away_defence": shot_away_defence
+            }
+
     return stats
 
 def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[str, Any]:
@@ -333,7 +434,7 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
     
     correct_scores = correct_score_probabilities(lambda_h, lambda_a, 10)
     
-    return {
+    result = {
         "expected_goals": {"home": round(lambda_h, 2), "away": round(lambda_a, 2)},
         "most_likely_score": f"{h_idx}-{a_idx}",
         "match_result": {
@@ -349,6 +450,48 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
         },
         "correct_scores": correct_scores
     }
+    
+    # CORNERS PREDICTION
+    c = stats.get("corners")
+    if c:
+        c_att_h = c["home_attack"].get(home, 1.0)
+        c_def_a = c["away_defence"].get(away, 1.0)
+        c_att_a = c["away_attack"].get(away, 1.0)
+        c_def_h = c["home_defence"].get(home, 1.0)
+        
+        lambda_hc = c_att_h * c_def_a * c["league_avg_home"]
+        lambda_ac = c_att_a * c_def_h * c["league_avg_away"]
+        
+        # Use mode (most likely value) for corners
+        corners_home = int(round(lambda_hc))
+        corners_away = int(round(lambda_ac))
+        
+        result["corners"] = {
+            "home": max(corners_home, 1),
+            "away": max(corners_away, 1),
+            "total": max(corners_home, 1) + max(corners_away, 1),
+            "expected_home": round(lambda_hc, 1),
+            "expected_away": round(lambda_ac, 1)
+        }
+    
+    # SHOTS ON TARGET PREDICTION
+    s = stats.get("shots")
+    if s:
+        s_att_h = s["home_attack"].get(home, 1.0)
+        s_def_a = s["away_defence"].get(away, 1.0)
+        s_att_a = s["away_attack"].get(away, 1.0)
+        s_def_h = s["home_defence"].get(home, 1.0)
+        
+        lambda_hst = s_att_h * s_def_a * s["league_avg_home"]
+        lambda_ast = s_att_a * s_def_h * s["league_avg_away"]
+        
+        result["shots"] = {
+            "home": round(lambda_hst, 1),
+            "away": round(lambda_ast, 1),
+            "total": round(lambda_hst + lambda_ast, 1)
+        }
+    
+    return result
 
 # ================================
 # MAIN APP
@@ -366,7 +509,7 @@ if uploaded_file is not None:
 
         st.sidebar.subheader("Column Mapping")
         col_map = {}
-        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG"]:
+        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "HC", "AC", "HST", "AST"]:
             detected = mapping.get(label)
             options = [""] + [c for c in df.columns if c.lower() != "date"]
             default_idx = options.index(detected) if detected in options else 0
@@ -384,6 +527,10 @@ if uploaded_file is not None:
                 away_col=col_map["AwayTeam"],
                 hg_col=col_map["FTHG"], 
                 ag_col=col_map["FTAG"],
+                hc_col=col_map.get("HC"),
+                ac_col=col_map.get("AC"),
+                hst_col=col_map.get("HST"),
+                ast_col=col_map.get("AST"),
                 recency_weight=st.sidebar.slider("Recency Weight", 0.5, 5.0, 2.0, 0.1),
                 min_matches=st.sidebar.number_input("Min matches", 1, 20, 3)
             )
@@ -490,6 +637,33 @@ if uploaded_file is not None:
                             delta=f"Fair Odds: {probability_to_decimal(btts['yes']):.2f}")
                 col_b2.metric("BTTS No", f"{btts['no']:.1%}", 
                             delta=f"Fair Odds: {probability_to_decimal(btts['no']):.2f}")
+
+                # CORNERS & SHOTS
+                if "corners" in pred or "shots" in pred:
+                    st.markdown("### 🚩 Corners & 🎯 Shots on Target")
+                    col_cs1, col_cs2 = st.columns(2)
+                    
+                    if "corners" in pred:
+                        with col_cs1:
+                            st.markdown(f"""
+                            <div class='stat-card'>
+                                <h4>🚩 Corners Prediction</h4>
+                                <p><strong>{home_team}:</strong> {pred['corners']['home']} cantos (xC: {pred['corners']['expected_home']})</p>
+                                <p><strong>{away_team}:</strong> {pred['corners']['away']} cantos (xC: {pred['corners']['expected_away']})</p>
+                                <p><strong>Total Esperado:</strong> {pred['corners']['total']} cantos</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                    if "shots" in pred:
+                        with col_cs2:
+                            st.markdown(f"""
+                            <div class='stat-card'>
+                                <h4>🎯 Shots on Target</h4>
+                                <p><strong>{home_team}:</strong> {pred['shots']['home']} remates</p>
+                                <p><strong>{away_team}:</strong> {pred['shots']['away']} remates</p>
+                                <p><strong>Total Esperado:</strong> {pred['shots']['total']} remates</p>
+                            </div>
+                            """, unsafe_allow_html=True)
 
                 st.markdown("### 🎯 Most Likely Correct Scores")
                 cs_data = pred["correct_scores"][:5]
