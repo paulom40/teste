@@ -74,13 +74,10 @@ def kelly_criterion(probability: float, odds: float, conservative: float = 0.25)
     q = 1 - probability
     b = odds - 1
     kelly = ((b * probability) - q) / b
-    return max(0, kelly * conservative)  # Conservative Kelly
+    return max(0, kelly * conservative)
 
 def asian_handicap_probability(home_goals: float, away_goals: float, handicap: float) -> Dict[str, float]:
     """Calculate Asian Handicap probabilities"""
-    adjusted_home = home_goals - handicap
-    
-    # Generate score probabilities
     max_goals = 8
     prob_home_win = 0
     prob_draw = 0
@@ -106,9 +103,7 @@ def asian_handicap_probability(home_goals: float, away_goals: float, handicap: f
 
 def over_under_probability(home_goals: float, away_goals: float, line: float) -> Dict[str, float]:
     """Calculate Over/Under probabilities"""
-    total_goals = home_goals + away_goals
     max_goals = 15
-    
     prob_over = 0
     prob_under = 0
     prob_exact = 0
@@ -178,6 +173,7 @@ def calculate_form(df: pd.DataFrame, team: str, home_col: str, away_col: str,
     
     wins = draws = losses = 0
     goals_for = goals_against = 0
+    form_list = []
     
     for _, match in all_matches.iterrows():
         if match[home_col] == team:
@@ -190,10 +186,13 @@ def calculate_form(df: pd.DataFrame, team: str, home_col: str, away_col: str,
         
         if gf > ga:
             wins += 1
+            form_list.append("W")
         elif gf == ga:
             draws += 1
+            form_list.append("D")
         else:
             losses += 1
+            form_list.append("L")
     
     points = wins * 3 + draws
     matches_played = len(all_matches)
@@ -203,15 +202,12 @@ def calculate_form(df: pd.DataFrame, team: str, home_col: str, away_col: str,
         "wins": wins,
         "draws": draws,
         "losses": losses,
-        "goals_for": goals_for,
-        "goals_against": goals_against,
-        "goal_difference": goals_for - goals_against,
+        "goals_for": int(goals_for),
+        "goals_against": int(goals_against),
+        "goal_difference": int(goals_for - goals_against),
         "points": points,
         "ppg": points / matches_played if matches_played > 0 else 0,
-        "form_string": "".join(["W" if w else "D" if d else "L" 
-                               for w, d in [(match[hg_col] > match[ag_col], 
-                                           match[hg_col] == match[ag_col]) 
-                                          for _, match in all_matches.iterrows()]])
+        "form_string": "".join(form_list)
     }
 
 def head_to_head(df: pd.DataFrame, home: str, away: str, home_col: str, 
@@ -244,13 +240,13 @@ def head_to_head(df: pd.DataFrame, home: str, away: str, home_col: str,
         "home_wins": home_wins,
         "away_wins": away_wins,
         "draws": draws,
-        "home_goals": home_goals,
-        "away_goals": away_goals,
+        "home_goals": int(home_goals),
+        "away_goals": int(away_goals),
         "avg_goals": (home_goals + away_goals) / len(h2h) if len(h2h) > 0 else 0
     }
 
 # ================================
-# CORE FUNCTIONS (from original)
+# CORE FUNCTIONS
 # ================================
 @st.cache_data(ttl=3600)
 def get_team_logo(team_name: str) -> str:
@@ -296,24 +292,16 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
         elif "away" in lower and "team" in lower: mapping["AwayTeam"] = col
         elif lower in ["fthg", "hgoals"]: mapping["FTHG"] = col
         elif lower in ["ftag", "agoals"]: mapping["FTAG"] = col
-        elif lower in ["hc", "homecorners"]: mapping["HC"] = col
-        elif lower in ["ac", "awaycorners"]: mapping["AC"] = col
-        elif lower in ["hs", "homeshotsontarget"]: mapping["HS"] = col
-        elif lower in ["as", "awayshotsontarget"]: mapping["AS"] = col
-        elif lower in ["hxg", "home_xg"]: mapping["HxG"] = col
-        elif lower in ["axg", "away_xg"]: mapping["AxG"] = col
     return mapping
 
 @st.cache_data(show_spinner="Training model...")
 def compute_team_stats(
     _df: pd.DataFrame,
     home_col: str, away_col: str, hg_col: str, ag_col: str,
-    hc_col=None, ac_col=None, hs_col=None, as_col=None,
-    hxg_col=None, axg_col=None,
     recency_weight: float = 2.0, min_matches: int = 3
 ) -> Dict[str, Any]:
     df = _df.copy()
-    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
+    for col in [hg_col, ag_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -323,39 +311,54 @@ def compute_team_stats(
     # Goals statistics
     ft_mask = df[hg_col].notna() & df[ag_col].notna()
     clean_ft = df[ft_mask][[home_col, away_col, hg_col, ag_col]].copy()
-    if len(clean_ft) < 5: raise ValueError("Not enough matches.")
+    if len(clean_ft) < 5: 
+        raise ValueError("Not enough matches.")
+    
     clean_ft['weight'] = np.exp(np.linspace(-recency_weight, 0, len(clean_ft)))
     avg_home = np.average(clean_ft[hg_col], weights=clean_ft['weight'])
     avg_away = np.average(clean_ft[ag_col], weights=clean_ft['weight'])
 
     def weighted_mean(group, col):
-        if len(group) < min_matches: return None
+        if len(group) < min_matches: 
+            return None
         return np.average(group[col], weights=group['weight'])
 
-    home_attack = away_attack = home_defence = away_defence = {}
+    home_attack = {}
+    away_attack = {}
+    home_defence = {}
+    away_defence = {}
+    
     for team in teams:
         home_matches = clean_ft[clean_ft[home_col] == team]
         away_matches = clean_ft[clean_ft[away_col] == team]
-        n_home = len(home_matches); n_away = len(away_matches)
+        n_home = len(home_matches)
+        n_away = len(away_matches)
+        
         if n_home >= min_matches:
             ha = weighted_mean(home_matches, hg_col) / avg_home
             hd = weighted_mean(home_matches, ag_col) / avg_away
             home_attack[team] = bayesian_smoothing(ha, 1.0, n_home)
             home_defence[team] = bayesian_smoothing(hd, 1.0, n_home)
         else:
-            home_attack[team] = home_defence[team] = 1.0
+            home_attack[team] = 1.0
+            home_defence[team] = 1.0
+            
         if n_away >= min_matches:
             aa = weighted_mean(away_matches, ag_col) / avg_away
             ad = weighted_mean(away_matches, hg_col) / avg_home
             away_attack[team] = bayesian_smoothing(aa, 1.0, n_away)
             away_defence[team] = bayesian_smoothing(ad, 1.0, n_away)
         else:
-            away_attack[team] = away_defence[team] = 1.0
+            away_attack[team] = 1.0
+            away_defence[team] = 1.0
 
     stats["goals"] = {
-        "league_avg_home": avg_home, "league_avg_away": avg_away,
-        "home_attack": home_attack, "away_attack": away_attack,
-        "home_defence": home_defence, "away_defence": away_defence
+        "league_avg_home": avg_home, 
+        "league_avg_away": avg_away,
+        "home_attack": home_attack, 
+        "away_attack": away_attack,
+        "home_defence": home_defence, 
+        "away_defence": away_defence
     }
 
     return stats
@@ -451,15 +454,17 @@ if uploaded_file is not None:
 
         missing = [r for r in ["HomeTeam", "AwayTeam", "FTHG", "FTAG"] if not col_map[r]]
         if missing:
-            st.error(f"Map: {', '.join(missing)}")
+            st.error(f"Map required columns: {', '.join(missing)}")
             st.stop()
 
         # Training
         with st.spinner("🔄 Training model..."):
             team_stats = compute_team_stats(
                 _df=df,
-                home_col=col_map["HomeTeam"], away_col=col_map["AwayTeam"],
-                hg_col=col_map["FTHG"], ag_col=col_map["FTAG"],
+                home_col=col_map["HomeTeam"], 
+                away_col=col_map["AwayTeam"],
+                hg_col=col_map["FTHG"], 
+                ag_col=col_map["FTAG"],
                 recency_weight=st.sidebar.slider("Recency Weight", 0.5, 5.0, 2.0, 0.1),
                 min_matches=st.sidebar.number_input("Min matches", 1, 20, 3)
             )
@@ -606,4 +611,27 @@ if uploaded_file is not None:
 
                 # Calculate EV for each outcome
                 ev_home = calculate_ev(mr['home_win'], odds_home, 100)
-                ev_draw = calculate_ev(mr['draw'], odds_
+                ev_draw = calculate_ev(mr['draw'], odds_draw, 100)
+                ev_away = calculate_ev(mr['away_win'], odds_away, 100)
+                
+                # Display value bets
+                value_bets = []
+                
+                if ev_home['ev_percentage'] >= min_ev:
+                    kelly_stake = kelly_criterion(mr['home_win'], odds_home, kelly_fraction) * bankroll
+                    value_bets.append({
+                        "market": "Home Win",
+                        "odds": odds_home,
+                        "true_prob": mr['home_win'],
+                        "ev": ev_home['ev_percentage'],
+                        "edge": ev_home['edge'],
+                        "kelly_stake": kelly_stake
+                    })
+                
+                if ev_draw['ev_percentage'] >= min_ev:
+                    kelly_stake = kelly_criterion(mr['draw'], odds_draw, kelly_fraction) * bankroll
+                    value_bets.append({
+                        "market": "Draw",
+                        "odds": odds_draw,
+                        "true_prob": mr['draw'],
+                        "ev": ev_draw['ev_percentage'],
