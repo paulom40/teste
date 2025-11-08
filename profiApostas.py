@@ -103,6 +103,60 @@ def btts_probability(home_goals: float, away_goals: float) -> Dict[str, float]:
     
     return {"yes": prob_btts_yes, "no": prob_btts_no}
 
+def first_half_goals_probability(home_goals: float, away_goals: float) -> Dict[str, float]:
+    """Calculate probability of goals in first 45 minutes
+    Typically, 45% of goals occur in first half"""
+    first_half_factor = 0.45
+    
+    lambda_h_fh = home_goals * first_half_factor
+    lambda_a_fh = away_goals * first_half_factor
+    
+    # Probability of 0 goals in first half
+    prob_no_goals_fh = poisson.pmf(0, lambda_h_fh) * poisson.pmf(0, lambda_a_fh)
+    
+    # Probability of 1+ goals in first half
+    prob_one_or_more_fh = 1 - prob_no_goals_fh
+    
+    # Probability of 2+ goals in first half
+    max_goals = 10
+    prob_two_or_more = 0
+    for h in range(max_goals):
+        for a in range(max_goals):
+            if h + a >= 2:
+                prob_two_or_more += poisson.pmf(h, lambda_h_fh) * poisson.pmf(a, lambda_a_fh)
+    
+    # Expected goals in first half
+    expected_fh = lambda_h_fh + lambda_a_fh
+    
+    # Over/Under 0.5 in first half
+    prob_over_05_fh = prob_one_or_more_fh
+    prob_under_05_fh = prob_no_goals_fh
+    
+    # Over/Under 1.5 in first half
+    prob_under_15_fh = 0
+    prob_over_15_fh = 0
+    for h in range(max_goals):
+        for a in range(max_goals):
+            total = h + a
+            prob = poisson.pmf(h, lambda_h_fh) * poisson.pmf(a, lambda_a_fh)
+            if total < 2:
+                prob_under_15_fh += prob
+            else:
+                prob_over_15_fh += prob
+    
+    return {
+        "one_or_more": prob_one_or_more_fh,
+        "no_goals": prob_no_goals_fh,
+        "two_or_more": prob_two_or_more,
+        "expected_goals": round(expected_fh, 2),
+        "over_05": prob_over_05_fh,
+        "under_05": prob_under_05_fh,
+        "over_15": prob_over_15_fh,
+        "under_15": prob_under_15_fh,
+        "home_expected": round(lambda_h_fh, 2),
+        "away_expected": round(lambda_a_fh, 2)
+    }
+
 def correct_score_probabilities(home_goals: float, away_goals: float, top_n: int = 10) -> List[Dict]:
     """Calculate most likely correct scores"""
     scores = []
@@ -408,6 +462,44 @@ def generate_html_report(home: str, away: str, pred: Dict, home_form: Dict,
                         <div class="metric-label">BTTS Sim</div>
                         <div class="metric-value">{pred['btts']['yes']:.1%}</div>
                         <div class="metric-odds">Odd: {1/pred['btts']['yes']:.2f}</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>⏱️ Golos no Primeiro Tempo (0-45')</h2>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">1+ Golos</div>
+                        <div class="metric-value">{pred['first_half']['one_or_more']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['first_half']['one_or_more']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Sem Golos</div>
+                        <div class="metric-value">{pred['first_half']['no_goals']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['first_half']['no_goals']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">2+ Golos</div>
+                        <div class="metric-value">{pred['first_half']['two_or_more']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['first_half']['two_or_more']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">xG 1º Tempo</div>
+                        <div class="metric-value">{pred['first_half']['expected_goals']}</div>
+                        <div class="metric-odds">Casa: {pred['first_half']['home_expected']} | Fora: {pred['first_half']['away_expected']}</div>
+                    </div>
+                </div>
+                <div class="metrics" style="margin-top: 15px;">
+                    <div class="metric">
+                        <div class="metric-label">Over 0.5 (1ºT)</div>
+                        <div class="metric-value">{pred['first_half']['over_05']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['first_half']['over_05']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Over 1.5 (1ºT)</div>
+                        <div class="metric-value">{pred['first_half']['over_15']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['first_half']['over_15']:.2f}</div>
                     </div>
                 </div>
             </div>
@@ -813,6 +905,9 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
     over_under_25 = over_under_probability(lambda_h, lambda_a, 2.5)
     over_under_35 = over_under_probability(lambda_h, lambda_a, 3.5)
     
+    # First Half Goals
+    first_half = first_half_goals_probability(lambda_h, lambda_a)
+    
     correct_scores = correct_score_probabilities(lambda_h, lambda_a, 10)
     
     result = {
@@ -829,6 +924,7 @@ def predict_match_advanced(home: str, away: str, stats: Dict[str, Any]) -> Dict[
             "2.5": over_under_25,
             "3.5": over_under_35
         },
+        "first_half": first_half,
         "correct_scores": correct_scores
     }
     
@@ -1018,6 +1114,28 @@ if uploaded_file is not None:
                             delta=f"Fair Odds: {probability_to_decimal(btts['yes']):.2f}")
                 col_b2.metric("BTTS No", f"{btts['no']:.1%}", 
                             delta=f"Fair Odds: {probability_to_decimal(btts['no']):.2f}")
+
+                # FIRST HALF GOALS
+                st.markdown("### ⏱️ Golos no Primeiro Tempo (0-45')")
+                fh = pred["first_half"]
+                
+                col_fh1, col_fh2, col_fh3, col_fh4 = st.columns(4)
+                col_fh1.metric("1+ Golos", f"{fh['one_or_more']:.1%}", 
+                             delta=f"Odds: {probability_to_decimal(fh['one_or_more']):.2f}")
+                col_fh2.metric("Sem Golos", f"{fh['no_goals']:.1%}", 
+                             delta=f"Odds: {probability_to_decimal(fh['no_goals']):.2f}")
+                col_fh3.metric("2+ Golos", f"{fh['two_or_more']:.1%}", 
+                             delta=f"Odds: {probability_to_decimal(fh['two_or_more']):.2f}")
+                col_fh4.metric("xG 1º Tempo", f"{fh['expected_goals']}", 
+                             delta=f"Casa: {fh['home_expected']} | Fora: {fh['away_expected']}")
+                
+                # First Half Over/Under
+                st.markdown("**Mercados Over/Under no 1º Tempo:**")
+                col_fh_ou1, col_fh_ou2 = st.columns(2)
+                col_fh_ou1.metric("Over 0.5", f"{fh['over_05']:.1%}", 
+                                delta=f"Odds: {probability_to_decimal(fh['over_05']):.2f}")
+                col_fh_ou2.metric("Over 1.5", f"{fh['over_15']:.1%}", 
+                                delta=f"Odds: {probability_to_decimal(fh['over_15']):.2f}")
 
                 # CORNERS & SHOTS
                 if "corners" in pred or "shots" in pred:
