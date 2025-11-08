@@ -7,6 +7,7 @@ import io
 from typing import Dict, Any, Tuple, List
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime
 
 # ================================
 # CONFIG
@@ -117,6 +118,386 @@ def correct_score_probabilities(home_goals: float, away_goals: float, top_n: int
     
     scores.sort(key=lambda x: x["probability"], reverse=True)
     return scores[:top_n]
+
+def generate_html_report(home: str, away: str, pred: Dict, home_form: Dict, 
+                         away_form: Dict, h2h: Dict, bankroll: float, 
+                         value_bets: List[Dict]) -> str:
+    """Generate complete HTML report"""
+    from datetime import datetime
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="pt">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{home} vs {away} - Análise Profissional</title>
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ 
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 30px;
+                color: #333;
+            }}
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 20px;
+                padding: 40px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            }}
+            .header {{
+                text-align: center;
+                padding-bottom: 30px;
+                border-bottom: 3px solid #667eea;
+                margin-bottom: 30px;
+            }}
+            .header h1 {{
+                font-size: 2.5rem;
+                color: #667eea;
+                margin-bottom: 10px;
+            }}
+            .header .date {{
+                color: #666;
+                font-size: 0.9rem;
+            }}
+            .match-header {{
+                display: flex;
+                justify-content: space-around;
+                align-items: center;
+                margin: 30px 0;
+                padding: 20px;
+                background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+                border-radius: 15px;
+            }}
+            .team {{
+                text-align: center;
+                flex: 1;
+            }}
+            .team-name {{
+                font-size: 1.8rem;
+                font-weight: bold;
+                color: #333;
+                margin: 10px 0;
+            }}
+            .score {{
+                font-size: 3rem;
+                font-weight: bold;
+                color: #667eea;
+                text-align: center;
+                margin: 0 20px;
+            }}
+            .xg {{
+                text-align: center;
+                color: #666;
+                font-size: 1.1rem;
+                margin-top: 10px;
+            }}
+            .section {{
+                margin: 30px 0;
+                padding: 20px;
+                background: #f8f9fa;
+                border-radius: 10px;
+                border-left: 5px solid #667eea;
+            }}
+            .section h2 {{
+                color: #667eea;
+                margin-bottom: 15px;
+                font-size: 1.5rem;
+            }}
+            .metrics {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }}
+            .metric {{
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                text-align: center;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                transition: transform 0.2s;
+            }}
+            .metric:hover {{
+                transform: translateY(-5px);
+            }}
+            .metric-label {{
+                color: #666;
+                font-size: 0.9rem;
+                margin-bottom: 5px;
+            }}
+            .metric-value {{
+                color: #667eea;
+                font-size: 1.8rem;
+                font-weight: bold;
+            }}
+            .metric-odds {{
+                color: #999;
+                font-size: 0.8rem;
+                margin-top: 5px;
+            }}
+            .form-container {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                margin: 20px 0;
+            }}
+            .form-box {{
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            .form-box h3 {{
+                color: #667eea;
+                margin-bottom: 15px;
+            }}
+            .form-box p {{
+                margin: 8px 0;
+                color: #333;
+            }}
+            .form-string {{
+                font-size: 1.2rem;
+                font-weight: bold;
+                letter-spacing: 2px;
+                color: #667eea;
+            }}
+            .value-bet {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin: 15px 0;
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            }}
+            .value-bet h3 {{
+                margin-bottom: 10px;
+            }}
+            .value-bet p {{
+                margin: 5px 0;
+            }}
+            .table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 15px 0;
+            }}
+            .table th {{
+                background: #667eea;
+                color: white;
+                padding: 12px;
+                text-align: left;
+            }}
+            .table td {{
+                padding: 10px;
+                border-bottom: 1px solid #ddd;
+            }}
+            .table tr:hover {{
+                background: #f5f7fa;
+            }}
+            .footer {{
+                text-align: center;
+                margin-top: 40px;
+                padding-top: 20px;
+                border-top: 2px solid #e0e0e0;
+                color: #666;
+                font-size: 0.9rem;
+            }}
+            @media print {{
+                body {{ background: white; padding: 0; }}
+                .container {{ box-shadow: none; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>⚽ Football Predictor Pro</h1>
+                <p class="date">Relatório gerado em {datetime.now().strftime('%d/%m/%Y às %H:%M')}</p>
+            </div>
+            
+            <div class="match-header">
+                <div class="team">
+                    <div class="team-name">🏠 {home}</div>
+                    <div class="xg">xG: {pred['expected_goals']['home']}</div>
+                </div>
+                <div class="score">{pred['most_likely_score']}</div>
+                <div class="team">
+                    <div class="team-name">✈️ {away}</div>
+                    <div class="xg">xG: {pred['expected_goals']['away']}</div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📊 Resultado do Jogo</h2>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">Vitória Casa</div>
+                        <div class="metric-value">{pred['match_result']['home_win']:.1%}</div>
+                        <div class="metric-odds">Odd Justa: {1/pred['match_result']['home_win']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Empate</div>
+                        <div class="metric-value">{pred['match_result']['draw']:.1%}</div>
+                        <div class="metric-odds">Odd Justa: {1/pred['match_result']['draw']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Vitória Fora</div>
+                        <div class="metric-value">{pred['match_result']['away_win']:.1%}</div>
+                        <div class="metric-odds">Odd Justa: {1/pred['match_result']['away_win']:.2f}</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>📈 Análise de Forma (Últimos 5 Jogos)</h2>
+                <div class="form-container">
+                    <div class="form-box">
+                        <h3>{home}</h3>
+                        <p><strong>Forma:</strong> <span class="form-string">{home_form['form_string']}</span></p>
+                        <p><strong>Pontos por Jogo:</strong> {home_form['ppg']:.2f}</p>
+                        <p><strong>Registo:</strong> {home_form['wins']}V - {home_form['draws']}E - {home_form['losses']}D</p>
+                        <p><strong>Golos:</strong> {home_form['goals_for']} marcados, {home_form['goals_against']} sofridos</p>
+                        <p><strong>Diferença:</strong> {home_form['goal_difference']:+d}</p>
+                    </div>
+                    <div class="form-box">
+                        <h3>{away}</h3>
+                        <p><strong>Forma:</strong> <span class="form-string">{away_form['form_string']}</span></p>
+                        <p><strong>Pontos por Jogo:</strong> {away_form['ppg']:.2f}</p>
+                        <p><strong>Registo:</strong> {away_form['wins']}V - {away_form['draws']}E - {away_form['losses']}D</p>
+                        <p><strong>Golos:</strong> {away_form['goals_for']} marcados, {away_form['goals_against']} sofridos</p>
+                        <p><strong>Diferença:</strong> {away_form['goal_difference']:+d}</p>
+                    </div>
+                </div>
+            </div>
+    """
+    
+    if h2h['matches'] > 0:
+        html += f"""
+            <div class="section">
+                <h2>🤝 Confrontos Diretos (Últimos {h2h['matches']})</h2>
+                <p><strong>{home}:</strong> {h2h['home_wins']} vitórias</p>
+                <p><strong>Empates:</strong> {h2h['draws']}</p>
+                <p><strong>{away}:</strong> {h2h['away_wins']} vitórias</p>
+                <p><strong>Golos:</strong> {h2h['home_goals']}-{h2h['away_goals']} (Média: {h2h['avg_goals']:.2f} por jogo)</p>
+            </div>
+        """
+    
+    html += f"""
+            <div class="section">
+                <h2>🎲 Mercados Over/Under</h2>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">Over 1.5</div>
+                        <div class="metric-value">{pred['over_under']['1.5']['over']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['over_under']['1.5']['over']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Over 2.5</div>
+                        <div class="metric-value">{pred['over_under']['2.5']['over']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['over_under']['2.5']['over']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">Over 3.5</div>
+                        <div class="metric-value">{pred['over_under']['3.5']['over']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['over_under']['3.5']['over']:.2f}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">BTTS Sim</div>
+                        <div class="metric-value">{pred['btts']['yes']:.1%}</div>
+                        <div class="metric-odds">Odd: {1/pred['btts']['yes']:.2f}</div>
+                    </div>
+                </div>
+            </div>
+    """
+    
+    if "corners" in pred or "shots" in pred:
+        html += '<div class="section"><h2>🚩 Cantos & 🎯 Remates</h2><div class="form-container">'
+        
+        if "corners" in pred:
+            html += f"""
+                <div class="form-box">
+                    <h3>🚩 Cantos</h3>
+                    <p><strong>{home}:</strong> {pred['corners']['home']} (xC: {pred['corners']['expected_home']})</p>
+                    <p><strong>{away}:</strong> {pred['corners']['away']} (xC: {pred['corners']['expected_away']})</p>
+                    <p><strong>Total:</strong> {pred['corners']['total']} cantos</p>
+                </div>
+            """
+        
+        if "shots" in pred:
+            html += f"""
+                <div class="form-box">
+                    <h3>🎯 Remates à Baliza</h3>
+                    <p><strong>{home}:</strong> {pred['shots']['home']} remates</p>
+                    <p><strong>{away}:</strong> {pred['shots']['away']} remates</p>
+                    <p><strong>Total:</strong> {pred['shots']['total']} remates</p>
+                </div>
+            """
+        
+        html += '</div></div>'
+    
+    html += f"""
+            <div class="section">
+                <h2>🎯 Resultados Mais Prováveis</h2>
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Resultado</th>
+                            <th>Probabilidade</th>
+                            <th>Odd Justa</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    
+    for cs in pred['correct_scores'][:5]:
+        html += f"""
+                        <tr>
+                            <td><strong>{cs['score']}</strong></td>
+                            <td>{cs['probability']:.1%}</td>
+                            <td>{1/cs['probability']:.2f}</td>
+                        </tr>
+        """
+    
+    html += """
+                    </tbody>
+                </table>
+            </div>
+    """
+    
+    if value_bets:
+        html += f"""
+            <div class="section">
+                <h2>💎 Value Bets Identificadas</h2>
+                <p style="margin-bottom: 15px;"><strong>Bankroll:</strong> €{bankroll:.2f}</p>
+        """
+        
+        for bet in value_bets:
+            html += f"""
+                <div class="value-bet">
+                    <h3>💰 {bet['market']}</h3>
+                    <p><strong>Odds:</strong> {bet['odds']:.2f} | <strong>Probabilidade Real:</strong> {bet['true_prob']:.1%}</p>
+                    <p><strong>Edge:</strong> {bet['edge']:.2f}% | <strong>EV:</strong> {bet['ev']:.2f}%</p>
+                    <p><strong>Stake Recomendada (Kelly):</strong> €{bet['kelly_stake']:.2f} ({(bet['kelly_stake']/bankroll)*100:.2f}% do bankroll)</p>
+                    <p><strong>Lucro Esperado:</strong> €{bet['kelly_stake'] * (bet['odds'] - 1) * bet['true_prob'] - bet['kelly_stake'] * (1 - bet['true_prob']):.2f}</p>
+                </div>
+            """
+        
+        html += "</div>"
+    
+    html += f"""
+            <div class="footer">
+                <p><strong>Football Predictor Pro</strong> - Análise profissional de apostas desportivas</p>
+                <p>© {datetime.now().year} | Modelo Dixon-Coles com Bayesian Smoothing</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 # ================================
 # FORM ANALYSIS
@@ -740,6 +1121,55 @@ if uploaded_file is not None:
                         """, unsafe_allow_html=True)
                 else:
                     st.info("No value bets found with current odds and settings.")
+
+                # EXPORT BUTTON
+                st.markdown("---")
+                st.markdown("### 📥 Exportar Relatório")
+                
+                html_report = generate_html_report(
+                    home=home_team,
+                    away=away_team,
+                    pred=pred,
+                    home_form=home_form,
+                    away_form=away_form,
+                    h2h=h2h,
+                    bankroll=bankroll,
+                    value_bets=value_bets
+                )
+                
+                col_export1, col_export2 = st.columns(2)
+                
+                with col_export1:
+                    st.download_button(
+                        label="📄 Download HTML Completo",
+                        data=html_report,
+                        file_name=f"{home_team}_vs_{away_team}_analise_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                        mime="text/html",
+                        type="primary",
+                        use_container_width=True
+                    )
+                    st.caption("Relatório completo com todas as análises e value bets")
+                
+                with col_export2:
+                    st.markdown(
+                        """
+                        <button onclick="window.print()" style="
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            color: white;
+                            padding: 12px 24px;
+                            border: none;
+                            border-radius: 8px;
+                            cursor: pointer;
+                            font-size: 16px;
+                            width: 100%;
+                            font-weight: bold;
+                        ">
+                            🖨️ Imprimir / Guardar PDF
+                        </button>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    st.caption("Imprimir esta página ou guardar como PDF")
 
 else:
     st.info("📁 Upload a CSV file to start analyzing matches.")
