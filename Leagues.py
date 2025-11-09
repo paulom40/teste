@@ -1,4 +1,4 @@
-# Leagues.py - FOOTBALL PREDICTOR PRO v5.1 (FIXED: Duplicate ID)
+# Leagues.py - FOOTBALL PREDICTOR PRO v6.0 (FT SCORE + HTML EXPORT)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,10 +16,10 @@ warnings.filterwarnings('ignore')
 # ================================
 # CONFIG
 # ================================
-st.set_page_config(page_title="Predictor Pro v5.1", layout="wide")
+st.set_page_config(page_title="Predictor Pro v6.0", layout="wide")
 st.markdown("""
-# Football Predictor Pro v5.1
-**Goals • xG • Shots • SoT • Corners • Yellows • Total Cards • Win %**
+# Football Predictor Pro v6.0
+**FT Score • xG • Shots • SoT • Corners • Cards • Win % • HTML Export**
 """)
 
 # ================================
@@ -151,14 +151,13 @@ def compute_form_stats(df: pd.DataFrame, last_n: int = 6) -> dict:
 stats = compute_form_stats(df)
 
 # ================================
-# PREDICTION ENGINE
+# PREDICTION ENGINE – FT SCORE + HTML
 # ================================
 def predict_match(home: str, away: str):
     h = stats['home'].get(home, {})
     a = stats['away'].get(away, {})
     lhg = stats['league_home_goals']
     lag = stats['league_away_goals']
-    ly = stats['league_yellows']
 
     ha = h.get('goals_for', lhg) / lhg
     aa = a.get('goals_for', lag) / lag
@@ -179,23 +178,29 @@ def predict_match(home: str, away: str):
     home_corners = max(3.0, min(round(h.get('corners', 6.0) * ha * (2 - aa) / 2, 1), 12.0))
     away_corners = max(2.0, min(round(a.get('corners', 4.5) * aa * (2 - hd) / 2, 1), 10.0))
 
-    # Yellow Cards
     home_yellows = max(0.5, min(round(h.get('yellows', 2.1) * (1 + 0.1 * aa) * (1 + 0.05 * hd), 1), 6.0))
     away_yellows = max(0.5, min(round(a.get('yellows', 2.4) * (1 + 0.1 * ha) * (1 + 0.05 * ad), 1), 6.0))
     total_yellows = round(home_yellows + away_yellows, 1)
+    total_cards = round(total_yellows + h.get('reds', 0.08) * 1.3 + a.get('reds', 0.10) * 1.3, 1)
 
-    home_reds = round(h.get('reds', 0.08) * (1 + 0.3 * aa), 2)
-    away_reds = round(a.get('reds', 0.10) * (1 + 0.3 * ha), 2)
-    total_cards = round(total_yellows + home_reds + away_reds, 1)
-
+    # **FT SCORE PREDICTION (Most Likely)**
     sims = 30000
     home_goals_sim = poisson(mu=home_xg).rvs(sims)
     away_goals_sim = poisson(mu=away_xg).rvs(sims)
+
+    # Most common score
+    scores = np.column_stack([home_goals_sim, away_goals_sim])
+    unique, counts = np.unique(scores, axis=0, return_counts=True)
+    most_likely_idx = counts.argmax()
+    ft_score = f"{unique[most_likely_idx][0]}-{unique[most_likely_idx][1]}"
+
+    # Win %
     home_win = (home_goals_sim > away_goals_sim).mean() * 100
     draw = (home_goals_sim == away_goals_sim).mean() * 100
     away_win = 100 - home_win - draw
 
     return {
+        'ft_score': ft_score,  # e.g. "2-1"
         'home_shots': home_shots, 'away_shots': away_shots,
         'home_sot': home_sot, 'away_sot': away_sot,
         'home_xg': home_xg, 'away_xg': away_xg,
@@ -204,7 +209,6 @@ def predict_match(home: str, away: str):
         'home_corners': home_corners, 'away_corners': away_corners,
         'home_yellows': home_yellows, 'away_yellows': away_yellows,
         'total_yellows': total_yellows, 'total_cards': total_cards,
-        'home_reds': home_reds, 'away_reds': away_reds,
     }
 
 # ================================
@@ -225,28 +229,32 @@ if home_team == away_team:
 
 result = predict_match(home_team, away_team)
 
+# ================================
+# DISPLAY – FT SCORE + HTML
+# ================================
 st.markdown(f"## {home_team} vs {away_team}")
 
 colA, colB, colC = st.columns(3)
 with colA:
     logo = get_team_logo(home_team)
     if logo: st.image(load_image(logo), width=100)
-    st.metric(f"**{home_team}**", f"{result['home_goals']} goals")
+    st.metric(f"**{home_team}**", f"**{result['ft_score'].split('-')[0]}** goals")
     st.write(f"**Shots:** {result['home_shots']} | **SoT:** {result['home_sot']} | **Corners:** {result['home_corners']}")
-    st.write(f"**Yellow Cards:** {result['home_yellows']} | **Reds:** {result['home_reds']:.2f}")
+    st.write(f"**Yellow Cards:** {result['home_yellows']}")
 with colB:
+    st.metric("**FT Score**", f"**{result['ft_score']}**", "Most Likely")
     st.metric("**xG**", f"{result['home_xg']} – {result['away_xg']}")
     st.metric("**Win %**", f"{result['home_win']}%", f"Draw: {result['draw']}%")
     st.metric("**Total Cards**", f"{result['total_cards']}", f"Yellows: {result['total_yellows']}")
 with colC:
     logo = get_team_logo(away_team)
     if logo: st.image(load_image(logo), width=100)
-    st.metric(f"**{away_team}**", f"{result['away_goals']} goals")
+    st.metric(f"**{away_team}**", f"**{result['ft_score'].split('-')[1]}** goals")
     st.write(f"**Shots:** {result['away_shots']} | **SoT:** {result['away_sot']} | **Corners:** {result['away_corners']}")
-    st.write(f"**Yellow Cards:** {result['away_yellows']} | **Reds:** {result['away_reds']:.2f}")
+    st.write(f"**Yellow Cards:** {result['away_yellows']}")
 
 # ================================
-# FORM CHART – FIXED: UNIQUE KEYS
+# FORM CHART
 # ================================
 def plot_form(team, home=True):
     m = (df[df['HOMETEAM'] == team] if home else df[df['AWAYTEAM'] == team]).tail(5)
@@ -261,27 +269,58 @@ def plot_form(team, home=True):
 
 tab1, tab2 = st.tabs(["Home Form", "Away Form"])
 with tab1:
-    st.plotly_chart(plot_form(home_team, True), width='stretch', key="home_form_chart")  # UNIQUE KEY
+    st.plotly_chart(plot_form(home_team, True), width='stretch', key="home_form")
 with tab2:
-    st.plotly_chart(plot_form(away_team, False), width='stretch', key="away_form_chart")  # UNIQUE KEY
+    st.plotly_chart(plot_form(away_team, False), width='stretch', key="away_form")
 
 # ================================
-# PDF EXPORT
+# HTML EXPORT (Beautiful + Printable)
 # ================================
-html = f"""
-<h1>{home_team} vs {away_team}</h1>
-<p><strong>Score:</strong> {result['home_goals']} – {result['away_goals']}</p>
-<p><strong>xG:</strong> {result['home_xg']} – {result['away_xg']}</p>
-<p><strong>Shots:</strong> {result['home_shots']} – {result['away_shots']}</p>
-<p><strong>Shots on Target:</strong> {result['home_sot']} – {result['away_sot']}</p>
-<p><strong>Corners:</strong> {result['home_corners']} – {result['away_corners']}</p>
-<p><strong>Yellow Cards:</strong> {result['home_yellows']} – {result['away_yellows']} (Total: {result['total_yellows']})</p>
-<p><strong>Total Cards:</strong> {result['total_cards']}</p>
-<p><strong>Win %:</strong> {home_team} {result['home_win']}%, Draw {result['draw']}%, {away_team} {result['away_win']}%</p>
+html_template = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{home_team} vs {away_team} - Prediction</title>
+  <style>
+    body {{ font-family: 'Segoe UI', sans-serif; margin: 40px; background: #f9f9fb; color: #333; }}
+    .container {{ max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }}
+    h1 {{ text-align: center; color: #1a73e8; margin-bottom: 10px; }}
+    .score {{ font-size: 48px; font-weight: bold; text-align: center; color: #1a73e8; margin: 20px 0; }}
+    .team {{ text-align: center; font-size: 24px; margin: 10px 0; }}
+    .stat {{ font-size: 18px; margin: 8px 0; display: flex; justify-content: space-between; }}
+    .label {{ font-weight: 600; }}
+    .footer {{ text-align: center; margin-top: 40px; font-size: 14px; color: #777; }}
+    @media print {{ body {{ margin: 10mm; }} .no-print {{ display: none; }} }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>{home_team} vs {away_team}</h1>
+    <div class="score">{result['ft_score']}</div>
+    <div class="team">{home_team} <strong>{result['ft_score'].split('-')[0]}</strong> – <strong>{result['ft_score'].split('-')[1]}</strong> {away_team}</div>
+    <hr style="margin: 30px 0; border: 1px solid #eee;">
+    <div class="stat"><span class="label">xG:</span> <span>{result['home_xg']} – {result['away_xg']}</span></div>
+    <div class="stat"><span class="label">Shots:</span> <span>{result['home_shots']} – {result['away_shots']}</span></div>
+    <div class="stat"><span class="label">Shots on Target:</span> <span>{result['home_sot']} – {result['away_sot']}</span></div>
+    <div class="stat"><span class="label">Corners:</span> <span>{result['home_corners']} – {result['away_corners']}</span></div>
+    <div class="stat"><span class="label">Yellow Cards:</span> <span>{result['home_yellows']} – {result['away_yellows']}</span></div>
+    <div class="stat"><span class="label">Total Cards:</span> <span>{result['total_cards']}</span></div>
+    <div class="stat"><span class="label">Win Probability:</span> <span>{home_team} {result['home_win']}%, Draw {result['draw']}%, {away_team} {result['away_win']}%</span></div>
+    <div class="footer">Generated by Football Predictor Pro v6.0 • {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+  </div>
+</body>
+</html>
 """
 
-if st.button("Export PDF"):
-    st.download_button("Download PDF", html, "prediction.pdf", "application/pdf")
+if st.button("Export to HTML"):
+    st.download_button(
+        label="Download HTML Report",
+        data=html_template,
+        file_name=f"{home_team}_vs_{away_team}_prediction.html",
+        mime="text/html"
+    )
+    st.success("Click above to download → Open in browser → Print/Save as PDF")
 
 # ================================
 # INSTALL
