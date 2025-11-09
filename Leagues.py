@@ -1,497 +1,229 @@
-# app.py - FIXED VERSION WITH OPTIONAL ML FEATURES
-import streamlit as st
-import pandas as pd
-import numpy as np
-from scipy.stats import poisson, nbinom
-import io
-from typing import Dict, Any, Tuple, List
-import requests
-from PIL import Image
-from io import BytesIO
-import plotly.express as px
-import re
-from datetime import datetime
-import base64
-import warnings
-warnings.filterwarnings('ignore')
+# Add this to your main app section - RIGHT AFTER THE IMPORTS AND CONFIG
 
 # ================================
-# OPTIONAL ML IMPORTS WITH FALLBACK
+# CSV UPLOAD & DATA LOADING
 # ================================
-try:
-    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-    from xgboost import XGBRegressor
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import mean_absolute_error
-    ML_AVAILABLE = True
-except ImportError:
-    ML_AVAILABLE = False
-    st.warning("⚠️ ML libraries not available. Using statistical models only.")
+st.sidebar.header("📁 Upload Match Data")
+uploaded_file = st.sidebar.file_uploader("Choose CSV File", type=["csv"], 
+                                         help="Upload your football match data CSV file")
 
-# ================================
-# CONFIG - ENHANCED
-# ================================
-st.set_page_config(page_title="Football Predictor Pro AI", layout="wide")
-st.title("⚽ Football Predictor Pro AI")
-st.markdown("""
-**Advanced AI Prediction Suite**  
-- **Ensemble ML Models** (XGBoost, Random Forest, Gradient Boosting)
-- **Bayesian Hierarchical Models** with uncertainty quantification
-- **Advanced Feature Engineering** (form, momentum, fatigue)
-- **Player-Level Impact Analysis**
-- **Monte Carlo Simulation** (10,000 iterations)
-- **Market Efficiency Analysis**
-- **Enhanced xG & Expected Threat**
-""")
-
-# ================================
-# NEW: ENSEMBLE MODELS WITH FALLBACK
-# ================================
-class EnsemblePredictor:
-    def __init__(self):
-        self.models = {}
-        self.is_trained = False
-        
-        if ML_AVAILABLE:
-            self.models = {
-                'xgb': XGBRegressor(n_estimators=100, max_depth=6, random_state=42),
-                'rf': RandomForestRegressor(n_estimators=50, random_state=42),
-                'gbm': GradientBoostingRegressor(n_estimators=50, random_state=42)
-            }
+if uploaded_file is not None:
+    try:
+        # Read the CSV file
+        df = load_csv(uploaded_file.read())
+        if df.empty:
+            st.error("The uploaded CSV file is empty.")
         else:
-            st.info("🔍 ML features disabled - install scikit-learn and xgboost for enhanced predictions")
-        
-    def create_advanced_features(self, df: pd.DataFrame, home_col: str, away_col: str) -> pd.DataFrame:
-        """Create sophisticated features for ML models"""
-        feature_df = df.copy()
-        teams = sorted(set(feature_df[home_col]).union(feature_df[away_col]))
-        
-        # Basic feature engineering that works without ML
-        if 'Date' in feature_df.columns:
-            try:
-                feature_df['Date'] = pd.to_datetime(feature_df['Date'])
-                feature_df['days_rest_home'] = feature_df.groupby(home_col)['Date'].diff().dt.days
-                feature_df['days_rest_away'] = feature_df.groupby(away_col)['Date'].diff().dt.days
-                feature_df['fatigue_home'] = np.exp(-feature_df['days_rest_home'].fillna(7) / 7)
-                feature_df['fatigue_away'] = np.exp(-feature_df['days_rest_away'].fillna(7) / 7)
-            except:
-                pass
-        
-        # Form calculations
-        for team in teams:
-            # Home form
-            home_games = feature_df[feature_df[home_col] == team]
-            if len(home_games) >= 3 and 'FTHG' in home_games.columns:
-                recent_home_avg = home_games['FTHG'].tail(3).mean()
-                feature_df.loc[feature_df[home_col] == team, f'{team}_home_form'] = recent_home_avg
+            st.success(f"✅ Successfully loaded {len(df):,} matches")
             
-            # Away form  
-            away_games = feature_df[feature_df[away_col] == team]
-            if len(away_games) >= 3 and 'FTAG' in away_games.columns:
-                recent_away_avg = away_games['FTAG'].tail(3).mean()
-                feature_df.loc[feature_df[away_col] == team, f'{team}_away_form'] = recent_away_avg
-        
-        return feature_df
-    
-    def train_ensemble(self, df: pd.DataFrame, home_col: str, away_col: str, target_col: str):
-        """Train ensemble model on historical data"""
-        if not ML_AVAILABLE:
-            return False
+            # Show dataframe preview
+            with st.expander("📊 Data Preview (First 10 rows)"):
+                st.dataframe(df.head(10))
             
-        try:
-            # Feature engineering
-            feature_df = self.create_advanced_features(df, home_col, away_col)
+            # Auto-detect columns
+            mapping = detect_columns(df)
             
-            # Select numeric features for training
-            numeric_features = feature_df.select_dtypes(include=[np.number]).columns.tolist()
-            features = [f for f in numeric_features if f != target_col and not f.startswith('Unnamed')]
+            st.sidebar.subheader("🔧 Column Mapping")
+            st.sidebar.write("Map your CSV columns to the required fields:")
             
-            if len(features) < 3:
-                return False
+            col_map = {}
+            required_fields = [
+                ("HomeTeam", "Home Team"),
+                ("AwayTeam", "Away Team"), 
+                ("FTHG", "Full Time Home Goals"),
+                ("FTAG", "Full Time Away Goals")
+            ]
             
-            X = feature_df[features].fillna(0)
-            y = feature_df[target_col].fillna(0)
+            optional_fields = [
+                ("HC", "Home Corners"),
+                ("AC", "Away Corners"),
+                ("HS", "Home Shots"),
+                ("AS", "Away Shots"), 
+                ("HxG", "Home Expected Goals"),
+                ("AxG", "Away Expected Goals")
+            ]
             
-            if len(X) < 20:
-                return False
+            # Required fields
+            for field, label in required_fields:
+                detected = mapping.get(field)
+                options = [""] + list(df.columns)
+                default_idx = options.index(detected) if detected in options else 0
+                col_map[field] = st.sidebar.selectbox(
+                    f"**{label}** *", 
+                    options=options, 
+                    index=default_idx,
+                    help=f"Select column for {label}"
+                )
             
-            # Train each model
-            for name, model in self.models.items():
-                model.fit(X, y)
+            # Optional fields  
+            st.sidebar.write("**Optional Fields:**")
+            for field, label in optional_fields:
+                detected = mapping.get(field)
+                options = [""] + list(df.columns)
+                default_idx = options.index(detected) if detected in options else 0
+                col_map[field] = st.sidebar.selectbox(
+                    label,
+                    options=options, 
+                    index=default_idx,
+                    help=f"Select column for {label} (optional)"
+                )
             
-            self.is_trained = True
-            return True
+            # Check required fields are mapped
+            missing = [r for r in ["HomeTeam", "AwayTeam", "FTHG", "FTAG"] if not col_map[r]]
+            if missing:
+                st.error(f"❌ Please map these required fields: {', '.join(missing)}")
+                st.stop()
             
-        except Exception as e:
-            return False
-    
-    def predict_ensemble(self, features: pd.DataFrame) -> Dict[str, float]:
-        """Get ensemble prediction"""
-        if not self.is_trained or not ML_AVAILABLE:
-            return {}
-        
-        predictions = {}
-        for name, model in self.models.items():
-            try:
-                pred = model.predict(features.fillna(0))
-                predictions[name] = float(pred[0]) if len(pred) > 0 else 0.0
-            except:
-                predictions[name] = 0.0
-        
-        # Ensemble average
-        if predictions:
-            return {
-                'ensemble_mean': np.mean(list(predictions.values())),
-                'ensemble_std': np.std(list(predictions.values())),
-                'individual': predictions
-            }
-        return {}
-
-# ================================
-# NEW: BAYESIAN IMPROVEMENTS
-# ================================
-def bayesian_team_strength(df: pd.DataFrame, home_col: str, away_col: str, hg_col: str, ag_col: str) -> Dict[str, float]:
-    """Bayesian estimation of team strengths with uncertainty"""
-    teams = sorted(set(df[home_col]).union(df[away_col]))
-    team_strengths = {}
-    
-    # League averages
-    try:
-        league_avg_home = df[hg_col].mean()
-        league_avg_away = df[ag_col].mean()
-    except:
-        league_avg_home = league_avg_away = 1.5  # Fallback
-    
-    for team in teams:
-        # Home performance
-        home_matches = df[df[home_col] == team]
-        home_goals = home_matches[hg_col].mean() if len(home_matches) > 0 else league_avg_home
-        
-        # Away performance  
-        away_matches = df[df[away_col] == team]
-        away_goals = away_matches[ag_col].mean() if len(away_matches) > 0 else league_avg_away
-        
-        # Empirical Bayes estimation
-        n_home = len(home_matches)
-        n_away = len(away_matches)
-        
-        home_attack = (home_goals * n_home + league_avg_home * 5) / (n_home + 5) if n_home > 0 else 1.0
-        away_attack = (away_goals * n_away + league_avg_away * 5) / (n_away + 5) if n_away > 0 else 1.0
-        
-        team_strengths[team] = {
-            'home_attack': home_attack / league_avg_home,
-            'away_attack': away_attack / league_avg_away,
-            'uncertainty': 1.0 / (n_home + n_away + 1),  # Lower is better
-            'matches_played': n_home + n_away
-        }
-    
-    return team_strengths
-
-# ================================
-# NEW: MONTE CARLO SIMULATION
-# ================================
-def monte_carlo_match_simulation(home_expected: float, away_expected: float, iterations: int = 10000) -> Dict[str, float]:
-    """Advanced Monte Carlo simulation with correlation"""
-    home_wins, away_wins, draws = 0, 0, 0
-    scores = []
-    goals_home = []
-    goals_away = []
-    
-    # Add slight negative correlation between goals
-    correlation = -0.15
-    
-    for _ in range(iterations):
-        # Correlated Poisson (simplified implementation)
-        home_noise = np.random.normal(0, 0.1)
-        away_noise = np.random.normal(0, 0.1)
-        
-        home_goals = np.random.poisson(max(0.1, home_expected * (1 + correlation * away_noise)))
-        away_goals = np.random.poisson(max(0.1, away_expected * (1 - correlation * home_noise)))
-        
-        goals_home.append(home_goals)
-        goals_away.append(away_goals)
-        scores.append((home_goals, away_goals))
-        
-        if home_goals > away_goals:
-            home_wins += 1
-        elif away_goals > home_goals:
-            away_wins += 1
-        else:
-            draws += 1
-    
-    total = iterations
-    score_counts = pd.Series(scores).value_counts()
-    most_common_score = score_counts.index[0] if len(score_counts) > 0 else (0, 0)
-    
-    return {
-        'home_win': home_wins / total,
-        'away_win': away_wins / total,
-        'draw': draws / total,
-        'most_common_score': most_common_score,
-        'avg_home_goals': np.mean(goals_home),
-        'avg_away_goals': np.mean(goals_away),
-        'score_distribution': score_counts.head(5).to_dict()
-    }
-
-# ================================
-# NEW: PLAYER IMPACT MODEL
-# ================================
-def calculate_player_impact(injuries: Dict) -> Tuple[float, float]:
-    """Calculate team strength adjustments based on player injuries"""
-    if not injuries:
-        return 1.0, 1.0
-    
-    home_attack_reduction = 0.0
-    home_defense_reduction = 0.0
-    away_attack_reduction = 0.0  
-    away_defense_reduction = 0.0
-    
-    for team, players in injuries.items():
-        for player, data in players.items():
-            impact = data["impact"]
-            role = data["role"].lower()
-            
-            if "home" in team.lower() or team.lower() in ["home", "h"]:
-                if role in ["forward", "attacker", "winger", "striker"]:
-                    home_attack_reduction += impact
-                elif role in ["defender", "goalkeeper"]:
-                    home_defense_reduction += impact
-            else:
-                if role in ["forward", "attacker", "winger", "striker"]:
-                    away_attack_reduction += impact
-                elif role in ["defender", "goalkeeper"]:
-                    away_defense_reduction += impact
-    
-    # Cap maximum reduction
-    home_attack_multiplier = max(0.7, 1.0 - home_attack_reduction)
-    home_defense_multiplier = max(0.7, 1.0 - home_defense_reduction)
-    away_attack_multiplier = max(0.7, 1.0 - away_attack_reduction) 
-    away_defense_multiplier = max(0.7, 1.0 - away_defense_reduction)
-    
-    return (home_attack_multiplier * home_defense_multiplier, 
-            away_attack_multiplier * away_defense_multiplier)
-
-# ================================
-# ENHANCED PREDICTION FUNCTION
-# ================================
-@st.cache_data(show_spinner=False)
-def predict_match_enhanced(home: str, away: str, stats: Dict[str, Any],
-                          ensemble_model: EnsemblePredictor,
-                          _df: pd.DataFrame = None, home_col: str = None,
-                          away_col: str = None, hg_col: str = None, ag_col: str = None,
-                          injuries: Dict = None) -> Dict[str, Any]:
-    
-    # Get base statistical predictions (your existing function)
-    base_pred = predict_match(home, away, stats, _df, home_col, away_col, hg_col, ag_col, injuries)
-    
-    # Apply player impact adjustments
-    home_multiplier, away_multiplier = calculate_player_impact(injuries)
-    
-    # Enhanced goal expectation with Bayesian team strengths
-    try:
-        bayesian_strengths = bayesian_team_strength(_df, home_col, away_col, hg_col, ag_col)
-    except:
-        bayesian_strengths = {}
-    
-    home_attack = bayesian_strengths.get(home, {}).get('home_attack', 1.0)
-    away_attack = bayesian_strengths.get(away, {}).get('away_attack', 1.0)
-    
-    # Get league averages from stats
-    try:
-        league_avg_home = stats["goals"]["league_avg_home"]
-        league_avg_away = stats["goals"]["league_avg_away"]
-    except:
-        league_avg_home = league_avg_away = 1.5
-    
-    # Final expected goals with all adjustments
-    home_expected = home_attack * away_attack * league_avg_home * home_multiplier  # Simplified
-    away_expected = away_attack * home_attack * league_avg_away * away_multiplier
-    
-    # Monte Carlo simulation
-    mc_results = monte_carlo_match_simulation(home_expected, away_expected, 5000)
-    
-    # Ensemble ML prediction if available
-    ml_prediction = {}
-    try:
-        # Create feature row for current match
-        feature_row = pd.DataFrame({
-            'home_team_strength': [home_attack],
-            'away_team_strength': [away_attack], 
-            'league_avg_home': [league_avg_home],
-            'league_avg_away': [league_avg_away]
-        })
-        ml_prediction = ensemble_model.predict_ensemble(feature_row)
-    except:
-        pass
-    
-    # Combine all predictions
-    enhanced_pred = base_pred.copy()
-    enhanced_pred["predictions"]["enhanced"] = {
-        "monte_carlo": mc_results,
-        "bayesian_strengths": {
-            home: bayesian_strengths.get(home, {}),
-            away: bayesian_strengths.get(away, {})
-        },
-        "expected_goals": {
-            "home": round(home_expected, 2),
-            "away": round(away_expected, 2)
-        },
-        "ml_predictions": ml_prediction,
-        "injury_impact": {
-            "home_multiplier": home_multiplier,
-            "away_multiplier": away_multiplier
-        }
-    }
-    
-    # Override base predictions with enhanced ones where available
-    if mc_results:
-        enhanced_pred["predictions"]["goals"]["home_win"] = mc_results["home_win"]
-        enhanced_pred["predictions"]["goals"]["away_win"] = mc_results["away_win"] 
-        enhanced_pred["predictions"]["goals"]["draw"] = mc_results["draw"]
-        enhanced_pred["predictions"]["goals"]["score"] = f"{mc_results['most_common_score'][0]}-{mc_results['most_common_score'][1]}"
-    
-    return enhanced_pred
-
-# ================================
-# ENHANCED UI COMPONENTS
-# ================================
-def display_enhanced_predictions(pred: Dict[str, Any], home_team: str, away_team: str):
-    """Display the enhanced prediction results"""
-    p = pred["predictions"]
-    enhanced = p.get("enhanced", {})
-    
-    st.markdown("---")
-    st.subheader("🎯 Enhanced AI Predictions")
-    
-    # Confidence metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        uncertainty_home = enhanced.get("bayesian_strengths", {}).get(home_team, {}).get("uncertainty", 0.5)
-        confidence = max(0, 1 - uncertainty_home) * 100
-        st.metric("Model Confidence", f"{confidence:.1f}%")
-    
-    with col2:
-        st.metric("Simulation Iterations", "5,000")
-    
-    with col3:
-        if ML_AVAILABLE:
-            ml_std = enhanced.get("ml_predictions", {}).get("ensemble_std", 0)
-            consistency = max(0, 1 - ml_std) * 100 if ml_std > 0 else "N/A"
-            st.metric("Prediction Consistency", f"{consistency:.1f}%" if isinstance(consistency, float) else consistency)
-        else:
-            st.metric("ML Models", "Not Available")
-    
-    # Enhanced odds
-    st.markdown("#### 📊 Enhanced Probabilities")
-    mc_results = enhanced.get("monte_carlo", {})
-    
-    if mc_results:
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Home Win", f"{mc_results.get('home_win', 0):.1%}")
-        with col2:
-            st.metric("Draw", f"{mc_results.get('draw', 0):.1%}")
-        with col3:
-            st.metric("Away Win", f"{mc_results.get('away_win', 0):.1%}")
-        with col4:
-            st.metric("Most Likely Score", f"{mc_results.get('most_common_score', (0,0))[0]}-{mc_results.get('most_common_score', (0,0))[1]}")
-        with col5:
-            expected_goals = enhanced.get("expected_goals", {})
-            st.metric("Expected Goals", f"{expected_goals.get('home', 0):.1f}-{expected_goals.get('away', 0):.1f}")
-    
-    # ML Ensemble Details
-    if enhanced.get("ml_predictions") and ML_AVAILABLE:
-        st.markdown("#### 🤖 Ensemble ML Predictions")
-        ml_preds = enhanced["ml_predictions"]
-        if "individual" in ml_preds:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("XGBoost", f"{ml_preds['individual'].get('xgb', 0):.2f}")
-            with col2:
-                st.metric("Random Forest", f"{ml_preds['individual'].get('rf', 0):.2f}")
-            with col3:
-                st.metric("Gradient Boost", f"{ml_preds['individual'].get('gbm', 0):.2f}")
-            with col4:
-                st.metric("Ensemble Avg", f"{ml_preds.get('ensemble_mean', 0):.2f}")
-    
-    # Bayesian Strengths
-    st.markdown("#### 📈 Team Strength Analysis")
-    bayesian = enhanced.get("bayesian_strengths", {})
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        home_strength = bayesian.get(home_team, {})
-        st.write(f"**{home_team}**")
-        st.write(f"Home Attack: {home_strength.get('home_attack', 1.0):.2f}")
-        st.write(f"Matches: {home_strength.get('matches_played', 0)}")
-        st.write(f"Uncertainty: ±{home_strength.get('uncertainty', 0.5)*100:.1f}%")
-    
-    with col2:
-        away_strength = bayesian.get(away_team, {})
-        st.write(f"**{away_team}**")
-        st.write(f"Away Attack: {away_strength.get('away_attack', 1.0):.2f}")
-        st.write(f"Matches: {away_strength.get('matches_played', 0)}")
-        st.write(f"Uncertainty: ±{away_strength.get('uncertainty', 0.5)*100:.1f}%")
-    
-    # Injury Impact
-    injury_impact = enhanced.get("injury_impact", {})
-    if injury_impact.get("home_multiplier", 1.0) != 1.0 or injury_impact.get("away_multiplier", 1.0) != 1.0:
-        st.markdown("#### 🏥 Injury Impact Analysis")
-        col1, col2 = st.columns(2)
-        with col1:
-            reduction = (1 - injury_impact.get("home_multiplier", 1.0)) * 100
-            st.metric(f"{home_team} Strength Reduction", f"{reduction:.1f}%")
-        with col2:
-            reduction = (1 - injury_impact.get("away_multiplier", 1.0)) * 100
-            st.metric(f"{away_team} Strength Reduction", f"{reduction:.1f}%")
-
-# ================================
-# UPDATED MAIN APP INTEGRATION
-# ================================
-
-# Initialize ensemble model
-ensemble_predictor = EnsemblePredictor()
-
-# Add this to your existing sidebar
-st.sidebar.markdown("---")
-st.sidebar.subheader("AI Model Status")
-if ML_AVAILABLE:
-    if ensemble_predictor.is_trained:
-        st.sidebar.success("✅ Ensemble ML Model Trained")
-    else:
-        st.sidebar.info("🔍 ML Ready - Will train with data")
-else:
-    st.sidebar.warning("⚠️ ML Libraries Not Installed")
-
-# Add model configuration
-st.sidebar.subheader("AI Model Settings")
-use_monte_carlo = st.sidebar.toggle("Use Monte Carlo Simulation", value=True)
-use_bayesian = st.sidebar.toggle("Use Bayesian Adjustments", value=True)
-if ML_AVAILABLE:
-    use_ensemble = st.sidebar.toggle("Use Ensemble ML", value=True)
-
-# In your main prediction section, replace the existing predict button logic:
-if 'df' in locals() and 'team_stats' in locals():
-    if st.button("Predict with AI Enhancement"):
-        with st.spinner("Running advanced AI prediction models..."):
-            # Train ensemble model if enough data and ML available
-            if ML_AVAILABLE and len(df) >= 20:
-                ensemble_predictor.train_ensemble(df_clean, "HomeTeam", "AwayTeam", "FTHG")
-            
-            # Get enhanced prediction
-            pred = predict_match_enhanced(
-                home_team, away_team, team_stats, ensemble_predictor, df,
-                col_map["HomeTeam"], col_map["AwayTeam"], 
-                col_map["FTHG"], col_map["FTAG"], injuries
+            # Model training settings
+            st.sidebar.subheader("⚙️ Model Settings")
+            recency_weight = st.sidebar.slider(
+                "Recency Weight", 
+                0.5, 5.0, 2.0, 0.1,
+                help="Higher values give more weight to recent matches"
+            )
+            min_matches = st.sidebar.number_input(
+                "Minimum Matches per Team", 
+                1, 20, 3,
+                help="Minimum matches required for reliable team stats"
             )
             
-            # Display both base and enhanced results
-            display_enhanced_predictions(pred, home_team, away_team)
+            # Train the model
+            with st.spinner("🔄 Training prediction model on your data..."):
+                try:
+                    team_stats = compute_team_stats(
+                        _df=df,
+                        home_col=col_map["HomeTeam"], 
+                        away_col=col_map["AwayTeam"],
+                        hg_col=col_map["FTHG"], 
+                        ag_col=col_map["FTAG"],
+                        hc_col=col_map.get("HC"), 
+                        ac_col=col_map.get("AC"),
+                        hs_col=col_map.get("HS"), 
+                        as_col=col_map.get("AS"),
+                        hxg_col=col_map.get("HxG"), 
+                        axg_col=col_map.get("AxG"),
+                        recency_weight=recency_weight,
+                        min_matches=min_matches
+                    )
+                    
+                    st.success("✅ Model trained successfully!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error training model: {str(e)}")
+                    st.stop()
+            
+            # Prepare data for prediction
+            rename_dict = {v: k for k, v in col_map.items() if v}
+            df_clean = df.rename(columns=rename_dict).copy()
+            teams = sorted(set(df_clean["HomeTeam"]).union(df_clean["AwayTeam"]))
+            
+            # Injury Input
+            st.sidebar.subheader("🏥 Injury Information")
+            st.sidebar.write("Format: `Team: Player (role:position, impact:15%)`")
+            injury_input = st.sidebar.text_area(
+                "Injured Players", 
+                placeholder="Example:\nArsenal: Saka (role:forward, impact:15%)\nChelsea: James (role:defender, impact:20%)",
+                height=100,
+                help="Enter one injury per line in the format shown"
+            )
+            injuries = parse_injuries(injury_input)
+            
+            # PREDICTION SECTION
+            st.markdown("---")
+            st.subheader("🔮 Match Prediction")
+            
+            col1, col2 = st.columns(2)
+            home_team = col1.selectbox("Home Team", teams, key="home_select")
+            away_team = col2.selectbox("Away Team", teams, key="away_select")
+            
+            # Prediction buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🎯 Standard Prediction", use_container_width=True):
+                    with st.spinner("Calculating standard prediction..."):
+                        pred = predict_match(home_team, away_team, team_stats, df,
+                                           col_map["HomeTeam"], col_map["AwayTeam"],
+                                           col_map["FTHG"], col_map["FTAG"], injuries)
+                        # Display standard results (your existing display function)
+                        display_standard_predictions(pred, home_team, away_team)
+            
+            with col2:
+                if st.button("🤖 AI Enhanced Prediction", use_container_width=True, type="primary"):
+                    with st.spinner("Running advanced AI models..."):
+                        # Train ensemble if possible
+                        if ML_AVAILABLE and len(df) >= 20:
+                            ensemble_predictor.train_ensemble(df_clean, "HomeTeam", "AwayTeam", "FTHG")
+                        
+                        # Get enhanced prediction
+                        pred = predict_match_enhanced(
+                            home_team, away_team, team_stats, ensemble_predictor, df,
+                            col_map["HomeTeam"], col_map["AwayTeam"], 
+                            col_map["FTHG"], col_map["FTAG"], injuries
+                        )
+                        
+                        # Display both standard and enhanced results
+                        display_standard_predictions(pred, home_team, away_team)
+                        display_enhanced_predictions(pred, home_team, away_team)
+            
+            # Team statistics overview
+            with st.expander("📈 League Overview"):
+                st.write(f"**Total Teams:** {len(teams)}")
+                st.write(f"**Total Matches:** {len(df_clean)}")
+                if 'FTHG' in df_clean.columns:
+                    avg_home_goals = df_clean['FTHG'].mean()
+                    avg_away_goals = df_clean['FTAG'].mean()
+                    st.write(f"**Average Home Goals:** {avg_home_goals:.2f}")
+                    st.write(f"**Average Away Goals:** {avg_away_goals:.2f}")
+                
+    except Exception as e:
+        st.error(f"❌ Error processing CSV file: {str(e)}")
+        st.info("💡 Make sure your CSV file has the correct format with columns for teams and goals.")
 
-# Add installation instructions for ML features
-if not ML_AVAILABLE:
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Enable ML Features")
-    st.sidebar.code("""
-pip install scikit-learn xgboost
-""")
+else:
+    # Show when no file is uploaded
+    st.info("📁 Please upload a CSV file to get started")
+    
+    with st.expander("💡 CSV Format Guide"):
+        st.markdown("""
+        **Required Columns:**
+        - Home Team (e.g., 'HomeTeam', 'Home')
+        - Away Team (e.g., 'AwayTeam', 'Away')  
+        - Home Goals (e.g., 'FTHG', 'HG', 'HomeGoals')
+        - Away Goals (e.g., 'FTAG', 'AG', 'AwayGoals')
+        
+        **Optional Columns:**
+        - Home Corners, Away Corners
+        - Home Shots, Away Shots  
+        - Home xG, Away xG
+        - Date (for form calculations)
+        
+        **Example CSV structure:**
+        ```
+        HomeTeam,AwayTeam,FTHG,FTAG,HC,AC,Date
+        Arsenal,Chelsea,2,1,6,4,2024-01-15
+        Man Utd,Liverpool,1,1,5,7,2024-01-14
+        ```
+        """)
+    
+    # Sample data option
+    if st.button("🎲 Load Sample Data (for testing)"):
+        # Create sample data
+        sample_data = {
+            'HomeTeam': ['Arsenal', 'Chelsea', 'Man Utd', 'Liverpool', 'Man City', 'Tottenham'],
+            'AwayTeam': ['Chelsea', 'Arsenal', 'Liverpool', 'Man Utd', 'Tottenham', 'Man City'],
+            'FTHG': [2, 1, 1, 2, 3, 1],
+            'FTAG': [1, 2, 2, 1, 0, 2],
+            'HC': [6, 4, 5, 7, 8, 3],
+            'AC': [4, 6, 7, 5, 2, 8],
+            'HS': [15, 12, 10, 14, 18, 9],
+            'AS': [10, 14, 16, 11, 6, 17]
+        }
+        sample_df = pd.DataFrame(sample_data)
+        st.session_state.sample_data = sample_df
+        st.rerun()
+
+# Check if sample data is loaded
+if 'sample_data' in st.session_state:
+    df = st.session_state.sample_data
+    st.info("🎲 Sample data loaded for testing. Upload your own CSV for real predictions.")
+    # Continue with the same processing logic as above...
