@@ -1,4 +1,4 @@
-# Leagues.py - FOOTBALL PREDICTOR PRO v4.0 (MAX ACCURACY)
+# Leagues.py - FOOTBALL PREDICTOR PRO v4.1 (Streamlit 2025+ Compatible)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,7 +8,7 @@ from PIL import Image
 from io import BytesIO
 import plotly.graph_objects as go
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -16,9 +16,9 @@ warnings.filterwarnings('ignore')
 # ================================
 # CONFIG
 # ================================
-st.set_page_config(page_title="Predictor Pro v4", layout="wide")
+st.set_page_config(page_title="Predictor Pro v4.1", layout="wide")
 st.markdown("""
-# Football Predictor Pro v4.0
+# Football Predictor Pro v4.1
 **87%+ Accuracy • Goals • xG • Shots • SoT • Corners • Win %**
 """)
 
@@ -47,7 +47,7 @@ def load_image(url: str) -> Image.Image | None:
         return None
 
 # ================================
-# DEMO DATA (WITH HST, AST)
+# DEMO DATA
 # ================================
 def load_demo_csv() -> pd.DataFrame:
     data = {
@@ -100,11 +100,10 @@ def compute_form_stats(df: pd.DataFrame, last_n: int = 10) -> dict:
     if df.empty:
         return {}
 
-    # Add decay: older games matter less
     df = df.copy()
     latest = df['DATE'].max()
     df['days_ago'] = (latest - df['DATE']).dt.days
-    df['weight'] = np.exp(-df['days_ago'] / 30)  # 30-day half-life
+    df['weight'] = np.exp(-df['days_ago'] / 30)
 
     home_games = []
     away_games = []
@@ -153,7 +152,7 @@ def compute_form_stats(df: pd.DataFrame, last_n: int = 10) -> dict:
 stats = compute_form_stats(df)
 
 # ================================
-# ACCURATE PREDICTION ENGINE
+# PREDICTION ENGINE
 # ================================
 def predict_match(home: str, away: str):
     h = stats['home'].get(home, {})
@@ -161,35 +160,28 @@ def predict_match(home: str, away: str):
     lhg = stats['league_home_goals']
     lag = stats['league_away_goals']
 
-    # Attack/Defence (with decay)
     ha = h.get('goals_for', lhg) / lhg
     aa = a.get('goals_for', lag) / lag
     hd = h.get('goals_against', lag) / lag
     ad = a.get('goals_against', lhg) / lhg
 
-    # Shots
     home_shots = max(8.0, min(round(h.get('shots', 12.0) * ha * (2 - aa) / 2, 1), 20.0))
     away_shots = max(6.0, min(round(a.get('shots', 10.0) * aa * (2 - hd) / 2, 1), 18.0))
 
-    # Accuracy
     home_acc = h.get('accuracy', 0.35)
     away_acc = a.get('accuracy', 0.30)
 
-    # Shots on Target
     home_sot = round(home_shots * home_acc, 1)
     away_sot = round(away_shots * away_acc, 1)
     home_sot = max(2.0, min(home_sot, home_shots))
     away_sot = max(1.0, min(away_sot, away_shots))
 
-    # xG: SoT × 0.28 + Off-target × 0.01
     home_xg = round(home_sot * 0.28 + (home_shots - home_sot) * 0.01, 2)
     away_xg = round(away_sot * 0.25 + (away_shots - away_sot) * 0.01, 2)
 
-    # Corners
     home_corners = max(3.0, min(round(h.get('corners', 6.0) * ha * (2 - aa) / 2, 1), 12.0))
     away_corners = max(2.0, min(round(a.get('corners', 4.5) * aa * (2 - hd) / 2, 1), 10.0))
 
-    # Skellam for win probability
     sims = 50000
     diff = poisson(mu=home_xg).rvs(sims) - poisson(mu=away_xg).rvs(sims)
     home_win = (diff > 0).mean() * 100
@@ -227,9 +219,6 @@ if home_team == away_team:
 
 result = predict_match(home_team, away_team)
 
-# ================================
-# DISPLAY
-# ================================
 st.markdown(f"## {home_team} vs {away_team}")
 
 colA, colB, colC = st.columns(3)
@@ -248,7 +237,7 @@ with colC:
     st.write(f"**Shots:** {result['away_shots']} | **Corners:** {result['away_corners']}")
 
 # ================================
-# FORM CHART
+# FORM CHART – FIXED: width='stretch'
 # ================================
 def plot_form(team, home=True):
     m = (df[df['HOMETEAM'] == team] if home else df[df['AWAYTEAM'] == team]).tail(5)
@@ -262,8 +251,10 @@ def plot_form(team, home=True):
     return fig
 
 tab1, tab2 = st.tabs(["Home Form", "Away Form"])
-with tab1: st.plotly_chart(plot_form(home_team, True), use_container_width=True)
-with tab2: st.plotly_chart(plot_form(away_team, False), use_container_width=True)
+with tab1:
+    st.plotly_chart(plot_form(home_team, True), width='stretch')  # FIXED
+with tab2:
+    st.plotly_chart(plot_form(away_team, False), width='stretch')  # FIXED
 
 # ================================
 # PDF EXPORT
