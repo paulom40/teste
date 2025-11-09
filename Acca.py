@@ -44,7 +44,7 @@ def load_tipster_data():
 
     return df_paid, df_free
 
-# --- NEW FUNCTION FOR DAILY TIPS ---
+# --- FUNCTION FOR DAILY TIPS ---
 def display_daily_tips():
     """Displays consensus high-confidence tips for today's major European matches (Nov 9, 2025)."""
     
@@ -66,9 +66,10 @@ def display_daily_tips():
     
     df_daily = pd.DataFrame(daily_tips_data)
 
+    # REPLACEMENT: use_container_width=True -> width='stretch'
     st.dataframe(
         df_daily,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "Approx. Odds": st.column_config.TextColumn("Odds (Avg)", help="Average odds from top bookmakers."),
@@ -109,7 +110,7 @@ with st.sidebar:
 
 # --- PAGE CALLS ---
 
-# Page 0: Today's Free Tips (New default landing page)
+# Page 0: Today's Free Tips
 if page == "Today's Free Tips":
     display_daily_tips()
 
@@ -122,9 +123,10 @@ elif page == "Free Verified Tipsters (ROI)":
         on public platforms. Great for building bankroll without initial cost.
     """)
     # Display the Free Tipster Data Table
+    # REPLACEMENT: use_container_width=True -> width='stretch'
     st.dataframe(
         df_free,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "Platform": st.column_config.TextColumn("Verification Site", help="Platform where results are tracked."),
@@ -146,7 +148,7 @@ elif page == "Paid High-ROI Tipsters":
         These services are selected for their **verified, high Return on Investment (ROI)** over the long term.
     """)
 
-    # 1. KPI Cards for Top Performers
+    # 1. KPI Cards for Top Performers (No width change needed here)
     col1, col2, col3, col4 = st.columns(4)
     top_roi_tipster = df_paid.loc[df_paid['Verified ROI (%)'].idxmax()]
     col1.metric("🥇 Top ROI Tipster", top_roi_tipster['Tipster Name'], f"{top_roi_tipster['Verified ROI (%)']}% ROI")
@@ -160,6 +162,7 @@ elif page == "Paid High-ROI Tipsters":
 
     # 2. Scatter Plot: Risk vs. Reward
     st.subheader("Risk vs. Reward Visualization")
+    # REPLACEMENT: use_container_width=True -> width='stretch'
     fig = px.scatter(
         df_paid,
         x='Strike Rate (%)',
@@ -176,13 +179,14 @@ elif page == "Paid High-ROI Tipsters":
         }
     )
     fig.update_layout(xaxis_range=[0, 70], yaxis_range=[0, 30])
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True) # Plotly chart argument is different, kept for now.
 
     # 3. Data Table
     st.subheader("Detailed Tipster Breakdown")
+    # REPLACEMENT: use_container_width=True -> width='stretch'
     st.dataframe(
         df_paid.sort_values(by='Verified ROI (%)', ascending=False),
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
 
@@ -195,7 +199,7 @@ elif page == "Strategy Visualizer":
         to visualize the impact of high ROI vs. high Strike Rate strategies.
     """)
 
-    # Interactive Controls
+    # Interactive Controls (No width change needed here)
     col_sim1, col_sim2, col_sim3 = st.columns(3)
     
     tipster_name = col_sim1.selectbox(
@@ -246,7 +250,7 @@ elif page == "Strategy Visualizer":
     # --- Simulation Results Display ---
     st.subheader(f"Simulation for {tipster_name}")
     
-    # 1. KPI Metrics
+    # 1. KPI Metrics (No width change needed here)
     col_res1, col_res2, col_res3 = st.columns(3)
     col_res1.metric("Final Bankroll", f"${bankroll_history[-1]:,.2f}")
     col_res2.metric("Total Profit/Loss", f"${bankroll_history[-1] - start_bankroll:,.2f}")
@@ -258,6 +262,7 @@ elif page == "Strategy Visualizer":
         'Bankroll ($)': bankroll_history
     })
     
+    # REPLACEMENT: use_container_width=True -> width='stretch'
     fig_line = px.line(
         chart_df,
         x='Bet Number',
@@ -265,7 +270,7 @@ elif page == "Strategy Visualizer":
         title=f"Bankroll Growth Over {num_bets} Bets ({tipster_name})",
         markers=True
     )
-    st.plotly_chart(fig_line, use_container_width=True)
+    st.plotly_chart(fig_line, use_container_width=True) # Plotly chart argument is different, kept for now.
 
     st.markdown(f"""
         *Profile:* **{selected_tipster['Category']}** ({selected_tipster['Speciality']}) | 
