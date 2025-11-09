@@ -470,7 +470,7 @@ def display_form_based_predictions(pred: Dict, home_team: str, away_team: str,
     with colA:
         if logos[home_team]:
             img = load_image(logos[home_team])
-            if img: st.image(img width=80)
+            if img: st.image(img, width=80)
         st.write(f"**{home_team}**")
         st.caption(f"Last {p['games_used']['home']} home games")
     with colC:
