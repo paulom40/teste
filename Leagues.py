@@ -1,4 +1,4 @@
-# app.py - WITH SHOT PREDICTIONS
+# app.py - COMPLETE WORKING VERSION WITH SHOT PREDICTIONS
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -30,7 +30,93 @@ st.markdown("""
 """)
 
 # ================================
-# ENHANCED LEAGUE COMPARISON WITH SHOTS
+# CORE FUNCTIONS
+# ================================
+@st.cache_data(ttl=3600)
+def get_team_logo(team_name: str) -> str:
+    team_clean = team_name.strip().lower().replace(" ", "_").replace(".", "").replace("'", "")
+    replacements = {
+        "man_utd": "Manchester_United_F.C.", "man_city": "Manchester_City_F.C.",
+        "arsenal": "Arsenal_F.C.", "chelsea": "Chelsea_F.C.", "liverpool": "Liverpool_F.C.",
+        "nottm_forest": "Nottingham_Forest_F.C.", "leeds": "Leeds_United_F.C.",
+        "spurs": "Tottenham_Hotspur_F.C.", "newcastle": "Newcastle_United_F.C.",
+        "brighton": "Brighton_&_Hove_Albion_F.C.", "west_ham": "West_Ham_United_F.C."
+    }
+    wiki_name = replacements.get(team_clean, team_name.replace(" ", "_") + "_F.C.")
+    url = f"https://en.wikipedia.org/wiki/File:{wiki_name}_logo.svg"
+    try:
+        if requests.head(url, timeout=5).status_code == 200:
+            return url
+    except:
+        pass
+    return None
+
+@st.cache_data(ttl=3600)
+def load_image(url: str):
+    try:
+        response = requests.get(url, timeout=10)
+        return Image.open(BytesIO(response.content)).convert("RGBA")
+    except:
+        return None
+
+@st.cache_data(show_spinner="Loading CSV...")
+def load_csv(uploaded_file_bytes: bytes) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="utf-8")
+        for col in df.columns:
+            if 'date' in col.lower() or 'time' in col.lower():
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except:
+                    pass
+        return df
+    except:
+        return pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="latin1")
+
+@st.cache_data(show_spinner=False)
+def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
+    mapping = {}
+    for col in df.columns:
+        lower = col.lower().replace(" ", "")
+        if "home" in lower and "team" in lower: mapping["HomeTeam"] = col
+        elif "away" in lower and "team" in lower: mapping["AwayTeam"] = col
+        elif lower in ["fthg", "hgoals"]: mapping["FTHG"] = col
+        elif lower in ["ftag", "agoals"]: mapping["FTAG"] = col
+        elif lower in ["hc", "homecorners"]: mapping["HC"] = col
+        elif lower in ["ac", "awaycorners"]: mapping["AC"] = col
+        elif lower in ["hs", "homeshotsontarget"]: mapping["HS"] = col
+        elif lower in ["as", "awayshotsontarget"]: mapping["AS"] = col
+        elif lower in ["hxg", "home_xg"]: mapping["HxG"] = col
+        elif lower in ["axg", "away_xg"]: mapping["AxG"] = col
+        elif "date" in lower: mapping["Date"] = col
+    return mapping
+
+def parse_injuries(injury_str: str) -> Dict[str, Dict[str, float]]:
+    injuries = {}
+    if not injury_str.strip(): return injuries
+    for line in injury_str.split('\n'):
+        match = re.match(r'(\w+):\s*(\w+)\s*\(role:(\w+),\s*impact:(\d+)%\)', line.strip())
+        if match:
+            team, player, role, impact = match.groups()
+            impact = float(impact) / 100
+            if team not in injuries: injuries[team] = {}
+            injuries[team][player] = {"role": role, "impact": impact}
+    return injuries
+
+def get_last_n_home_games(df: pd.DataFrame, team: str, home_col: str, n: int = 5) -> pd.DataFrame:
+    home_games = df[df[home_col] == team].copy()
+    if 'Date' in home_games.columns:
+        home_games = home_games.sort_values('Date', ascending=False)
+    return home_games.head(n)
+
+def get_last_n_away_games(df: pd.DataFrame, team: str, away_col: str, n: int = 5) -> pd.DataFrame:
+    away_games = df[df[away_col] == team].copy()
+    if 'Date' in away_games.columns:
+        away_games = away_games.sort_values('Date', ascending=False)
+    return away_games.head(n)
+
+# ================================
+# LEAGUE COMPARISON FUNCTIONS WITH SHOTS
 # ================================
 def calculate_league_averages(df: pd.DataFrame, home_col: str, away_col: str, 
                             hg_col: str, ag_col: str, hc_col: str = None, ac_col: str = None,
@@ -65,8 +151,11 @@ def calculate_league_averages(df: pd.DataFrame, home_col: str, away_col: str,
                 'clean_sheets': (home_games[ag_col] == 0).mean(),
                 'shots_for': home_games[hs_col].mean() if hs_col and hs_col in home_games.columns else None,
                 'shots_against': home_games[as_col].mean() if as_col and as_col in home_games.columns else None,
-                'shot_efficiency': (home_games[hg_col] / home_games[hs_col]).mean() if hs_col and hs_col in home_games.columns and home_games[hs_col].sum() > 0 else None
             }
+            
+            # Calculate shot efficiency if shots data available
+            if hs_col and hs_col in home_games.columns and home_games[hs_col].sum() > 0:
+                home_stats['shot_efficiency'] = (home_games[hg_col] / home_games[hs_col]).mean()
             
             if hc_col and hc_col in home_games.columns:
                 home_stats['corners_for'] = home_games[hc_col].mean()
@@ -88,8 +177,11 @@ def calculate_league_averages(df: pd.DataFrame, home_col: str, away_col: str,
                 'clean_sheets': (away_games[hg_col] == 0).mean(),
                 'shots_for': away_games[as_col].mean() if as_col and as_col in away_games.columns else None,
                 'shots_against': away_games[hs_col].mean() if hs_col and hs_col in away_games.columns else None,
-                'shot_efficiency': (away_games[ag_col] / away_games[as_col]).mean() if as_col and as_col in away_games.columns and away_games[as_col].sum() > 0 else None
             }
+            
+            # Calculate shot efficiency if shots data available
+            if as_col and as_col in away_games.columns and away_games[as_col].sum() > 0:
+                away_stats['shot_efficiency'] = (away_games[ag_col] / away_games[as_col]).mean()
             
             if ac_col and ac_col in away_games.columns:
                 away_stats['corners_for'] = away_games[ac_col].mean()
@@ -116,7 +208,8 @@ def calculate_league_averages(df: pd.DataFrame, home_col: str, away_col: str,
         if 'shots_for' in home_df.columns and home_df['shots_for'].notna().any():
             league_stats['league_home_avg']['shots_for'] = home_df['shots_for'].mean()
             league_stats['league_home_avg']['shots_against'] = home_df['shots_against'].mean()
-            league_stats['league_home_avg']['shot_efficiency'] = home_df['shot_efficiency'].mean()
+            if 'shot_efficiency' in home_df.columns:
+                league_stats['league_home_avg']['shot_efficiency'] = home_df['shot_efficiency'].mean()
     
     if away_stats_list:
         away_df = pd.DataFrame(away_stats_list)
@@ -135,7 +228,8 @@ def calculate_league_averages(df: pd.DataFrame, home_col: str, away_col: str,
         if 'shots_for' in away_df.columns and away_df['shots_for'].notna().any():
             league_stats['league_away_avg']['shots_for'] = away_df['shots_for'].mean()
             league_stats['league_away_avg']['shots_against'] = away_df['shots_against'].mean()
-            league_stats['league_away_avg']['shot_efficiency'] = away_df['shot_efficiency'].mean()
+            if 'shot_efficiency' in away_df.columns:
+                league_stats['league_away_avg']['shot_efficiency'] = away_df['shot_efficiency'].mean()
     
     return league_stats
 
@@ -186,15 +280,17 @@ def create_comparison_tables(league_stats: Dict[str, Any], home_team: str, away_
                     'League Avg': f"{league_home_avg['shots_against']:.1f}",
                     'Difference': f"{home_team_stats['shots_against'] - league_home_avg['shots_against']:+.1f}",
                     'Percentage': f"{(home_team_stats['shots_against'] / league_home_avg['shots_against'] - 1) * 100:+.1f}%"
-                },
-                {
+                }
+            ])
+            
+            if home_team_stats.get('shot_efficiency') is not None and league_home_avg.get('shot_efficiency') is not None:
+                home_comparison.append({
                     'Metric': 'Shot Efficiency',
                     'Team': f"{home_team_stats['shot_efficiency']:.1%}",
                     'League Avg': f"{league_home_avg['shot_efficiency']:.1%}",
                     'Difference': f"{(home_team_stats['shot_efficiency'] - league_home_avg['shot_efficiency']) * 100:+.1f}%",
                     'Percentage': f"{(home_team_stats['shot_efficiency'] / league_home_avg['shot_efficiency'] - 1) * 100:+.1f}%"
-                }
-            ])
+                })
         
         home_comparison.extend([
             {
@@ -241,15 +337,17 @@ def create_comparison_tables(league_stats: Dict[str, Any], home_team: str, away_
                     'League Avg': f"{league_away_avg['shots_against']:.1f}",
                     'Difference': f"{away_team_stats['shots_against'] - league_away_avg['shots_against']:+.1f}",
                     'Percentage': f"{(away_team_stats['shots_against'] / league_away_avg['shots_against'] - 1) * 100:+.1f}%"
-                },
-                {
+                }
+            ])
+            
+            if away_team_stats.get('shot_efficiency') is not None and league_away_avg.get('shot_efficiency') is not None:
+                away_comparison.append({
                     'Metric': 'Shot Efficiency',
                     'Team': f"{away_team_stats['shot_efficiency']:.1%}",
                     'League Avg': f"{league_away_avg['shot_efficiency']:.1%}",
                     'Difference': f"{(away_team_stats['shot_efficiency'] - league_away_avg['shot_efficiency']) * 100:+.1f}%",
                     'Percentage': f"{(away_team_stats['shot_efficiency'] / league_away_avg['shot_efficiency'] - 1) * 100:+.1f}%"
-                }
-            ])
+                })
         
         away_comparison.extend([
             {
@@ -262,6 +360,48 @@ def create_comparison_tables(league_stats: Dict[str, Any], home_team: str, away_
         ])
     
     return pd.DataFrame(home_comparison), pd.DataFrame(away_comparison)
+
+def create_league_ranking_tables(league_stats: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Create league ranking tables for home and away performance
+    """
+    home_rankings = []
+    away_rankings = []
+    
+    # Home performance rankings
+    for team, stats in league_stats['team_home_stats'].items():
+        home_rankings.append({
+            'Team': team,
+            'Games': stats['games_played'],
+            'Goals Scored': f"{stats['goals_scored']:.2f}",
+            'Goals Conceded': f"{stats['goals_conceded']:.2f}",
+            'Goal Difference': f"{stats['goal_difference']:+.2f}",
+            'Win Rate': f"{stats['win_rate']:.1%}",
+            'Clean Sheets': f"{stats['clean_sheets']:.1%}"
+        })
+    
+    # Away performance rankings
+    for team, stats in league_stats['team_away_stats'].items():
+        away_rankings.append({
+            'Team': team,
+            'Games': stats['games_played'],
+            'Goals Scored': f"{stats['goals_scored']:.2f}",
+            'Goals Conceded': f"{stats['goals_conceded']:.2f}",
+            'Goal Difference': f"{stats['goal_difference']:+.2f}",
+            'Win Rate': f"{stats['win_rate']:.1%}",
+            'Clean Sheets': f"{stats['clean_sheets']:.1%}"
+        })
+    
+    # Convert to DataFrames and sort
+    home_df = pd.DataFrame(home_rankings)
+    away_df = pd.DataFrame(away_rankings)
+    
+    if not home_df.empty:
+        home_df = home_df.sort_values('Goal Difference', ascending=False)
+    if not away_df.empty:
+        away_df = away_df.sort_values('Goal Difference', ascending=False)
+    
+    return home_df, away_df
 
 # ================================
 # SHOT PREDICTION FUNCTIONS
@@ -343,8 +483,108 @@ def calculate_shot_probabilities(home_shots: int, away_shots: int, home_efficien
     }
 
 # ================================
-# ENHANCED PREDICTION FUNCTION WITH SHOTS
+# PREDICTION FUNCTIONS
 # ================================
+def calculate_team_form(df: pd.DataFrame, home_col: str, away_col: str, hg_col: str, ag_col: str, 
+                       teams: List[str], n_games: int = 5) -> Dict[str, Any]:
+    form_stats = {
+        'home_attack': {}, 'home_defence': {}, 'away_attack': {}, 'away_defence': {},
+        'home_games_used': {}, 'away_games_used': {}
+    }
+    
+    recent_home_goals = []
+    recent_away_goals = []
+    
+    for team in teams:
+        home_games = get_last_n_home_games(df, team, home_col, n_games)
+        form_stats['home_games_used'][team] = len(home_games)
+        
+        if len(home_games) > 0:
+            home_goals_scored = home_games[hg_col].mean()
+            home_goals_conceded = home_games[ag_col].mean()
+            recent_home_goals.extend(home_games[hg_col].tolist())
+            form_stats['home_attack'][team] = home_goals_scored
+            form_stats['home_defence'][team] = home_goals_conceded
+        else:
+            form_stats['home_attack'][team] = 1.0
+            form_stats['home_defence'][team] = 1.0
+        
+        away_games = get_last_n_away_games(df, team, away_col, n_games)
+        form_stats['away_games_used'][team] = len(away_games)
+        
+        if len(away_games) > 0:
+            away_goals_scored = away_games[ag_col].mean()
+            away_goals_conceded = away_games[hg_col].mean()
+            recent_away_goals.extend(away_games[ag_col].tolist())
+            form_stats['away_attack'][team] = away_goals_scored
+            form_stats['away_defence'][team] = away_goals_conceded
+        else:
+            form_stats['away_attack'][team] = 1.0
+            form_stats['away_defence'][team] = 1.0
+    
+    form_stats['league_avg_home'] = np.mean(recent_home_goals) if recent_home_goals else 1.5
+    form_stats['league_avg_away'] = np.mean(recent_away_goals) if recent_away_goals else 1.2
+    
+    return form_stats
+
+@st.cache_data(show_spinner="Analyzing last 5 games form...")
+def compute_form_based_stats(_df: pd.DataFrame, home_col: str, away_col: str, hg_col: str, ag_col: str,
+                           hc_col=None, ac_col=None, hs_col=None, as_col=None, n_games: int = 5) -> Dict[str, Any]:
+    df = _df.copy()
+    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col]:
+        if col and col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    stats = {}
+    teams = sorted(set(df[home_col]).union(df[away_col]))
+    form_stats = calculate_team_form(df, home_col, away_col, hg_col, ag_col, teams, n_games)
+    
+    home_attack = {}; home_defence = {}; away_attack = {}; away_defence = {}
+    
+    for team in teams:
+        home_attack[team] = form_stats['home_attack'][team] / form_stats['league_avg_home']
+        home_defence[team] = form_stats['home_defence'][team] / form_stats['league_avg_away']
+        away_attack[team] = form_stats['away_attack'][team] / form_stats['league_avg_away']
+        away_defence[team] = form_stats['away_defence'][team] / form_stats['league_avg_home']
+
+    stats["goals"] = {
+        "league_avg_home": form_stats['league_avg_home'], "league_avg_away": form_stats['league_avg_away'],
+        "home_attack": home_attack, "away_attack": away_attack, "home_defence": home_defence, "away_defence": away_defence,
+        "games_used": form_stats['home_games_used'], "away_games_used": form_stats['away_games_used']
+    }
+
+    if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
+        corner_stats = calculate_team_form(df, home_col, away_col, hc_col, ac_col, teams, n_games)
+        stats["corners"] = {
+            "league_avg_home": corner_stats['league_avg_home'], "league_avg_away": corner_stats['league_avg_away'],
+            "home_attack": {t: corner_stats['home_attack'][t] / corner_stats['league_avg_home'] for t in teams},
+            "away_attack": {t: corner_stats['away_attack'][t] / corner_stats['league_avg_away'] for t in teams},
+            "home_defence": {t: corner_stats['home_defence'][t] / corner_stats['league_avg_away'] for t in teams},
+            "away_defence": {t: corner_stats['away_defence'][t] / corner_stats['league_avg_home'] for t in teams}
+        }
+    else:
+        stats["corners"] = {
+            "league_avg_home": 5.5, "league_avg_away": 4.8,
+            "home_attack": {t: 1.0 for t in teams}, "away_attack": {t: 1.0 for t in teams},
+            "home_defence": {t: 1.0 for t in teams}, "away_defence": {t: 1.0 for t in teams},
+        }
+
+    return stats
+
+def apply_injury_adjustment(stats: Dict[str, Any], injuries: Dict[str, Dict[str, float]]) -> str:
+    summary = ""
+    for team, players in injuries.items():
+        attack_reduction = defence_reduction = 0
+        for p, data in players.items():
+            if data["role"] in ["forward", "midfielder", "winger", "striker"]:
+                attack_reduction += data["impact"]
+            elif data["role"] in ["defender", "goalkeeper"]:
+                defence_reduction += data["impact"]
+        attack_reduction = min(attack_reduction, 0.3); defence_reduction = min(defence_reduction, 0.3)
+        if attack_reduction > 0: summary += f"{team} Attack -{attack_reduction*100:.0f}% | "
+        if defence_reduction > 0: summary += f"{team} Defence -{defence_reduction*100:.0f}% | "
+    return summary.strip(" | ")
+
 @st.cache_data(show_spinner=False)
 def predict_form_based_match(home: str, away: str, stats: Dict[str, Any], injuries: Dict = None, league_stats: Dict[str, Any] = None) -> Dict[str, Any]:
     injury_summary = apply_injury_adjustment(stats, injuries) if injuries else ""
@@ -360,7 +600,7 @@ def predict_form_based_match(home: str, away: str, stats: Dict[str, Any], injuri
         "games_used": {"home": stats["goals"]["games_used"].get(home, 0), "away": stats["goals"]["away_games_used"].get(away, 0)}
     }
 
-    # Original goals prediction (keep existing logic)
+    # Original goals prediction
     g = stats.get("goals", {})
     if g:
         l_home = g["league_avg_home"]; l_away = g["league_avg_away"]
@@ -511,15 +751,87 @@ def display_form_based_predictions(pred: Dict[str, Any], home_team: str, away_te
         if not away_comparison_df.empty:
             st.markdown(f"##### 🚌 {away_team} Away Performance vs League Average")
             st.dataframe(away_comparison_df, use_container_width=True, hide_index=True)
+    
+    # League rankings - FIXED HIGHLIGHTING
+    st.markdown("#### 📈 League Rankings (Last 5 Games)")
+    
+    home_rankings_df, away_rankings_df = create_league_ranking_tables(league_stats)
+    
+    col_rank1, col_rank2 = st.columns(2)
+    
+    with col_rank1:
+        if not home_rankings_df.empty:
+            st.markdown("##### 🏠 Home Performance Rankings")
+            
+            # FIXED: Proper highlighting with dark text
+            def highlight_home_team(row):
+                if row['Team'] == home_team:
+                    return ['background-color: #ffeb3b; color: #000000; font-weight: bold'] * len(row)
+                return [''] * len(row)
+            
+            styled_home_df = home_rankings_df.style.apply(highlight_home_team, axis=1)
+            st.dataframe(styled_home_df, use_container_width=True, height=400)
+    
+    with col_rank2:
+        if not away_rankings_df.empty:
+            st.markdown("##### 🚌 Away Performance Rankings")
+            
+            # FIXED: Proper highlighting with dark text
+            def highlight_away_team(row):
+                if row['Team'] == away_team:
+                    return ['background-color: #ffeb3b; color: #000000; font-weight: bold'] * len(row)
+                return [''] * len(row)
+            
+            styled_away_df = away_rankings_df.style.apply(highlight_away_team, axis=1)
+            st.dataframe(styled_away_df, use_container_width=True, height=400)
 
-    # Rest of the display function remains the same...
-    # ... (league rankings, averages, etc.)
+    # ===== LEAGUE AVERAGES SUMMARY =====
+    st.markdown("#### 📋 League Averages Summary")
+    
+    col_avg1, col_avg2 = st.columns(2)
+    
+    with col_avg1:
+        st.markdown("##### 🏠 Home Games Averages")
+        if league_stats.get('league_home_avg'):
+            home_avg = league_stats['league_home_avg']
+            st.metric("Goals Scored", f"{home_avg['goals_scored']:.2f}")
+            st.metric("Goals Conceded", f"{home_avg['goals_conceded']:.2f}")
+            st.metric("Win Rate", f"{home_avg['win_rate']:.1%}")
+            st.metric("Clean Sheets", f"{home_avg['clean_sheets']:.1%}")
+            if 'shots_for' in home_avg:
+                st.metric("Shots For", f"{home_avg['shots_for']:.1f}")
+    
+    with col_avg2:
+        st.markdown("##### 🚌 Away Games Averages")
+        if league_stats.get('league_away_avg'):
+            away_avg = league_stats['league_away_avg']
+            st.metric("Goals Scored", f"{away_avg['goals_scored']:.2f}")
+            st.metric("Goals Conceded", f"{away_avg['goals_conceded']:.2f}")
+            st.metric("Win Rate", f"{away_avg['win_rate']:.1%}")
+            st.metric("Clean Sheets", f"{away_avg['clean_sheets']:.1%}")
+            if 'shots_for' in away_avg:
+                st.metric("Shots For", f"{away_avg['shots_for']:.1f}")
+
+    # Rest of the display
+    st.markdown("#### ⚽ Expected Match Stats")
+    colX1, colX2 = st.columns(2)
+    with colX1:
+        st.write(f"**Expected Goals (xG)**")
+        st.write(f"{home_team}: **{p['xg']['home']}**")
+        st.write(f"{away_team}: **{p['xg']['away']}**")
+    with colX2:
+        st.write(f"**Expected Corners**")
+        st.write(f"{home_team}: **{p['corners']['home']}**")
+        st.write(f"{away_team}: **{p['corners']['away']}**")
+        st.write(f"**Total**: **{p['corners']['total']}**")
+
+    if p["injury_summary"]:
+        st.markdown(f"#### 🏥 Injury Impact")
+        st.markdown(f"<span style='color:red'>{p['injury_summary']}</span>", unsafe_allow_html=True)
 
 # ================================
-# MAIN APP INTEGRATION
+# MAIN APP
 # ================================
-# In the main app section, update the column mapping to include shots:
-
 st.sidebar.header("📁 Upload Match Data")
 uploaded_file = st.sidebar.file_uploader("Choose CSV File", type=["csv"])
 
@@ -586,3 +898,10 @@ if uploaded_file is not None:
                 # UPDATE: Pass league_stats to prediction function
                 pred = predict_form_based_match(home_team, away_team, team_stats, injuries, league_stats)
                 display_form_based_predictions(pred, home_team, away_team, team_stats, league_stats)
+
+else:
+    st.info("📁 Please upload CSV data to get started")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 Form Analysis")
+st.sidebar.info(f"Using last {n_games if 'n_games' in locals() else 5} home/away games")
