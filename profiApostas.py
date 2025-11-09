@@ -8,7 +8,7 @@ import random
 # -------------------------------------------------
 # App configuration
 # -------------------------------------------------
-st.set_page_config(page_title="Daily Betting Tips + Tennis", layout="wide")
+st.set_page_config(page_title="Daily Betting Tips + Injury Tracker", layout="wide")
 st.title("Daily Betting Tips + Injury Tracker")
 st.markdown("**Soccer • Tennis • Basketball • NBA • Horse Racing | New Tips Every Day**")
 st.markdown("---")
@@ -43,7 +43,7 @@ if st.sidebar.button("Reset Bankroll"):
     st.success("Bankroll reset!")
 
 # -------------------------------------------------
-# TIPSTER TEMPLATES (Soccer + NBA + TENNIS)
+# TIPSTER TEMPLATES (All Sports)
 # -------------------------------------------------
 TIPSTER_TEMPLATES = {
     "Soccer": {
@@ -86,6 +86,29 @@ TIPSTER_TEMPLATES = {
             "opponents": ["Djokovic", "Alcaraz", "Sinner", "Medvedev", "Zverev", "Rublev", "Tsitsipas", "Rune"],
             "odds_range": (2.20, 3.50)
         }
+    },
+    "Basketball": {
+        "HoopsMaster": {
+            "subtitle": "Spread & Total Expert",
+            "markets": ["Lakers -4.5", "Over 228.5", "Real Madrid -6.5", "Under 165.5"],
+            "teams": ["Lakers", "Celtics", "Bucks", "Real Madrid", "Panathinaikos", "Mavericks"],
+            "opponents": ["Warriors", "Nuggets", "Knicks", "Barcelona", "Olympiacos", "Thunder"],
+            "odds_range": (1.85, 2.10)
+        },
+        "SlamValue": {
+            "subtitle": "Player Props & Live",
+            "markets": ["Jokic Over 28.5 Pts", "Curry Over 5.5 3PM", "Brunson Over 25.5 Pts"],
+            "players": ["Jokic", "Curry", "Brunson", "Kawhi", "SGA", "Embiid"],
+            "opponents": ["Celtics", "Lakers", "Bucks", "Suns", "Mavericks", "Heat"],
+            "odds_range": (1.80, 2.00)
+        },
+        "EuroHoops": {
+            "subtitle": "EuroLeague Specialist",
+            "markets": ["Real Madrid -8.5", "Over 158.5", "Monaco to Win"],
+            "teams": ["Real Madrid", "Barcelona", "Monaco", "Efes", "CSKA", "Fenerbahce"],
+            "opponents": ["Panathinaikos", "Olympiacos", "Virtus", "Partizan", "Bayern", "Maccabi"],
+            "odds_range": (1.90, 2.15)
+        }
     }
 }
 
@@ -99,8 +122,12 @@ def generate_daily_tips(sport, tipster_name, num_tips=4):
     today = st.session_state.current_date.strftime("%Y-%m-%d")
     tips = []
     for _ in range(num_tips):
-        p1 = random.choice(template["players"] if sport == "Tennis" else template["teams"])
-        p2 = random.choice(template["opponents"])
+        if sport == "Tennis":
+            p1 = random.choice(template["players"])
+            p2 = random.choice(template["opponents"])
+        else:
+            p1 = random.choice(template["teams"])
+            p2 = random.choice(template["opponents"])
         while p2 == p1:
             p2 = random.choice(template["opponents"])
         selection = random.choice(template["markets"])
@@ -109,7 +136,7 @@ def generate_daily_tips(sport, tipster_name, num_tips=4):
         elif "Player B" in selection:
             selection = selection.replace("Player B", p1).replace("Player A", p2)
         odds = round(random.uniform(*template["odds_range"]), 2)
-        reasoning = f"{p1} strong serve; {p2} return weak." if "Over" in selection else f"{p1} form; value at odds."
+        reasoning = f"{p1} strong at home; {p2} leaky defense." if "Over" in selection else f"{p1} form; value at odds."
         tips.append({
             'Date': today,
             'Match': f"{p1} vs {p2} (ATP)" if sport == "Tennis" else f"{p1} vs {p2} (NBA)" if sport == "NBA" else f"{p1} vs {p2} (PL)",
@@ -121,12 +148,12 @@ def generate_daily_tips(sport, tipster_name, num_tips=4):
     return tips
 
 # -------------------------------------------------
-# INITIALIZE / UPDATE TIPSTER DATA
+# INITIALIZE / AUTO-GENERATE TIPS ON LOAD
 # -------------------------------------------------
 if 'tipsters_data' not in st.session_state:
     st.session_state.tipsters_data = {}
 
-def refresh_daily_tips():
+def auto_generate_tips():
     today_str = st.session_state.current_date.strftime("%Y-%m-%d")
     updated = False
     for s in TIPSTER_TEMPLATES.keys():
@@ -139,37 +166,40 @@ def refresh_daily_tips():
                 }
             df = pd.DataFrame(st.session_state.tipsters_data[s][tipster]["tips"])
             today_tips = df[df['Date'] == today_str]
-            if today_tips.empty or len(today_tips) < 3:
+            if today_tips.empty:
                 new_tips = generate_daily_tips(s, tipster, 4)
                 new_df = pd.DataFrame(new_tips)
-                df = pd.concat([df, new_df], ignore_index=True).drop_duplicates(subset=['Date', 'Match', 'Selection'])
+                df = pd.concat([df, new_df], ignore_index=True)
                 st.session_state.tipsters_data[s][tipster]["tips"] = df.to_dict('list')
                 updated = True
     return updated
 
+# Auto-run on load
+auto_generate_tips()
+
 # -------------------------------------------------
-# INJURY DATA (Soccer + Tennis)
+# INJURY DATA
 # -------------------------------------------------
 if 'injury_data' not in st.session_state:
     st.session_state.injury_data = pd.DataFrame([
         {'League': 'Premier League - Man City', 'Player': 'Erling Haaland', 'Injury': 'Back', 'Status': 'Out', 'Return': 'Early Dec', 'Impact': 'High'},
         {'League': 'ATP Finals', 'Player': 'Novak Djokovic', 'Injury': 'Shoulder', 'Status': 'Out', 'Return': '2026', 'Impact': 'High'},
-        {'League': 'WTA Finals', 'Player': 'Iga Swiatek', 'Injury': 'Wrist', 'Status': 'Probable', 'Return': 'Nov 10', 'Impact': 'Med'},
+        {'League': 'NBA - Lakers', 'Player': 'LeBron James', 'Injury': 'Ankle', 'Status': 'Day-to-Day', 'Return': 'Nov 10', 'Impact': 'Med'},
     ])
 
 # -------------------------------------------------
-# UPDATE BUTTON
+# UPDATE BUTTONS
 # -------------------------------------------------
-col1, col2, col3 = st.columns([1, 1, 4])
+col1, col2 = st.columns([1, 1])
 with col1:
     if st.button("Next Day", type="secondary"):
         st.session_state.current_date += timedelta(days=1)
+        auto_generate_tips()
         st.rerun()
 with col2:
     if st.button("Update Tips & Injuries", type="primary"):
-        with st.spinner("Generating today's tips..."):
+        with st.spinner("Generating fresh tips..."):
             time.sleep(1)
-            tips_updated = refresh_daily_tips()
             if random.random() < 0.4:
                 new_injury = pd.DataFrame([{
                     'League': 'ATP - Paris',
@@ -181,33 +211,22 @@ with col2:
                 }])
                 st.session_state.injury_data = pd.concat([st.session_state.injury_data, new_injury], ignore_index=True)
                 st.warning("New injury reported!")
-            if tips_updated:
-                st.success("New daily tips generated!")
-            else:
-                st.info("Tips already up to date.")
+            st.success("Tips refreshed!")
         st.rerun()
 
 # -------------------------------------------------
-# STYLING FUNCTIONS (FIXED: .map instead of .applymap)
+# STYLING FUNCTIONS (NO DEPRECATION)
 # -------------------------------------------------
 def highlight_outcome(val):
-    if val == 'Win':
-        return 'background-color: #ccffcc; color: green; font-weight: bold'
-    if val == 'Loss':
-        return 'background-color: #ffcccc; color: red; font-weight: bold'
-    if val == 'Pending':
-        return 'background-color: #fff3cd; color: #d58b00; font-weight: bold'
+    if val == 'Win': return 'background-color: #ccffcc; color: green; font-weight: bold'
+    if val == 'Loss': return 'background-color: #ffcccc; color: red; font-weight: bold'
+    if val == 'Pending': return 'background-color: #fff3cd; color: #d58b00; font-weight: bold'
     return ''
 
 def highlight_selection(val):
-    colors = {
-        'Over': '#e6f7ff', 'Under': '#fff5e6',
-        'BTTS': '#e6ffe6', 'Spread': '#f0e6ff',
-        'to Win': '#ccffcc', 'Games': '#fff3cd'
-    }
+    colors = {'Over': '#e6f7ff', 'Under': '#fff5e6', 'BTTS': '#e6ffe6', 'to Win': '#ccffcc'}
     for k, c in colors.items():
-        if k in val:
-            return f'background-color: {c}'
+        if k in val: return f'background-color: {c}'
     return ''
 
 # -------------------------------------------------
@@ -220,12 +239,7 @@ with tab1:
         st.info(f"No tipsters for {sport} yet.")
     else:
         tipsters = st.session_state.tipsters_data[sport]
-        selected = st.multiselect(
-            "Select Tipsters",
-            list(tipsters.keys()),
-            default=list(tipsters.keys())[:1],
-            key=f"select_{sport}"
-        )
+        selected = st.multiselect("Select Tipsters", list(tipsters.keys()), default=list(tipsters.keys())[:1], key=f"select_{sport}")
 
         for t in selected:
             with st.expander(f"**{t}** – {TIPSTER_TEMPLATES[sport][t]['subtitle']}", expanded=True):
@@ -238,27 +252,22 @@ with tab1:
                 else:
                     styled = (
                         today_df.style
-                        .map(highlight_outcome, subset=['Outcome'])        # FIXED
-                        .map(highlight_selection, subset=['Selection'])    # FIXED
+                        .map(highlight_outcome, subset=['Outcome'])
+                        .map(highlight_selection, subset=['Selection'])
                         .format({'Odds': '{:.2f}'})
                     )
-                    st.dataframe(styled, width=800)  # FIXED: use_container_width → width
+                    st.dataframe(styled, width=800)
 
 with tab2:
     st.header("Injury Tracker")
-    sport_filter = st.selectbox("Sport", ["All", "Soccer", "Tennis"], key="injury_sport")
     impact = st.multiselect("Impact", ["High", "Med", "Low"], default=["High"], key="impact_filter")
-    
-    filtered = st.session_state.injury_data
-    if sport_filter != "All":
-        filtered = filtered[filtered['League'].str.contains(sport_filter, case=False)]
-    filtered = filtered[filtered['Impact'].isin(impact)]
+    filtered = st.session_state.injury_data[st.session_state.injury_data['Impact'].isin(impact)]
     
     def color_impact(val):
         return 'background-color: #ffcccc' if val == 'High' else 'background-color: #fff3cd' if val == 'Med' else ''
     
-    styled = filtered.style.map(color_impact, subset=['Impact'])  # FIXED
-    st.dataframe(styled, width=800)  # FIXED
+    styled = filtered.style.map(color_impact, subset=['Impact'])
+    st.dataframe(styled, width=800)
 
 # -------------------------------------------------
 # BANKROLL
@@ -274,5 +283,5 @@ c3.metric("ROI", f"{roi:+.1f}%")
 # Footer
 # -------------------------------------------------
 st.markdown("---")
-st.caption("**No Deprecation Warnings** | Tennis tipsters added | Daily auto-refresh | 18+")
+st.caption("**Auto-generates tips on load** | Click 'Next Day' to advance | 18+")
 st.markdown("[**ProTipster Free Tips**](https://www.protipster.com)")
