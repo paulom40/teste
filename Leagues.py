@@ -1,4 +1,4 @@
-# app.py - FOCUSED ON 2025-2026 SEASON
+# app.py - FOCUSED ON LAST 5 HOME/AWAY GAMES
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,48 +18,90 @@ warnings.filterwarnings('ignore')
 # ================================
 # CONFIG
 # ================================
-st.set_page_config(page_title="Football Predictor 2025-26", layout="wide")
-st.title("⚽ Football Predictor Pro 2025-26 Season")
+st.set_page_config(page_title="Football Predictor - Last 5 Games Form", layout="wide")
+st.title("⚽ Football Predictor Pro - Last 5 Games Form")
 st.markdown("""
-**2025-2026 Season Analysis**  
-- **Current Season Form Only**  
-- **Latest Team Performance Data**  
-- **Real-time Strength Ratings**  
-- **In-season Injury Impact**  
+**Form-Based Analysis**  
+- **Last 5 Home Games** for home teams  
+- **Last 5 Away Games** for away teams  
+- **Current Season Focus**  
+- **Recent Performance Weighted**  
 """)
 
 # ================================
-# SEASON FILTERING
+# LAST 5 GAMES ANALYSIS FUNCTIONS
 # ================================
-def filter_current_season(df: pd.DataFrame, date_col: str = None) -> pd.DataFrame:
-    """
-    Filter data for 2025-2026 season only
-    """
-    df_filtered = df.copy()
-    
-    # If we have a date column, use it to filter
-    if date_col and date_col in df.columns:
-        try:
-            df_filtered[date_col] = pd.to_datetime(df_filtered[date_col])
-            # Keep only matches from 2025-2026 season (July 2025 onwards)
-            season_start = pd.to_datetime('2025-07-01')
-            df_filtered = df_filtered[df_filtered[date_col] >= season_start]
-        except:
-            st.warning("Could not parse dates, using all data")
-    
-    st.info(f"📊 Using {len(df_filtered)} matches from 2025-2026 season")
-    return df_filtered
+def get_last_n_home_games(df: pd.DataFrame, team: str, home_col: str, n: int = 5) -> pd.DataFrame:
+    """Get last N home games for a team"""
+    home_games = df[df[home_col] == team].copy()
+    if 'Date' in home_games.columns:
+        home_games = home_games.sort_values('Date', ascending=False)
+    return home_games.head(n)
 
-def detect_date_column(df: pd.DataFrame) -> str:
-    """Auto-detect date column"""
-    date_indicators = ['date', 'Date', 'TIME', 'time', 'datetime', 'Datetime']
-    for col in df.columns:
-        if any(indicator in col.lower() for indicator in ['date', 'time']):
-            return col
-    return None
+def get_last_n_away_games(df: pd.DataFrame, team: str, away_col: str, n: int = 5) -> pd.DataFrame:
+    """Get last N away games for a team"""
+    away_games = df[df[away_col] == team].copy()
+    if 'Date' in away_games.columns:
+        away_games = away_games.sort_values('Date', ascending=False)
+    return away_games.head(n)
+
+def calculate_team_form(df: pd.DataFrame, home_col: str, away_col: str, hg_col: str, ag_col: str, 
+                       teams: List[str], n_games: int = 5) -> Dict[str, Any]:
+    """
+    Calculate team form based on last N home/away games
+    """
+    form_stats = {
+        'home_attack': {},
+        'home_defence': {}, 
+        'away_attack': {},
+        'away_defence': {},
+        'home_games_used': {},
+        'away_games_used': {}
+    }
+    
+    # Calculate league averages from recent games
+    recent_home_goals = []
+    recent_away_goals = []
+    
+    for team in teams:
+        # Home form (last N home games)
+        home_games = get_last_n_home_games(df, team, home_col, n_games)
+        form_stats['home_games_used'][team] = len(home_games)
+        
+        if len(home_games) > 0:
+            home_goals_scored = home_games[hg_col].mean()
+            home_goals_conceded = home_games[ag_col].mean()
+            recent_home_goals.extend(home_games[hg_col].tolist())
+            
+            form_stats['home_attack'][team] = home_goals_scored
+            form_stats['home_defence'][team] = home_goals_conceded
+        else:
+            form_stats['home_attack'][team] = 1.0  # Default
+            form_stats['home_defence'][team] = 1.0
+        
+        # Away form (last N away games)  
+        away_games = get_last_n_away_games(df, team, away_col, n_games)
+        form_stats['away_games_used'][team] = len(away_games)
+        
+        if len(away_games) > 0:
+            away_goals_scored = away_games[ag_col].mean()
+            away_goals_conceded = away_games[hg_col].mean()
+            recent_away_goals.extend(away_games[ag_col].tolist())
+            
+            form_stats['away_attack'][team] = away_goals_scored
+            form_stats['away_defence'][team] = away_goals_conceded
+        else:
+            form_stats['away_attack'][team] = 1.0
+            form_stats['away_defence'][team] = 1.0
+    
+    # Calculate league averages from the recent games we actually have
+    form_stats['league_avg_home'] = np.mean(recent_home_goals) if recent_home_goals else 1.5
+    form_stats['league_avg_away'] = np.mean(recent_away_goals) if recent_away_goals else 1.2
+    
+    return form_stats
 
 # ================================
-# ORIGINAL FUNCTIONS (UPDATED FOR CURRENT SEASON)
+# ORIGINAL FUNCTIONS (UPDATED FOR FORM ANALYSIS)
 # ================================
 @st.cache_data(ttl=3600)
 def get_team_logo(team_name: str) -> str:
@@ -91,7 +133,15 @@ def load_image(url: str):
 @st.cache_data(show_spinner="Loading CSV...")
 def load_csv(uploaded_file_bytes: bytes) -> pd.DataFrame:
     try:
-        return pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="utf-8")
+        df = pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="utf-8")
+        # Try to auto-detect and parse date column
+        for col in df.columns:
+            if 'date' in col.lower() or 'time' in col.lower():
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except:
+                    pass
+        return df
     except:
         return pd.read_csv(io.BytesIO(uploaded_file_bytes), encoding="latin1")
 
@@ -126,121 +176,70 @@ def parse_injuries(injury_str: str) -> Dict[str, Dict[str, float]]:
     return injuries
 
 # ================================
-# CURRENT SEASON MODEL TRAINING
+# FORM-BASED MODEL TRAINING
 # ================================
-@st.cache_data(show_spinner="Analyzing 2025-26 season...")
-def compute_current_season_stats(
+@st.cache_data(show_spinner="Analyzing last 5 games form...")
+def compute_form_based_stats(
     _df: pd.DataFrame,
     home_col: str, away_col: str, hg_col: str, ag_col: str,
     hc_col=None, ac_col=None, hs_col=None, as_col=None,
-    hxg_col=None, axg_col=None,
-    min_matches: int = 2  # Lower minimum for current season
+    n_games: int = 5
 ) -> Dict[str, Any]:
     """
-    Compute stats using ONLY 2025-2026 season data
-    Higher weight on recent form, no historical data
+    Compute stats based on last N home/away games only
     """
     df = _df.copy()
     
     # Ensure numeric columns
-    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col, hxg_col, axg_col]:
+    for col in [hg_col, ag_col, hc_col, ac_col, hs_col, as_col]:
         if col and col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     stats = {}
     teams = sorted(set(df[home_col]).union(df[away_col]))
 
-    # --- GOALS - Current Season Only ---
-    ft_mask = df[hg_col].notna() & df[ag_col].notna()
-    clean_ft = df[ft_mask][[home_col, away_col, hg_col, ag_col]].copy()
+    # Calculate form-based stats
+    form_stats = calculate_team_form(df, home_col, away_col, hg_col, ag_col, teams, n_games)
     
-    if len(clean_ft) < 3: 
-        st.warning("⚠️ Limited current season data. Using league averages.")
-        # Fallback to reasonable current season averages
-        avg_home = 1.6  # Conservative current season estimate
-        avg_away = 1.3
-    else:
-        # Use simple averages for current season (no recency weighting)
-        avg_home = clean_ft[hg_col].mean()
-        avg_away = clean_ft[ag_col].mean()
-
-    # Current season team strengths (simple averages)
-    home_attack = away_attack = home_defence = away_defence = {}
+    # Convert to relative strengths
+    home_attack = {}
+    home_defence = {}
+    away_attack = {}
+    away_defence = {}
     
     for team in teams:
-        home_matches = clean_ft[clean_ft[home_col] == team]
-        away_matches = clean_ft[clean_ft[away_col] == team]
+        # Home attack strength relative to league average
+        home_attack[team] = form_stats['home_attack'][team] / form_stats['league_avg_home']
+        home_defence[team] = form_stats['home_defence'][team] / form_stats['league_avg_away']
         
-        n_home = len(home_matches)
-        n_away = len(away_matches)
-        
-        # Home performance
-        if n_home >= min_matches:
-            home_goals_avg = home_matches[hg_col].mean()
-            home_conceded_avg = home_matches[ag_col].mean()
-            home_attack[team] = home_goals_avg / avg_home
-            home_defence[team] = home_conceded_avg / avg_away
-        else:
-            # New teams or few matches start at league average
-            home_attack[team] = 1.0
-            home_defence[team] = 1.0
-        
-        # Away performance
-        if n_away >= min_matches:
-            away_goals_avg = away_matches[ag_col].mean()
-            away_conceded_avg = away_matches[hg_col].mean()
-            away_attack[team] = away_goals_avg / avg_away
-            away_defence[team] = away_conceded_avg / avg_home
-        else:
-            away_attack[team] = 1.0
-            away_defence[team] = 1.0
+        # Away attack strength relative to league average  
+        away_attack[team] = form_stats['away_attack'][team] / form_stats['league_avg_away']
+        away_defence[team] = form_stats['away_defence'][team] / form_stats['league_avg_home']
 
     stats["goals"] = {
-        "league_avg_home": avg_home, 
-        "league_avg_away": avg_away,
-        "home_attack": home_attack, 
-        "away_attack": away_attack,
-        "home_defence": home_defence, 
+        "league_avg_home": form_stats['league_avg_home'],
+        "league_avg_away": form_stats['league_avg_away'],
+        "home_attack": home_attack,
+        "away_attack": away_attack, 
+        "home_defence": home_defence,
         "away_defence": away_defence,
-        "matches_analyzed": len(clean_ft)
+        "games_used": form_stats['home_games_used'],
+        "away_games_used": form_stats['away_games_used']
     }
 
-    # --- CURRENT SEASON CORNERS ---
+    # Form-based corners
     if hc_col and ac_col and hc_col in df.columns and ac_col in df.columns:
-        c_mask = df[hc_col].notna() & df[ac_col].notna()
-        clean_c = df[c_mask][[home_col, away_col, hc_col, ac_col]].copy()
-        
-        if len(clean_c) >= 3:
-            hc_mean = clean_c[hc_col].mean()
-            ac_mean = clean_c[ac_col].mean()
-            
-            corner_stats = {
-                "league_avg_home": hc_mean, 
-                "league_avg_away": ac_mean,
-                "home_attack": {}, "away_attack": {}, 
-                "home_defence": {}, "away_defence": {}
-            }
-            
-            for team in teams:
-                home_c = clean_c[clean_c[home_col] == team]
-                away_c = clean_c[clean_c[away_col] == team]
-                
-                if len(home_c) >= min_matches:
-                    corner_stats["home_attack"][team] = home_c[hc_col].mean() / hc_mean
-                    corner_stats["home_defence"][team] = home_c[ac_col].mean() / ac_mean
-                else:
-                    corner_stats["home_attack"][team] = corner_stats["home_defence"][team] = 1.0
-                    
-                if len(away_c) >= min_matches:
-                    corner_stats["away_attack"][team] = away_c[ac_col].mean() / ac_mean
-                    corner_stats["away_defence"][team] = away_c[hc_col].mean() / hc_mean
-                else:
-                    corner_stats["away_attack"][team] = corner_stats["away_defence"][team] = 1.0
-                    
-            stats["corners"] = corner_stats
-    
-    # Fallback if no corner data
-    if "corners" not in stats:
+        corner_stats = calculate_team_form(df, home_col, away_col, hc_col, ac_col, teams, n_games)
+        stats["corners"] = {
+            "league_avg_home": corner_stats['league_avg_home'],
+            "league_avg_away": corner_stats['league_avg_away'],
+            "home_attack": {t: corner_stats['home_attack'][t] / corner_stats['league_avg_home'] for t in teams},
+            "away_attack": {t: corner_stats['away_attack'][t] / corner_stats['league_avg_away'] for t in teams},
+            "home_defence": {t: corner_stats['home_defence'][t] / corner_stats['league_avg_away'] for t in teams},
+            "away_defence": {t: corner_stats['away_defence'][t] / corner_stats['league_avg_home'] for t in teams}
+        }
+    else:
+        # Fallback
         stats["corners"] = {
             "league_avg_home": 5.5, "league_avg_away": 4.8,
             "home_attack": {t: 1.0 for t in teams},
@@ -252,45 +251,49 @@ def compute_current_season_stats(
     return stats
 
 # ================================
-# PREDICTION FUNCTION FOR CURRENT SEASON
+# FORM-BASED PREDICTION
 # ================================
 @st.cache_data(show_spinner=False)
-def predict_current_season_match(
+def predict_form_based_match(
     home: str, away: str, stats: Dict[str, Any], injuries: Dict = None
 ) -> Dict[str, Any]:
     """
-    Predict match using only 2025-2026 season data
+    Predict match based on last 5 home/away games form
     """
     
-    # Apply injury adjustments
-    if injuries:
-        injury_summary = apply_injury_adjustment(stats, injuries)
-    else:
-        injury_summary = ""
+    injury_summary = apply_injury_adjustment(stats, injuries) if injuries else ""
 
-    max_g = 8  # Lower max goals for current season realism
     predictions = {
         "goals": {"score": "N/A", "home_win": 0, "draw": 0, "away_win": 0, "btts_yes": 0, "over_25": 0},
         "xg": {"home": 0.0, "away": 0.0},
         "corners": {"home": 0, "away": 0, "total": 0},
-        "current_season_data": True,
-        "injury_summary": injury_summary
+        "form_based": True,
+        "injury_summary": injury_summary,
+        "games_used": {
+            "home": stats["goals"]["games_used"].get(home, 0),
+            "away": stats["goals"]["away_games_used"].get(away, 0)
+        }
     }
 
-    # --- CURRENT SEASON GOALS PREDICTION ---
+    # --- FORM-BASED GOALS PREDICTION ---
     g = stats.get("goals", {})
     if g:
         l_home = g["league_avg_home"]
         l_away = g["league_avg_away"]
-        att_h = g["home_attack"].get(home, 1.0)
-        def_a = g["away_defence"].get(away, 1.0)
-        att_a = g["away_attack"].get(away, 1.0)
-        def_h = g["home_defence"].get(home, 1.0)
+        
+        # Home team: use their home form
+        att_h = g["home_attack"].get(home, 1.0)  # Home team's home attack
+        def_a = g["away_defence"].get(away, 1.0)  # Away team's away defence
+        
+        # Away team: use their away form  
+        att_a = g["away_attack"].get(away, 1.0)  # Away team's away attack
+        def_h = g["home_defence"].get(home, 1.0)  # Home team's home defence
         
         lambda_h = att_h * def_a * l_home
         lambda_a = att_a * def_h * l_away
 
-        # Poisson distribution for goals
+        # Poisson distribution
+        max_g = 8
         prob_matrix = np.zeros((max_g + 1, max_g + 1))
         for h in range(max_g + 1):
             for a in range(max_g + 1):
@@ -309,7 +312,7 @@ def predict_current_season_match(
         predictions["xg"]["home"] = max(round(lambda_h, 2), 0.1)
         predictions["xg"]["away"] = max(round(lambda_a, 2), 0.1)
 
-    # --- CURRENT SEASON CORNERS ---
+    # --- FORM-BASED CORNERS ---
     c = stats.get("corners")
     if c:
         mu_hc = c["home_attack"].get(home, 1.0) * c["away_defence"].get(away, 1.0) * c["league_avg_home"]
@@ -321,18 +324,18 @@ def predict_current_season_match(
     return {"predictions": predictions}
 
 def apply_injury_adjustment(stats: Dict[str, Any], injuries: Dict[str, Dict[str, float]]) -> str:
-    """Simple injury adjustment for current season"""
+    """Apply injury adjustments to form-based stats"""
     summary = ""
     for team, players in injuries.items():
         attack_reduction = defence_reduction = 0
         for p, data in players.items():
-            if data["role"] in ["forward", "midfielder"]:
+            if data["role"] in ["forward", "midfielder", "winger", "striker"]:
                 attack_reduction += data["impact"]
-            elif data["role"] in ["defender"]:
+            elif data["role"] in ["defender", "goalkeeper"]:
                 defence_reduction += data["impact"]
         
-        attack_reduction = min(attack_reduction, 0.25)  # Higher cap for current season impact
-        defence_reduction = min(defence_reduction, 0.25)
+        attack_reduction = min(attack_reduction, 0.3)
+        defence_reduction = min(defence_reduction, 0.3)
         
         if attack_reduction > 0:
             summary += f"{team} Attack -{attack_reduction*100:.0f}% | "
@@ -344,28 +347,35 @@ def apply_injury_adjustment(stats: Dict[str, Any], injuries: Dict[str, Dict[str,
 # ================================
 # DISPLAY FUNCTIONS
 # ================================
-def display_current_season_predictions(pred: Dict[str, Any], home_team: str, away_team: str, stats: Dict[str, Any]):
+def display_form_based_predictions(pred: Dict[str, Any], home_team: str, away_team: str, stats: Dict[str, Any]):
     p = pred["predictions"]
     
     st.markdown(f"### **{home_team} vs {away_team}**")
-    st.markdown("#### 🎯 2025-2026 Season Prediction")
+    st.markdown("#### 🎯 Last 5 Games Form Analysis")
     
-    # Team logos
+    # Team logos and form info
     logos = {home_team: get_team_logo(home_team), away_team: get_team_logo(away_team)}
     colA, colB, colC = st.columns([1,2,1])
+    
     with colA:
         if logos[home_team]: 
             img = load_image(logos[home_team])
             if img: st.image(img, width=80)
         st.write(f"**{home_team}**")
+        home_games_used = p['games_used']['home']
+        st.caption(f"Last {home_games_used} home games")
+        
     with colC:
         if logos[away_team]: 
             img = load_image(logos[away_team])
             if img: st.image(img, width=80)
         st.write(f"**{away_team}**")
+        away_games_used = p['games_used']['away']
+        st.caption(f"Last {away_games_used} away games")
+        
     with colB:
         st.markdown(f"<h2 style='text-align:center'>{p['goals']['score']}</h2>", unsafe_allow_html=True)
-        st.caption("Most likely score")
+        st.caption("Most likely score based on recent form")
 
     # Outcomes
     st.markdown("#### 📊 Match Probabilities")
@@ -392,46 +402,54 @@ def display_current_season_predictions(pred: Dict[str, Any], home_team: str, awa
         st.write(f"{away_team}: **{p['corners']['away']}**")
         st.write(f"**Total**: **{p['corners']['total']}**")
 
+    # Form Analysis
+    st.markdown("#### 📈 Recent Form Analysis")
+    g = stats["goals"]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**{home_team} Home Form**")
+        home_attack = g["home_attack"].get(home_team, 1.0)
+        home_defence = g["home_defence"].get(home_team, 1.0)
+        st.write(f"Attack: {home_attack:.2f}× avg")
+        st.write(f"Defence: {1/home_defence:.2f}× avg")
+        
+    with col2:
+        st.write(f"**{away_team} Away Form**")
+        away_attack = g["away_attack"].get(away_team, 1.0)
+        away_defence = g["away_defence"].get(away_team, 1.0)
+        st.write(f"Attack: {away_attack:.2f}× avg")
+        st.write(f"Defence: {1/away_defence:.2f}× avg")
+
     if p["injury_summary"]:
-        st.markdown(f"#### 🏥 Current Season Injury Impact")
+        st.markdown(f"#### 🏥 Injury Impact")
         st.markdown(f"<span style='color:red'>{p['injury_summary']}</span>", unsafe_allow_html=True)
 
-    # Season context
-    st.markdown("#### 📈 2025-26 Season Context")
-    matches_analyzed = stats["goals"].get("matches_analyzed", 0)
-    st.write(f"**Analysis based on**: {matches_analyzed} current season matches")
-    st.write(f"**League averages**: {stats['goals']['league_avg_home']:.1f} home goals | {stats['goals']['league_avg_away']:.1f} away goals")
-
 # ================================
-# MAIN APP - 2025-26 SEASON FOCUS
+# MAIN APP - FORM-BASED ANALYSIS
 # ================================
-st.sidebar.header("📁 Upload 2025-26 Season Data")
+st.sidebar.header("📁 Upload Match Data")
 uploaded_file = st.sidebar.file_uploader("Choose CSV File", type=["csv"], 
-                                         help="Upload your 2025-2026 season match data")
+                                         help="Upload match data with dates for form analysis")
 
 if uploaded_file is not None:
     df = load_csv(uploaded_file.read())
     if df.empty:
         st.error("Empty CSV file.")
     else:
-        # Filter for current season
-        date_col = detect_date_column(df)
-        df_current = filter_current_season(df, date_col)
-        
-        st.success(f"✅ Loaded {len(df_current)} matches from 2025-2026 season")
+        st.success(f"✅ Loaded {len(df):,} matches")
         
         # Show preview
-        with st.expander("📊 Current Season Data Preview"):
-            st.dataframe(df_current.head(10))
-            st.write(f"**Teams in dataset**: {len(set(df_current['HomeTeam'].dropna()) | set(df_current['AwayTeam'].dropna()))}")
+        with st.expander("📊 Data Preview"):
+            st.dataframe(df.head(8))
         
-        mapping = detect_columns(df_current)
+        mapping = detect_columns(df)
         
         st.sidebar.subheader("🔧 Column Mapping")
         col_map = {}
-        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "HC", "AC", "HS", "AS", "HxG", "AxG", "Date"]:
+        for label in ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "HC", "AC", "Date"]:
             detected = mapping.get(label)
-            options = [""] + list(df_current.columns)
+            options = [""] + list(df.columns)
             default_idx = options.index(detected) if detected in options else 0
             col_map[label] = st.sidebar.selectbox(f"**{label}**", options=options, index=default_idx)
 
@@ -440,89 +458,96 @@ if uploaded_file is not None:
             st.error(f"❌ Map required fields: {', '.join(missing)}")
             st.stop()
 
-        # Current season settings
-        st.sidebar.subheader("⚙️ Current Season Settings")
-        min_matches = st.sidebar.slider("Minimum matches for team rating", 1, 10, 2,
-                                       help="Lower value for early season, increase as season progresses")
+        # Form analysis settings
+        st.sidebar.subheader("⚙️ Form Analysis Settings")
+        n_games = st.sidebar.slider("Number of games for form analysis", 3, 10, 5,
+                                   help="Analyze last N home/away games for each team")
+        
+        require_dates = st.sidebar.toggle("Require date column", value=True,
+                                         help="Date column needed for accurate recent form")
 
-        with st.spinner("🔄 Analyzing 2025-26 season form..."):
-            team_stats = compute_current_season_stats(
-                _df=df_current,
-                home_col=col_map["HomeTeam"], away_col=col_map["AwayTeam"],
-                hg_col=col_map["FTHG"], ag_col=col_map["FTAG"],
-                hc_col=col_map.get("HC"), ac_col=col_map.get("AC"),
-                hs_col=col_map.get("HS"), as_col=col_map.get("AS"),
-                hxg_col=col_map.get("HxG"), axg_col=col_map.get("AxG"),
-                min_matches=min_matches
+        if require_dates and not col_map.get("Date"):
+            st.warning("⚠️ Date column not mapped. Form analysis may be less accurate.")
+            # Sort by index as fallback
+            df = df.sort_index(ascending=False)
+
+        with st.spinner(f"🔄 Analyzing last {n_games} home/away games form..."):
+            team_stats = compute_form_based_stats(
+                _df=df,
+                home_col=col_map["HomeTeam"], 
+                away_col=col_map["AwayTeam"],
+                hg_col=col_map["FTHG"], 
+                ag_col=col_map["FTAG"],
+                hc_col=col_map.get("HC"), 
+                ac_col=col_map.get("AC"),
+                n_games=n_games
             )
 
-        teams = sorted(set(df_current[col_map["HomeTeam"]]).union(df_current[col_map["AwayTeam"]]))
+        teams = sorted(set(df[col_map["HomeTeam"]]).union(df[col_map["AwayTeam"]]))
 
-        # Injury Input for current season
-        st.sidebar.subheader("🏥 Current Season Injuries")
+        # Injury Input
+        st.sidebar.subheader("🏥 Current Injuries")
         injury_input = st.sidebar.text_area("Injured Players", 
-                                          placeholder="Example:\nArsenal: Saka (role:forward, impact:15%)\nChelsea: James (role:defender, impact:20%)",
+                                          placeholder="Arsenal: Saka (role:forward, impact:15%)\nChelsea: James (role:defender, impact:20%)",
                                           height=100)
         injuries = parse_injuries(injury_input)
 
         # Prediction Section
         st.markdown("---")
-        st.subheader("🔮 2025-26 Season Match Prediction")
+        st.subheader("🔮 Form-Based Match Prediction")
         
         col1, col2 = st.columns(2)
         home_team = col1.selectbox("Home Team", teams, key="home_select")
         away_team = col2.selectbox("Away Team", teams, key="away_select")
 
-        if st.button("🎯 Predict Current Season Match", type="primary", use_container_width=True):
-            with st.spinner("Analyzing current season form..."):
-                pred = predict_current_season_match(home_team, away_team, team_stats, injuries)
-                display_current_season_predictions(pred, home_team, away_team, team_stats)
+        if st.button(f"🎯 Predict Based on Last {n_games} Games", type="primary", use_container_width=True):
+            with st.spinner("Analyzing recent form..."):
+                pred = predict_form_based_match(home_team, away_team, team_stats, injuries)
+                display_form_based_predictions(pred, home_team, away_team, team_stats)
 
-        # Team strength overview
-        with st.expander("📈 2025-26 Team Strength Ratings"):
+        # Team form overview
+        with st.expander("📈 Team Form Ratings (Last 5 Games)"):
             g = team_stats["goals"]
-            teams_sorted = sorted(teams, key=lambda x: g["home_attack"].get(x, 1.0) + g["away_attack"].get(x, 1.0), reverse=True)
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Top Attacking Teams**")
-                for i, team in enumerate(teams_sorted[:5]):
-                    home_att = g["home_attack"].get(team, 1.0)
-                    away_att = g["away_attack"].get(team, 1.0)
-                    st.write(f"{i+1}. {team}: Home {home_att:.2f} | Away {away_att:.2f}")
+            st.write("**Best Home Form (Attack)**")
+            home_attack_sorted = sorted(teams, key=lambda x: g["home_attack"].get(x, 0), reverse=True)
+            for i, team in enumerate(home_attack_sorted[:6]):
+                if g["home_attack"].get(team, 0) > 0:
+                    st.write(f"{i+1}. {team}: {g['home_attack'][team]:.2f}× avg")
             
-            with col2:
-                st.write("**Top Defensive Teams**")
-                teams_def_sorted = sorted(teams, key=lambda x: (1/g["home_defence"].get(x, 1.0) + 1/g["away_defence"].get(x, 1.0))/2)
-                for i, team in enumerate(teams_def_sorted[:5]):
-                    home_def = g["home_defence"].get(team, 1.0)
-                    away_def = g["away_defence"].get(team, 1.0)
-                    st.write(f"{i+1}. {team}: Home {1/home_def:.2f} | Away {1/away_def:.2f}")
+            st.write("**Best Away Form (Attack)**")
+            away_attack_sorted = sorted(teams, key=lambda x: g["away_attack"].get(x, 0), reverse=True)
+            for i, team in enumerate(away_attack_sorted[:6]):
+                if g["away_attack"].get(team, 0) > 0:
+                    st.write(f"{i+1}. {team}: {g['away_attack'][team]:.2f}× avg")
 
 else:
-    st.info("📁 Please upload 2025-2026 season CSV data to get started")
+    st.info("📁 Please upload CSV data to get started")
     
-    with st.expander("💡 2025-26 CSV Format Guide"):
+    with st.expander("💡 CSV Format for Form Analysis"):
         st.markdown("""
-        **Required for Current Season Analysis:**
-        - Home Team (e.g., 'HomeTeam', 'Home')
-        - Away Team (e.g., 'AwayTeam', 'Away')  
-        - Home Goals (e.g., 'FTHG', 'HG')
-        - Away Goals (e.g., 'FTAG', 'AG')
-        - Date (recommended for season filtering)
+        **Required for Form Analysis:**
+        - Home Team
+        - Away Team  
+        - Home Goals
+        - Away Goals
+        - **Date (highly recommended)**
         
-        **2025-26 Season Example:**
+        **Example with dates:**
         ```
-        Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC
-        2025-08-10,Arsenal,Chelsea,2,1,6,4
-        2025-08-11,Man Utd,Liverpool,1,1,5,7
-        2025-08-12,Man City,Tottenham,3,0,8,2
+        Date,HomeTeam,AwayTeam,FTHG,FTAG
+        2025-01-15,Arsenal,Chelsea,2,1
+        2025-01-14,Man Utd,Liverpool,1,1
+        2025-01-13,Man City,Tottenham,3,0
         ```
         
-        **Note**: Only 2025-2026 season data will be used for predictions.
+        **Analysis Method:**
+        - Home teams: Last 5 **home** games
+        - Away teams: Last 5 **away** games  
+        - Most recent games weighted highest
         """)
 
-# Season info in sidebar
+# Form analysis info
 st.sidebar.markdown("---")
-st.sidebar.subheader("🏆 2025-26 Season")
-st.sidebar.info("Using current season data only for accurate form-based predictions")
+st.sidebar.subheader("📊 Form Analysis")
+st.sidebar.info(f"Using last {n_games if 'n_games' in locals() else 5} home/away games for predictions")
