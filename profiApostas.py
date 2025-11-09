@@ -99,7 +99,7 @@ def generate_daily_tips(sport, tipster_name, num_tips=4):
     today = st.session_state.current_date.strftime("%Y-%m-%d")
     tips = []
     for _ in range(num_tips):
-        p1 = random.choice(template["players"])
+        p1 = random.choice(template["players"] if sport == "Tennis" else template["teams"])
         p2 = random.choice(template["opponents"])
         while p2 == p1:
             p2 = random.choice(template["opponents"])
@@ -137,10 +137,8 @@ def refresh_daily_tips():
                 st.session_state.tipsters_data[s][tipster] = {
                     "tips": {"Date": [], "Match": [], "Selection": [], "Odds": [], "Outcome": [], "Reasoning": []}
                 }
-            
             df = pd.DataFrame(st.session_state.tipsters_data[s][tipster]["tips"])
             today_tips = df[df['Date'] == today_str]
-            
             if today_tips.empty or len(today_tips) < 3:
                 new_tips = generate_daily_tips(s, tipster, 4)
                 new_df = pd.DataFrame(new_tips)
@@ -190,12 +188,15 @@ with col2:
         st.rerun()
 
 # -------------------------------------------------
-# STYLING FUNCTIONS (FIXED: .map)
+# STYLING FUNCTIONS (FIXED: .map instead of .applymap)
 # -------------------------------------------------
 def highlight_outcome(val):
-    if val == 'Win': return 'background-color: #ccffcc; color: green; font-weight: bold'
-    if val == 'Loss': return 'background-color: #ffcccc; color: red; font-weight: bold'
-    if val == 'Pending': return 'background-color: #fff3cd; color: #d58b00; font-weight: bold'
+    if val == 'Win':
+        return 'background-color: #ccffcc; color: green; font-weight: bold'
+    if val == 'Loss':
+        return 'background-color: #ffcccc; color: red; font-weight: bold'
+    if val == 'Pending':
+        return 'background-color: #fff3cd; color: #d58b00; font-weight: bold'
     return ''
 
 def highlight_selection(val):
@@ -219,7 +220,12 @@ with tab1:
         st.info(f"No tipsters for {sport} yet.")
     else:
         tipsters = st.session_state.tipsters_data[sport]
-        selected = st.multiselect("Select Tipsters", list(tipsters.keys()), default=list(tipsters.keys())[:1], key=f"select_{sport}")
+        selected = st.multiselect(
+            "Select Tipsters",
+            list(tipsters.keys()),
+            default=list(tipsters.keys())[:1],
+            key=f"select_{sport}"
+        )
 
         for t in selected:
             with st.expander(f"**{t}** – {TIPSTER_TEMPLATES[sport][t]['subtitle']}", expanded=True):
@@ -232,11 +238,11 @@ with tab1:
                 else:
                     styled = (
                         today_df.style
-                        .map(highlight_outcome, subset=['Outcome'])
-                        .map(highlight_selection, subset=['Selection'])
+                        .map(highlight_outcome, subset=['Outcome'])        # FIXED
+                        .map(highlight_selection, subset=['Selection'])    # FIXED
                         .format({'Odds': '{:.2f}'})
                     )
-                    st.dataframe(styled, width=800)
+                    st.dataframe(styled, width=800)  # FIXED: use_container_width → width
 
 with tab2:
     st.header("Injury Tracker")
@@ -251,8 +257,8 @@ with tab2:
     def color_impact(val):
         return 'background-color: #ffcccc' if val == 'High' else 'background-color: #fff3cd' if val == 'Med' else ''
     
-    styled = filtered.style.map(color_impact, subset=['Impact'])
-    st.dataframe(styled, width=800)
+    styled = filtered.style.map(color_impact, subset=['Impact'])  # FIXED
+    st.dataframe(styled, width=800)  # FIXED
 
 # -------------------------------------------------
 # BANKROLL
@@ -268,5 +274,5 @@ c3.metric("ROI", f"{roi:+.1f}%")
 # Footer
 # -------------------------------------------------
 st.markdown("---")
-st.caption("**Tennis Tips Added** | No deprecation warnings | Daily auto-refresh | 18+")
+st.caption("**No Deprecation Warnings** | Tennis tipsters added | Daily auto-refresh | 18+")
 st.markdown("[**ProTipster Free Tips**](https://www.protipster.com)")
