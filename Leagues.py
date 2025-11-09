@@ -1,4 +1,4 @@
-# app.py - FOOTBALL PREDICTOR PRO: FULLY FUNCTIONAL + EXPORT
+# app.py - FOOTBALL PREDICTOR PRO: FULLY FIXED + EXPORT
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -73,7 +73,7 @@ def load_demo_csv() -> pd.DataFrame:
     return pd.DataFrame(data)
 
 # ================================
-# CSV & COLUMN DETECTION
+# ROBUST CSV & COLUMN DETECTION
 # ================================
 st.sidebar.header("Data Input")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
@@ -84,34 +84,47 @@ else:
     st.sidebar.info("Using demo data (10 matches).")
     df = load_demo_csv()
 
-def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
-    cols = df.columns.str.lower()
-    mapping = {}
-    for key, patterns in {
-        "date": ["date"],
-        "home": ["home", "hometeam"],
-        "away": ["away", "awayteam"],
-        "fthg": ["fthg", "homegoals"],
-        "ftag": ["ftag", "awaygoals"],
-        "hs": ["hs", "homeshots"],
-        "as": ["as", "awayshots"],
-        "hc": ["hc", "homecorners"],
-        "ac": ["ac", "awaycorners"],
-    }.items():
-        for p in patterns:
-            mask = cols.str.contains(p, regex=False)
-            if mask.any():
-                mapping[key] = df.columns[mask.argmax()]
-                break
-    return mapping
+# Normalize column names
+df.columns = df.columns.str.strip().str.lower()
 
-col_map = detect_columns(df)
-if len(col_map) < 9:
-    st.error("Missing columns. Need: Date, HomeTeam, AwayTeam, FTHG, FTAG, HS, AS, HC, AC")
+# Auto-detect required columns
+required = {
+    "date": ["date"],
+    "home": ["home", "hometeam", "home team", "home_team"],
+    "away": ["away", "awayteam", "away team", "away_team"],
+    "fthg": ["fthg", "homegoals", "home goals", "ft_home_goals", "ft_home"],
+    "ftag": ["ftag", "awaygoals", "away goals", "ft_away_goals", "ft_away"],
+    "hs": ["hs", "homeshots", "home shots", "home_shots"],
+    "as": ["as", "awayshots", "away shots", "away_shots"],
+    "hc": ["hc", "homecorners", "home corners", "home_corners"],
+    "ac": ["ac", "awaycorners", "away corners", "away_corners"],
+}
+
+col_map = {}
+for std_name, patterns in required.items():
+    for p in patterns:
+        matches = [c for c in df.columns if p in c]
+        if matches:
+            col_map[std_name] = matches[0]
+            break
+
+# Validate
+missing = [k for k in required if k not in col_map]
+if missing:
+    st.error(f"Missing columns: {', '.join(missing)}. "
+             "Required: Date, HomeTeam, AwayTeam, FTHG, FTAG, HS, AS, HC, AC")
     st.stop()
 
-df = df.rename(columns={v: k.upper() for k, v in col_map.items()})
-df["DATE"] = pd.to_datetime(df["DATE"])
+# Rename to standard uppercase
+rename_dict = {v: k.upper() for k, v in col_map.items()}
+df = df.rename(columns=rename_dict)
+
+# Convert date
+try:
+    df["DATE"] = pd.to_datetime(df["DATE"])
+except Exception as e:
+    st.error(f"Could not parse 'DATE' column. Error: {e}")
+    st.stop()
 
 # ================================
 # INJURY INPUT
@@ -131,9 +144,14 @@ injuries_text = st.sidebar.text_area("Injuries (e.g. Man City: Haaland)", height
 injuries = parse_injuries(injuries_text) if injuries_text else {}
 
 # ================================
-# FORM STATS
+# FORM STATS (FIXED)
 # ================================
 def compute_form_based_stats(df: pd.DataFrame, last_n: int = 5) -> Dict:
+    required_cols = ["HOMETEAM", "AWAYTEAM", "FTHG", "FTAG", "HS", "AS"]
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"Missing required columns: {set(required_cols) - set(df.columns)}")
+        return {}
+
     home_games = df.sort_values("DATE").copy()
     away_games = df.sort_values("DATE").copy()
 
@@ -159,24 +177,33 @@ def compute_form_based_stats(df: pd.DataFrame, last_n: int = 5) -> Dict:
         })
     away_df = pd.DataFrame(away_stats)
 
-    league_home_avg = {"goals": home_df["goals_for"].mean(), "shots": home_df["shots_for"].mean()}
-    league_away_avg = {"goals": away_df["goals_for"].mean(), "shots": away_df["shots_for"].mean()}
+    # League averages (avoid division by zero)
+    league_home_goals = home_df["goals_for"].mean() or 1.5
+    league_away_goals = away_df["goals_for"].mean() or 1.2
+    league_home_shots = home_df["shots_for"].mean() or 12.0
+    league_away_shots = away_df["shots_for"].mean() or 10.0
 
-    def strength(col, avg): return {r["team"]: r[col] / avg for _, r in col.items()}
+    def strength(series, avg):
+        return {team: val / avg for team, val in series.items() if avg > 0}
 
-    stats = {
+    return {
         "goals": {
-            "home_attack": strength(home_df.set_index("team")["goals_for"], league_home_avg["goals"]),
-            "home_defence": strength(home_df.set_index("team")["goals_against"], home_df["goals_against"].mean()),
-            "away_attack": strength(away_df.set_index("team")["goals_for"], league_away_avg["goals"]),
-            "away_defence": strength(away_df.set_index("team")["goals_against"], away_df["goals_against"].mean()),
-            "league_avg_home": league_home_avg["goals"],
-            "league_avg_away": league_away_avg["goals"],
+            "home_attack": strength(home_df.set_index("team")["goals_for"], league_home_goals),
+            "home_defence": strength(home_df.set_index("team")["goals_against"], home_df["goals_against"].mean() or 1.0),
+            "away_attack": strength(away_df.set_index("team")["goals_for"], league_away_goals),
+            "away_defence": strength(away_df.set_index("team")["goals_against"], away_df["goals_against"].mean() or 1.0),
+            "league_avg_home": league_home_goals,
+            "league_avg_away": league_away_goals,
             "games_used": {r["team"]: r["games"] for _, r in home_df.iterrows()},
             "away_games_used": {r["team"]: r["games"] for _, r in away_df.iterrows()},
         },
+        "shots": {
+            "home_attack": strength(home_df.set_index("team")["shots_for"], league_home_shots),
+            "away_attack": strength(away_df.set_index("team")["shots_for"], league_away_shots),
+            "league_avg_home_shots": league_home_shots,
+            "league_avg_away_shots": league_away_shots,
+        }
     }
-    return stats
 
 stats = compute_form_based_stats(df, last_n=5)
 
@@ -213,11 +240,11 @@ def adjust_to_bookmaker_level(raw_shots: float, team_type: str = "home") -> floa
 def predict_realistic_shots(home_team: str, away_team: str, stats: Dict, league_stats: Dict) -> Dict:
     h_stats = league_stats['team_home_stats'].get(home_team, {})
     a_stats = league_stats['team_away_stats'].get(away_team, {})
-    l_home = {"shots_for": df["HS"].mean(), "shots_against": df["AS"].mean()}
-    l_away = {"shots_for": df["AS"].mean(), "shots_against": df["HS"].mean()}
+    l_home_shots = stats["shots"]["league_avg_home_shots"]
+    l_away_shots = stats["shots"]["league_avg_away_shots"]
 
-    raw_home = l_home['shots_for'] * (h_stats.get('shots_for', 10) / l_home['shots_for']) * (2 - a_stats.get('shots_against', 8) / l_away['shots_against']) / 2
-    raw_away = l_away['shots_for'] * (a_stats.get('shots_for', 8) / l_away['shots_for']) * (2 - h_stats.get('shots_against', 10) / l_home['shots_against']) / 2
+    raw_home = l_home_shots * stats["shots"]["home_attack"].get(home_team, 1.0) * (2 - stats["shots"]["away_attack"].get(away_team, 1.0)) / 2
+    raw_away = l_away_shots * stats["shots"]["away_attack"].get(away_team, 1.0) * (2 - stats["shots"]["home_attack"].get(home_team, 1.0)) / 2
 
     return {
         'home_shots': round(adjust_to_bookmaker_level(raw_home, "home"), 1),
@@ -346,7 +373,7 @@ def predict_form_based_match(home: str, away: str, stats: Dict, injuries: Dict, 
         pred["xg"]["home"] = max(round(lambda_h,2),0.1)
         pred["xg"]["away"] = max(round(lambda_a,2),0.1)
 
-    if league_stats:
+    if league_stats and stats.get("shots"):
         shot_pred = predict_realistic_shots(home, away, stats, league_stats)
         shot_pred['total_shots'] = round(shot_pred['home_shots'] + shot_pred['away_shots'], 1)
         pred["shots"] = shot_pred
@@ -382,14 +409,14 @@ def display_form_based_predictions(pred: Dict, home_team: str, away_team: str, s
         if logos[home_team]:
             img = load_image(logos[home_team])
             if img:
-                st.image(img, width=80)  # FIXED: comma added
+                st.image(img, width=80)
         st.write(f"**{home_team}**")
         st.caption(f"Last {p['games_used']['home']} home games")
     with colC:
         if logos[away_team]:
             img = load_image(logos[away_team])
             if img:
-                st.image(img, width=80)  # FIXED: comma added
+                st.image(img, width=80)
         st.write(f"**{away_team}**")
         st.caption(f"Last {p['games_used']['away']} away games")
     with colB:
@@ -474,7 +501,7 @@ def export_concise_report(p, home, away):
         pdf = HTML(string=html).write_pdf(stylesheets=[css])
         st.download_button("PDF Report", pdf, f"{home}_vs_{away}.pdf", "application/pdf")
     except Exception:
-        st.caption("Install `weasyprint` for PDF")
+        st.caption("Install `weasyprint` for PDF: `pip install weasyprint`")
 
 # ================================
 # MAIN UI
