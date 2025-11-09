@@ -2,369 +2,239 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
-import time  # For real-time simulation
 
-# -------------------------------------------------
-# App configuration
-# -------------------------------------------------
-st.set_page_config(page_title="Multi-Tipster + Bankroll Tracker", layout="wide")
-st.title("Multi-Tipster Soccer Dashboard + Bankroll Tracker")
-st.markdown("**Track Free Tipsters + Manage Your Betting Bankroll | 100% Free | Real-Time Updates**")
-st.markdown("---")
+# --- Configuration and Setup ---
 
-# -------------------------------------------------
-# Sidebar – Tipster & Bankroll
-# -------------------------------------------------
-st.sidebar.header("Tipster Selection")
-tipsters_available = ["NorthSea", "Rush 641", "GoalMaster", "ValueHunter"]
-selected_tipsters = st.sidebar.multiselect(
-    "Choose tipsters:",
-    options=tipsters_available,
-    default=tipsters_available[:2]
+# Set wide layout and page title
+st.set_page_config(
+    page_title="European Football Tipster Dashboard",
+    page_icon="⚽",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Bankroll Tracker in Sidebar
-st.sidebar.header("Bankroll Tracker")
-if 'bankroll' not in st.session_state:
-    st.session_state.bankroll = 1000.0
-if 'bets' not in st.session_state:
-    st.session_state.bets = pd.DataFrame(columns=[
-        'Date', 'Tipster', 'Match', 'Selection', 'Odds', 'Stake', 'Result', 'P/L'
-    ])
-
-start_balance = st.sidebar.number_input("Starting Bankroll (£)", min_value=1.0, value=1000.0, step=10.0)
-if st.sidebar.button("Reset Bankroll"):
-    st.session_state.bankroll = start_balance
-    st.session_state.bets = pd.DataFrame(columns=[
-        'Date', 'Tipster', 'Match', 'Selection', 'Odds', 'Stake', 'Result', 'P/L'
-    ])
-    st.success(f"Bankroll reset to £{start_balance:.2f}")
-
-# Real-time toggle
-enable_realtime = st.sidebar.checkbox("Enable Real-Time Updates (Simulated)", value=True)
-
-# -------------------------------------------------
-# FULL TIPSTER DATA (ALL ARRAYS SAME LENGTH)
-# -------------------------------------------------
-tipsters_data = {
-    "NorthSea": {
-        "subtitle": "BTTS & Over/Under Specialist",
-        "stats": {"Profit": "+£3,381", "Strike Rate": "77%", "Tips": "196"},
-        "tips": {
-            'Date': ['2025-10-25', '2025-10-22', '2025-10-19', '2025-10-15', '2025-10-12',
-                     '2025-10-08', '2025-10-05', '2025-11-08', '2025-11-09', '2025-11-10'],
-            'Match': ['Man City vs Southampton (PL)', 'PSG vs Marseille (Ligue 1)', 'Real Madrid vs Villarreal (La Liga)',
-                      'Juventus vs Inter (Serie A)', 'Bayern vs Dortmund (Bundesliga)', 'Liverpool vs Chelsea (PL)',
-                      'Lyon vs Monaco (Ligue 1)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
-                      'Barcelona vs Real Sociedad (La Liga)'],
-            'Selection': ['BTTS - Yes', 'Over 2.5 Goals', 'BTTS - Yes', 'Under 2.5 Goals', 'Over 3.5 Goals',
-                          'BTTS & Over 2.5', 'BTTS - Yes', 'BTTS - Yes', 'Over 2.5 Goals', 'BTTS - Yes'],
-            'Market': ['BTTS', 'Over/Under', 'BTTS', 'Over/Under', 'Over/Under', 'BTTS + O/U', 'BTTS',
-                       'BTTS', 'Over/Under', 'BTTS'],
-            'Odds': [1.85, 1.70, 1.95, 1.90, 2.20, 2.40, 1.80, 2.10, 1.95, 1.85],
-            'Outcome': ['Win', 'Win', 'Win', 'Loss', 'Win', 'Win', 'Win', 'Pending', 'Pending', 'Pending'],
-            'Reasoning': [
-                'Both teams scoring in 6/7 recent games; City leaky at back.',
-                'Derby fireworks: Over in 8/10 h2h; high attack ratings.',
-                'Madrid concede on counters; Villarreal score 70% aways.',
-                'Tactical battle expected low-scoring; defied with late goals.',
-                'Klassiker always goals: 5/6 Over 3.5; explosive attacks.',
-                'End-to-end rivalry; BTTS in 9/10 meetings.',
-                'Both leaky defenses; scoring form in 80% games.',
-                'Bayern dominate but concede; Union home scorers.',
-                'Milan attack firing; Juve counters—goals likely.',
-                'Barca creative; Sociedad potent at home—mutual threats.'
-            ]
-        }
-    },
-    "Rush 641": {
-        "subtitle": "Over/Under & Asian Handicap Expert",
-        "stats": {"Profit": "+£2,697", "Strike Rate": "72%", "Tips": "89"},
-        "tips": {
-            'Date': ['2025-10-26', '2025-10-23', '2025-10-20', '2025-10-16', '2025-10-13',
-                     '2025-10-09', '2025-10-06', '2025-11-08', '2025-11-09', '2025-11-10'],
-            'Match': ['Ajax vs PSV (Eredivisie)', 'Porto vs Benfica (Primeira Liga)', 'Atalanta vs Lazio (Serie A)',
-                      'Leipzig vs Stuttgart (Bundesliga)', 'Sevilla vs Valencia (La Liga)', 'Celtic vs Rangers (Scottish PL)',
-                      'Monaco vs Nice (Ligue 1)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
-                      'Barcelona vs Real Sociedad (La Liga)'],
-            'Selection': ['Over 2.5 Goals', 'Under 2.5 Goals', 'Asian Handicap -1.5 Atalanta', 'Over 3.0 Goals',
-                          'Over 1.5 Goals', 'Asian Handicap 0 Rangers', 'Under 2.5 Goals', 'Over 2.5 Goals',
-                          'Asian Handicap -0.5 Milan', 'Over 2.5 Goals'],
-            'Market': ['Over/Under', 'Over/Under', 'Asian Handicap', 'Over/Under', 'Over/Under',
-                       'Asian Handicap', 'Over/Under', 'Over/Under', 'Asian Handicap', 'Over/Under'],
-            'Odds': [1.75, 1.85, 2.10, 1.95, 1.40, 1.90, 1.80, 1.70, 2.00, 1.85],
-            'Outcome': ['Win', 'Win', 'Win', 'Loss', 'Win', 'Win', 'Win', 'Pending', 'Pending', 'Pending'],
-            'Reasoning': [
-                'Dutch top clash: Over in 7/8 h2h; both attacks firing.',
-                'Tight rivalry: Under in 5/6 recent derbies; defensive setups.',
-                'Atalanta home form (W4/5); Lazio poor aways, concede heavily.',
-                'Expected goals fest, but low-scoring tactical battle.',
-                'Both leaky: Over 1.5 in 9/10 combined games.',
-                'Rangers edge in form; Celtic vulnerable at home.',
-                "Cote d'Azur derby: Low goals in 6/7 h2h.",
-                'Bayern firepower; Union counter threats—goals expected.',
-                'Milan streak intact; Juve travel woes continue.',
-                'Barca home dominance; Sociedad open playstyle.'
-            ]
-        }
-    },
-    "GoalMaster": {
-        "subtitle": "Win/Draw/Win & BTTS Combo Master",
-        "stats": {"Profit": "+£4,120", "Strike Rate": "68%", "Tips": "245"},
-        "tips": {
-            'Date': ['2025-10-27', '2025-10-24', '2025-10-21', '2025-10-17', '2025-10-14',
-                     '2025-10-10', '2025-10-07', '2025-11-08', '2025-11-09', '2025-11-10'],
-            'Match': ['Arsenal vs Tottenham (PL)', 'Lille vs PSG (Ligue 1)', 'Inter vs Napoli (Serie A)',
-                      'Dortmund vs Leverkusen (Bundesliga)', 'Atletico vs Real Madrid (La Liga)', 'Man Utd vs Liverpool (PL)',
-                      'Juventus vs Roma (Serie A)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
-                      'Barcelona vs Real Sociedad (La Liga)'],
-            'Selection': ['Arsenal to Win', 'BTTS - Yes', 'Inter to Win & Over 1.5', 'Draw', 'BTTS & Over 2.5',
-                          'Man Utd to Win', 'Under 2.5 Goals', 'Bayern to Win', 'Milan to Win', 'Barcelona to Win & BTTS'],
-            'Market': ['1X2', 'BTTS', 'Win + O/U', '1X2', 'BTTS + O/U', '1X2', 'Over/Under', '1X2', '1X2', 'Win + BTTS'],
-            'Odds': [1.90, 1.80, 2.50, 3.20, 2.80, 2.10, 1.75, 1.40, 2.20, 3.00],
-            'Outcome': ['Win', 'Win', 'Win', 'Loss', 'Win', 'Loss', 'Win', 'Pending', 'Pending', 'Pending'],
-            'Reasoning': [
-                'Arsenal home dominance; Spurs poor record at Emirates.',
-                'PSG leaky; Lille score consistently in big games.',
-                'Inter form unbeatable; Napoli travel fatigue.',
-                'Evenly matched; history shows draws in 4/5.',
-                'Derby chaos: BTTS in 7/8, goals galore.',
-                'Home advantage for Utd; Liverpool midweek fatigue.',
-                'Defensive masterclass expected in Italian clash.',
-                'Bayern machine; Union no match.',
-                'Milan revival; Juve inconsistent.',
-                'Barca attack vs Sociedad defense—expect scores both ways.'
-            ]
-        }
-    },
-    "ValueHunter": {
-        "subtitle": "Value Bets & Asian Lines Pro",
-        "stats": {"Profit": "+£1,850", "Strike Rate": "65%", "Tips": "150"},
-        "tips": {
-            'Date': ['2025-10-28', '2025-10-25', '2025-10-22', '2025-10-18', '2025-10-15',
-                     '2025-10-11', '2025-10-08', '2025-11-08', '2025-11-09', '2025-11-10'],
-            'Match': ['Chelsea vs Newcastle (PL)', 'Monaco vs Marseille (Ligue 1)', 'Bayern vs Leipzig (Bundesliga)',
-                      'Milan vs Fiorentina (Serie A)', 'Valencia vs Girona (La Liga)', 'Everton vs Brighton (PL)',
-                      'Lyon vs St Etienne (Ligue 1)', 'Union Berlin vs Bayern (Bundesliga)', 'AC Milan vs Juventus (Serie A)',
-                      'Barcelona vs Real Sociedad (La Liga)'],
-            'Selection': ['Asian Handicap -1 Chelsea', 'Over 2.5 Goals', 'Bayern -1.5 AH', 'Milan to Win',
-                          'Under 2.5 Goals', 'BTTS - Yes', 'Lyon to Win & BTTS', 'Over 3.5 Goals', 'Under 2.5 Goals',
-                          'Asian Handicap 0 Barca'],
-            'Market': ['Asian Handicap', 'Over/Under', 'Asian Handicap', '1X2', 'Over/Under', 'BTTS',
-                       'Win + BTTS', 'Over/Under', 'Over/Under', 'Asian Handicap'],
-            'Odds': [2.00, 1.95, 1.80, 1.70, 1.85, 1.90, 2.30, 2.50, 1.90, 1.65],
-            'Outcome': ['Win', 'Win', 'Loss', 'Win', 'Win', 'Win', 'Win', 'Pending', 'Pending', 'Pending'],
-            'Reasoning': [
-                'Chelsea firepower; Newcastle defensive issues.',
-                'French flair: Goals in 6/7 h2h.',
-                'Bayern cruise; Leipzig vulnerable.',
-                'Milan solid at home; Fiorentina away struggles.',
-                'Cautious Spanish affair; low scores typical.',
-                'Both mid-table, leaky defenses.',
-                'Derby passion: Lyon edge with goals.',
-                'Bayern onslaught expected.',
-                'Tactical chess match; low goals.',
-                'Barca edge but Sociedad resilient.'
-            ]
-        }
+# Use st.cache_data for functions that load data (runs only once)
+@st.cache_data
+def load_tipster_data():
+    """Simulates loading verified tipster data for the dashboard."""
+    
+    # ----------------------------------------------------------------------
+    # Hardcoded/Simulated Data for High-ROI Paid Tipsters
+    # Data is based on verified ROI and Strike Rate profiles discussed previously
+    # ----------------------------------------------------------------------
+    paid_data = {
+        'Tipster Name': ['IZNOGOUD', 'TriBTTS', 'Main Draws Model', 'PinnacleBets', 'The Goal King'],
+        'Category': ['Moderate Risk', 'High Volatility', 'High Volatility', 'Moderate Risk', 'Low Risk'],
+        'Speciality': ['Low-Odds Value / AH', 'BTTS - NO (Niche)', 'Draw Bets (High Odds)', 'Asian Handicap', 'Goals Markets (Over/Under)'],
+        'Verified ROI (%)': [15.8, 20.8, 14.0, 16.9, 3.0], # ROI based on verified long-term tracking
+        'Strike Rate (%)': [57, 35, 29, 45, 58],         # Win rate percentage
+        'Avg Odds': [1.80, 2.80, 3.77, 2.15, 1.65],
+        'Tips Per Week': [12, 24, 5, 18, 50],
+        'Subscription ($ / Month)': [49.99, 59.99, 99.99, 39.99, 29.99]
     }
-}
+    df_paid = pd.DataFrame(paid_data)
+    
+    # ----------------------------------------------------------------------
+    # Hardcoded/Simulated Data for Free Tipsters
+    # ----------------------------------------------------------------------
+    free_data = {
+        'Tipster Name': ['Havatr', 'GAMESDRAWS', 'Limited_Vip Tips', 'salahsyh (OLBG)'],
+        'Platform': ['Tipstrr', 'Tipstrr', 'Tipstrr', 'OLBG Leaderboard'],
+        'Primary Focus': ['Match Winner / AH', 'Draw Bets', 'Over/Under & Accas', 'Various Football'],
+        'Approx. ROI/Edge': ['12.3% (Recent ROI)', '5.2% (Sustained ROI)', '4.9% (High SR)', 'Top Monthly Profit'],
+        'Note': ['Strongest current value finder on the free list.', 'High-odds, low-strike-rate specialist.', 'Good for consistent, low-variance daily picks.', 'Community expert for recent hot streaks.']
+    }
+    df_free = pd.DataFrame(free_data)
 
-# -------------------------------------------------
-# Styling Helpers
-# -------------------------------------------------
-def highlight_outcome(val):
-    if val == 'Win': return 'background-color: #ccffcc; color: green; font-weight: bold'
-    if val == 'Loss': return 'background-color: #ffcccc; color: red; font-weight: bold'
-    if val == 'Pending': return 'background-color: #fff3cd; color: #d58b00; font-weight: bold'
-    return ''
+    return df_paid, df_free
 
-def highlight_market(val):
-    if 'BTTS' in val: return 'background-color: #e6f7ff; font-weight: bold'
-    if 'Over' in val: return 'background-color: #f0e6ff; font-weight: bold'
-    if 'Under' in val: return 'background-color: #fff0f0; font-weight: bold'
-    if 'Asian' in val or 'Handicap' in val: return 'background-color: #fff4e6; font-weight: bold'
-    if '1X2' in val or 'Win' in val: return 'background-color: #f0fff0; font-weight: bold'
-    return ''
+# Load dataframes
+df_paid, df_free = load_tipster_data()
 
-# -------------------------------------------------
-# MAIN DASHBOARD
-# -------------------------------------------------
-if not selected_tipsters:
-    st.warning("Select at least one tipster!")
-else:
-    # Summary
-    st.header("Tipster Summary")
-    summary = []
-    for t in selected_tipsters:
-        df = pd.DataFrame(tipsters_data[t]["tips"])
-        wins = len(df[df['Outcome'] == 'Win'])
-        resolved = len(df[df['Outcome'] != 'Pending'])
-        strike = (wins / resolved * 100) if resolved else 0
-        profit = sum((o - 1) * 10 for o in df.loc[df['Outcome'] == 'Win', 'Odds']) - 10 * len(df[df['Outcome'] == 'Loss'])
-        summary.append({"Tipster": t, "Tips": len(df), "Strike": f"{strike:.1f}%", "Est. Profit": f"£{profit:.0f}"})
-    st.table(pd.DataFrame(summary))
+# ----------------------------------------------------------------------
+# --- App Layout and Functions ---
+# ----------------------------------------------------------------------
 
-    # Tabs
-    tabs = st.tabs(selected_tipsters)
-    for idx, t in enumerate(selected_tipsters):
-        with tabs[idx]:
-            info = tipsters_data[t]
-            st.subheader(f"{t} – {info['subtitle']}")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("YTD Profit", info['stats']['Profit'])
-            c2.metric("Strike Rate", info['stats']['Strike Rate'])
-            c3.metric("Tips", info['stats']['Tips'])
+# --- Sidebar Navigation ---
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/en/thumb/5/5c/UEFA_Champions_League_logo.svg/320px-UEFA_Champions_League_logo.svg.png", width=100)
+    st.title("⚽ Europe Betting Tracker")
+    page = st.selectbox(
+        "Select Dashboard View:",
+        ["Paid High-ROI Tipsters", "Free Verified Tipsters", "Strategy Visualizer"]
+    )
+    st.markdown("---")
+    st.info(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    st.markdown("Data is simulated/hardcoded based on current verified market performance profiles.")
 
-            df = pd.DataFrame(info["tips"])
-            styled = df.style.applymap(highlight_outcome, subset=['Outcome']) \
-                             .applymap(highlight_market, subset=['Market']) \
-                             .format({'Odds': '{:.2f}'})
-            st.dataframe(styled, use_container_width=True)
 
-            # Acca Builder
-            future = df[df['Outcome'] == 'Pending'].copy()
-            if not future.empty:
-                st.subheader("Acca Builder")
-                sel = st.multiselect("Pick legs:", future['Match'].tolist(), default=future['Match'].tolist()[:3], key=f"acca_{t}")
-                acca = future[future['Match'].isin(sel)]
-                if not acca.empty:
-                    odds = np.prod(acca['Odds'])
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        stake = st.number_input("Stake (£)", 1.0, 100.0, 10.0, key=f"stake_{t}")
-                    with col2:
-                        st.metric("Odds", f"{odds:.2f}")
-                        st.metric("Return", f"£{stake * odds:.2f}")
-                    st.table(acca[['Match', 'Selection', 'Odds']])
+# --- Page 1: Paid High-ROI Tipsters ---
+if page == "Paid High-ROI Tipsters":
+    st.header("💰 Paid High-ROI Tipsters (Big Five Focus)")
+    st.markdown("""
+        These services are selected for their **verified, high Return on Investment (ROI)** over the long term, focusing primarily on the major European leagues (Big Five).
+    """)
 
-    # -------------------------------------------------
-    # BANKROLL TRACKER
-    # -------------------------------------------------
-    st.header("Bankroll Tracker")
+    # 1. KPI Cards for Top Performers
     col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Current Bankroll", f"£{st.session_state.bankroll:.2f}")
-    with col2:
-        total_staked = st.session_state.bets['Stake'].sum() if not st.session_state.bets.empty else 0
-        st.metric("Total Staked", f"£{total_staked:.2f}")
-    with col3:
-        total_pl = st.session_state.bets['P/L'].sum() if not st.session_state.bets.empty else 0
-        st.metric("Total P/L", f"£{total_pl:+.2f}")
-    with col4:
-        roi = (total_pl / total_staked * 100) if total_staked > 0 else 0
-        st.metric("ROI", f"{roi:+.1f}%")
 
-    # Log Bet
-    st.subheader("Log a Bet")
-    with st.form("log_bet"):
-        col1, col2 = st.columns(2)
-        with col1:
-            bet_tipster = st.selectbox("Tipster", selected_tipsters)
-            bet_match = st.text_input("Match")
-            bet_selection = st.text_input("Selection")
-        with col2:
-            bet_odds = st.number_input("Odds", min_value=1.01, value=1.80, step=0.05)
-            bet_stake = st.number_input("Stake (£)", min_value=0.5, value=10.0, step=0.5)
-            bet_result = st.selectbox("Result", ["Win", "Loss", "Pending"])
+    # Find the top ROI performer
+    top_roi_tipster = df_paid.loc[df_paid['Verified ROI (%)'].idxmax()]
+    col1.metric("🥇 Top ROI Tipster", top_roi_tipster['Tipster Name'], f"{top_roi_tipster['Verified ROI (%)']}% ROI")
 
-        submitted = st.form_submit_button("Log Bet")
-        if submitted:
-            pl = (bet_odds - 1) * bet_stake if bet_result == "Win" else -bet_stake if bet_result == "Loss" else 0
-            new_bet = pd.DataFrame([{
-                'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                'Tipster': bet_tipster,
-                'Match': bet_match,
-                'Selection': bet_selection,
-                'Odds': bet_odds,
-                'Stake': bet_stake,
-                'Result': bet_result,
-                'P/L': pl
-            }])
-            st.session_state.bets = pd.concat([st.session_state.bets, new_bet], ignore_index=True)
-            st.session_state.bankroll += pl
-            st.success(f"Bet logged! P/L: £{pl:+.2f}")
-
-    # Bet History + Charts
-    if not st.session_state.bets.empty:
-        st.subheader("Bet History")
-        st.dataframe(st.session_state.bets.sort_values('Date', ascending=False))
-
-        chart_df = st.session_state.bets.copy()
-        chart_df['Cumulative P/L'] = chart_df['P/L'].cumsum()
-        chart_df['Bankroll'] = start_balance + chart_df['Cumulative P/L']
-
-        fig1 = px.line(chart_df, x='Date', y='Bankroll', title="Bankroll Growth")
-        st.plotly_chart(fig1, use_container_width=True)
-
-        win_rate = len(chart_df[chart_df['Result'] == 'Win']) / len(chart_df[chart_df['Result'] != 'Pending']) * 100
-        fig2 = go.Figure(go.Indicator(mode="gauge+number", value=win_rate, title={'text': "Win Rate %"},
-                                     gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "green"}}))
-        st.plotly_chart(fig2, use_container_width=True)
-
-        csv = st.session_state.bets.to_csv(index=False).encode()
-        st.download_button("Download CSV", csv, "bets.csv", "text/csv")
-    else:
-        st.info("No bets yet.")
-
-    # -------------------------------------------------
-    # MEGA ACCA
-    # -------------------------------------------------
-    st.header("Mega Acca (All Tipsters)")
-    all_future = pd.DataFrame()
-    for t in selected_tipsters:
-        df = pd.DataFrame(tipsters_data[t]["tips"])
-        fut = df[df['Outcome'] == 'Pending'].copy()
-        fut['Tipster'] = t
-        all_future = pd.concat([all_future, fut], ignore_index=True)
-
-    if not all_future.empty:
-        all_future['Label'] = all_future['Match'] + " (" + all_future['Tipster'] + ")"
-        mega_sel = st.multiselect("Pick legs:", all_future['Label'].tolist(), key="mega")
-        mega_df = all_future[all_future['Label'].isin(mega_sel)]
-        if not mega_df.empty:
-            odds = np.prod(mega_df['Odds'])
-            col1, col2 = st.columns(2)
-            with col1:
-                stake = st.number_input("Stake (£)", 1.0, 100.0, 5.0, key="mega_stake")
-            with col2:
-                st.metric("Odds", f"{odds:.2f}")
-                st.metric("Return", f"£{stake * odds:.2f}")
-            st.table(mega_df[['Tipster', 'Match', 'Selection', 'Odds']])
-
-# -------------------------------------------------
-# REAL-TIME BET UPDATES (Simulated)
-# -------------------------------------------------
-if enable_realtime:
-    st.header("Real-Time Bet Updates")
-    st.markdown("**Simulated live updates for demo (in production, integrate API like Sportradar or FlashScore).**")
+    # Find the top Strike Rate performer (Lowest Risk)
+    top_sr_tipster = df_paid.loc[df_paid['Strike Rate (%)'].idxmax()]
+    col2.metric("🎯 Lowest Risk (High SR)", top_sr_tipster['Tipster Name'], f"{top_sr_tipster['Strike Rate (%)']}% SR")
     
-    # Simulate real-time updates with st.rerun
-    if st.button("Simulate Live Update"):
-        # Randomly "resolve" a pending bet
-        for t in selected_tipsters:
-            df = pd.DataFrame(tipsters_data[t]["tips"])
-            pending_idx = df[df['Outcome'] == 'Pending'].index
-            if not pending_idx.empty:
-                update_idx = np.random.choice(pending_idx)
-                df.loc[update_idx, 'Outcome'] = np.random.choice(['Win', 'Loss'])
-                tipsters_data[t]["tips"] = df.to_dict('list')  # Update in place
-                st.rerun()
-    
-    # Live feed placeholder
-    st.subheader("Live Bet Feed")
-    with st.empty():
-        for _ in range(3):  # Simulate 3 updates
-            time.sleep(1)
-            st.write(f"🔄 Updating {datetime.now().strftime('%H:%M:%S')} - New tip from NorthSea: BTTS Yes on Union Berlin vs Bayern @ 2.10")
-    
-    st.info("For true real-time: Use WebSockets or polling from soccer APIs. Refresh page to see changes.")
+    # Find the most expensive tipster
+    most_expensive = df_paid.loc[df_paid['Subscription ($ / Month)'].idxmax()]
+    col3.metric("📈 Max Subscription Cost", f"${most_expensive['Subscription ($ / Month)']}", "Monthly")
 
-# -------------------------------------------------
-# Footer
-# -------------------------------------------------
-st.markdown("---")
-st.caption("Data from ProTipster.com | Real-time simulated | Gamble responsibly. 18+")
-st.markdown("[**ProTipster Free Tips**](https://www.protipster.com/betting-tips/football)")
+    # Display Average ROI
+    col4.metric("📊 Average Group ROI", f"{df_paid['Verified ROI (%)'].mean():.1f}%", "Overall")
+
+    st.markdown("---")
+
+    # 2. Scatter Plot: Risk vs. Reward
+    st.subheader("Risk vs. Reward Visualization")
+    fig = px.scatter(
+        df_paid,
+        x='Strike Rate (%)',
+        y='Verified ROI (%)',
+        color='Category',
+        size='Subscription ($ / Month)',
+        hover_name='Tipster Name',
+        title="Tipster Performance: Strike Rate vs. ROI",
+        labels={'Strike Rate (%)': 'Consistency (Strike Rate %)', 'Verified ROI (%)': 'Profitability (ROI %)'},
+        color_discrete_map={
+            'High Volatility': 'red',
+            'Moderate Risk': 'blue',
+            'Low Risk': 'green'
+        }
+    )
+    fig.update_layout(xaxis_range=[0, 70], yaxis_range=[0, 30])
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 3. Data Table
+    st.subheader("Detailed Tipster Breakdown")
+    st.dataframe(
+        df_paid.sort_values(by='Verified ROI (%)', ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# --- Page 2: Free Verified Tipsters ---
+elif page == "Free Verified Tipsters":
+    st.header("🆓 Free Verified Tipsters")
+    st.markdown("""
+        These free tipsters are selected based on strong recent performance and verifiable tracking 
+        on public platforms. Great for building confidence and bankroll without initial cost.
+    """)
+
+    # Display the Free Tipster Data Table
+    st.dataframe(
+        df_free,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Platform": st.column_config.TextColumn("Verification Site", help="Platform where results are tracked."),
+            "Approx. ROI/Edge": st.column_config.TextColumn("ROI/Profit Edge", help="The primary metric for their value."),
+            "Note": st.column_config.TextColumn("Key Note", help="A brief note on their betting style.")
+        }
+    )
+
+    st.markdown("---")
+    st.subheader("Expert Free Analysis Sources")
+    st.markdown("""
+        For daily, high-quality analysis that often leads to profitable bets in the Big Five:
+        * **OLBG Leaderboards:** Check the daily top performers in the Premier League/La Liga sections.
+        * **Sporting Life / Betting Expert Sites:** Look for expert analysis articles (e.g., Kevin Hatchard) for informed picks.
+    """)
+
+# --- Page 3: Strategy Visualizer ---
+elif page == "Strategy Visualizer":
+    st.header("📈 Bankroll Growth Simulation")
+    st.markdown("""
+        Simulate the growth of a starting bankroll over 100 bets based on a chosen tipster's profile 
+        to visualize the impact of high ROI vs. high Strike Rate strategies.
+    """)
+
+    # Interactive Controls
+    col_sim1, col_sim2, col_sim3 = st.columns(3)
+    
+    tipster_name = col_sim1.selectbox(
+        "Select a Tipster Profile:",
+        df_paid['Tipster Name'].tolist()
+    )
+    
+    start_bankroll = col_sim2.number_input(
+        "Starting Bankroll ($):", 
+        min_value=100, 
+        max_value=10000, 
+        value=1000, 
+        step=100
+    )
+    
+    unit_stake_pct = col_sim3.slider(
+        "Unit Stake (% of Bankroll):", 
+        min_value=0.5, 
+        max_value=5.0, 
+        value=2.0, 
+        step=0.5,
+        format="%f%%"
+    )
+
+    # Get selected tipster data
+    selected_tipster = df_paid[df_paid['Tipster Name'] == tipster_name].iloc[0]
+    
+    # Simulation Parameters
+    num_bets = 100
+    strike_rate = selected_tipster['Strike Rate (%)'] / 100
+    avg_odds = selected_tipster['Avg Odds']
+    
+    # Run the Simulation
+    bankroll_history = [start_bankroll]
+    current_bankroll = start_bankroll
+    
+    for _ in range(num_bets):
+        stake = current_bankroll * (unit_stake_pct / 100) # Percentage of current bankroll
+        
+        # Determine if the bet wins based on Strike Rate
+        if np.random.rand() < strike_rate:
+            current_bankroll += stake * (avg_odds - 1) # Profit = Stake * (Odds - 1)
+        else:
+            current_bankroll -= stake # Loss = Stake
+            
+        bankroll_history.append(current_bankroll)
+
+    # --- Simulation Results Display ---
+    st.subheader(f"Simulation for {tipster_name}")
+    
+    # 1. KPI Metrics
+    col_res1, col_res2, col_res3 = st.columns(3)
+    col_res1.metric("Final Bankroll", f"${bankroll_history[-1]:,.2f}")
+    col_res2.metric("Total Profit/Loss", f"${bankroll_history[-1] - start_bankroll:,.2f}")
+    col_res3.metric("Simulated ROI", f"{((bankroll_history[-1] - start_bankroll) / (start_bankroll * num_bets * (unit_stake_pct / 100))) * 100:.2f}%")
+    
+    # 2. Plotting the Bankroll Curve
+    chart_df = pd.DataFrame({
+        'Bet Number': range(num_bets + 1),
+        'Bankroll ($)': bankroll_history
+    })
+    
+    fig_line = px.line(
+        chart_df,
+        x='Bet Number',
+        y='Bankroll ($)',
+        title=f"Bankroll Growth Over {num_bets} Bets ({tipster_name})",
+        markers=True
+    )
+    st.plotly_chart(fig_line, use_container_width=True)
+
+    st.markdown(f"""
+        *Profile:* **{selected_tipster['Category']}** ({selected_tipster['Speciality']}) | 
+        *Expected SR:* {selected_tipster['Strike Rate (%)']}% | 
+        *Expected Avg Odds:* {selected_tipster['Avg Odds']:.2f}
+    """)
+    st.warning("Note: This is a single run of a Monte Carlo simulation based on random results. Actual results will vary.")
