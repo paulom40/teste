@@ -1,4 +1,4 @@
-# Leagues.py - FOOTBALL PREDICTOR PRO v7.0 (ADVANCED MODELS + POWER RATINGS)
+# Leagues.py - FOOTBALL PREDICTOR PRO v7.0 (ADVANCED MODELS + HTML EXPORT)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,6 +11,7 @@ import plotly.express as px
 import re
 from datetime import datetime
 import warnings
+import base64
 
 warnings.filterwarnings('ignore')
 
@@ -20,7 +21,7 @@ warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Predictor Pro v7.0", layout="wide")
 st.markdown("""
 # Football Predictor Pro v7.0
-**Advanced Statistical Models • FT Score • xG • Shots • SoT • Corners • Power Ratings**
+**Advanced Statistical Models • FT Score • xG • Shots • SoT • Corners • Power Ratings • HTML Export**
 """)
 
 # ================================
@@ -46,7 +47,7 @@ def load_demo_csv() -> pd.DataFrame:
     })
 
 # ================================
-# ADVANCED STATISTICAL MODELS (No ML libraries needed)
+# ADVANCED STATISTICAL MODELS
 # ================================
 class AdvancedFootballPredictor:
     def __init__(self):
@@ -61,10 +62,9 @@ class AdvancedFootballPredictor:
         defense_ratings = {team: 1.0 for team in teams}
         home_advantage = 1.2  # Typical home advantage factor
         
-        # Simple iterative rating calculation (simplified Dixon-Coles)
-        for iteration in range(10):  # 10 iterations for convergence
+        # Simple iterative rating calculation
+        for iteration in range(10):
             for team in teams:
-                # Calculate expected goals for this team
                 home_games = df[df['HOMETEAM'] == team]
                 away_games = df[df['AWAYTEAM'] == team]
                 
@@ -72,7 +72,6 @@ class AdvancedFootballPredictor:
                     home_goals_for = home_games['FTHG'].mean()
                     home_goals_against = home_games['FTAG'].mean()
                     
-                    # Update ratings based on home performance
                     opp_defense_avg = np.mean([defense_ratings.get(opp, 1.0) for opp in home_games['AWAYTEAM']])
                     if opp_defense_avg > 0:
                         attack_ratings[team] = home_goals_for / (home_advantage * opp_defense_avg)
@@ -81,7 +80,6 @@ class AdvancedFootballPredictor:
                     away_goals_for = away_games['FTAG'].mean()
                     away_goals_against = away_games['FTHG'].mean()
                     
-                    # Update ratings based on away performance
                     opp_defense_avg = np.mean([defense_ratings.get(opp, 1.0) for opp in away_games['HOMETEAM']])
                     if opp_defense_avg > 0:
                         attack_ratings[team] = (attack_ratings.get(team, 1.0) + away_goals_for / opp_defense_avg) / 2
@@ -177,11 +175,10 @@ class BayesianShotsPredictor:
     def predict_shots(self, home_team, away_team, home_stats, away_stats, league_avg):
         """Bayesian prediction for shots and shots on target"""
         
-        # Home shots prediction (Bayesian)
+        # Home shots prediction
         home_shots_avg = home_stats.get('shots', league_avg['home_shots'])
         home_shots_obs = max(1, home_stats.get('shots', 8))
         
-        # Bayesian update
         home_shots_alpha = self.priors['shots_alpha'] + home_shots_obs
         home_shots_beta = self.priors['shots_beta'] + 1
         
@@ -198,7 +195,7 @@ class BayesianShotsPredictor:
         away_shots_pred = away_shots_alpha / (away_shots_alpha + away_shots_beta) * away_shots_avg
         away_shots_pred = away_shots_pred * (2 - home_stats.get('defense_rating', 100) / 100)
         
-        # Shots on target (using accuracy)
+        # Shots on target
         home_sot_ratio = home_stats.get('accuracy', 0.35)
         away_sot_ratio = away_stats.get('accuracy', 0.30)
         
@@ -253,11 +250,10 @@ class ValueBettingAnalyzer:
     def analyze_value(self, predictions, bookmaker_odds=None):
         """Analyze value across all outcomes"""
         if bookmaker_odds is None:
-            # Use typical odds if not provided
             bookmaker_odds = {
-                'home': 2.0,  # 50% implied probability
-                'draw': 3.5,  # 28.6% implied probability  
-                'away': 3.8   # 26.3% implied probability
+                'home': 2.0,
+                'draw': 3.5, 
+                'away': 3.8
             }
         
         # Convert odds to implied probabilities
@@ -289,6 +285,431 @@ class ValueBettingAnalyzer:
             }
         
         return value_analysis
+
+# ================================
+# HTML REPORT GENERATOR
+# ================================
+class HTMLReportGenerator:
+    """Generate professional HTML reports"""
+    
+    def generate_report(self, home_team, away_team, dc_prediction, shots_prediction, 
+                       corners_prediction, value_analysis, team_ratings, stats):
+        """Generate comprehensive HTML report"""
+        
+        home_stats = stats['home'].get(home_team, {})
+        away_stats = stats['away'].get(away_team, {})
+        
+        # Get value ratings with colors
+        def get_value_color(value):
+            if value > 10: return '#10b981'
+            elif value > 5: return '#84cc16'
+            elif value > -5: return '#f59e0b'
+            else: return '#ef4444'
+        
+        def get_rating_color(rating):
+            if rating > 120: return '#10b981'
+            elif rating > 100: return '#84cc16'
+            elif rating > 80: return '#f59e0b'
+            else: return '#ef4444'
+        
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Football Prediction Report - {home_team} vs {away_team}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }}
+        
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        
+        .report-card {{
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+            position: relative;
+        }}
+        
+        .header::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="2" fill="white" opacity="0.1"/></svg>');
+        }}
+        
+        .match-title {{
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }}
+        
+        .match-subtitle {{
+            font-size: 1.2em;
+            opacity: 0.9;
+            font-weight: 300;
+        }}
+        
+        .prediction-section {{
+            padding: 40px;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        
+        .section-title {{
+            font-size: 1.8em;
+            color: #1e3c72;
+            margin-bottom: 30px;
+            text-align: center;
+            font-weight: 600;
+        }}
+        
+        .prediction-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }}
+        
+        .prediction-card {{
+            background: #f8fafc;
+            border-radius: 15px;
+            padding: 25px;
+            border-left: 5px solid #3b82f6;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            transition: transform 0.3s ease;
+        }}
+        
+        .prediction-card:hover {{
+            transform: translateY(-5px);
+        }}
+        
+        .card-title {{
+            font-size: 1.3em;
+            color: #1e40af;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }}
+        
+        .score-display {{
+            font-size: 3em;
+            font-weight: 700;
+            color: #1e3c72;
+            text-align: center;
+            margin: 20px 0;
+        }}
+        
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }}
+        
+        .stat-item {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        
+        .stat-label {{
+            font-weight: 500;
+            color: #6b7280;
+        }}
+        
+        .stat-value {{
+            font-weight: 600;
+            color: #1f2937;
+        }}
+        
+        .value-badge {{
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }}
+        
+        .team-comparison {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }}
+        
+        .team-card {{
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+        }}
+        
+        .team-name {{
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #1e3c72;
+            margin-bottom: 20px;
+        }}
+        
+        .rating-display {{
+            font-size: 2.5em;
+            font-weight: 700;
+            margin: 10px 0;
+        }}
+        
+        .progress-bar {{
+            background: #e5e7eb;
+            border-radius: 10px;
+            height: 8px;
+            margin: 15px 0;
+            overflow: hidden;
+        }}
+        
+        .progress-fill {{
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.3s ease;
+        }}
+        
+        .recommendation-section {{
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-top: 30px;
+        }}
+        
+        .recommendation-title {{
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }}
+        
+        .footer {{
+            text-align: center;
+            padding: 30px;
+            background: #1e3c72;
+            color: white;
+            margin-top: 40px;
+        }}
+        
+        .timestamp {{
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-top: 10px;
+        }}
+        
+        @media (max-width: 768px) {{
+            .prediction-grid {{
+                grid-template-columns: 1fr;
+            }}
+            
+            .team-comparison {{
+                grid-template-columns: 1fr;
+            }}
+            
+            .match-title {{
+                font-size: 2em;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="report-card">
+            <!-- Header -->
+            <div class="header">
+                <h1 class="match-title">{home_team} vs {away_team}</h1>
+                <p class="match-subtitle">Advanced Football Prediction Report</p>
+            </div>
+            
+            <!-- Main Prediction -->
+            <div class="prediction-section">
+                <h2 class="section-title">🎯 Match Prediction</h2>
+                <div class="prediction-grid">
+                    <div class="prediction-card">
+                        <h3 class="card-title">Dixon-Coles Model</h3>
+                        <div class="score-display">{dc_prediction['most_likely_score']}</div>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">Expected Goals</span>
+                                <span class="stat-value">{dc_prediction['home_xg']} - {dc_prediction['away_xg']}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Model Confidence</span>
+                                <span class="stat-value">{dc_prediction['confidence']}%</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">{home_team} Win</span>
+                                <span class="stat-value">{dc_prediction['home_win_prob']}%</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Draw</span>
+                                <span class="stat-value">{dc_prediction['draw_prob']}%</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">{away_team} Win</span>
+                                <span class="stat-value">{dc_prediction['away_win_prob']}%</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="prediction-card">
+                        <h3 class="card-title">📊 Match Statistics</h3>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">Shots</span>
+                                <span class="stat-value">{shots_prediction['home_shots']} - {shots_prediction['away_shots']}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Shots on Target</span>
+                                <span class="stat-value">{shots_prediction['home_sot']} - {shots_prediction['away_sot']}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Corners</span>
+                                <span class="stat-value">{corners_prediction['home_corners']} - {corners_prediction['away_corners']}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Shot Accuracy</span>
+                                <span class="stat-value">{home_stats.get('accuracy', 0.35)*100:.1f}% - {away_stats.get('accuracy', 0.30)*100:.1f}%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Team Comparison -->
+                <h2 class="section-title">⚔️ Team Analysis</h2>
+                <div class="team-comparison">
+                    <div class="team-card">
+                        <h3 class="team-name">{home_team}</h3>
+                        <div class="rating-display" style="color: {get_rating_color(team_ratings['attack'].get(home_team, 100))}">
+                            {team_ratings['attack'].get(home_team, 1.0)*100:.0f}
+                        </div>
+                        <div>Attack Rating</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {min(team_ratings['attack'].get(home_team, 1.0)*50, 100)}%; background: {get_rating_color(team_ratings['attack'].get(home_team, 100))}"></div>
+                        </div>
+                        
+                        <div class="rating-display" style="color: {get_rating_color(200 - team_ratings['defense'].get(home_team, 100))}">
+                            {(2 - team_ratings['defense'].get(home_team, 1.0))*100:.0f}
+                        </div>
+                        <div>Defense Rating</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {min((2 - team_ratings['defense'].get(home_team, 1.0))*50, 100)}%; background: {get_rating_color(200 - team_ratings['defense'].get(home_team, 100))}"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="team-card">
+                        <h3 class="team-name">{away_team}</h3>
+                        <div class="rating-display" style="color: {get_rating_color(team_ratings['attack'].get(away_team, 100))}">
+                            {team_ratings['attack'].get(away_team, 1.0)*100:.0f}
+                        </div>
+                        <div>Attack Rating</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {min(team_ratings['attack'].get(away_team, 1.0)*50, 100)}%; background: {get_rating_color(team_ratings['attack'].get(away_team, 100))}"></div>
+                        </div>
+                        
+                        <div class="rating-display" style="color: {get_rating_color(200 - team_ratings['defense'].get(away_team, 100))}">
+                            {(2 - team_ratings['defense'].get(away_team, 1.0))*100:.0f}
+                        </div>
+                        <div>Defense Rating</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {min((2 - team_ratings['defense'].get(away_team, 1.0))*50, 100)}%; background: {get_rating_color(200 - team_ratings['defense'].get(away_team, 100))}"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Value Analysis -->
+                <h2 class="section-title">💰 Value Betting Analysis</h2>
+                <div class="prediction-grid">
+        """
+        
+        # Add value analysis cards
+        for outcome, analysis in value_analysis.items():
+            outcome_name = {'home': home_team, 'draw': 'Draw', 'away': away_team}[outcome]
+            color = get_value_color(analysis['value_percentage'])
+            
+            html_content += f"""
+                    <div class="prediction-card">
+                        <h3 class="card-title">{outcome_name}</h3>
+                        <div class="score-display" style="color: {color}; font-size: 2.5em;">
+                            {analysis['value_percentage']}%
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">Model Probability</span>
+                                <span class="stat-value">{analysis['model_prob']}%</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Implied Probability</span>
+                                <span class="stat-value">{analysis['implied_prob']}%</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Value Rating</span>
+                                <span class="stat-value">
+                                    <span class="value-badge" style="background: {color}; color: white;">
+                                        {analysis['rating']}
+                                    </span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+            """
+        
+        html_content += f"""
+                </div>
+                
+                <!-- Recommendation -->
+                <div class="recommendation-section">
+                    <h3 class="recommendation-title">💡 Betting Recommendation</h3>
+                    <p>Based on the advanced statistical models and value analysis, the recommended approach is to focus on outcomes showing positive expected value (+EV). The Dixon-Coles model shows {dc_prediction['confidence']}% confidence in the predicted score of {dc_prediction['most_likely_score']}.</p>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <div class="footer">
+                <p>Generated by Football Predictor Pro v7.0</p>
+                <p class="timestamp">Report generated on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S')}</p>
+                <p style="margin-top: 10px; opacity: 0.8;">
+                    Advanced statistical models include Dixon-Coles goal prediction, Bayesian shots/corners forecasting, and value betting analysis.
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        return html_content
 
 # ================================
 # MAIN APPLICATION
@@ -343,9 +764,6 @@ def main():
             corners = m['HC'].mean()
             accuracy = (m['HST'] / m['HS']).mean() if 'HST' in m.columns and (m['HS'] > 0).all() else 0.35
             
-            offense_rating = round((goals_for / lhg * 0.6 + shots / lh_shots * 0.2 + sot / (lh_shots * 0.35) * 0.2) * 100)
-            defense_rating = round(((1 - goals_against / lag) * 0.7 + (1 - (m['AS'].mean() / la_shots)) * 0.3) * 100)
-            
             home_stats.append({
                 'team': team,
                 'goals_for': goals_for,
@@ -354,9 +772,6 @@ def main():
                 'sot': sot,
                 'corners': corners,
                 'accuracy': accuracy,
-                'offense_rating': offense_rating,
-                'defense_rating': defense_rating,
-                'overall_rating': round((offense_rating + defense_rating) / 2)
             })
         
         for team in df['AWAYTEAM'].unique():
@@ -370,9 +785,6 @@ def main():
             corners = m['AC'].mean()
             accuracy = (m['AST'] / m['AS']).mean() if 'AST' in m.columns and (m['AS'] > 0).all() else 0.30
             
-            offense_rating = round((goals_for / lag * 0.6 + shots / la_shots * 0.2 + sot / (la_shots * 0.30) * 0.2) * 100)
-            defense_rating = round(((1 - goals_against / lhg) * 0.7 + (1 - (m['HS'].mean() / lh_shots)) * 0.3) * 100)
-            
             away_stats.append({
                 'team': team,
                 'goals_for': goals_for,
@@ -381,9 +793,6 @@ def main():
                 'sot': sot,
                 'corners': corners,
                 'accuracy': accuracy,
-                'offense_rating': offense_rating,
-                'defense_rating': defense_rating,
-                'overall_rating': round((offense_rating + defense_rating) / 2)
             })
         
         home_df = pd.DataFrame(home_stats).set_index('team')
@@ -406,6 +815,7 @@ def main():
     advanced_predictor = AdvancedFootballPredictor()
     shots_predictor = BayesianShotsPredictor()
     value_analyzer = ValueBettingAnalyzer()
+    html_generator = HTMLReportGenerator()
     
     # Calculate team ratings
     with st.spinner("Calculating advanced team ratings..."):
@@ -490,93 +900,34 @@ def main():
                 delta_color="normal" if analysis['value_percentage'] > 0 else "off"
             )
     
-    # Advanced insights
-    st.subheader("🔍 Advanced Insights")
+    # HTML Export Section
+    st.markdown("---")
+    st.subheader("📄 Export Professional Report")
     
-    tab1, tab2, tab3 = st.tabs(["Team Analysis", "Model Comparison", "Betting Recommendations"])
-    
-    with tab1:
-        # Team strength visualization
-        fig = go.Figure()
-        
-        teams_data = [home_team, away_team]
-        attack_ratings = [team_ratings['attack'].get(team, 1.0) for team in teams_data]
-        defense_ratings = [team_ratings['defense'].get(team, 1.0) for team in teams_data]
-        
-        fig.add_trace(go.Bar(name='Attack Rating', x=teams_data, y=attack_ratings))
-        fig.add_trace(go.Bar(name='Defense Rating', x=teams_data, y=defense_ratings))
-        
-        fig.update_layout(
-            title="Team Strength Ratings (Dixon-Coles Method)",
-            yaxis_title="Rating",
-            barmode='group'
-        )
-        st.plotly_chart(fig)
-        
-        # Recent form
-        st.write("**Recent Form Analysis:**")
-        home_last_5 = df[df['HOMETEAM'] == home_team].tail(3)['FTHG'].sum()
-        away_last_5 = df[df['AWAYTEAM'] == away_team].tail(3)['FTAG'].sum()
-        
-        col1, col2 = st.columns(2)
-        col1.metric(f"{home_team} Last 3 Home Games", f"{home_last_5} Goals")
-        col2.metric(f"{away_team} Last 3 Away Games", f"{away_last_5} Goals")
-    
-    with tab2:
-        st.write("""
-        **Statistical Models Used:**
-        
-        1. **Dixon-Coles Model** - Advanced Poisson regression considering:
-           - Team attack/defense strengths
-           - Home advantage factor
-           - Interdependence between scores
-        
-        2. **Bayesian Inference** - For shots and corners:
-           - Prior knowledge incorporation
-           - Uncertainty quantification
-           - Adaptive learning from recent data
-        
-        3. **Value Betting Analysis** - Identifies mispriced outcomes:
-           - Compares model probabilities vs implied odds
-           - Highlights positive expected value bets
-           - Risk-adjusted recommendations
-        """)
-        
-        # Model confidence
-        st.metric("Overall Model Confidence", "High" if dc_prediction and dc_prediction['confidence'] > 15 else "Medium")
-        st.metric("Data Quality", "Good" if len(df) > 30 else "Limited")
-        st.metric("Prediction Horizon", "Short-term (Next Match)")
-    
-    with tab3:
-        st.write("**Betting Recommendations:**")
-        
-        # Generate recommendations
-        best_value = max(value_analysis.items(), key=lambda x: x[1]['value_percentage'])
-        worst_value = min(value_analysis.items(), key=lambda x: x[1]['value_percentage'])
-        
-        outcome_names = {'home': home_team, 'draw': 'Draw', 'away': away_team}
-        
-        st.success(f"🎯 **Best Value**: {outcome_names[best_value[0]]} (+{best_value[1]['value_percentage']}% value)")
-        st.warning(f"⚠️ **Avoid**: {outcome_names[worst_value[0]]} ({worst_value[1]['value_percentage']}% value)")
-        
-        # Risk assessment
-        if dc_prediction:
-            if dc_prediction['confidence'] > 20:
-                st.info("**Confidence**: High - Strong model agreement")
-            elif dc_prediction['confidence'] > 10:
-                st.info("**Confidence**: Medium - Reasonable certainty")
-            else:
-                st.warning("**Confidence**: Low - Consider smaller stakes")
-        
-        # Additional insights
-        st.write("""
-        **Key Factors Considered:**
-        - Recent team form and performance
-        - Home/away performance differentials
-        - Underlying statistics (shots, xG)
-        - Defensive solidity
-        - Attack efficiency
-        """)
+    if st.button("🔄 Generate HTML Report"):
+        with st.spinner("Generating professional report..."):
+            html_report = html_generator.generate_report(
+                home_team, away_team, dc_prediction, shots_prediction,
+                corners_prediction, value_analysis, team_ratings, stats
+            )
+            
+            # Create download button
+            b64 = base64.b64encode(html_report.encode()).decode()
+            href = f'data:text/html;base64,{b64}'
+            
+            st.success("✅ Professional report generated successfully!")
+            
+            st.download_button(
+                label="📥 Download HTML Report",
+                data=html_report,
+                file_name=f"{home_team}_vs_{away_team}_prediction_report.html",
+                mime="text/html",
+                help="Download a professional HTML report with all predictions and analysis"
+            )
+            
+            # Preview
+            st.subheader("👁️ Report Preview")
+            st.components.v1.html(html_report, height=800, scrolling=True)
 
 if __name__ == "__main__":
     main()
