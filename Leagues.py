@@ -93,7 +93,7 @@ if missing:
 
 df = df.rename(columns={**required, **{k: v for k, v in optional.items() if k in df.columns}})
 df['DATE'] = pd.to_datetime(df['DATE'], dayfirst=True, errors='coerce')
-df = df.dropna(subset=['DATE']).sort_values('DATE').reset_index(drop=True)
+df = df.dropna(subset(['DATE']).sort_values('DATE').reset_index(drop=True)
 
 # ================================
 # FORM STATS & POWER RATINGS
@@ -121,9 +121,9 @@ def compute_form_stats(df: pd.DataFrame, last_n: int = 6) -> dict:
         sot = m['HST'].mean() if 'HST' in m.columns else m['HS'].mean() * 0.35
         accuracy = (m['HST'] / m['HS']).mean() if 'HST' in m.columns and (m['HS'] > 0).all() else 0.35
         
-        # Power Ratings Calculation
+        # Power Ratings Calculation - FIXED PARENTHESES
         offense_rating = round((goals_for / lhg * 0.6 + shots / lh_shots * 0.2 + sot / lh_sot * 0.2) * 100)
-        defense_rating = round((1 - goals_against / lag) * 0.7 + (1 - (m['AS'].mean() / la_shots)) * 0.3) * 100)
+        defense_rating = round(((1 - goals_against / lag) * 0.7 + (1 - (m['AS'].mean() / la_shots)) * 0.3) * 100)
         
         home_stats.append({
             'team': team,
@@ -150,9 +150,9 @@ def compute_form_stats(df: pd.DataFrame, last_n: int = 6) -> dict:
         sot = m['AST'].mean() if 'AST' in m.columns else m['AS'].mean() * 0.30
         accuracy = (m['AST'] / m['AS']).mean() if 'AST' in m.columns and (m['AS'] > 0).all() else 0.30
         
-        # Power Ratings Calculation
+        # Power Ratings Calculation - FIXED PARENTHESES
         offense_rating = round((goals_for / lag * 0.6 + shots / la_shots * 0.2 + sot / la_sot * 0.2) * 100)
-        defense_rating = round((1 - goals_against / lhg) * 0.7 + (1 - (m['HS'].mean() / lh_shots)) * 0.3) * 100)
+        defense_rating = round(((1 - goals_against / lhg) * 0.7 + (1 - (m['HS'].mean() / lh_shots)) * 0.3) * 100)
         
         away_stats.append({
             'team': team,
