@@ -93,7 +93,7 @@ if missing:
 
 df = df.rename(columns={**required, **{k: v for k, v in optional.items() if k in df.columns}})
 df['DATE'] = pd.to_datetime(df['DATE'], dayfirst=True, errors='coerce')
-df = df.dropna(subset(['DATE']).sort_values('DATE').reset_index(drop=True)
+df = df.dropna(subset=['DATE']).sort_values('DATE').reset_index(drop=True)  # FIXED THIS LINE
 
 # ================================
 # FORM STATS & POWER RATINGS
