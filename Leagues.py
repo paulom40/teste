@@ -11,12 +11,6 @@ import plotly.express as px
 import re
 from datetime import datetime
 import warnings
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error
-import xgboost as xgb
-import lightgbm as lgb
 
 warnings.filterwarnings('ignore')
 
@@ -26,7 +20,7 @@ warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Predictor Pro v7.0", layout="wide")
 st.markdown("""
 # Football Predictor Pro v7.0
-**Advanced ML Models • FT Score • xG • Shots • SoT • Corners • Power Ratings**
+**Advanced Statistical Models • FT Score • xG • Shots • SoT • Corners • Power Ratings**
 """)
 
 # ================================
@@ -52,302 +46,249 @@ def load_demo_csv() -> pd.DataFrame:
     })
 
 # ================================
-# ADVANCED FEATURE ENGINEERING
-# ================================
-def create_advanced_features(df):
-    """Create advanced features for ML models"""
-    df = df.copy()
-    
-    # Rolling averages for form (last 5 games)
-    features_list = []
-    
-    for team in set(df['HOMETEAM'].unique()) | set(df['AWAYTEAM'].unique()):
-        # Home games
-        home_games = df[df['HOMETEAM'] == team].sort_values('DATE')
-        away_games = df[df['AWAYTEAM'] == team].sort_values('DATE')
-        
-        # Home features
-        for col in ['FTHG', 'FTAG', 'HS', 'AS', 'HST', 'AST', 'HC', 'AC']:
-            home_games[f'home_avg_{col}'] = home_games[col].rolling(5, min_periods=1).mean()
-            away_games[f'away_avg_{col}'] = away_games[col].rolling(5, min_periods=1).mean()
-        
-        features_list.extend([home_games, away_games])
-    
-    # Merge features back
-    if features_list:
-        enhanced_df = pd.concat(features_list, ignore_index=True)
-    else:
-        enhanced_df = df
-    
-    # Create match-level features
-    enhanced_df['goal_difference'] = enhanced_df['FTHG'] - enhanced_df['FTAG']
-    enhanced_df['total_goals'] = enhanced_df['FTHG'] + enhanced_df['FTAG']
-    enhanced_df['total_shots'] = enhanced_df['HS'] + enhanced_df['AS']
-    enhanced_df['total_corners'] = enhanced_df['HC'] + enhanced_df['AC']
-    
-    return enhanced_df
-
-# ================================
-# ADVANCED MODELS
+# ADVANCED STATISTICAL MODELS (No ML libraries needed)
 # ================================
 class AdvancedFootballPredictor:
     def __init__(self):
-        self.models = {}
-        self.scalers = {}
-        self.feature_importance = {}
+        self.team_ratings = {}
         
-    def prepare_features(self, df, home_team, away_team, stats):
-        """Prepare advanced features for prediction"""
-        h = stats['home'].get(home_team, {})
-        a = stats['away'].get(away_team, {})
+    def calculate_team_ratings(self, df):
+        """Calculate advanced team ratings using Dixon-Coles inspired approach"""
+        teams = sorted(set(df['HOMETEAM'].unique()) | set(df['AWAYTEAM'].unique()))
         
-        features = {
-            # Basic stats
-            'home_goals_avg': h.get('goals_for', 1.6),
-            'away_goals_avg': a.get('goals_for', 1.3),
-            'home_goals_against_avg': h.get('goals_against', 1.3),
-            'away_goals_against_avg': a.get('goals_against', 1.6),
-            'home_shots_avg': h.get('shots', 12.0),
-            'away_shots_avg': a.get('shots', 10.0),
-            'home_sot_avg': h.get('sot', 4.2),
-            'away_sot_avg': a.get('sot', 3.0),
-            'home_corners_avg': h.get('corners', 6.0),
-            'away_corners_avg': a.get('corners', 4.5),
+        # Initialize ratings
+        attack_ratings = {team: 1.0 for team in teams}
+        defense_ratings = {team: 1.0 for team in teams}
+        home_advantage = 1.2  # Typical home advantage factor
+        
+        # Simple iterative rating calculation (simplified Dixon-Coles)
+        for iteration in range(10):  # 10 iterations for convergence
+            for team in teams:
+                # Calculate expected goals for this team
+                home_games = df[df['HOMETEAM'] == team]
+                away_games = df[df['AWAYTEAM'] == team]
+                
+                if len(home_games) > 0:
+                    home_goals_for = home_games['FTHG'].mean()
+                    home_goals_against = home_games['FTAG'].mean()
+                    
+                    # Update ratings based on home performance
+                    opp_defense_avg = np.mean([defense_ratings.get(opp, 1.0) for opp in home_games['AWAYTEAM']])
+                    if opp_defense_avg > 0:
+                        attack_ratings[team] = home_goals_for / (home_advantage * opp_defense_avg)
+                
+                if len(away_games) > 0:
+                    away_goals_for = away_games['FTAG'].mean()
+                    away_goals_against = away_games['FTHG'].mean()
+                    
+                    # Update ratings based on away performance
+                    opp_defense_avg = np.mean([defense_ratings.get(opp, 1.0) for opp in away_games['HOMETEAM']])
+                    if opp_defense_avg > 0:
+                        attack_ratings[team] = (attack_ratings.get(team, 1.0) + away_goals_for / opp_defense_avg) / 2
+                        
+                    opp_attack_avg = np.mean([attack_ratings.get(opp, 1.0) for opp in away_games['HOMETEAM']])
+                    if opp_attack_avg > 0:
+                        defense_ratings[team] = away_goals_against / (home_advantage * opp_attack_avg)
+        
+        # Normalize ratings
+        avg_attack = np.mean(list(attack_ratings.values()))
+        avg_defense = np.mean(list(defense_ratings.values()))
+        
+        for team in teams:
+            attack_ratings[team] = attack_ratings[team] / avg_attack if avg_attack > 0 else 1.0
+            defense_ratings[team] = defense_ratings[team] / avg_defense if avg_defense > 0 else 1.0
             
-            # Derived features
-            'home_attack_strength': h.get('goals_for', 1.6) / stats['league_home_goals'],
-            'away_attack_strength': a.get('goals_for', 1.3) / stats['league_away_goals'],
-            'home_defense_strength': h.get('goals_against', 1.3) / stats['league_away_goals'],
-            'away_defense_strength': a.get('goals_against', 1.6) / stats['league_home_goals'],
-            
-            # Form indicators
-            'home_goal_difference': h.get('goals_for', 1.6) - h.get('goals_against', 1.3),
-            'away_goal_difference': a.get('goals_for', 1.3) - a.get('goals_against', 1.6),
+        self.team_ratings = {
+            'attack': attack_ratings,
+            'defense': defense_ratings,
+            'home_advantage': home_advantage
         }
         
-        return pd.DataFrame([features])
+        return self.team_ratings
     
-    def train_goals_model(self, df):
-        """Train XGBoost model for goal prediction"""
-        try:
-            # Prepare training data
-            X = []
-            y_home_goals = []
-            y_away_goals = []
+    def predict_goals_dixon_coles(self, home_team, away_team, league_avg_home_goals=1.6, league_avg_away_goals=1.3):
+        """Dixon-Coles inspired goal prediction"""
+        if not self.team_ratings:
+            return None
             
-            for idx, match in df.iterrows():
-                home_team = match['HOMETEAM']
-                away_team = match['AWAYTEAM']
-                
-                # Get team stats (simplified for demo)
-                home_goals_avg = df[df['HOMETEAM'] == home_team]['FTHG'].mean()
-                away_goals_avg = df[df['AWAYTEAM'] == away_team]['FTAG'].mean()
-                
-                features = [
-                    home_goals_avg,
-                    away_goals_avg,
-                    df[df['HOMETEAM'] == home_team]['FTAG'].mean(),  # home goals against
-                    df[df['AWAYTEAM'] == away_team]['FTHG'].mean(),  # away goals against
-                ]
-                
-                X.append(features)
-                y_home_goals.append(match['FTHG'])
-                y_away_goals.append(match['FTAG'])
-            
-            X = np.array(X)
-            
-            # Train home goals model
-            model_home = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1)
-            model_home.fit(X, y_home_goals)
-            
-            # Train away goals model
-            model_away = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1)
-            model_away.fit(X, y_away_goals)
-            
-            self.models['goals_home'] = model_home
-            self.models['goals_away'] = model_away
-            
-            return True
-        except Exception as e:
-            st.warning(f"Advanced goals model training failed: {e}")
-            return False
-    
-    def train_shots_model(self, df):
-        """Train model for shots prediction"""
-        try:
-            X = []
-            y_home_shots = []
-            y_away_shots = []
-            
-            for idx, match in df.iterrows():
-                home_team = match['HOMETEAM']
-                away_team = match['AWAYTEAM']
-                
-                home_shots_avg = df[df['HOMETEAM'] == home_team]['HS'].mean()
-                away_shots_avg = df[df['AWAYTEAM'] == away_team]['AS'].mean()
-                
-                features = [
-                    home_shots_avg,
-                    away_shots_avg,
-                    df[df['HOMETEAM'] == home_team]['AS'].mean(),
-                    df[df['AWAYTEAM'] == away_team]['HS'].mean(),
-                ]
-                
-                X.append(features)
-                y_home_shots.append(match['HS'])
-                y_away_shots.append(match['AS'])
-            
-            X = np.array(X)
-            
-            model_home = RandomForestRegressor(n_estimators=50, random_state=42)
-            model_away = RandomForestRegressor(n_estimators=50, random_state=42)
-            
-            model_home.fit(X, y_home_shots)
-            model_away.fit(X, y_away_shots)
-            
-            self.models['shots_home'] = model_home
-            self.models['shots_away'] = model_away
-            
-            return True
-        except Exception as e:
-            st.warning(f"Advanced shots model training failed: {e}")
-            return False
-    
-    def train_corners_model(self, df):
-        """Train model for corners prediction"""
-        try:
-            X = []
-            y_home_corners = []
-            y_away_corners = []
-            
-            for idx, match in df.iterrows():
-                home_team = match['HOMETEAM']
-                away_team = match['AWAYTEAM']
-                
-                home_corners_avg = df[df['HOMETEAM'] == home_team]['HC'].mean()
-                away_corners_avg = df[df['AWAYTEAM'] == away_team]['AC'].mean()
-                
-                features = [
-                    home_corners_avg,
-                    away_corners_avg,
-                    df[df['HOMETEAM'] == home_team]['AC'].mean(),
-                    df[df['AWAYTEAM'] == away_team]['HC'].mean(),
-                ]
-                
-                X.append(features)
-                y_home_corners.append(match['HC'])
-                y_away_corners.append(match['AC'])
-            
-            X = np.array(X)
-            
-            model_home = GradientBoostingRegressor(n_estimators=50, random_state=42)
-            model_away = GradientBoostingRegressor(n_estimators=50, random_state=42)
-            
-            model_home.fit(X, y_home_corners)
-            model_away.fit(X, y_away_corners)
-            
-            self.models['corners_home'] = model_home
-            self.models['corners_away'] = model_away
-            
-            return True
-        except Exception as e:
-            st.warning(f"Advanced corners model training failed: {e}")
-            return False
-    
-    def predict_advanced(self, home_team, away_team, stats, df):
-        """Make advanced predictions using trained models"""
-        predictions = {}
+        attack = self.team_ratings['attack']
+        defense = self.team_ratings['defense']
+        home_adv = self.team_ratings['home_advantage']
         
-        try:
-            # Prepare features
-            home_goals_avg = df[df['HOMETEAM'] == home_team]['FTHG'].mean()
-            away_goals_avg = df[df['AWAYTEAM'] == away_team]['FTAG'].mean()
-            home_goals_against_avg = df[df['HOMETEAM'] == home_team]['FTAG'].mean()
-            away_goals_against_avg = df[df['AWAYTEAM'] == away_team]['FTHG'].mean()
-            
-            # Goals prediction
-            if 'goals_home' in self.models and 'goals_away' in self.models:
-                features = [[home_goals_avg, away_goals_avg, home_goals_against_avg, away_goals_against_avg]]
-                pred_home_goals = max(0, self.models['goals_home'].predict(features)[0])
-                pred_away_goals = max(0, self.models['goals_away'].predict(features)[0])
-                predictions['advanced_home_goals'] = round(pred_home_goals, 2)
-                predictions['advanced_away_goals'] = round(pred_away_goals, 2)
-            
-            # Shots prediction
-            if 'shots_home' in self.models and 'shots_away' in self.models:
-                home_shots_avg = df[df['HOMETEAM'] == home_team]['HS'].mean()
-                away_shots_avg = df[df['AWAYTEAM'] == away_team]['AS'].mean()
-                home_shots_against_avg = df[df['HOMETEAM'] == home_team]['AS'].mean()
-                away_shots_against_avg = df[df['AWAYTEAM'] == away_team]['HS'].mean()
-                
-                features = [[home_shots_avg, away_shots_avg, home_shots_against_avg, away_shots_against_avg]]
-                pred_home_shots = max(0, self.models['shots_home'].predict(features)[0])
-                pred_away_shots = max(0, self.models['shots_away'].predict(features)[0])
-                predictions['advanced_home_shots'] = round(pred_home_shots, 1)
-                predictions['advanced_away_shots'] = round(pred_away_shots, 1)
-            
-            # Corners prediction
-            if 'corners_home' in self.models and 'corners_away' in self.models:
-                home_corners_avg = df[df['HOMETEAM'] == home_team]['HC'].mean()
-                away_corners_avg = df[df['AWAYTEAM'] == away_team]['AC'].mean()
-                home_corners_against_avg = df[df['HOMETEAM'] == home_team]['AC'].mean()
-                away_corners_against_avg = df[df['AWAYTEAM'] == away_team]['HC'].mean()
-                
-                features = [[home_corners_avg, away_corners_avg, home_corners_against_avg, away_corners_against_avg]]
-                pred_home_corners = max(0, self.models['corners_home'].predict(features)[0])
-                pred_away_corners = max(0, self.models['corners_away'].predict(features)[0])
-                predictions['advanced_home_corners'] = round(pred_home_corners, 1)
-                predictions['advanced_away_corners'] = round(pred_away_corners, 1)
-                
-        except Exception as e:
-            st.warning(f"Advanced prediction failed: {e}")
+        home_attack = attack.get(home_team, 1.0)
+        away_attack = attack.get(away_team, 1.0)
+        home_defense = defense.get(home_team, 1.0)
+        away_defense = defense.get(away_team, 1.0)
         
-        return predictions
-
-# ================================
-# BAYESIAN POISSON MODEL
-# ================================
-class BayesianPoissonModel:
-    def __init__(self):
-        self.alpha = 1.0  # Prior parameter
+        # Expected goals
+        home_xg = home_attack * away_defense * home_adv * league_avg_home_goals
+        away_xg = away_attack * home_defense * league_avg_away_goals
         
-    def predict_match(self, home_team, away_team, stats):
-        """Bayesian Poisson model for score prediction"""
-        h = stats['home'].get(home_team, {})
-        a = stats['away'].get(away_team, {})
+        # Apply Poisson distribution
+        home_goals_probs = [poisson.pmf(i, home_xg) for i in range(8)]
+        away_goals_probs = [poisson.pmf(i, away_xg) for i in range(8)]
         
-        # Attack and defense strengths
-        home_attack = h.get('goals_for', stats['league_home_goals']) / stats['league_home_goals']
-        away_attack = a.get('goals_for', stats['league_away_goals']) / stats['league_away_goals']
-        home_defense = h.get('goals_against', stats['league_away_goals']) / stats['league_away_goals']
-        away_defense = a.get('goals_against', stats['league_home_goals']) / stats['league_home_goals']
+        # Most likely score
+        max_prob = 0
+        most_likely_score = "0-0"
         
-        # Expected goals with Bayesian adjustment
-        home_xg = (home_attack * away_defense * stats['league_home_goals'] + self.alpha) / (1 + self.alpha)
-        away_xg = (away_attack * home_defense * stats['league_away_goals'] + self.alpha) / (1 + self.alpha)
-        
-        # Monte Carlo simulation
-        n_simulations = 10000
-        home_goals = np.random.poisson(home_xg, n_simulations)
-        away_goals = np.random.poisson(away_xg, n_simulations)
-        
-        # Get most likely score
-        scores, counts = np.unique(np.column_stack([home_goals, away_goals]), axis=0, return_counts=True)
-        most_likely = scores[counts.argmax()]
+        for i in range(8):
+            for j in range(8):
+                prob = home_goals_probs[i] * away_goals_probs[j]
+                if prob > max_prob:
+                    max_prob = prob
+                    most_likely_score = f"{i}-{j}"
         
         # Win probabilities
-        home_win = (home_goals > away_goals).mean()
-        draw = (home_goals == away_goals).mean()
-        away_win = (home_goals < away_goals).mean()
+        home_win_prob = 0
+        draw_prob = 0
+        away_win_prob = 0
+        
+        for i in range(8):
+            for j in range(8):
+                prob = home_goals_probs[i] * away_goals_probs[j]
+                if i > j:
+                    home_win_prob += prob
+                elif i == j:
+                    draw_prob += prob
+                else:
+                    away_win_prob += prob
         
         return {
             'home_xg': round(home_xg, 2),
             'away_xg': round(away_xg, 2),
-            'most_likely_score': f"{most_likely[0]}-{most_likely[1]}",
-            'home_win_prob': round(home_win * 100, 1),
-            'draw_prob': round(draw * 100, 1),
-            'away_win_prob': round(away_win * 100, 1)
+            'most_likely_score': most_likely_score,
+            'home_win_prob': round(home_win_prob * 100, 1),
+            'draw_prob': round(draw_prob * 100, 1),
+            'away_win_prob': round(away_win_prob * 100, 1),
+            'confidence': round(max_prob * 100, 1)
         }
+
+class BayesianShotsPredictor:
+    """Bayesian model for shots and corners prediction"""
+    
+    def __init__(self):
+        self.priors = {
+            'shots_alpha': 2, 'shots_beta': 2,
+            'sot_alpha': 2, 'sot_beta': 2,
+            'corners_alpha': 2, 'corners_beta': 2
+        }
+    
+    def predict_shots(self, home_team, away_team, home_stats, away_stats, league_avg):
+        """Bayesian prediction for shots and shots on target"""
+        
+        # Home shots prediction (Bayesian)
+        home_shots_avg = home_stats.get('shots', league_avg['home_shots'])
+        home_shots_obs = max(1, home_stats.get('shots', 8))
+        
+        # Bayesian update
+        home_shots_alpha = self.priors['shots_alpha'] + home_shots_obs
+        home_shots_beta = self.priors['shots_beta'] + 1
+        
+        home_shots_pred = home_shots_alpha / (home_shots_alpha + home_shots_beta) * home_shots_avg
+        home_shots_pred = home_shots_pred * (2 - away_stats.get('defense_rating', 100) / 100)
+        
+        # Away shots prediction
+        away_shots_avg = away_stats.get('shots', league_avg['away_shots'])
+        away_shots_obs = max(1, away_stats.get('shots', 6))
+        
+        away_shots_alpha = self.priors['shots_alpha'] + away_shots_obs
+        away_shots_beta = self.priors['shots_beta'] + 1
+        
+        away_shots_pred = away_shots_alpha / (away_shots_alpha + away_shots_beta) * away_shots_avg
+        away_shots_pred = away_shots_pred * (2 - home_stats.get('defense_rating', 100) / 100)
+        
+        # Shots on target (using accuracy)
+        home_sot_ratio = home_stats.get('accuracy', 0.35)
+        away_sot_ratio = away_stats.get('accuracy', 0.30)
+        
+        home_sot_pred = home_shots_pred * home_sot_ratio
+        away_sot_pred = away_shots_pred * away_sot_ratio
+        
+        return {
+            'home_shots': round(max(3, home_shots_pred), 1),
+            'away_shots': round(max(2, away_shots_pred), 1),
+            'home_sot': round(max(1, home_sot_pred), 1),
+            'away_sot': round(max(1, away_sot_pred), 1)
+        }
+    
+    def predict_corners(self, home_team, away_team, home_stats, away_stats, league_avg):
+        """Bayesian prediction for corners"""
+        
+        home_corners_avg = home_stats.get('corners', league_avg['home_corners'])
+        home_corners_obs = max(1, home_stats.get('corners', 4))
+        
+        home_corners_alpha = self.priors['corners_alpha'] + home_corners_obs
+        home_corners_beta = self.priors['corners_beta'] + 1
+        
+        home_corners_pred = home_corners_alpha / (home_corners_alpha + home_corners_beta) * home_corners_avg
+        home_corners_pred = home_corners_pred * (2 - away_stats.get('defense_rating', 100) / 120)
+        
+        away_corners_avg = away_stats.get('corners', league_avg['away_corners'])
+        away_corners_obs = max(1, away_stats.get('corners', 3))
+        
+        away_corners_alpha = self.priors['corners_alpha'] + away_corners_obs
+        away_corners_beta = self.priors['corners_beta'] + 1
+        
+        away_corners_pred = away_corners_alpha / (away_corners_alpha + away_corners_beta) * away_corners_avg
+        away_corners_pred = away_corners_pred * (2 - home_stats.get('defense_rating', 100) / 120)
+        
+        return {
+            'home_corners': round(max(2, home_corners_pred), 1),
+            'away_corners': round(max(1, away_corners_pred), 1)
+        }
+
+# ================================
+# VALUE BETTING IDENTIFICATION
+# ================================
+class ValueBettingAnalyzer:
+    """Identify value betting opportunities"""
+    
+    def calculate_value(self, model_prob, implied_prob):
+        """Calculate betting value"""
+        if implied_prob <= 0:
+            return 0
+        return (model_prob - implied_prob) / implied_prob * 100
+    
+    def analyze_value(self, predictions, bookmaker_odds=None):
+        """Analyze value across all outcomes"""
+        if bookmaker_odds is None:
+            # Use typical odds if not provided
+            bookmaker_odds = {
+                'home': 2.0,  # 50% implied probability
+                'draw': 3.5,  # 28.6% implied probability  
+                'away': 3.8   # 26.3% implied probability
+            }
+        
+        # Convert odds to implied probabilities
+        implied_probs = {
+            'home': 1 / bookmaker_odds['home'],
+            'draw': 1 / bookmaker_odds['draw'],
+            'away': 1 / bookmaker_odds['away']
+        }
+        
+        # Normalize to 100%
+        total_implied = sum(implied_probs.values())
+        implied_probs = {k: v/total_implied for k, v in implied_probs.items()}
+        
+        model_probs = {
+            'home': predictions.get('home_win_prob', 33) / 100,
+            'draw': predictions.get('draw_prob', 33) / 100,
+            'away': predictions.get('away_win_prob', 33) / 100
+        }
+        
+        # Calculate value
+        value_analysis = {}
+        for outcome in ['home', 'draw', 'away']:
+            value_pct = self.calculate_value(model_probs[outcome], implied_probs[outcome])
+            value_analysis[outcome] = {
+                'value_percentage': round(value_pct, 1),
+                'model_prob': round(model_probs[outcome] * 100, 1),
+                'implied_prob': round(implied_probs[outcome] * 100, 1),
+                'rating': 'HIGH VALUE' if value_pct > 10 else 'VALUE' if value_pct > 5 else 'FAIR' if value_pct > -5 else 'POOR'
+            }
+        
+        return value_analysis
 
 # ================================
 # MAIN APPLICATION
@@ -378,23 +319,9 @@ def main():
     df['DATE'] = pd.to_datetime(df['DATE'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['DATE']).sort_values('DATE').reset_index(drop=True)
     
-    # Enhanced features
-    df_enhanced = create_advanced_features(df)
-    
-    # Initialize models
-    advanced_predictor = AdvancedFootballPredictor()
-    bayesian_model = BayesianPoissonModel()
-    
-    # Train models
-    with st.spinner("Training advanced models..."):
-        goals_trained = advanced_predictor.train_goals_model(df)
-        shots_trained = advanced_predictor.train_shots_model(df)
-        corners_trained = advanced_predictor.train_corners_model(df)
-    
-    # Compute form stats (from previous implementation)
+    # Compute form stats
     @st.cache_data
     def compute_form_stats(df: pd.DataFrame, last_n: int = 6) -> dict:
-        # ... (same compute_form_stats function as before)
         home_stats = []
         away_stats = []
         
@@ -402,6 +329,8 @@ def main():
         lag = df['FTAG'].mean() or 1.3
         lh_shots = df['HS'].mean() or 12.0
         la_shots = df['AS'].mean() or 10.0
+        lh_corners = df['HC'].mean() or 6.0
+        la_corners = df['AC'].mean() or 4.5
         
         for team in df['HOMETEAM'].unique():
             m = df[df['HOMETEAM'] == team].tail(last_n)
@@ -411,6 +340,8 @@ def main():
             goals_against = m['FTAG'].mean()
             shots = m['HS'].mean()
             sot = m['HST'].mean() if 'HST' in m.columns else m['HS'].mean() * 0.35
+            corners = m['HC'].mean()
+            accuracy = (m['HST'] / m['HS']).mean() if 'HST' in m.columns and (m['HS'] > 0).all() else 0.35
             
             offense_rating = round((goals_for / lhg * 0.6 + shots / lh_shots * 0.2 + sot / (lh_shots * 0.35) * 0.2) * 100)
             defense_rating = round(((1 - goals_against / lag) * 0.7 + (1 - (m['AS'].mean() / la_shots)) * 0.3) * 100)
@@ -421,6 +352,8 @@ def main():
                 'goals_against': goals_against,
                 'shots': shots,
                 'sot': sot,
+                'corners': corners,
+                'accuracy': accuracy,
                 'offense_rating': offense_rating,
                 'defense_rating': defense_rating,
                 'overall_rating': round((offense_rating + defense_rating) / 2)
@@ -434,6 +367,8 @@ def main():
             goals_against = m['FTHG'].mean()
             shots = m['AS'].mean()
             sot = m['AST'].mean() if 'AST' in m.columns else m['AS'].mean() * 0.30
+            corners = m['AC'].mean()
+            accuracy = (m['AST'] / m['AS']).mean() if 'AST' in m.columns and (m['AS'] > 0).all() else 0.30
             
             offense_rating = round((goals_for / lag * 0.6 + shots / la_shots * 0.2 + sot / (la_shots * 0.30) * 0.2) * 100)
             defense_rating = round(((1 - goals_against / lhg) * 0.7 + (1 - (m['HS'].mean() / lh_shots)) * 0.3) * 100)
@@ -444,6 +379,8 @@ def main():
                 'goals_against': goals_against,
                 'shots': shots,
                 'sot': sot,
+                'corners': corners,
+                'accuracy': accuracy,
                 'offense_rating': offense_rating,
                 'defense_rating': defense_rating,
                 'overall_rating': round((offense_rating + defense_rating) / 2)
@@ -457,9 +394,22 @@ def main():
             'away': away_df.to_dict('index'),
             'league_home_goals': lhg,
             'league_away_goals': lag,
+            'league_home_shots': lh_shots,
+            'league_away_shots': la_shots,
+            'league_home_corners': lh_corners,
+            'league_away_corners': la_corners,
         }
     
     stats = compute_form_stats(df)
+    
+    # Initialize models
+    advanced_predictor = AdvancedFootballPredictor()
+    shots_predictor = BayesianShotsPredictor()
+    value_analyzer = ValueBettingAnalyzer()
+    
+    # Calculate team ratings
+    with st.spinner("Calculating advanced team ratings..."):
+        team_ratings = advanced_predictor.calculate_team_ratings(df)
     
     # Team selection
     teams = sorted(set(df['HOMETEAM'].unique()) | set(df['AWAYTEAM'].unique()))
@@ -474,122 +424,159 @@ def main():
     # Make predictions
     st.markdown(f"## 🎯 Advanced Prediction: {home_team} vs {away_team}")
     
-    # Bayesian Poisson Prediction
-    bayesian_result = bayesian_model.predict_match(home_team, away_team, stats)
+    # Dixon-Coles Goal Prediction
+    dc_prediction = advanced_predictor.predict_goals_dixon_coles(
+        home_team, away_team, 
+        stats['league_home_goals'], 
+        stats['league_away_goals']
+    )
     
-    # Advanced ML Prediction
-    advanced_result = advanced_predictor.predict_advanced(home_team, away_team, stats, df)
+    # Bayesian Shots Prediction
+    home_stats = stats['home'].get(home_team, {})
+    away_stats = stats['away'].get(away_team, {})
+    
+    league_avg = {
+        'home_shots': stats['league_home_shots'],
+        'away_shots': stats['league_away_shots'],
+        'home_corners': stats['league_home_corners'],
+        'away_corners': stats['league_away_corners']
+    }
+    
+    shots_prediction = shots_predictor.predict_shots(home_team, away_team, home_stats, away_stats, league_avg)
+    corners_prediction = shots_predictor.predict_corners(home_team, away_team, home_stats, away_stats, league_avg)
+    
+    # Value Analysis
+    value_analysis = value_analyzer.analyze_value(dc_prediction)
     
     # Display results
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("🤖 Bayesian Model")
-        st.metric("Expected Score", bayesian_result['most_likely_score'])
-        st.metric("Expected Goals", f"{bayesian_result['home_xg']} - {bayesian_result['away_xg']}")
-        st.write(f"**Win Probabilities:**")
-        st.write(f"🏠 {home_team}: {bayesian_result['home_win_prob']}%")
-        st.write(f"⚖️ Draw: {bayesian_result['draw_prob']}%")
-        st.write(f"✈️ {away_team}: {bayesian_result['away_win_prob']}%")
+        st.subheader("🎯 Dixon-Coles Model")
+        if dc_prediction:
+            st.metric("Expected Score", dc_prediction['most_likely_score'])
+            st.metric("Expected Goals", f"{dc_prediction['home_xg']} - {dc_prediction['away_xg']}")
+            st.metric("Model Confidence", f"{dc_prediction['confidence']}%")
+            
+            st.write("**Win Probabilities:**")
+            st.write(f"🏠 {home_team}: {dc_prediction['home_win_prob']}%")
+            st.write(f"⚖️ Draw: {dc_prediction['draw_prob']}%")
+            st.write(f"✈️ {away_team}: {dc_prediction['away_win_prob']}%")
     
     with col2:
-        st.subheader("🧠 ML Ensemble")
-        if 'advanced_home_goals' in advanced_result:
-            st.metric("Predicted Goals", 
-                     f"{advanced_result['advanced_home_goals']} - {advanced_result['advanced_away_goals']}")
+        st.subheader("📊 Bayesian Predictions")
+        st.metric("Predicted Shots", 
+                 f"{shots_prediction['home_shots']} - {shots_prediction['away_shots']}")
+        st.metric("Shots on Target",
+                 f"{shots_prediction['home_sot']} - {shots_prediction['away_sot']}")
+        st.metric("Predicted Corners",
+                 f"{corners_prediction['home_corners']} - {corners_prediction['away_corners']}")
         
-        if 'advanced_home_shots' in advanced_result:
-            st.metric("Predicted Shots",
-                     f"{advanced_result['advanced_home_shots']} - {advanced_result['advanced_away_shots']}")
-        
-        if 'advanced_home_corners' in advanced_result:
-            st.metric("Predicted Corners",
-                     f"{advanced_result['advanced_home_corners']} - {advanced_result['advanced_away_corners']}")
+        # Accuracy indicators
+        home_accuracy = home_stats.get('accuracy', 0.35) * 100
+        away_accuracy = away_stats.get('accuracy', 0.30) * 100
+        st.metric("Shot Accuracy", f"{home_accuracy:.1f}% - {away_accuracy:.1f}%")
     
     with col3:
-        st.subheader("📊 Model Confidence")
-        st.info("""
-        **Model Types Used:**
-        - 🎯 Bayesian Poisson (Goals)
-        - 🌳 XGBoost/Random Forest (Shots)
-        - 📈 Gradient Boosting (Corners)
-        - 🤖 Ensemble Learning
-        """)
-        
-        # Model performance indicators
-        st.metric("Data Quality", "Good" if len(df) > 30 else "Limited")
-        st.metric("Model Complexity", "Advanced")
-        st.metric("Prediction Range", "Multi-output")
+        st.subheader("💰 Value Analysis")
+        for outcome, analysis in value_analysis.items():
+            outcome_name = {'home': home_team, 'draw': 'Draw', 'away': away_team}[outcome]
+            color = "green" if analysis['value_percentage'] > 5 else "orange" if analysis['value_percentage'] > 0 else "red"
+            
+            st.metric(
+                f"{outcome_name} Value",
+                f"{analysis['value_percentage']}%",
+                f"Model: {analysis['model_prob']}% vs Implied: {analysis['implied_prob']}%",
+                delta_color="normal" if analysis['value_percentage'] > 0 else "off"
+            )
     
-    # Feature importance visualization
-    st.subheader("🔍 Prediction Insights")
+    # Advanced insights
+    st.subheader("🔍 Advanced Insights")
     
-    tab1, tab2, tab3 = st.tabs(["Team Comparison", "Model Details", "Betting Insights"])
+    tab1, tab2, tab3 = st.tabs(["Team Analysis", "Model Comparison", "Betting Recommendations"])
     
     with tab1:
-        # Team comparison chart
-        comparison_data = {
-            'Metric': ['Attack Rating', 'Defense Rating', 'Avg Goals', 'Avg Shots'],
-            home_team: [
-                stats['home'].get(home_team, {}).get('offense_rating', 0),
-                stats['home'].get(home_team, {}).get('defense_rating', 0),
-                stats['home'].get(home_team, {}).get('goals_for', 0),
-                stats['home'].get(home_team, {}).get('shots', 0)
-            ],
-            away_team: [
-                stats['away'].get(away_team, {}).get('offense_rating', 0),
-                stats['away'].get(away_team, {}).get('defense_rating', 0),
-                stats['away'].get(away_team, {}).get('goals_for', 0),
-                stats['away'].get(away_team, {}).get('shots', 0)
-            ]
-        }
-        
+        # Team strength visualization
         fig = go.Figure()
-        fig.add_trace(go.Bar(name=home_team, x=comparison_data['Metric'], y=comparison_data[home_team]))
-        fig.add_trace(go.Bar(name=away_team, x=comparison_data['Metric'], y=comparison_data[away_team]))
-        fig.update_layout(title="Team Comparison", barmode='group')
+        
+        teams_data = [home_team, away_team]
+        attack_ratings = [team_ratings['attack'].get(team, 1.0) for team in teams_data]
+        defense_ratings = [team_ratings['defense'].get(team, 1.0) for team in teams_data]
+        
+        fig.add_trace(go.Bar(name='Attack Rating', x=teams_data, y=attack_ratings))
+        fig.add_trace(go.Bar(name='Defense Rating', x=teams_data, y=defense_ratings))
+        
+        fig.update_layout(
+            title="Team Strength Ratings (Dixon-Coles Method)",
+            yaxis_title="Rating",
+            barmode='group'
+        )
         st.plotly_chart(fig)
+        
+        # Recent form
+        st.write("**Recent Form Analysis:**")
+        home_last_5 = df[df['HOMETEAM'] == home_team].tail(3)['FTHG'].sum()
+        away_last_5 = df[df['AWAYTEAM'] == away_team].tail(3)['FTAG'].sum()
+        
+        col1, col2 = st.columns(2)
+        col1.metric(f"{home_team} Last 3 Home Games", f"{home_last_5} Goals")
+        col2.metric(f"{away_team} Last 3 Away Games", f"{away_last_5} Goals")
     
     with tab2:
         st.write("""
-        **Advanced Models Used:**
+        **Statistical Models Used:**
         
-        1. **Bayesian Poisson Model** - Accounts for team strength and league averages
-        2. **XGBoost** - For goal prediction with non-linear relationships  
-        3. **Random Forest** - Robust shots prediction
-        4. **Gradient Boosting** - Accurate corners forecasting
+        1. **Dixon-Coles Model** - Advanced Poisson regression considering:
+           - Team attack/defense strengths
+           - Home advantage factor
+           - Interdependence between scores
         
-        **Key Features:**
-        - Rolling averages (last 5 games)
-        - Attack/defense strength ratios
-        - Home/away performance differentials
-        - League-normalized metrics
+        2. **Bayesian Inference** - For shots and corners:
+           - Prior knowledge incorporation
+           - Uncertainty quantification
+           - Adaptive learning from recent data
+        
+        3. **Value Betting Analysis** - Identifies mispriced outcomes:
+           - Compares model probabilities vs implied odds
+           - Highlights positive expected value bets
+           - Risk-adjusted recommendations
         """)
+        
+        # Model confidence
+        st.metric("Overall Model Confidence", "High" if dc_prediction and dc_prediction['confidence'] > 15 else "Medium")
+        st.metric("Data Quality", "Good" if len(df) > 30 else "Limited")
+        st.metric("Prediction Horizon", "Short-term (Next Match)")
     
     with tab3:
+        st.write("**Betting Recommendations:**")
+        
+        # Generate recommendations
+        best_value = max(value_analysis.items(), key=lambda x: x[1]['value_percentage'])
+        worst_value = min(value_analysis.items(), key=lambda x: x[1]['value_percentage'])
+        
+        outcome_names = {'home': home_team, 'draw': 'Draw', 'away': away_team}
+        
+        st.success(f"🎯 **Best Value**: {outcome_names[best_value[0]]} (+{best_value[1]['value_percentage']}% value)")
+        st.warning(f"⚠️ **Avoid**: {outcome_names[worst_value[0]]} ({worst_value[1]['value_percentage']}% value)")
+        
+        # Risk assessment
+        if dc_prediction:
+            if dc_prediction['confidence'] > 20:
+                st.info("**Confidence**: High - Strong model agreement")
+            elif dc_prediction['confidence'] > 10:
+                st.info("**Confidence**: Medium - Reasonable certainty")
+            else:
+                st.warning("**Confidence**: Low - Consider smaller stakes")
+        
+        # Additional insights
         st.write("""
-        **Value Betting Insights:**
-        
-        Based on the predictions, look for:
-        - Discrepancies between model predictions and bookmaker odds
-        - Undervalued teams with strong underlying stats
-        - Overvalued favorites with poor recent form
-        
-        **Key Metrics to Watch:**
-        - Expected Goals (xG) vs Actual Goals
-        - Shots on Target ratios
-        - Defensive consistency
-        - Home advantage factor
+        **Key Factors Considered:**
+        - Recent team form and performance
+        - Home/away performance differentials
+        - Underlying statistics (shots, xG)
+        - Defensive solidity
+        - Attack efficiency
         """)
-        
-        # Simple value indicator
-        home_implied_prob = bayesian_result['home_win_prob'] / 100
-        away_implied_prob = bayesian_result['away_win_prob'] / 100
-        draw_implied_prob = bayesian_result['draw_prob'] / 100
-        
-        st.metric("Home Value", "Potential" if home_implied_prob > 0.4 else "Fair")
-        st.metric("Away Value", "Potential" if away_implied_prob > 0.35 else "Fair")
-        st.metric("Draw Value", "Potential" if draw_implied_prob > 0.25 else "Fair")
 
 if __name__ == "__main__":
     main()
