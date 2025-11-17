@@ -12,10 +12,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# API configuration - REPLACE WITH YOUR ACTUAL API KEY
-API_KEY = "2fc8ca1227c5f69b90c485199c8eabee"  # This key seems invalid
-BASE_URL = "https://api.the-odds-api.com/v4/sports"
-
 # League mappings
 LEAGUES = {
     'Portugal': {
@@ -43,13 +39,17 @@ LEAGUES = {
 BOOKMAKERS = ['pinnacle', 'bet365']
 MARKETS = ['h2h', 'spreads', 'totals']
 
-def test_api_key():
+def get_api_key():
+    """Get API key from session state or default"""
+    return st.session_state.get('api_key', '2fc8ca1227c5f69b90c485199c8eabee')
+
+def test_api_key(api_key):
     """Test if the API key is valid"""
-    url = f"{BASE_URL}"
-    params = {'api_key': API_KEY}
+    BASE_URL = "https://api.the-odds-api.com/v4/sports"
+    params = {'api_key': api_key}
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(BASE_URL, params=params)
         if response.status_code == 200:
             return True, "API key is valid"
         elif response.status_code == 401:
@@ -59,11 +59,12 @@ def test_api_key():
     except Exception as e:
         return False, f"Connection error: {e}"
 
-def get_upcoming_odds(sport_key, regions='eu', markets='h2h'):
+def get_upcoming_odds(sport_key, api_key, regions='eu', markets='h2h'):
     """Fetch odds for upcoming games"""
+    BASE_URL = "https://api.the-odds-api.com/v4/sports"
     url = f"{BASE_URL}/{sport_key}/odds"
     params = {
-        'api_key': API_KEY,
+        'api_key': api_key,
         'regions': regions,
         'markets': markets,
         'bookmakers': ','.join(BOOKMAKERS)
@@ -80,14 +81,15 @@ def get_upcoming_odds(sport_key, regions='eu', markets='h2h'):
         st.error(f"Error fetching upcoming data: {e}")
         return None
 
-def get_all_markets_odds(sport_key, regions='eu'):
+def get_all_markets_odds(sport_key, api_key, regions='eu'):
     """Fetch odds for all available markets"""
+    BASE_URL = "https://api.the-odds-api.com/v4/sports"
     all_odds = {}
     
     for market in MARKETS:
         url = f"{BASE_URL}/{sport_key}/odds"
         params = {
-            'api_key': API_KEY,
+            'api_key': api_key,
             'regions': regions,
             'markets': market,
             'bookmakers': ','.join(BOOKMAKERS)
@@ -349,23 +351,27 @@ def main():
     st.title("⚽ European Football Odds Tracker")
     st.markdown("Track odds from Pinnacle and Bet365 across all markets")
     
+    # Initialize session state for API key
+    if 'api_key' not in st.session_state:
+        st.session_state.api_key = '2fc8ca1227c5f69b90c485199c8eabee'
+    
     # API Key validation
     st.sidebar.header("🔑 API Configuration")
     
     # Let user input their own API key
     user_api_key = st.sidebar.text_input("Enter your Odds API Key", 
-                                       value=API_KEY,
+                                       value=st.session_state.api_key,
                                        type="password",
                                        help="Get your free API key from https://the-odds-api.com")
     
     # Update API key if user provides a new one
-    if user_api_key and user_api_key != API_KEY:
-        global API_KEY
-        API_KEY = user_api_key
+    if user_api_key != st.session_state.api_key:
+        st.session_state.api_key = user_api_key
+        st.sidebar.success("API key updated!")
     
     # Test API key
     if st.sidebar.button("Test API Key"):
-        is_valid, message = test_api_key()
+        is_valid, message = test_api_key(st.session_state.api_key)
         if is_valid:
             st.sidebar.success(message)
         else:
@@ -395,13 +401,13 @@ def main():
                 sport_key = LEAGUES[selected_country][selected_league]
                 
                 # Test API first
-                is_valid, message = test_api_key()
+                is_valid, message = test_api_key(st.session_state.api_key)
                 if not is_valid:
                     st.error(f"API Error: {message}")
                     st.info("Please check your API key in the sidebar and try again.")
                 else:
                     # Fetch upcoming games
-                    upcoming_data = get_upcoming_odds(sport_key, markets=','.join(selected_markets))
+                    upcoming_data = get_upcoming_odds(sport_key, st.session_state.api_key, markets=','.join(selected_markets))
                     
                     if upcoming_data:
                         df = create_comprehensive_odds_table(upcoming_data, "Upcoming")
@@ -441,12 +447,12 @@ def main():
         
         if st.button("Fetch All Market Data"):
             with st.spinner("Fetching detailed market data..."):
-                is_valid, message = test_api_key()
+                is_valid, message = test_api_key(st.session_state.api_key)
                 if not is_valid:
                     st.error(f"API Error: {message}")
                 else:
                     sport_key = LEAGUES[selected_country][selected_league]
-                    all_markets_data = get_all_markets_odds(sport_key)
+                    all_markets_data = get_all_markets_odds(sport_key, st.session_state.api_key)
                     
                     if any(all_markets_data.values()):
                         market_tables = create_market_specific_tables(all_markets_data)
