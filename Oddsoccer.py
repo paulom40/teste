@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import json
+import io
+from pyxlsb import open_workbook as open_xlsb
 
 # Configure the page
 st.set_page_config(
@@ -413,6 +415,23 @@ def display_odds_comparison(df, title):
     
     st.dataframe(formatted_df, use_container_width=True)
 
+def to_excel(df):
+    """Convert DataFrame to Excel format"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Sheet1')
+        # Auto-adjust columns' width
+        worksheet = writer.sheets['Sheet1']
+        for idx, col in enumerate(df.columns):
+            series = df[col]
+            max_len = max((
+                series.astype(str).map(len).max(),
+                len(str(series.name))
+            )) + 1
+            worksheet.set_column(idx, idx, max_len)
+    processed_data = output.getvalue()
+    return processed_data
+
 def create_pnl_tracker():
     """Create a P&L tracker for the season"""
     st.subheader("💰 Season P&L Tracker")
@@ -500,14 +519,28 @@ def create_pnl_tracker():
         # Display detailed table
         st.dataframe(st.session_state.pnl_data, use_container_width=True)
         
-        # Download button
-        csv = st.session_state.pnl_data.to_csv(index=False)
-        st.download_button(
-            label="Download P&L Data",
-            data=csv,
-            file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
+        # Export buttons
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # CSV Download
+            csv = st.session_state.pnl_data.to_csv(index=False)
+            st.download_button(
+                label="📥 Download P&L as CSV",
+                data=csv,
+                file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+        
+        with col2:
+            # Excel Download
+            excel_data = to_excel(st.session_state.pnl_data)
+            st.download_button(
+                label="📊 Download P&L as Excel",
+                data=excel_data,
+                file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.ms-excel"
+            )
         
         # P&L chart
         st.subheader("P&L Over Time")
@@ -587,6 +620,32 @@ def create_value_bets_simulator():
     available_columns = [col for col in display_columns if col in value_bets_df.columns]
     st.dataframe(value_bets_df[available_columns], use_container_width=True)
     
+    # Export value bets to Excel
+    st.subheader("💾 Export Value Bets")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if not value_bets_df.empty:
+            excel_data = to_excel(value_bets_df)
+            st.download_button(
+                label="📊 Export Value Bets to Excel",
+                data=excel_data,
+                file_name=f"value_bets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.ms-excel",
+                help="Download all identified value bets to Excel"
+            )
+    
+    with col2:
+        if not value_bets_df.empty:
+            csv_data = value_bets_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Export Value Bets to CSV",
+                data=csv_data,
+                file_name=f"value_bets_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                help="Download all identified value bets to CSV"
+            )
+    
     # Simulation controls
     st.subheader("🎲 Simulation")
     
@@ -616,75 +675,120 @@ def create_value_bets_simulator():
                         all_results.append(results_df)
                         all_summaries.append(summary)
             
-            if all_results:
-                # Combine all simulation results
-                combined_results = pd.concat(all_results, ignore_index=True)
-                
-                # Display simulation results
-                st.subheader("📈 Simulation Results")
-                
-                # Calculate average performance
-                avg_bets = np.mean([s['Total Bets'] for s in all_summaries])
-                avg_profit = np.mean([float(s['Total Profit'].replace('€', '')) for s in all_summaries])
-                avg_roi = np.mean([float(s['Overall ROI'].rstrip('%')) for s in all_summaries])
-                
-                # Display metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Average Bets per Simulation", f"{avg_bets:.1f}")
-                with col2:
-                    st.metric("Average Profit", f"€{avg_profit:.2f}")
-                with col3:
-                    st.metric("Average ROI", f"{avg_roi:.1f}%")
-                with col4:
-                    positive_simulations = len([s for s in all_summaries if float(s['Total Profit'].replace('€', '')) > 0])
-                    success_rate = (positive_simulations / num_simulations) * 100
-                    st.metric("Success Rate", f"{success_rate:.1f}%")
-                
-                # Show detailed results for first simulation
-                with st.expander("View Detailed Results (First Simulation)"):
-                    st.dataframe(all_results[0], use_container_width=True)
-                
-                # Bankroll progression chart
-                st.subheader("💰 Bankroll Progression")
-                
-                # Get first simulation bankroll progression
-                first_sim = all_results[0]
-                if not first_sim.empty:
-                    first_sim['Cumulative Profit'] = first_sim['Profit'].cumsum() + initial_bankroll
-                    st.line_chart(first_sim.set_index(first_sim.index)['Cumulative Profit'])
-                
-                # ROI distribution across simulations
-                st.subheader("📊 ROI Distribution")
-                roi_values = [float(s['Overall ROI'].rstrip('%')) for s in all_summaries]
-                roi_series = pd.Series(roi_values)
-                st.bar_chart(roi_series)
-                
-                # Auto-add to P&L tracker option
-                st.subheader("💾 Save to P&L Tracker")
-                
-                if st.button("Add Value Bets to P&L Tracker"):
-                    # Add all value bets as pending bets to P&L tracker
-                    today = datetime.now().strftime('%Y-%m-%d')
-                    new_bets = []
-                    
-                    for bet in value_bets:
-                        new_bet = {
-                            'Date': today,
-                            'League': 'Value Bet Simulation',
-                            'Match': bet['Match'],
-                            'Market': 'h2h',
-                            'Selection': bet['Bet Type'],
-                            'Stake': bet['Stake'],
-                            'Odds': bet['Odds'],
-                            'Result': 'Pending',
-                            'P/L': 0
-                        }
-                        new_bets.append(new_bet)
-                    
-                    new_bets_df = pd.DataFrame(new_bets)
-                    st.session_state.pnl_data = pd.concat([st.session_state.pnl_data, new_bets_df], ignore_index=True)
-                    st.success(f"Added {len(new_bets)} value bets to P&L tracker!")
+            # Store simulation results in session state
+            st.session_state.simulation_results = all_results
+            st.session_state.simulation_summaries = all_summaries
+    
+    # Display simulation results if available
+    if 'simulation_results' in st.session_state and st.session_state.simulation_results:
+        all_results = st.session_state.simulation_results
+        all_summaries = st.session_state.simulation_summaries
+        
+        # Display simulation results
+        st.subheader("📈 Simulation Results")
+        
+        # Calculate average performance
+        avg_bets = np.mean([s['Total Bets'] for s in all_summaries])
+        avg_profit = np.mean([float(s['Total Profit'].replace('€', '')) for s in all_summaries])
+        avg_roi = np.mean([float(s['Overall ROI'].rstrip('%')) for s in all_summaries])
+        
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Average Bets per Simulation", f"{avg_bets:.1f}")
+        with col2:
+            st.metric("Average Profit", f"€{avg_profit:.2f}")
+        with col3:
+            st.metric("Average ROI", f"{avg_roi:.1f}%")
+        with col4:
+            positive_simulations = len([s for s in all_summaries if float(s['Total Profit'].replace('€', '')) > 0])
+            success_rate = (positive_simulations / num_simulations) * 100
+            st.metric("Success Rate", f"{success_rate:.1f}%")
+        
+        # Export simulation results
+        st.subheader("💾 Export Simulation Results")
+        
+        # Combine all simulation results
+        combined_results = pd.concat(all_results, ignore_index=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Export detailed results to Excel
+            excel_data = to_excel(combined_results)
+            st.download_button(
+                label="📊 Export All Simulations to Excel",
+                data=excel_data,
+                file_name=f"simulation_results_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.ms-excel",
+                help="Download detailed simulation results for all runs"
+            )
+        
+        with col2:
+            # Export summary to Excel
+            summary_df = pd.DataFrame(all_summaries)
+            excel_summary = to_excel(summary_df)
+            st.download_button(
+                label="📈 Export Simulation Summary to Excel",
+                data=excel_summary,
+                file_name=f"simulation_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.ms-excel",
+                help="Download summary statistics for all simulations"
+            )
+        
+        # Show detailed results for first simulation
+        with st.expander("View Detailed Results (First Simulation)"):
+            st.dataframe(all_results[0], use_container_width=True)
+            
+            # Export first simulation
+            first_sim_excel = to_excel(all_results[0])
+            st.download_button(
+                label="📥 Export First Simulation to Excel",
+                data=first_sim_excel,
+                file_name=f"first_simulation_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.ms-excel"
+            )
+        
+        # Bankroll progression chart
+        st.subheader("💰 Bankroll Progression")
+        
+        # Get first simulation bankroll progression
+        first_sim = all_results[0]
+        if not first_sim.empty:
+            first_sim['Cumulative Profit'] = first_sim['Profit'].cumsum() + initial_bankroll
+            st.line_chart(first_sim.set_index(first_sim.index)['Cumulative Profit'])
+        
+        # ROI distribution across simulations
+        st.subheader("📊 ROI Distribution")
+        roi_values = [float(s['Overall ROI'].rstrip('%')) for s in all_summaries]
+        roi_series = pd.Series(roi_values)
+        st.bar_chart(roi_series)
+        
+        # Auto-add to P&L tracker option
+        st.subheader("💾 Save to P&L Tracker")
+        
+        if st.button("Add Value Bets to P&L Tracker"):
+            # Add all value bets as pending bets to P&L tracker
+            today = datetime.now().strftime('%Y-%m-%d')
+            new_bets = []
+            
+            for bet in value_bets:
+                new_bet = {
+                    'Date': today,
+                    'League': 'Value Bet Simulation',
+                    'Match': bet['Match'],
+                    'Market': 'h2h',
+                    'Selection': bet['Bet Type'],
+                    'Stake': bet['Stake'],
+                    'Odds': bet['Odds'],
+                    'Result': 'Pending',
+                    'P/L': 0
+                }
+                new_bets.append(new_bet)
+            
+            new_bets_df = pd.DataFrame(new_bets)
+            st.session_state.pnl_data = pd.concat([st.session_state.pnl_data, new_bets_df], ignore_index=True)
+            st.success(f"Added {len(new_bets)} value bets to P&L tracker!")
 
 # Main app
 def main():
@@ -768,6 +872,30 @@ def main():
                                 bet365_coverage = safe_column_count(df, 'Bet365 Home')
                                 st.metric("Bet365 Coverage", f"{bet365_coverage}/{len(df)}")
                             
+                            # Export options for odds data
+                            st.subheader("💾 Export Options")
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                # Export to Excel
+                                excel_data = to_excel(df)
+                                st.download_button(
+                                    label="📊 Download Odds as Excel",
+                                    data=excel_data,
+                                    file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    mime="application/vnd.ms-excel"
+                                )
+                            
+                            with col2:
+                                # Export to CSV
+                                csv_data = df.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download Odds as CSV",
+                                    data=csv_data,
+                                    file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                    mime="text/csv"
+                                )
+                            
                             # Display the main table
                             st.subheader("🎯 Upcoming Matches Odds")
                             
@@ -802,15 +930,6 @@ def main():
                                     )
                             
                             st.dataframe(display_df, use_container_width=True)
-                            
-                            # Download option
-                            csv = df.to_csv(index=False)
-                            st.download_button(
-                                label="Download Odds Data",
-                                data=csv,
-                                file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d')}.csv",
-                                mime="text/csv"
-                            )
                         else:
                             st.warning("No upcoming match data available for the selected league")
                     else:
@@ -833,6 +952,38 @@ def main():
                     
                     if all_markets_data and any(all_markets_data.values()):
                         market_tables = create_market_specific_tables(all_markets_data)
+                        
+                        # Export options for market data
+                        st.subheader("💾 Export Market Data")
+                        col1, col2 = st.columns(2)
+                        
+                        # Combine all market data for export
+                        all_market_dfs = []
+                        for market_type, table in market_tables.items():
+                            if not table.empty:
+                                table['Market'] = market_type
+                                all_market_dfs.append(table)
+                        
+                        if all_market_dfs:
+                            combined_markets = pd.concat(all_market_dfs, ignore_index=True)
+                            
+                            with col1:
+                                excel_data = to_excel(combined_markets)
+                                st.download_button(
+                                    label="📊 Download All Markets as Excel",
+                                    data=excel_data,
+                                    file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    mime="application/vnd.ms-excel"
+                                )
+                            
+                            with col2:
+                                csv_data = combined_markets.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Download All Markets as CSV",
+                                    data=csv_data,
+                                    file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                    mime="text/csv"
+                                )
                         
                         for market_type, table in market_tables.items():
                             if not table.empty:
@@ -867,23 +1018,26 @@ def main():
         - Point spreads
         - Over/Under totals
         - Pinnacle vs Bet365 comparison
+        - **Excel/CSV Export**
         
         ### 🎯 Value Bets Simulator
         - Automatic value bet identification
         - 1 unit stake simulation
         - Multiple simulation runs
         - Performance metrics and charts
+        - **Excel/CSV Export for value bets and simulations**
         
         ### 🔄 Market Comparison
         - Side-by-side market analysis
         - Multiple bookmaker comparison
         - Real-time odds updates
+        - **Excel/CSV Export**
         
         ### 💰 P&L Tracker
         - Complete betting journal
         - ROI and performance metrics
         - Chart visualization
-        - Data export
+        - **Excel/CSV Export**
         
         ## Covered Leagues
         
