@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # API configuration
-API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual API key
+API_KEY = "2fc8ca1227c5f69b90c485199c8eabee"  # Replace with your actual API key
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
 # League mappings
