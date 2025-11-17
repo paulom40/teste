@@ -5,7 +5,6 @@ import numpy as np
 from datetime import datetime, timedelta
 import json
 import io
-from pyxlsb import open_workbook as open_xlsb
 
 # Configure the page
 st.set_page_config(
@@ -416,19 +415,10 @@ def display_odds_comparison(df, title):
     st.dataframe(formatted_df, use_container_width=True)
 
 def to_excel(df):
-    """Convert DataFrame to Excel format"""
+    """Convert DataFrame to Excel format using pandas built-in Excel writer"""
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Sheet1')
-        # Auto-adjust columns' width
-        worksheet = writer.sheets['Sheet1']
-        for idx, col in enumerate(df.columns):
-            series = df[col]
-            max_len = max((
-                series.astype(str).map(len).max(),
-                len(str(series.name))
-            )) + 1
-            worksheet.set_column(idx, idx, max_len)
     processed_data = output.getvalue()
     return processed_data
 
@@ -534,13 +524,14 @@ def create_pnl_tracker():
         
         with col2:
             # Excel Download
-            excel_data = to_excel(st.session_state.pnl_data)
-            st.download_button(
-                label="📊 Download P&L as Excel",
-                data=excel_data,
-                file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            if not st.session_state.pnl_data.empty:
+                excel_data = to_excel(st.session_state.pnl_data)
+                st.download_button(
+                    label="📊 Download P&L as Excel",
+                    data=excel_data,
+                    file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
         
         # P&L chart
         st.subheader("P&L Over Time")
@@ -878,13 +869,14 @@ def main():
                             
                             with col1:
                                 # Export to Excel
-                                excel_data = to_excel(df)
-                                st.download_button(
-                                    label="📊 Download Odds as Excel",
-                                    data=excel_data,
-                                    file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                    mime="application/vnd.ms-excel"
-                                )
+                                if not df.empty:
+                                    excel_data = to_excel(df)
+                                    st.download_button(
+                                        label="📊 Download Odds as Excel",
+                                        data=excel_data,
+                                        file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                        mime="application/vnd.ms-excel"
+                                    )
                             
                             with col2:
                                 # Export to CSV
@@ -968,13 +960,14 @@ def main():
                             combined_markets = pd.concat(all_market_dfs, ignore_index=True)
                             
                             with col1:
-                                excel_data = to_excel(combined_markets)
-                                st.download_button(
-                                    label="📊 Download All Markets as Excel",
-                                    data=excel_data,
-                                    file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                    mime="application/vnd.ms-excel"
-                                )
+                                if not combined_markets.empty:
+                                    excel_data = to_excel(combined_markets)
+                                    st.download_button(
+                                        label="📊 Download All Markets as Excel",
+                                        data=excel_data,
+                                        file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                        mime="application/vnd.ms-excel"
+                                    )
                             
                             with col2:
                                 csv_data = combined_markets.to_csv(index=False)
