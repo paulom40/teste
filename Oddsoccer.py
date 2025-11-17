@@ -143,6 +143,178 @@ def process_market_odds(match_data, bookmaker_key, market_type):
     
     return odds_data
 
+def calculate_value(odds, implied_probability):
+    """Calculate value percentage for given odds and implied probability"""
+    if odds is None or implied_probability <= 0:
+        return 0
+    actual_probability = 1 / odds
+    value = (actual_probability - implied_probability) / implied_probability * 100
+    return value
+
+def find_value_bets(df, min_value_threshold=5.0):
+    """Find value bets in the odds data"""
+    value_bets = []
+    
+    if df.empty:
+        return value_bets
+    
+    for _, match in df.iterrows():
+        match_name = match['Match']
+        commence_time = match['Date']
+        
+        # Check Pinnacle odds for value (using Pinnacle as benchmark)
+        pinnacle_odds = {
+            'home': match.get('Pinnacle Home'),
+            'away': match.get('Pinnacle Away'),
+            'draw': match.get('Pinnacle Draw')
+        }
+        
+        # Calculate implied probabilities from Pinnacle (market benchmark)
+        total_implied = 0
+        valid_odds = 0
+        
+        for odds in pinnacle_odds.values():
+            if odds is not None and odds > 0:
+                total_implied += 1 / odds
+                valid_odds += 1
+        
+        if valid_odds == 0 or total_implied == 0:
+            continue
+            
+        # Calculate fair probabilities (normalized)
+        fair_probabilities = {}
+        if pinnacle_odds['home'] is not None:
+            fair_probabilities['home'] = (1 / pinnacle_odds['home']) / total_implied
+        if pinnacle_odds['away'] is not None:
+            fair_probabilities['away'] = (1 / pinnacle_odds['away']) / total_implied
+        if pinnacle_odds['draw'] is not None:
+            fair_probabilities['draw'] = (1 / pinnacle_odds['draw']) / total_implied
+        
+        # Check Bet365 for value opportunities
+        bet365_odds = {
+            'home': match.get('Bet365 Home'),
+            'away': match.get('Bet365 Away'),
+            'draw': match.get('Bet365 Draw')
+        }
+        
+        for bet_type, odds in bet365_odds.items():
+            if (odds is not None and odds > 0 and 
+                bet_type in fair_probabilities and 
+                fair_probabilities[bet_type] > 0):
+                
+                value = calculate_value(odds, fair_probabilities[bet_type])
+                
+                if value >= min_value_threshold:
+                    value_bets.append({
+                        'Match': match_name,
+                        'Date': commence_time,
+                        'Bet Type': bet_type.title(),
+                        'Bookmaker': 'Bet365',
+                        'Odds': odds,
+                        'Fair Probability': f"{fair_probabilities[bet_type]*100:.1f}%",
+                        'Implied Probability': f"{(1/odds)*100:.1f}%",
+                        'Value %': f"{value:.1f}%",
+                        'Stake': 1.0,  # 1 unit stake
+                        'Potential Win': odds - 1,
+                        'Expected Value': (odds - 1) * fair_probabilities[bet_type] - (1 - fair_probabilities[bet_type])
+                    })
+        
+        # Also check if Pinnacle itself has value compared to Bet365
+        for bet_type, odds in pinnacle_odds.items():
+            if (odds is not None and odds > 0 and 
+                bet_type in fair_probabilities and 
+                fair_probabilities[bet_type] > 0):
+                
+                value = calculate_value(odds, fair_probabilities[bet_type])
+                
+                if value >= min_value_threshold:
+                    value_bets.append({
+                        'Match': match_name,
+                        'Date': commence_time,
+                        'Bet Type': bet_type.title(),
+                        'Bookmaker': 'Pinnacle',
+                        'Odds': odds,
+                        'Fair Probability': f"{fair_probabilities[bet_type]*100:.1f}%",
+                        'Implied Probability': f"{(1/odds)*100:.1f}%",
+                        'Value %': f"{value:.1f}%",
+                        'Stake': 1.0,  # 1 unit stake
+                        'Potential Win': odds - 1,
+                        'Expected Value': (odds - 1) * fair_probabilities[bet_type] - (1 - fair_probabilities[bet_type])
+                    })
+    
+    return value_bets
+
+def simulate_value_bets_season(value_bets_list, bankroll=100, bet_size=1):
+    """Simulate a season of betting on value bets"""
+    if not value_bets_list:
+        return pd.DataFrame(), bankroll
+    
+    simulation_results = []
+    current_bankroll = bankroll
+    bets_placed = 0
+    wins = 0
+    total_staked = 0
+    
+    for bet in value_bets_list:
+        if current_bankroll < bet_size:
+            break
+            
+        # Place the bet
+        bets_placed += 1
+        total_staked += bet_size
+        current_bankroll -= bet_size
+        
+        # Simulate outcome based on fair probability
+        fair_prob = float(bet['Fair Probability'].rstrip('%')) / 100
+        outcome = np.random.random() < fair_prob
+        
+        if outcome:
+            # Win
+            win_amount = bet_size * bet['Odds']
+            current_bankroll += win_amount
+            profit = win_amount - bet_size
+            wins += 1
+            result = 'Win'
+        else:
+            # Loss
+            profit = -bet_size
+            result = 'Loss'
+        
+        simulation_results.append({
+            'Match': bet['Match'],
+            'Bet Type': bet['Bet Type'],
+            'Bookmaker': bet['Bookmaker'],
+            'Odds': bet['Odds'],
+            'Stake': bet_size,
+            'Result': result,
+            'Profit': profit,
+            'Bankroll': current_bankroll,
+            'Value %': bet['Value %'],
+            'ROI': (profit / bet_size) * 100
+        })
+    
+    # Calculate summary statistics
+    if bets_placed > 0:
+        win_rate = (wins / bets_placed) * 100
+        total_profit = current_bankroll - bankroll
+        overall_roi = (total_profit / total_staked) * 100
+    else:
+        win_rate = 0
+        total_profit = 0
+        overall_roi = 0
+    
+    summary = {
+        'Total Bets': bets_placed,
+        'Wins': wins,
+        'Win Rate': f"{win_rate:.1f}%",
+        'Total Staked': f"€{total_staked:.2f}",
+        'Total Profit': f"€{total_profit:.2f}",
+        'Final Bankroll': f"€{current_bankroll:.2f}",
+        'Overall ROI': f"{overall_roi:.1f}%"
+    }
+    
+    return pd.DataFrame(simulation_results), summary
+
 def create_comprehensive_odds_table(odds_data, time_period="Upcoming"):
     """Create a comprehensive table with all markets and odds"""
     matches_data = []
@@ -349,6 +521,171 @@ def create_pnl_tracker():
     else:
         st.info("No bets recorded yet. Add your first bet above.")
 
+def create_value_bets_simulator():
+    """Create a value bets simulator with 1 unit stakes"""
+    st.subheader("🎯 Value Bets Simulator")
+    st.markdown("Automatically identify value bets and simulate placing 1 unit on each")
+    
+    # Simulation parameters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        min_value_threshold = st.slider(
+            "Minimum Value % Threshold",
+            min_value=1.0,
+            max_value=20.0,
+            value=5.0,
+            step=0.5,
+            help="Only consider bets with value above this percentage"
+        )
+    
+    with col2:
+        initial_bankroll = st.number_input(
+            "Initial Bankroll (€)",
+            min_value=10,
+            max_value=10000,
+            value=100,
+            step=10
+        )
+    
+    with col3:
+        bet_size = st.number_input(
+            "Bet Size (Units)",
+            min_value=0.1,
+            max_value=10.0,
+            value=1.0,
+            step=0.1,
+            help="Size of each bet in units (1 unit = 1% of bankroll)"
+        )
+    
+    # Check if we have odds data in session state
+    if 'current_odds_data' not in st.session_state:
+        st.warning("Please fetch odds data first in the 'Upcoming Games' tab")
+        return
+    
+    df = st.session_state.current_odds_data
+    
+    if df.empty:
+        st.warning("No odds data available. Please fetch data first.")
+        return
+    
+    # Find value bets
+    value_bets = find_value_bets(df, min_value_threshold)
+    
+    if not value_bets:
+        st.info(f"No value bets found with minimum {min_value_threshold}% value threshold")
+        return
+    
+    # Display value bets
+    st.subheader(f"📊 Identified Value Bets ({len(value_bets)} found)")
+    
+    value_bets_df = pd.DataFrame(value_bets)
+    display_columns = ['Match', 'Date', 'Bet Type', 'Bookmaker', 'Odds', 'Value %', 
+                      'Fair Probability', 'Implied Probability', 'Expected Value']
+    
+    # Filter to available columns
+    available_columns = [col for col in display_columns if col in value_bets_df.columns]
+    st.dataframe(value_bets_df[available_columns], use_container_width=True)
+    
+    # Simulation controls
+    st.subheader("🎲 Simulation")
+    
+    sim_col1, sim_col2 = st.columns(2)
+    
+    with sim_col1:
+        num_simulations = st.slider(
+            "Number of Simulations",
+            min_value=1,
+            max_value=100,
+            value=10,
+            help="Run multiple simulations to see average performance"
+        )
+    
+    with sim_col2:
+        if st.button("🚀 Run Simulation", type="primary"):
+            all_results = []
+            all_summaries = []
+            
+            with st.spinner(f"Running {num_simulations} simulations..."):
+                for i in range(num_simulations):
+                    results_df, summary = simulate_value_bets_season(
+                        value_bets, initial_bankroll, bet_size
+                    )
+                    if not results_df.empty:
+                        results_df['Simulation'] = i + 1
+                        all_results.append(results_df)
+                        all_summaries.append(summary)
+            
+            if all_results:
+                # Combine all simulation results
+                combined_results = pd.concat(all_results, ignore_index=True)
+                
+                # Display simulation results
+                st.subheader("📈 Simulation Results")
+                
+                # Calculate average performance
+                avg_bets = np.mean([s['Total Bets'] for s in all_summaries])
+                avg_profit = np.mean([float(s['Total Profit'].replace('€', '')) for s in all_summaries])
+                avg_roi = np.mean([float(s['Overall ROI'].rstrip('%')) for s in all_summaries])
+                
+                # Display metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Average Bets per Simulation", f"{avg_bets:.1f}")
+                with col2:
+                    st.metric("Average Profit", f"€{avg_profit:.2f}")
+                with col3:
+                    st.metric("Average ROI", f"{avg_roi:.1f}%")
+                with col4:
+                    positive_simulations = len([s for s in all_summaries if float(s['Total Profit'].replace('€', '')) > 0])
+                    success_rate = (positive_simulations / num_simulations) * 100
+                    st.metric("Success Rate", f"{success_rate:.1f}%")
+                
+                # Show detailed results for first simulation
+                with st.expander("View Detailed Results (First Simulation)"):
+                    st.dataframe(all_results[0], use_container_width=True)
+                
+                # Bankroll progression chart
+                st.subheader("💰 Bankroll Progression")
+                
+                # Get first simulation bankroll progression
+                first_sim = all_results[0]
+                if not first_sim.empty:
+                    first_sim['Cumulative Profit'] = first_sim['Profit'].cumsum() + initial_bankroll
+                    st.line_chart(first_sim.set_index(first_sim.index)['Cumulative Profit'])
+                
+                # ROI distribution across simulations
+                st.subheader("📊 ROI Distribution")
+                roi_values = [float(s['Overall ROI'].rstrip('%')) for s in all_summaries]
+                roi_series = pd.Series(roi_values)
+                st.bar_chart(roi_series)
+                
+                # Auto-add to P&L tracker option
+                st.subheader("💾 Save to P&L Tracker")
+                
+                if st.button("Add Value Bets to P&L Tracker"):
+                    # Add all value bets as pending bets to P&L tracker
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    new_bets = []
+                    
+                    for bet in value_bets:
+                        new_bet = {
+                            'Date': today,
+                            'League': 'Value Bet Simulation',
+                            'Match': bet['Match'],
+                            'Market': 'h2h',
+                            'Selection': bet['Bet Type'],
+                            'Stake': bet['Stake'],
+                            'Odds': bet['Odds'],
+                            'Result': 'Pending',
+                            'P/L': 0
+                        }
+                        new_bets.append(new_bet)
+                    
+                    new_bets_df = pd.DataFrame(new_bets)
+                    st.session_state.pnl_data = pd.concat([st.session_state.pnl_data, new_bets_df], ignore_index=True)
+                    st.success(f"Added {len(new_bets)} value bets to P&L tracker!")
+
 # Main app
 def main():
     st.title("⚽ European Football Odds Tracker")
@@ -393,8 +730,8 @@ def main():
         default=['h2h']
     )
     
-    # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Upcoming Games", "🔄 Market Comparison", "💰 P&L Tracker", "ℹ️ Setup Guide"])
+    # Main content - UPDATED TABS to include Value Bets Simulator
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Upcoming Games", "🎯 Value Bets", "🔄 Market Comparison", "💰 P&L Tracker", "ℹ️ Setup Guide"])
     
     with tab1:
         st.header(f"{selected_country} - {selected_league} - Upcoming Games")
@@ -415,6 +752,9 @@ def main():
                     if upcoming_data:
                         df = create_comprehensive_odds_table(upcoming_data, "Upcoming")
                         
+                        # Store in session state for value bets tab
+                        st.session_state.current_odds_data = df
+                        
                         if not df.empty:
                             # Display summary with safe column checking
                             st.subheader("📈 Overview")
@@ -427,12 +767,6 @@ def main():
                             with col3:
                                 bet365_coverage = safe_column_count(df, 'Bet365 Home')
                                 st.metric("Bet365 Coverage", f"{bet365_coverage}/{len(df)}")
-                            
-                            # Show available columns for debugging
-                            with st.expander("🔍 Data Preview"):
-                                st.write("Available columns:", list(df.columns))
-                                st.write("First few rows:")
-                                st.dataframe(df.head(3))
                             
                             # Display the main table
                             st.subheader("🎯 Upcoming Matches Odds")
@@ -483,6 +817,9 @@ def main():
                         st.error("Failed to fetch odds data. Please check your API key and try again.")
     
     with tab2:
+        create_value_bets_simulator()
+    
+    with tab3:
         st.header("Market Comparison")
         
         if st.button("Fetch All Market Data"):
@@ -503,10 +840,10 @@ def main():
                     else:
                         st.warning("No market data available. The API key may have limited access or there are no current matches.")
     
-    with tab3:
+    with tab4:
         create_pnl_tracker()
     
-    with tab4:
+    with tab5:
         st.header("📋 Setup Guide")
         st.markdown("""
         ## How to Get Your API Key
@@ -530,6 +867,12 @@ def main():
         - Point spreads
         - Over/Under totals
         - Pinnacle vs Bet365 comparison
+        
+        ### 🎯 Value Bets Simulator
+        - Automatic value bet identification
+        - 1 unit stake simulation
+        - Multiple simulation runs
+        - Performance metrics and charts
         
         ### 🔄 Market Comparison
         - Side-by-side market analysis
