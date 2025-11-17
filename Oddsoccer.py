@@ -12,8 +12,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# API configuration
-API_KEY = "2fc8ca1227c5f69b90c485199c8eabee"  # Replace with your actual API key
+# API configuration - REPLACE WITH YOUR ACTUAL API KEY
+API_KEY = "2fc8ca1227c5f69b90c485199c8eabee"  # This key seems invalid
 BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
 # League mappings
@@ -41,30 +41,23 @@ LEAGUES = {
 }
 
 BOOKMAKERS = ['pinnacle', 'bet365']
-MARKETS = ['h2h', 'spreads', 'totals', 'outrights']
+MARKETS = ['h2h', 'spreads', 'totals']
 
-def get_historical_odds(sport_key, days_back=7, regions='eu', markets='h2h'):
-    """Fetch historical odds for past games"""
-    end_time = datetime.utcnow()
-    start_time = end_time - timedelta(days=days_back)
-    
-    url = f"{BASE_URL}/{sport_key}/odds-history"
-    params = {
-        'api_key': API_KEY,
-        'regions': regions,
-        'markets': markets,
-        'bookmakers': ','.join(BOOKMAKERS),
-        'date': start_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'dateFormat': 'iso'
-    }
+def test_api_key():
+    """Test if the API key is valid"""
+    url = f"{BASE_URL}"
+    params = {'api_key': API_KEY}
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching historical data: {e}")
-        return None
+        if response.status_code == 200:
+            return True, "API key is valid"
+        elif response.status_code == 401:
+            return False, "Invalid API key - Please check your API key"
+        else:
+            return False, f"API error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return False, f"Connection error: {e}"
 
 def get_upcoming_odds(sport_key, regions='eu', markets='h2h'):
     """Fetch odds for upcoming games"""
@@ -78,8 +71,11 @@ def get_upcoming_odds(sport_key, regions='eu', markets='h2h'):
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"API Error {response.status_code}: {response.text}")
+            return None
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching upcoming data: {e}")
         return None
@@ -101,6 +97,8 @@ def get_all_markets_odds(sport_key, regions='eu'):
             response = requests.get(url, params=params)
             if response.status_code == 200:
                 all_odds[market] = response.json()
+            else:
+                st.warning(f"Could not fetch {market} market: {response.status_code}")
         except requests.exceptions.RequestException:
             continue
     
@@ -266,7 +264,7 @@ def create_pnl_tracker():
             match = st.text_input("Match")
         
         with col2:
-            market = st.selectbox("Market", ["h2h", "spreads", "totals", "outrights"])
+            market = st.selectbox("Market", ["h2h", "spreads", "totals"])
             selection = st.selectbox("Selection", ["Home", "Away", "Draw", "Over", "Under"])
             stake = st.number_input("Stake (€)", min_value=1.0, value=10.0)
         
@@ -349,148 +347,168 @@ def create_pnl_tracker():
 # Main app
 def main():
     st.title("⚽ European Football Odds Tracker")
-    st.markdown("Track historical and upcoming odds from Pinnacle and Bet365 across all markets")
+    st.markdown("Track odds from Pinnacle and Bet365 across all markets")
     
-    # Sidebar for configuration
-    st.sidebar.header("Configuration")
+    # API Key validation
+    st.sidebar.header("🔑 API Configuration")
+    
+    # Let user input their own API key
+    user_api_key = st.sidebar.text_input("Enter your Odds API Key", 
+                                       value=API_KEY,
+                                       type="password",
+                                       help="Get your free API key from https://the-odds-api.com")
+    
+    # Update API key if user provides a new one
+    if user_api_key and user_api_key != API_KEY:
+        global API_KEY
+        API_KEY = user_api_key
+    
+    # Test API key
+    if st.sidebar.button("Test API Key"):
+        is_valid, message = test_api_key()
+        if is_valid:
+            st.sidebar.success(message)
+        else:
+            st.sidebar.error(message)
+    
+    # League selection
+    st.sidebar.header("League Selection")
     selected_country = st.sidebar.selectbox("Select Country", list(LEAGUES.keys()))
     selected_league = st.sidebar.selectbox("Select League", list(LEAGUES[selected_country].keys()))
-    
-    # Date range for historical data
-    st.sidebar.header("Historical Data Settings")
-    days_back = st.sidebar.slider("Days of Historical Data", 1, 30, 7)
     
     # Market selection
     st.sidebar.header("Market Selection")
     selected_markets = st.sidebar.multiselect(
         "Select Markets to Display",
         MARKETS,
-        default=['h2h', 'spreads', 'totals']
+        default=['h2h']
     )
     
     # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 All Games", "🔄 Market Comparison", "💰 P&L Tracker", "ℹ️ About"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Upcoming Games", "🔄 Market Comparison", "💰 P&L Tracker", "ℹ️ Setup Guide"])
     
     with tab1:
-        st.header(f"{selected_country} - {selected_league} - All Games")
+        st.header(f"{selected_country} - {selected_league} - Upcoming Games")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🔄 Fetch All Odds Data", type="primary"):
-                with st.spinner("Fetching comprehensive odds data..."):
-                    sport_key = LEAGUES[selected_country][selected_league]
-                    
+        if st.button("🔄 Fetch Upcoming Odds", type="primary"):
+            with st.spinner("Fetching upcoming odds data..."):
+                sport_key = LEAGUES[selected_country][selected_league]
+                
+                # Test API first
+                is_valid, message = test_api_key()
+                if not is_valid:
+                    st.error(f"API Error: {message}")
+                    st.info("Please check your API key in the sidebar and try again.")
+                else:
                     # Fetch upcoming games
                     upcoming_data = get_upcoming_odds(sport_key, markets=','.join(selected_markets))
                     
-                    # Fetch historical games
-                    historical_data = get_historical_odds(sport_key, days_back=days_back, markets=','.join(selected_markets))
-                    
-                    if upcoming_data or historical_data:
-                        # Combine and display data
-                        all_matches = []
+                    if upcoming_data:
+                        df = create_comprehensive_odds_table(upcoming_data, "Upcoming")
                         
-                        if historical_data:
-                            hist_df = create_comprehensive_odds_table(historical_data, "Past")
-                            all_matches.append(hist_df)
-                            st.success(f"Found {len(historical_data)} historical matches")
-                        
-                        if upcoming_data:
-                            upc_df = create_comprehensive_odds_table(upcoming_data, "Upcoming")
-                            all_matches.append(upc_df)
-                            st.success(f"Found {len(upcoming_data)} upcoming matches")
-                        
-                        if all_matches:
-                            combined_df = pd.concat(all_matches, ignore_index=True)
-                            combined_df = combined_df.sort_values('Timestamp')
-                            
+                        if not df.empty:
                             # Display summary
                             st.subheader("📈 Overview")
-                            col1, col2, col3, col4 = st.columns(4)
+                            col1, col2, col3 = st.columns(3)
                             with col1:
-                                total_matches = len(combined_df)
-                                st.metric("Total Matches", total_matches)
+                                st.metric("Total Matches", len(df))
                             with col2:
-                                past_matches = len(combined_df[combined_df['Period'] == 'Past'])
-                                st.metric("Past Matches", past_matches)
+                                pinnacle_coverage = len(df[df['Pinnacle Home'].notna()])
+                                st.metric("Pinnacle Coverage", f"{pinnacle_coverage}/{len(df)}")
                             with col3:
-                                upcoming_matches = len(combined_df[combined_df['Period'] == 'Upcoming'])
-                                st.metric("Upcoming Matches", upcoming_matches)
-                            with col4:
-                                pinnacle_coverage = len(combined_df[combined_df['Pinnacle Home'].notna()])
-                                st.metric("Pinnacle Coverage", f"{pinnacle_coverage}/{total_matches}")
+                                bet365_coverage = len(df[df['Bet365 Home'].notna()])
+                                st.metric("Bet365 Coverage", f"{bet365_coverage}/{len(df)}")
                             
                             # Display the main table
-                            st.subheader("🎯 All Matches Odds")
-                            st.dataframe(combined_df.drop('Timestamp', axis=1), use_container_width=True)
+                            st.subheader("🎯 Upcoming Matches Odds")
+                            st.dataframe(df.drop('Timestamp', axis=1), use_container_width=True)
                             
                             # Download option
-                            csv = combined_df.to_csv(index=False)
+                            csv = df.to_csv(index=False)
                             st.download_button(
-                                label="Download All Odds Data",
+                                label="Download Odds Data",
                                 data=csv,
                                 file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d')}.csv",
                                 mime="text/csv"
                             )
                         else:
-                            st.warning("No match data available")
+                            st.warning("No upcoming match data available for the selected league")
                     else:
-                        st.error("Failed to fetch odds data. Please check your API key and connection.")
-        
-        with col2:
-            if st.button("🧹 Clear Display"):
-                st.rerun()
+                        st.error("Failed to fetch odds data. Please check your API key and try again.")
     
     with tab2:
         st.header("Market Comparison")
         
-        if st.button("Fetch Market Data"):
+        if st.button("Fetch All Market Data"):
             with st.spinner("Fetching detailed market data..."):
-                sport_key = LEAGUES[selected_country][selected_league]
-                all_markets_data = get_all_markets_odds(sport_key)
-                
-                market_tables = create_market_specific_tables(all_markets_data)
-                
-                for market_type, table in market_tables.items():
-                    if not table.empty:
-                        display_odds_comparison(table, f"{market_type.upper()} Market")
+                is_valid, message = test_api_key()
+                if not is_valid:
+                    st.error(f"API Error: {message}")
+                else:
+                    sport_key = LEAGUES[selected_country][selected_league]
+                    all_markets_data = get_all_markets_odds(sport_key)
+                    
+                    if any(all_markets_data.values()):
+                        market_tables = create_market_specific_tables(all_markets_data)
+                        
+                        for market_type, table in market_tables.items():
+                            if not table.empty:
+                                display_odds_comparison(table, f"{market_type.upper()} Market")
+                    else:
+                        st.warning("No market data available. The API key may have limited access.")
     
     with tab3:
         create_pnl_tracker()
     
     with tab4:
-        st.header("About This App")
+        st.header("📋 Setup Guide")
         st.markdown("""
-        ## Enhanced Odds Tracker Features
+        ## How to Get Your API Key
         
-        ### 📊 All Games View
-        - **Historical Games**: Past matches with their closing odds
-        - **Upcoming Games**: Future matches with current odds
-        - **Comprehensive Coverage**: All major European leagues
+        1. **Visit [The Odds API](https://the-odds-api.com)**
+        2. **Sign up for a free account**
+        3. **Get your API key from the dashboard**
+        4. **Enter your API key in the sidebar**
+        5. **Click 'Test API Key' to verify**
+        
+        ## Free Tier Limits
+        
+        - **500 requests per month**
+        - **1 request per second**
+        - **All sports and regions included**
+        
+        ## Supported Features
+        
+        ### 📊 Upcoming Games
+        - Head-to-Head (Moneyline) odds
+        - Point spreads
+        - Over/Under totals
+        - Pinnacle vs Bet365 comparison
         
         ### 🔄 Market Comparison
-        - **Multiple Markets**: 
-          - **h2h**: Head-to-Head (Moneyline)
-          - **spreads**: Point spreads
-          - **totals**: Over/Under markets
-          - **outrights**: Future bets
-        - **Bookmaker Comparison**: Pinnacle vs Bet365
+        - Side-by-side market analysis
+        - Multiple bookmaker comparison
+        - Real-time odds updates
         
         ### 💰 P&L Tracker
-        - **Complete betting journal**
-        - **ROI and performance metrics**
-        - **Chart visualization** of betting performance
-        - **Data export** functionality
+        - Complete betting journal
+        - ROI and performance metrics
+        - Chart visualization
+        - Data export
         
-        ### Covered Leagues:
+        ## Covered Leagues
+        
         - **Portugal**: Primeira & Segunda Liga
         - **Spain**: La Liga & Segunda Division
         - **Italy**: Serie A & Serie B
         - **England**: Premier League & Championship
         - **Germany**: Bundesliga & Bundesliga 2
         
-        **Note:** Replace `YOUR_API_KEY_HERE` with your actual API key from The Odds API.
+        ## Troubleshooting
+        
+        **Error 401**: Invalid API key - check your key in the sidebar
+        **Error 429**: Too many requests - wait and try again
+        **No Data**: League might not have current matches - try different league
         """)
 
 if __name__ == "__main__":
