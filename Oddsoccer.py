@@ -414,13 +414,49 @@ def display_odds_comparison(df, title):
     
     st.dataframe(formatted_df, use_container_width=True)
 
+def clean_dataframe_for_export(df):
+    """Clean DataFrame to ensure it can be exported to Excel"""
+    if df.empty:
+        return df
+    
+    # Create a copy to avoid modifying the original
+    clean_df = df.copy()
+    
+    # Convert all columns to string to avoid data type issues
+    for col in clean_df.columns:
+        # Handle NaN values and convert to string
+        clean_df[col] = clean_df[col].astype(str)
+        
+        # Replace 'nan' and 'None' with empty string
+        clean_df[col] = clean_df[col].replace(['nan', 'None', 'NaN'], '')
+    
+    return clean_df
+
 def to_excel(df):
-    """Convert DataFrame to Excel format using pandas built-in Excel writer"""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Sheet1')
-    processed_data = output.getvalue()
-    return processed_data
+    """Convert DataFrame to Excel format with error handling"""
+    try:
+        # Clean the dataframe first
+        clean_df = clean_dataframe_for_export(df)
+        
+        output = io.BytesIO()
+        
+        # Use different engine based on availability
+        try:
+            # Try using openpyxl first
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                clean_df.to_excel(writer, index=False, sheet_name='Data')
+        except ImportError:
+            # Fallback to xlsxwriter
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                clean_df.to_excel(writer, index=False, sheet_name='Data')
+        
+        processed_data = output.getvalue()
+        return processed_data
+        
+    except Exception as e:
+        st.error(f"Error creating Excel file: {e}")
+        # Fallback to CSV if Excel fails
+        return None
 
 def create_pnl_tracker():
     """Create a P&L tracker for the season"""
@@ -526,12 +562,13 @@ def create_pnl_tracker():
             # Excel Download
             if not st.session_state.pnl_data.empty:
                 excel_data = to_excel(st.session_state.pnl_data)
-                st.download_button(
-                    label="📊 Download P&L as Excel",
-                    data=excel_data,
-                    file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
+                if excel_data:
+                    st.download_button(
+                        label="📊 Download P&L as Excel",
+                        data=excel_data,
+                        file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.ms-excel"
+                    )
         
         # P&L chart
         st.subheader("P&L Over Time")
@@ -618,13 +655,14 @@ def create_value_bets_simulator():
     with col1:
         if not value_bets_df.empty:
             excel_data = to_excel(value_bets_df)
-            st.download_button(
-                label="📊 Export Value Bets to Excel",
-                data=excel_data,
-                file_name=f"value_bets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.ms-excel",
-                help="Download all identified value bets to Excel"
-            )
+            if excel_data:
+                st.download_button(
+                    label="📊 Export Value Bets to Excel",
+                    data=excel_data,
+                    file_name=f"value_bets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.ms-excel",
+                    help="Download all identified value bets to Excel"
+                )
     
     with col2:
         if not value_bets_df.empty:
@@ -707,25 +745,27 @@ def create_value_bets_simulator():
         with col1:
             # Export detailed results to Excel
             excel_data = to_excel(combined_results)
-            st.download_button(
-                label="📊 Export All Simulations to Excel",
-                data=excel_data,
-                file_name=f"simulation_results_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.ms-excel",
-                help="Download detailed simulation results for all runs"
-            )
+            if excel_data:
+                st.download_button(
+                    label="📊 Export All Simulations to Excel",
+                    data=excel_data,
+                    file_name=f"simulation_results_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.ms-excel",
+                    help="Download detailed simulation results for all runs"
+                )
         
         with col2:
             # Export summary to Excel
             summary_df = pd.DataFrame(all_summaries)
             excel_summary = to_excel(summary_df)
-            st.download_button(
-                label="📈 Export Simulation Summary to Excel",
-                data=excel_summary,
-                file_name=f"simulation_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.ms-excel",
-                help="Download summary statistics for all simulations"
-            )
+            if excel_summary:
+                st.download_button(
+                    label="📈 Export Simulation Summary to Excel",
+                    data=excel_summary,
+                    file_name=f"simulation_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.ms-excel",
+                    help="Download summary statistics for all simulations"
+                )
         
         # Show detailed results for first simulation
         with st.expander("View Detailed Results (First Simulation)"):
@@ -733,12 +773,13 @@ def create_value_bets_simulator():
             
             # Export first simulation
             first_sim_excel = to_excel(all_results[0])
-            st.download_button(
-                label="📥 Export First Simulation to Excel",
-                data=first_sim_excel,
-                file_name=f"first_simulation_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            if first_sim_excel:
+                st.download_button(
+                    label="📥 Export First Simulation to Excel",
+                    data=first_sim_excel,
+                    file_name=f"first_simulation_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
         
         # Bankroll progression chart
         st.subheader("💰 Bankroll Progression")
@@ -871,12 +912,15 @@ def main():
                                 # Export to Excel
                                 if not df.empty:
                                     excel_data = to_excel(df)
-                                    st.download_button(
-                                        label="📊 Download Odds as Excel",
-                                        data=excel_data,
-                                        file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                        mime="application/vnd.ms-excel"
-                                    )
+                                    if excel_data:
+                                        st.download_button(
+                                            label="📊 Download Odds as Excel",
+                                            data=excel_data,
+                                            file_name=f"odds_data_{selected_league}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                            mime="application/vnd.ms-excel"
+                                        )
+                                    else:
+                                        st.warning("Excel export not available. Please use CSV export.")
                             
                             with col2:
                                 # Export to CSV
@@ -962,12 +1006,15 @@ def main():
                             with col1:
                                 if not combined_markets.empty:
                                     excel_data = to_excel(combined_markets)
-                                    st.download_button(
-                                        label="📊 Download All Markets as Excel",
-                                        data=excel_data,
-                                        file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                        mime="application/vnd.ms-excel"
-                                    )
+                                    if excel_data:
+                                        st.download_button(
+                                            label="📊 Download All Markets as Excel",
+                                            data=excel_data,
+                                            file_name=f"all_markets_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                            mime="application/vnd.ms-excel"
+                                        )
+                                    else:
+                                        st.warning("Excel export not available. Please use CSV export.")
                             
                             with col2:
                                 csv_data = combined_markets.to_csv(index=False)
@@ -1046,6 +1093,7 @@ def main():
         **Error 429**: Too many requests - wait and try again
         **No Data**: League might not have current matches - try different league
         **Missing Columns**: Some bookmakers may not have odds for all matches
+        **Excel Export Issues**: Use CSV export as a reliable alternative
         """)
 
 if __name__ == "__main__":
