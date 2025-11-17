@@ -1,413 +1,366 @@
+import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
-import requests
-from bs4 import BeautifulSoup
-import time
-from scipy.stats import poisson, norm
 from datetime import datetime, timedelta
-import streamlit as st
-import re
+import json
 
-class AdvancedFootballPredictor:
-    def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-    def scrape_fbref_league_table(self, league_url):
-        """Scrape league table and advanced metrics from FBref"""
-        try:
-            response = requests.get(league_url, headers=self.headers)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            teams_data = {}
-            
-            # Find the standings table
-            table = soup.find('table', {'id': re.compile('standings')})
-            if table:
-                for row in table.find_all('tr')[1:]:  # Skip header
-                    cols = row.find_all('td')
-                    if len(cols) > 10:
-                        try:
-                            team_name = row.find('th').text.strip()
-                            
-                            # Basic stats
-                            matches_played = int(cols[0].text) if cols[0].text else 0
-                            wins = int(cols[1].text) if cols[1].text else 0
-                            draws = int(cols[2].text) if cols[2].text else 0
-                            losses = int(cols[3].text) if cols[3].text else 0
-                            goals_for = int(cols[4].text) if cols[4].text else 0
-                            goals_against = int(cols[5].text) if cols[5].text else 0
-                            
-                            # Calculate advanced metrics
-                            avg_goals_for = goals_for / matches_played if matches_played > 0 else 0
-                            avg_goals_against = goals_against / matches_played if matches_played > 0 else 0
-                            win_rate = wins / matches_played if matches_played > 0 else 0
-                            
-                            teams_data[team_name] = {
-                                'matches_played': matches_played,
-                                'wins': wins,
-                                'draws': draws,
-                                'losses': losses,
-                                'goals_for': goals_for,
-                                'goals_against': goals_against,
-                                'avg_goals_for': round(avg_goals_for, 2),
-                                'avg_goals_against': round(avg_goals_against, 2),
-                                'win_rate': round(win_rate, 3),
-                                'goal_difference': goals_for - goals_against
-                            }
-                        except Exception as e:
-                            continue
-            
-            return teams_data
-            
-        except Exception as e:
-            print(f"Error scraping FBref league table: {e}")
-            return self.get_demo_teams_data()
-    
-    def scrape_fbref_advanced_stats(self, team_name, league_url):
-        """Scrape advanced stats for a specific team"""
-        try:
-            response = requests.get(league_url, headers=self.headers)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Look for team-specific advanced stats
-            # This is a simplified version - in practice you'd navigate to team pages
-            advanced_stats = {
-                'xg_per_game': np.random.uniform(1.0, 2.5),
-                'xg_against_per_game': np.random.uniform(0.8, 2.0),
-                'shot_creating_actions': np.random.uniform(15, 30),
-                'pass_accuracy': np.random.uniform(75, 90),
-                'pressures_per_game': np.random.uniform(150, 250),
-                'possession': np.random.uniform(40, 65)
-            }
-            
-            return advanced_stats
-            
-        except Exception as e:
-            print(f"Error scraping advanced stats: {e}")
-            return self.get_demo_advanced_stats()
-    
-    def get_demo_teams_data(self):
-        """Generate demo data when scraping fails"""
-        teams = [
-            'Manchester City', 'Liverpool', 'Arsenal', 'Chelsea', 'Tottenham',
-            'Manchester United', 'Newcastle', 'Brighton', 'West Ham', 'Crystal Palace'
-        ]
-        
-        teams_data = {}
-        for team in teams:
-            matches = np.random.randint(15, 25)
-            wins = np.random.randint(5, matches-5)
-            draws = np.random.randint(2, 8)
-            losses = matches - wins - draws
-            goals_for = np.random.randint(20, 50)
-            goals_against = np.random.randint(15, 40)
-            
-            teams_data[team] = {
-                'matches_played': matches,
-                'wins': wins,
-                'draws': draws,
-                'losses': losses,
-                'goals_for': goals_for,
-                'goals_against': goals_against,
-                'avg_goals_for': round(goals_for / matches, 2),
-                'avg_goals_against': round(goals_against / matches, 2),
-                'win_rate': round(wins / matches, 3),
-                'goal_difference': goals_for - goals_against
-            }
-        
-        return teams_data
-    
-    def get_demo_advanced_stats(self):
-        """Generate demo advanced stats"""
-        return {
-            'xg_per_game': np.random.uniform(1.0, 2.5),
-            'xg_against_per_game': np.random.uniform(0.8, 2.0),
-            'shot_creating_actions': np.random.uniform(15, 30),
-            'pass_accuracy': np.random.uniform(75, 90),
-            'pressures_per_game': np.random.uniform(150, 250),
-            'possession': np.random.uniform(40, 65)
-        }
-    
-    def calculate_team_strength(self, team_data, advanced_stats):
-        """Calculate overall team strength rating"""
-        # Weight different factors
-        attack_strength = (
-            team_data['avg_goals_for'] * 0.3 +
-            advanced_stats['xg_per_game'] * 0.4 +
-            advanced_stats['shot_creating_actions'] * 0.1 +
-            (advanced_stats['pass_accuracy'] / 100) * 0.2
-        )
-        
-        defense_strength = (
-            (2 - team_data['avg_goals_against']) * 0.3 +
-            (2 - advanced_stats['xg_against_per_game']) * 0.4 +
-            (advanced_stats['pressures_per_game'] / 200) * 0.2 +
-            (advanced_stats['possession'] / 100) * 0.1
-        )
-        
-        overall_strength = (attack_strength + defense_strength) / 2
-        
-        return {
-            'attack': round(attack_strength, 2),
-            'defense': round(defense_strength, 2),
-            'overall': round(overall_strength, 2),
-            'form': team_data['win_rate']
-        }
-    
-    def predict_match(self, home_team, away_team, home_strength, away_strength):
-        """Predict match outcome using strength ratings and Poisson distribution"""
-        
-        # Home advantage factor
-        home_advantage = 1.2
-        
-        # Calculate expected goals
-        home_expected_goals = max(0.1, 
-            (home_strength['attack'] * away_strength['defense'] * home_advantage) / 2
-        )
-        away_expected_goals = max(0.1,
-            (away_strength['attack'] * home_strength['defense']) / 2
-        )
-        
-        # Use Poisson distribution to calculate probabilities
-        home_win_prob, draw_prob, away_win_prob = self.poisson_probabilities(
-            home_expected_goals, away_expected_goals
-        )
-        
-        # Calculate additional probabilities
-        over_25_prob = self.calculate_over_under_probability(home_expected_goals, away_expected_goals, 2.5)
-        both_teams_score = 1 - (poisson.pmf(0, home_expected_goals) * poisson.pmf(0, away_expected_goals))
-        
-        # Determine most likely scoreline
-        most_likely_score = self.find_most_likely_score(home_expected_goals, away_expected_goals)
-        
-        return {
-            'home_team': home_team,
-            'away_team': away_team,
-            'home_expected_goals': round(home_expected_goals, 2),
-            'away_expected_goals': round(away_expected_goals, 2),
-            'home_win_prob': round(home_win_prob, 3),
-            'draw_prob': round(draw_prob, 3),
-            'away_win_prob': round(away_win_prob, 3),
-            'over_2.5_goals_prob': round(over_25_prob, 3),
-            'both_teams_score_prob': round(both_teams_score, 3),
-            'most_likely_score': most_likely_score,
-            'confidence': max(home_win_prob, draw_prob, away_win_prob),
-            'home_strength': home_strength['overall'],
-            'away_strength': away_strength['overall']
-        }
-    
-    def poisson_probabilities(self, home_goals, away_goals):
-        """Calculate match outcome probabilities using Poisson distribution"""
-        max_goals = 8
-        home_probs = [poisson.pmf(i, home_goals) for i in range(max_goals)]
-        away_probs = [poisson.pmf(i, away_goals) for i in range(max_goals)]
-        
-        home_win = np.sum(np.outer(home_probs, away_probs) * 
-                         (np.arange(max_goals)[:, None] > np.arange(max_goals)))
-        draw = np.sum(np.outer(home_probs, away_probs) * 
-                     (np.arange(max_goals)[:, None] == np.arange(max_goals)))
-        away_win = 1 - home_win - draw
-        
-        return home_win, draw, away_win
-    
-    def calculate_over_under_probability(self, home_goals, away_goals, line):
-        """Calculate probability of over/under goals"""
-        max_goals = 10
-        total_prob = 0
-        for i in range(max_goals):
-            for j in range(max_goals):
-                if i + j > line:
-                    total_prob += poisson.pmf(i, home_goals) * poisson.pmf(j, away_goals)
-        return total_prob
-    
-    def find_most_likely_score(self, home_goals, away_goals):
-        """Find the most likely scoreline"""
-        max_goals = 5
-        max_prob = 0
-        most_likely = "0-0"
-        
-        for i in range(max_goals):
-            for j in range(max_goals):
-                prob = poisson.pmf(i, home_goals) * poisson.pmf(j, away_goals)
-                if prob > max_prob:
-                    max_prob = prob
-                    most_likely = f"{i}-{j}"
-        
-        return most_likely
-    
-    def generate_fixtures(self, teams):
-        """Generate sample fixtures"""
-        fixtures = []
-        team_list = list(teams.keys())
-        
-        for i in range(min(5, len(team_list))):
-            for j in range(i+1, min(i+3, len(team_list))):
-                fixtures.append({
-                    'home_team': team_list[i],
-                    'away_team': team_list[j],
-                    'date': (datetime.now() + timedelta(days=np.random.randint(1, 14))).strftime('%Y-%m-%d')
-                })
-        
-        return fixtures
-    
-    def run_analysis(self, league_url):
-        """Run complete analysis for a league"""
-        print("Scraping league data...")
-        teams_data = self.scrape_fbref_league_table(league_url)
-        
-        print("Calculating team strengths...")
-        team_strengths = {}
-        for team_name, basic_data in teams_data.items():
-            advanced_stats = self.scrape_fbref_advanced_stats(team_name, league_url)
-            strength = self.calculate_team_strength(basic_data, advanced_stats)
-            team_strengths[team_name] = strength
-        
-        print("Generating fixtures...")
-        fixtures = self.generate_fixtures(teams_data)
-        
-        print("Making predictions...")
-        predictions = []
-        for fixture in fixtures:
-            home_team = fixture['home_team']
-            away_team = fixture['away_team']
-            
-            if home_team in team_strengths and away_team in team_strengths:
-                prediction = self.predict_match(
-                    home_team, away_team,
-                    team_strengths[home_team],
-                    team_strengths[away_team]
-                )
-                prediction['date'] = fixture['date']
-                predictions.append(prediction)
-            
-            time.sleep(0.5)  # Rate limiting
-        
-        return predictions, team_strengths
+# Configure the page
+st.set_page_config(
+    page_title="Sports Betting Odds Tracker",
+    page_icon="⚽",
+    layout="wide"
+)
 
-# Streamlit App
-def main():
-    st.set_page_config(
-        page_title="Advanced Football Predictor",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    st.title("⚽ Advanced Football Predictor")
-    st.markdown("Using FBref metrics & Poisson distribution for sophisticated predictions")
-    
-    # Initialize predictor
-    predictor = AdvancedFootballPredictor()
-    
-    # Sidebar
-    st.sidebar.header("Configuration")
-    league = st.sidebar.selectbox(
-        "Select League",
-        ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1"]
-    )
-    
-    league_urls = {
-        "Premier League": "https://fbref.com/en/comps/9/Premier-League-Stats",
-        "La Liga": "https://fbref.com/en/comps/12/La-Liga-Stats",
-        "Serie A": "https://fbref.com/en/comps/11/Serie-A-Stats",
-        "Bundesliga": "https://fbref.com/en/comps/20/Bundesliga-Stats",
-        "Ligue 1": "https://fbref.com/en/comps/13/Ligue-1-Stats"
+# API configuration
+API_KEY = "2fc8ca1227c5f69b90c485199c8eabee"  # Replace with your actual API key
+BASE_URL = "https://api.the-odds-api.com/v4/sports"
+
+# League mappings
+LEAGUES = {
+    'Portugal': {
+        'Primeira Liga': 'soccer_portugal_primeira_liga',
+        'Segunda Liga': 'soccer_portugal_segunda_liga'
+    },
+    'Spain': {
+        'La Liga': 'soccer_spain_la_liga',
+        'Segunda Division': 'soccer_spain_segunda_division'
+    },
+    'Italy': {
+        'Serie A': 'soccer_italy_serie_a',
+        'Serie B': 'soccer_italy_serie_b'
+    },
+    'England': {
+        'Premier League': 'soccer_epl',
+        'Championship': 'soccer_england_championship'
+    },
+    'Germany': {
+        'Bundesliga': 'soccer_germany_bundesliga',
+        'Bundesliga 2': 'soccer_germany_bundesliga2'
+    }
+}
+
+BOOKMAKERS = ['pinnacle', 'bet365']
+
+def get_odds(sport_key, regions='eu', markets='h2h'):
+    """Fetch odds from the API"""
+    url = f"{BASE_URL}/{sport_key}/odds"
+    params = {
+        'api_key': API_KEY,
+        'regions': regions,
+        'markets': markets,
+        'bookmakers': ','.join(BOOKMAKERS)
     }
     
-    if st.sidebar.button("Generate Predictions"):
-        with st.spinner("Scraping data and generating predictions..."):
-            predictions, strengths = predictor.run_analysis(league_urls[league])
-            
-            if predictions:
-                st.success(f"Generated {len(predictions)} predictions!")
-                
-                # Display team strengths
-                st.subheader("🏆 Team Strength Ratings")
-                strength_data = []
-                for team, strength in list(strengths.items())[:10]:  # Show top 10
-                    strength_data.append({
-                        'Team': team,
-                        'Overall': strength['overall'],
-                        'Attack': strength['attack'],
-                        'Defense': strength['defense'],
-                        'Form': f"{strength['form']:.1%}"
-                    })
-                
-                st.dataframe(pd.DataFrame(strength_data), use_container_width=True)
-                
-                # Display predictions
-                st.subheader("📊 Match Predictions")
-                
-                for pred in predictions:
-                    with st.container():
-                        col1, col2, col3 = st.columns([2, 1, 2])
-                        
-                        with col1:
-                            st.markdown(f"### {pred['home_team']}")
-                            st.metric("Expected Goals", pred['home_expected_goals'])
-                            st.metric("Strength", pred['home_strength'])
-                            
-                        with col2:
-                            st.markdown("### vs")
-                            st.metric("Draw", f"{pred['draw_prob']:.1%}")
-                            st.metric("Date", pred['date'])
-                            
-                        with col3:
-                            st.markdown(f"### {pred['away_team']}")
-                            st.metric("Expected Goals", pred['away_expected_goals'])
-                            st.metric("Strength", pred['away_strength'])
-                        
-                        # Probability bars
-                        col4, col5, col6, col7, col8 = st.columns(5)
-                        
-                        with col4:
-                            st.metric("Home Win", f"{pred['home_win_prob']:.1%}")
-                        with col5:
-                            st.metric("Away Win", f"{pred['away_win_prob']:.1%}")
-                        with col6:
-                            st.metric("Over 2.5", f"{pred['over_2.5_goals_prob']:.1%}")
-                        with col7:
-                            st.metric("Both Score", f"{pred['both_teams_score_prob']:.1%}")
-                        with col8:
-                            st.metric("Likely Score", pred['most_likely_score'])
-                        
-                        # Confidence indicator
-                        st.progress(pred['confidence'])
-                        st.caption(f"Prediction confidence: {pred['confidence']:.1%}")
-                        
-                        st.markdown("---")
-                
-                # Download option
-                df_predictions = pd.DataFrame(predictions)
-                csv = df_predictions.to_csv(index=False)
-                st.download_button(
-                    label="Download Predictions CSV",
-                    data=csv,
-                    file_name=f"football_predictions_{league.replace(' ', '_').lower()}.csv",
-                    mime="text/csv"
-                )
-                
-            else:
-                st.error("No predictions generated. Please try again.")
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching data: {e}")
+        return None
 
-    # Methodology
-    with st.expander("📈 Methodology Explained"):
+def calculate_value_bets(home_odds, away_odds, draw_odds=None):
+    """Calculate implied probabilities and value indicators"""
+    if draw_odds:
+        # For sports with draw possibility
+        home_implied = 1 / home_odds if home_odds else 0
+        away_implied = 1 / away_odds if away_odds else 0
+        draw_implied = 1 / draw_odds if draw_odds else 0
+        total_implied = home_implied + away_implied + draw_implied
+        home_value = (1/home_odds - home_implied/total_implied) * 100 if home_odds else 0
+        away_value = (1/away_odds - away_implied/total_implied) * 100 if away_odds else 0
+        draw_value = (1/draw_odds - draw_implied/total_implied) * 100 if draw_odds else 0
+        return home_value, away_value, draw_value
+    else:
+        # For sports without draw
+        home_implied = 1 / home_odds if home_odds else 0
+        away_implied = 1 / away_odds if away_odds else 0
+        total_implied = home_implied + away_implied
+        home_value = (1/home_odds - home_implied/total_implied) * 100 if home_odds else 0
+        away_value = (1/away_odds - away_implied/total_implied) * 100 if away_odds else 0
+        return home_value, away_value
+
+def create_odds_dataframe(odds_data):
+    """Create a formatted DataFrame from odds data"""
+    matches = []
+    
+    for match in odds_data:
+        home_team = match['home_team']
+        away_team = match['away_team']
+        commence_time = match['commence_time']
+        
+        pinnacle_odds = None
+        bet365_odds = None
+        
+        # Extract odds from different bookmakers
+        for bookmaker in match['bookmakers']:
+            if bookmaker['key'] == 'pinnacle':
+                pinnacle_odds = bookmaker['markets'][0]['outcomes']
+            elif bookmaker['key'] == 'bet365':
+                bet365_odds = bookmaker['markets'][0]['outcomes']
+        
+        # Create match entry
+        match_data = {
+            'Match': f"{home_team} vs {away_team}",
+            'Date': pd.to_datetime(commence_time).strftime('%Y-%m-%d %H:%M'),
+            'Home Team': home_team,
+            'Away Team': away_team
+        }
+        
+        # Add Pinnacle odds
+        if pinnacle_odds:
+            for outcome in pinnacle_odds:
+                if outcome['name'] == home_team:
+                    match_data['Pinnacle Home'] = outcome['price']
+                elif outcome['name'] == away_team:
+                    match_data['Pinnacle Away'] = outcome['price']
+                else:
+                    match_data['Pinnacle Draw'] = outcome['price']
+        
+        # Add Bet365 odds
+        if bet365_odds:
+            for outcome in bet365_odds:
+                if outcome['name'] == home_team:
+                    match_data['Bet365 Home'] = outcome['price']
+                elif outcome['name'] == away_team:
+                    match_data['Bet365 Away'] = outcome['price']
+                else:
+                    match_data['Bet365 Draw'] = outcome['price']
+        
+        # Calculate value bets if we have both bookmakers
+        if pinnacle_odds and bet365_odds:
+            home_pinnacle = match_data.get('Pinnacle Home')
+            away_pinnacle = match_data.get('Pinnacle Away')
+            draw_pinnacle = match_data.get('Pinnacle Draw')
+            
+            home_bet365 = match_data.get('Bet365 Home')
+            away_bet365 = match_data.get('Bet365 Away')
+            draw_bet365 = match_data.get('Bet365 Draw')
+            
+            if draw_pinnacle:
+                pinnacle_values = calculate_value_bets(home_pinnacle, away_pinnacle, draw_pinnacle)
+                bet365_values = calculate_value_bets(home_bet365, away_bet365, draw_bet365)
+                
+                match_data['Pinnacle Home Value'] = f"{pinnacle_values[0]:.1f}%"
+                match_data['Pinnacle Away Value'] = f"{pinnacle_values[1]:.1f}%"
+                match_data['Pinnacle Draw Value'] = f"{pinnacle_values[2]:.1f}%"
+                
+                match_data['Bet365 Home Value'] = f"{bet365_values[0]:.1f}%"
+                match_data['Bet365 Away Value'] = f"{bet365_values[1]:.1f}%"
+                match_data['Bet365 Draw Value'] = f"{bet365_values[2]:.1f}%"
+            else:
+                pinnacle_values = calculate_value_bets(home_pinnacle, away_pinnacle)
+                bet365_values = calculate_value_bets(home_bet365, away_bet365)
+                
+                match_data['Pinnacle Home Value'] = f"{pinnacle_values[0]:.1f}%"
+                match_data['Pinnacle Away Value'] = f"{pinnacle_values[1]:.1f}%"
+                
+                match_data['Bet365 Home Value'] = f"{bet365_values[0]:.1f}%"
+                match_data['Bet365 Away Value'] = f"{bet365_values[1]:.1f}%"
+        
+        matches.append(match_data)
+    
+    return pd.DataFrame(matches)
+
+def create_pnl_tracker():
+    """Create a P&L tracker for the season"""
+    st.subheader("💰 Season P&L Tracker")
+    
+    # Initialize session state for P&L data
+    if 'pnl_data' not in st.session_state:
+        st.session_state.pnl_data = pd.DataFrame({
+            'Date': [],
+            'League': [],
+            'Match': [],
+            'Bet Type': [],
+            'Stake': [],
+            'Odds': [],
+            'Result': [],  # Win/Loss
+            'P/L': []
+        })
+    
+    # Add new bet form
+    with st.expander("Add New Bet"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            bet_date = st.date_input("Bet Date")
+            league = st.selectbox("League", list(LEAGUES.keys()))
+            match = st.text_input("Match")
+        
+        with col2:
+            bet_type = st.selectbox("Bet Type", ["Home Win", "Away Win", "Draw", "Over", "Under"])
+            stake = st.number_input("Stake (€)", min_value=1.0, value=10.0)
+            odds = st.number_input("Odds", min_value=1.01, value=2.0, step=0.01)
+        
+        with col3:
+            result = st.selectbox("Result", ["Pending", "Win", "Loss"])
+            if st.button("Add Bet"):
+                if match:
+                    # Calculate P/L
+                    if result == "Win":
+                        pl = (stake * odds) - stake
+                    elif result == "Loss":
+                        pl = -stake
+                    else:
+                        pl = 0
+                    
+                    # Add to dataframe
+                    new_bet = pd.DataFrame({
+                        'Date': [bet_date.strftime('%Y-%m-%d')],
+                        'League': [league],
+                        'Match': [match],
+                        'Bet Type': [bet_type],
+                        'Stake': [stake],
+                        'Odds': [odds],
+                        'Result': [result],
+                        'P/L': [pl]
+                    })
+                    
+                    st.session_state.pnl_data = pd.concat([st.session_state.pnl_data, new_bet], ignore_index=True)
+                    st.success("Bet added successfully!")
+    
+    # Display P&L data
+    if not st.session_state.pnl_data.empty:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_pl = st.session_state.pnl_data['P/L'].sum()
+        total_stake = st.session_state.pnl_data['Stake'].sum()
+        roi = (total_pl / total_stake * 100) if total_stake > 0 else 0
+        
+        with col1:
+            st.metric("Total P/L", f"€{total_pl:.2f}")
+        with col2:
+            st.metric("Total Stake", f"€{total_stake:.2f}")
+        with col3:
+            st.metric("ROI", f"{roi:.1f}%")
+        with col4:
+            wins = len(st.session_state.pnl_data[st.session_state.pnl_data['Result'] == 'Win'])
+            total_bets = len(st.session_state.pnl_data[st.session_state.pnl_data['Result'] != 'Pending'])
+            win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
+            st.metric("Win Rate", f"{win_rate:.1f}%")
+        
+        # Display detailed table
+        st.dataframe(st.session_state.pnl_data, use_container_width=True)
+        
+        # Download button
+        csv = st.session_state.pnl_data.to_csv(index=False)
+        st.download_button(
+            label="Download P&L Data",
+            data=csv,
+            file_name=f"betting_pnl_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No bets recorded yet. Add your first bet above.")
+
+# Main app
+def main():
+    st.title("⚽ European Football Odds Tracker")
+    st.markdown("Track odds from Pinnacle and Bet365 across top European leagues")
+    
+    # Sidebar for configuration
+    st.sidebar.header("Configuration")
+    selected_country = st.sidebar.selectbox("Select Country", list(LEAGUES.keys()))
+    selected_league = st.sidebar.selectbox("Select League", list(LEAGUES[selected_country].keys()))
+    
+    # Main content
+    tab1, tab2, tab3 = st.tabs(["📊 Current Odds", "💰 P&L Tracker", "ℹ️ About"])
+    
+    with tab1:
+        st.header(f"{selected_country} - {selected_league}")
+        
+        if st.button("Fetch Latest Odds"):
+            with st.spinner("Fetching odds..."):
+                sport_key = LEAGUES[selected_country][selected_league]
+                odds_data = get_odds(sport_key)
+                
+                if odds_data:
+                    df = create_odds_dataframe(odds_data)
+                    
+                    if not df.empty:
+                        # Display summary metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Matches", len(df))
+                        with col2:
+                            pinnacle_matches = len(df[df['Pinnacle Home'].notna()])
+                            st.metric("Pinnacle Markets", pinnacle_matches)
+                        with col3:
+                            bet365_matches = len(df[df['Bet365 Home'].notna()])
+                            st.metric("Bet365 Markets", bet365_matches)
+                        
+                        # Display the odds table
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Value bets highlight
+                        st.subheader("🎯 Value Bet Opportunities")
+                        value_columns = [col for col in df.columns if 'Value' in col]
+                        if value_columns:
+                            for col in value_columns:
+                                try:
+                                    df[col + '_num'] = df[col].str.rstrip('%').astype(float)
+                                except:
+                                    continue
+                            
+                            # Find best value bets
+                            value_threshold = 5.0  # 5% value threshold
+                            high_value_bets = []
+                            
+                            for idx, row in df.iterrows():
+                                for col in value_columns:
+                                    if '_num' in col:
+                                        try:
+                                            value = row[col]
+                                            if value > value_threshold:
+                                                bookmaker = 'Pinnacle' if 'Pinnacle' in col else 'Bet365'
+                                                bet_type = 'Home' if 'Home' in col else 'Away' if 'Away' in col else 'Draw'
+                                                high_value_bets.append({
+                                                    'Match': row['Match'],
+                                                    'Bookmaker': bookmaker,
+                                                    'Bet Type': bet_type,
+                                                    'Value %': f"{value:.1f}%"
+                                                })
+                                        except:
+                                            continue
+                            
+                            if high_value_bets:
+                                value_df = pd.DataFrame(high_value_bets)
+                                st.dataframe(value_df, use_container_width=True)
+                            else:
+                                st.info("No high-value bets found above 5% threshold")
+                    else:
+                        st.warning("No odds data available for the selected league")
+                else:
+                    st.error("Failed to fetch odds data. Please check your API key and connection.")
+    
+    with tab2:
+        create_pnl_tracker()
+    
+    with tab3:
+        st.header("About This App")
         st.markdown("""
-        **Advanced Metrics Used:**
+        This app provides:
         
-        - **Expected Goals (xG)**: Quality of scoring chances
-        - **Shot-Creating Actions**: Moves that lead to shots  
-        - **Passing Accuracy**: Team possession quality
-        - **Defensive Pressures**: Aggressiveness in winning possession
-        - **Poisson Distribution**: Statistical model for goal prediction
+        - **Real-time odds** from Pinnacle and Bet365
+        - **Coverage of top European leagues**:
+          - Portugal (Primeira & Segunda Liga)
+          - Spain (La Liga & Segunda Division)
+          - Italy (Serie A & Serie B)
+          - England (Premier League & Championship)
+          - Germany (Bundesliga & Bundesliga 2)
         
-        **Prediction Features:**
-        - Win/draw/loss probabilities
-        - Over/under goal probabilities  
-        - Both teams to score
-        - Most likely scoreline
-        - Prediction confidence
+        - **Value bet calculations** based on implied probabilities
+        - **Season-long P&L tracking** for your bets
+        
+        ### How to Use:
+        1. Select your country and league in the sidebar
+        2. Click "Fetch Latest Odds" to get current markets
+        3. Use the P&L tracker to monitor your betting performance
+        4. Look for value bets where the implied probability suggests positive expected value
+        
+        **Note:** Replace `YOUR_API_KEY_HERE` with your actual API key from The Odds API.
         """)
 
 if __name__ == "__main__":
