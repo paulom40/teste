@@ -147,6 +147,9 @@ def create_comprehensive_odds_table(odds_data, time_period="Upcoming"):
     """Create a comprehensive table with all markets and odds"""
     matches_data = []
     
+    if not odds_data:
+        return pd.DataFrame()
+    
     for match in odds_data:
         match_info = {
             'Period': time_period,
@@ -177,6 +180,12 @@ def create_comprehensive_odds_table(odds_data, time_period="Upcoming"):
         matches_data.append(match_info)
     
     return pd.DataFrame(matches_data)
+
+def safe_column_count(df, column_name):
+    """Safely count non-null values in a column that might not exist"""
+    if column_name in df.columns:
+        return len(df[df[column_name].notna()])
+    return 0
 
 def create_market_specific_tables(all_odds_data):
     """Create separate tables for each market type"""
@@ -219,24 +228,18 @@ def display_odds_comparison(df, title):
         return
     
     # Style the dataframe
-    styled_df = df.style.format({
-        'Pinnacle Home': '{:.2f}',
-        'Pinnacle Away': '{:.2f}',
-        'Pinnacle Draw': '{:.2f}',
-        'Bet365 Home': '{:.2f}',
-        'Bet365 Away': '{:.2f}',
-        'Bet365 Draw': '{:.2f}',
-        'Pinnacle Home Spread Odds': '{:.2f}',
-        'Pinnacle Away Spread Odds': '{:.2f}',
-        'Bet365 Home Spread Odds': '{:.2f}',
-        'Bet365 Away Spread Odds': '{:.2f}',
-        'Pinnacle Over Odds': '{:.2f}',
-        'Pinnacle Under Odds': '{:.2f}',
-        'Bet365 Over Odds': '{:.2f}',
-        'Bet365 Under Odds': '{:.2f}'
-    })
+    def format_odds(val):
+        if isinstance(val, (int, float)):
+            return f"{val:.2f}"
+        return val
     
-    st.dataframe(styled_df, use_container_width=True)
+    # Apply formatting to numeric columns
+    formatted_df = df.copy()
+    for col in formatted_df.columns:
+        if any(keyword in col for keyword in ['Odds', 'Home', 'Away', 'Draw', 'Over', 'Under']):
+            formatted_df[col] = formatted_df[col].apply(format_odds)
+    
+    st.dataframe(formatted_df, use_container_width=True)
 
 def create_pnl_tracker():
     """Create a P&L tracker for the season"""
@@ -413,21 +416,58 @@ def main():
                         df = create_comprehensive_odds_table(upcoming_data, "Upcoming")
                         
                         if not df.empty:
-                            # Display summary
+                            # Display summary with safe column checking
                             st.subheader("📈 Overview")
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("Total Matches", len(df))
                             with col2:
-                                pinnacle_coverage = len(df[df['Pinnacle Home'].notna()])
+                                pinnacle_coverage = safe_column_count(df, 'Pinnacle Home')
                                 st.metric("Pinnacle Coverage", f"{pinnacle_coverage}/{len(df)}")
                             with col3:
-                                bet365_coverage = len(df[df['Bet365 Home'].notna()])
+                                bet365_coverage = safe_column_count(df, 'Bet365 Home')
                                 st.metric("Bet365 Coverage", f"{bet365_coverage}/{len(df)}")
+                            
+                            # Show available columns for debugging
+                            with st.expander("🔍 Data Preview"):
+                                st.write("Available columns:", list(df.columns))
+                                st.write("First few rows:")
+                                st.dataframe(df.head(3))
                             
                             # Display the main table
                             st.subheader("🎯 Upcoming Matches Odds")
-                            st.dataframe(df.drop('Timestamp', axis=1), use_container_width=True)
+                            
+                            # Select only columns that have at least some data
+                            columns_to_show = ['Period', 'Match', 'Home Team', 'Away Team', 'Date']
+                            
+                            # Add odds columns that exist in the dataframe
+                            possible_odds_columns = [
+                                'Pinnacle Home', 'Pinnacle Away', 'Pinnacle Draw',
+                                'Bet365 Home', 'Bet365 Away', 'Bet365 Draw',
+                                'Pinnacle Home Spread', 'Pinnacle Home Spread Odds',
+                                'Pinnacle Away Spread', 'Pinnacle Away Spread Odds',
+                                'Bet365 Home Spread', 'Bet365 Home Spread Odds',
+                                'Bet365 Away Spread', 'Bet365 Away Spread Odds',
+                                'Pinnacle Over', 'Pinnacle Over Odds',
+                                'Pinnacle Under', 'Pinnacle Under Odds',
+                                'Bet365 Over', 'Bet365 Over Odds',
+                                'Bet365 Under', 'Bet365 Under Odds'
+                            ]
+                            
+                            for col in possible_odds_columns:
+                                if col in df.columns and df[col].notna().any():
+                                    columns_to_show.append(col)
+                            
+                            display_df = df[columns_to_show].copy()
+                            
+                            # Format numeric columns
+                            for col in display_df.columns:
+                                if any(keyword in col for keyword in ['Odds', 'Home', 'Away', 'Draw', 'Over', 'Under']):
+                                    display_df[col] = display_df[col].apply(
+                                        lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else x
+                                    )
+                            
+                            st.dataframe(display_df, use_container_width=True)
                             
                             # Download option
                             csv = df.to_csv(index=False)
@@ -454,14 +494,14 @@ def main():
                     sport_key = LEAGUES[selected_country][selected_league]
                     all_markets_data = get_all_markets_odds(sport_key, st.session_state.api_key)
                     
-                    if any(all_markets_data.values()):
+                    if all_markets_data and any(all_markets_data.values()):
                         market_tables = create_market_specific_tables(all_markets_data)
                         
                         for market_type, table in market_tables.items():
                             if not table.empty:
                                 display_odds_comparison(table, f"{market_type.upper()} Market")
                     else:
-                        st.warning("No market data available. The API key may have limited access.")
+                        st.warning("No market data available. The API key may have limited access or there are no current matches.")
     
     with tab3:
         create_pnl_tracker()
@@ -515,6 +555,7 @@ def main():
         **Error 401**: Invalid API key - check your key in the sidebar
         **Error 429**: Too many requests - wait and try again
         **No Data**: League might not have current matches - try different league
+        **Missing Columns**: Some bookmakers may not have odds for all matches
         """)
 
 if __name__ == "__main__":
