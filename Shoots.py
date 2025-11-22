@@ -1,222 +1,174 @@
-# Shoots.py (Updated for 2025/2026 Season)
+# Shoots.py - Extended GAP + Goals Predictor (2025/2026 Season)
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
-import time  # For retries
+from scipy.stats import poisson
+import time
 
-st.set_page_config(page_title="SoT Predictor - Top 5 Leagues", layout="wide")
-st.title("Shots on Target Predictor")
-st.markdown("### GAP Ratings Model • 2025/2026 Season • All Top 5 European Leagues (Team Completeness Checked)")
+st.set_page_config(page_title="SoT & Goals Predictor", layout="wide")
+st.title("Shots on Target & Goals Predictor")
+st.markdown("### Extended GAP Model • 2025/2026 Season • Top 5 Leagues")
 
-# === League configuration ===
 LEAGUES = {
-    'E0': 'Premier League',
-    'SP1': 'La Liga',
-    'I1': 'Serie A',
-    'D1': 'Bundesliga',
-    'F1': 'Ligue 1'
+    'E0': 'Premier League', 'SP1': 'La Liga', 'I1': 'Serie A',
+    'D1': 'Bundesliga', 'F1': 'Ligue 1'
 }
 
+# === Data Loading ===
 @st.cache_data(show_spinner=False)
 def load_league_data(code):
-    """Load single league with retry."""
     url = f"https://www.football-data.co.uk/mmz4281/2526/{code}.csv"
     for attempt in range(3):
         try:
-            df = pd.read_csv(url, usecols=['Date', 'HomeTeam', 'AwayTeam', 'HST', 'AST'])
+            df = pd.read_csv(url, usecols=['Date','HomeTeam','AwayTeam','FTHG','FTAG','HST','AST'])
             df['League'] = LEAGUES[code]
             df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-            df = df.dropna(subset=['Date', 'HST', 'AST'])
-            df = df.sort_values('Date').reset_index(drop=True)
-            if len(df) == 0:
-                raise ValueError("Empty data")
-            return df
+            df = df.dropna(subset=['Date','FTHG','FTAG','HST','AST'])
+            return df.sort_values('Date').reset_index(drop=True)
         except Exception as e:
             if attempt == 2:
-                st.warning(f"Failed to load {LEAGUES[code]} after 3 tries: {e}")
+                st.warning(f"Failed to load {LEAGUES[code]}: {e}")
                 return pd.DataFrame()
-            time.sleep(1)  # Wait before retry
+            time.sleep(1)
 
 @st.cache_data(show_spinner=False)
 def load_all_leagues():
-    all_data = []
-    for code in LEAGUES:
-        df = load_league_data(code)
-        all_data.append(df)
-    data = pd.concat(all_data, ignore_index=True)
-    if len(data) == 0:
-        return None
-    return data.sort_values('Date').reset_index(drop=True)
+    dfs = [load_league_data(code) for code in LEAGUES]
+    data = pd.concat([d for d in dfs if not d.empty], ignore_index=True)
+    return data.sort_values('Date').reset_index(drop=True) if len(data) > 0 else None
 
-# === GAP Rating Functions ===
-def compute_gap_ratings(data, lam, phi1, phi2):
-    teams = pd.unique(data[['HomeTeam', 'AwayTeam']].values.ravel('K'))
-    ratings = {t: {'Ha': 4.5, 'Hd': 4.5, 'Aa': 4.5, 'Ad': 4.5} for t in teams}
-    
+# === Extended GAP Model (SoT + Conversion → Goals) ===
+def train_extended_gap_model(data):
+    teams = pd.unique(data[['HomeTeam','AwayTeam']].values.ravel('K'))
+    # Initialize ratings
+    ratings = {t: {'Ha':4.5, 'Hd':4.5, 'Aa':4.5, 'Ad':4.5, 'HaConv':0.30, 'AaConv':0.25} for t in teams}
+
     for _, row in data.iterrows():
         h, a = row['HomeTeam'], row['AwayTeam']
         if h not in ratings or a not in ratings: continue
-        
-        pred_h = (ratings[h]['Ha'] + ratings[a]['Ad']) / 2
-        pred_a = (ratings[a]['Aa'] + ratings[h]['Hd']) / 2
-        
-        err_h = row['HST'] - pred_h
-        err_a = row['AST'] - pred_a
-        
-        # Update home team
-        ratings[h]['Ha'] += lam * phi1 * err_h
-        ratings[h]['Aa'] += lam * (1 - phi1) * err_h
-        ratings[h]['Hd'] += lam * phi1 * err_a
-        ratings[h]['Ad'] += lam * (1 - phi1) * err_a
-        
-        # Update away team
-        ratings[a]['Aa'] += lam * phi2 * err_a
-        ratings[a]['Ha'] += lam * (1 - phi2) * err_a
-        ratings[a]['Ad'] += lam * phi2 * err_h
-        ratings[a]['Hd'] += lam * (1 - phi2) * err_h
-        
-        # Keep ratings positive
+
+        # Predict SoT
+        pred_sot_h = (ratings[h]['Ha'] + ratings[a]['Ad']) / 2
+        pred_sot_a = (ratings[a]['Aa'] + ratings[h]['Hd']) / 2
+
+        # Predict Goals via conversion
+        pred_goals_h = pred_sot_h * ratings[h]['HaConv']
+        pred_goals_a = pred_sot_a * ratings[a]['AaConv']
+
+        # Actuals
+        act_sot_h, act_sot_a = row['HST'], row['AST']
+        act_goals_h, act_goals_a = row['FTHG'], row['FTAG']
+
+        # Learning rates
+        lr_sot, lr_conv = 0.12, 0.08
+
+        # Update SoT ratings (same as original GAP)
+        err_sot_h = act_sot_h - pred_sot_h
+        err_sot_a = act_sot_a - pred_sot_a
+
+        ratings[h]['Ha'] += lr_sot * 0.6 * err_sot_h
+        ratings[h]['Aa'] += lr_sot * 0.4 * err_sot_h
+        ratings[h]['Hd'] += lr_sot * 0.6 * err_sot_a
+        ratings[h]['Ad'] += lr_sot * 0.4 * err_sot_a
+        ratings[a]['Aa'] += lr_sot * 0.6 * err_sot_a
+        ratings[a]['Ha'] += lr_sot * 0.4 * err_sot_a
+        ratings[a]['Ad'] += lr_sot * 0.6 * err_sot_h
+        ratings[a]['Hd'] += lr_sot * 0.4 * err_sot_h
+
+        # Update conversion rates (only if shots > 0)
+        if act_sot_h > 0:
+            actual_conv_h = act_goals_h / act_sot_h
+            ratings[h]['HaConv'] += lr_conv * (actual_conv_h - ratings[h]['HaConv'])
+        if act_sot_a > 0:
+            actual_conv_a = act_goals_a / act_sot_a
+            ratings[a]['AaConv'] += lr_conv * (actual_conv_a - ratings[a]['AaConv'])
+
+        # Keep ratings in bounds
         for r in ratings.values():
-            for k in r:
-                r[k] = max(r[k], 0.5)
-    
+            for k in ['Ha','Hd','Aa','Ad']: r[k] = max(r[k], 0.5)
+            for k in ['HaConv','AaConv']: r[k] = np.clip(r[k], 0.05, 0.70)
+
     return ratings
 
-def objective(params, data):
-    lam, phi1, phi2 = params
-    ratings = compute_gap_ratings(data, lam, phi1, phi2)
-    errors = []
-    for _, row in data.iterrows():
-        h, a = row['HomeTeam'], row['AwayTeam']
-        if h not in ratings or a not in ratings: continue
-        pred_h = (ratings[h]['Ha'] + ratings[a]['Ad']) / 2
-        pred_a = (ratings[a]['Aa'] + ratings[h]['Hd']) / 2
-        errors.append(abs(pred_h - row['HST']))
-        errors.append(abs(pred_a - row['AST']))
-    return np.mean(errors) if errors else 1e6
-
-@st.cache_data(show_spinner="Training model on all 5 leagues...")
-def train_global_model(_data):
-    # Filter to teams with >=2 matches for robustness
-    team_matches = _data.groupby('HomeTeam').size() + _data.groupby('AwayTeam').size()
-    valid_teams = team_matches[team_matches >= 2].index
-    filtered_data = _data[_data['HomeTeam'].isin(valid_teams) & _data['AwayTeam'].isin(valid_teams)]
-    
-    res = minimize(objective, x0=[0.18, 0.55, 0.45], args=(filtered_data,),
-                   method='Nelder-Mead', bounds=[(0.01,1), (0.1,0.9), (0.1,0.9)], options={'maxiter': 500})
-    best_lam, best_phi1, best_phi2 = res.x
-    final_ratings = compute_gap_ratings(filtered_data, best_lam, best_phi1, best_phi2)
-    return final_ratings, best_lam, best_phi1, best_phi2, valid_teams
-
 # === Load & Train ===
-if st.button("Load All Top 5 Leagues & Train Model", type="primary"):
-    with st.spinner("Downloading latest 2025/2026 data from all 5 leagues..."):
+if st.button("Load 2025/26 Data & Train Model", type="primary"):
+    with st.spinner("Loading all Top 5 leagues..."):
         data = load_all_leagues()
-    
-    if data is not None and len(data) > 0:
-        # Team completeness check
-        team_summary = []
-        for code, name in LEAGUES.items():
-            league_data = data[data['League'] == name]
-            if len(league_data) > 0:
-                teams = pd.unique(league_data[['HomeTeam', 'AwayTeam']].values.ravel('K'))
-                team_summary.append({'League': name, 'Unique Teams': len(teams), 'Matches': len(league_data)})
-        
-        st.success(f"Loaded {len(data)} matches across all 5 leagues (up to {data['Date'].max().strftime('%d %b %Y')})")
-        
-        with st.expander("🔍 Team Completeness Check (Click to View)"):
-            df_summary = pd.DataFrame(team_summary)
-            st.dataframe(df_summary, use_container_width=True)
-            if any(df_summary['Unique Teams'] < 18):
-                st.warning("⚠️ Some leagues may have missing teams (e.g., early season or data gap). Check above.")
-            else:
-                st.info("✅ All leagues have expected teams (~20 each).")
-        
-        with st.spinner("Optimizing GAP parameters..."):
-            ratings, lam, phi1, phi2, valid_teams = train_global_model(data)
-        
+    if data is not None:
+        st.success(f"Loaded {len(data)} matches (up to {data['Date'].max().strftime('%d %b %Y')})")
+        with st.spinner("Training extended GAP model (SoT + Conversion)..."):
+            ratings = train_extended_gap_model(data)
         st.session_state.ratings = ratings
-        st.session_state.all_teams = sorted(valid_teams)
+        st.session_state.all_teams = sorted(ratings.keys())
         st.session_state.data = data
-        st.session_state.league_data = {name: data[data['League'] == name] for name in LEAGUES.values()}
-        
         st.success("Model trained successfully!")
-        st.write(f"**Best parameters** → λ = {lam:.3f} | φ₁ = {phi1:.3f} | φ₂ = {phi2:.3f}")
-        st.info(f"Using {len(valid_teams)} teams with ≥2 matches for robust predictions.")
 
-# === Prediction Section ===
+# === Prediction ===
 if 'ratings' in st.session_state:
     st.markdown("---")
-    st.subheader("Predict Shots on Target – Filter by League")
-    
-    # League filter for teams
-    selected_league = st.selectbox("Filter Teams by League", options=list(LEAGUES.values()) + ["All Leagues"])
-    
+    tab1, tab2 = st.tabs(["Prediction", "Top Scorelines"])
+
     teams = st.session_state.all_teams
-    if selected_league != "All Leagues":
-        if 'league_data' in st.session_state and selected_league in st.session_state.league_data:
-            league_df = st.session_state.league_data[selected_league]
-            if not league_df.empty:
-                league_teams = pd.unique(league_df[['HomeTeam', 'AwayTeam']].values.ravel('K'))
-                teams = sorted([t for t in teams if t in league_teams])
-            else:
-                st.warning(f"No data available for {selected_league}. Using all teams.")
-        else:
-            st.warning(f"League data for '{selected_league}' not loaded yet. Using all teams.")
-    
     col1, col2 = st.columns(2)
-    
     with col1:
-        home_team = st.selectbox(
-            "Home Team",
-            options=teams,
-            index=None,
-            placeholder="Select home team...",
-            key="home"
-        )
-    
+        home = st.selectbox("Home Team", options=teams, index=None, placeholder="Choose home...")
     with col2:
-        # Dynamically filter away team
-        away_options = [t for t in teams if t != home_team] if home_team else teams
-        away_team = st.selectbox(
-            "Away Team",
-            options=away_options,
-            index=None,
-            placeholder="Select away team...",
-            key="away"
-        )
-    
-    if home_team and away_team:
+        away_opts = [t for t in teams if t != home] if home else teams
+        away = st.selectbox("Away Team", options=away_opts, index=None, placeholder="Choose away...")
+
+    if home and away:
         r = st.session_state.ratings
-        pred_home = (r[home_team]['Ha'] + r[away_team]['Ad']) / 2
-        pred_away = (r[away_team]['Aa'] + r[home_team]['Hd']) / 2
-        
-        st.markdown(f"""
-        ### Prediction ({selected_league})
-        **{home_team}** (H) vs **{away_team}** (A)  
-        **Expected Shots on Target**  
-        → **{home_team}:** **{pred_home:.2f}**  
-        → **{away_team}:** **{pred_away:.2f}**  
-        *(Total: {pred_home + pred_away:.2f})*
-        """)
-        
-        with st.expander("Show detailed GAP ratings"):
-            df = pd.DataFrame({
-                'Team': [home_team, away_team],
-                'Home Attack': [r[home_team]['Ha'], r[away_team]['Ha']],
-                'Home Defense': [r[home_team]['Hd'], r[away_team]['Hd']],
-                'Away Attack': [r[home_team]['Aa'], r[away_team]['Aa']],
-                'Away Defense': [r[home_team]['Ad'], r[away_team]['Ad']],
-            }).round(2).set_index('Team')
-            st.dataframe(df, use_container_width=True)
-    
-    # Debug expander (remove in production)
-    with st.expander("🔧 Debug: Session State Info (Click to View)"):
-        st.json({k: type(v).__name__ if not isinstance(v, (dict, pd.DataFrame)) else f"{type(v).__name__} (len: {len(v)})" for k, v in st.session_state.items()})
+        # SoT prediction
+        sot_home = (r[home]['Ha'] + r[away]['Ad']) / 2
+        sot_away = (r[away]['Aa'] + r[home]['Hd']) / 2
+        # Expected Goals
+        xg_home = sot_home * r[home]['HaConv']
+        xg_away = sot_away * r[away]['AaConv']
+
+        with tab1:
+            st.markdown(f"### **{home} vs {away}**")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Expected SoT", f"{sot_home:.2f}", f"{sot_home-5.0:+.2f}")
+            c2.metric("Expected Goals (xG)", f"{xg_home:.2f}", f"{xg_home-1.4:+.2f}")
+            c3.metric("Conversion Rate", f"{r[home]['HaConv']:.0%}")
+
+            c4, c5, c6 = st.columns(3)
+            c4.metric("Expected SoT", f"{sot_away:.2f}", f"{sot_away-4.0:+.2f}")
+            c5.metric("Expected Goals (xG)", f"{xg_away:.2f}", f"{xg_away-1.0:+.2f}")
+            c6.metric("Conversion Rate", f"{r[away]['AaConv']:.0%}")
+
+            with st.expander("Detailed Ratings"):
+                df = pd.DataFrame({
+                    'Team': [home, away],
+                    'SoT Home': [r[home]['Ha'], r[away]['Ha']],
+                    'SoT Away': [r[home]['Aa'], r[away]['Aa']],
+                    'Def Home': [r[home]['Hd'], r[away]['Hd']],
+                    'Def Away': [r[home]['Ad'], r[away]['Ad']],
+                    'Conv Home': [f"{r[home]['HaConv']:.1%}", f"{r[away]['HaConv']:.1%}"],
+                    'Conv Away': [f"{r[home]['AaConv']:.1%}", f"{r[away]['AaConv']:.1%}"],
+                }).set_index('Team')
+                st.dataframe(df)
+
+        with tab2:
+            st.markdown("#### Most Likely Final Scorelines")
+            probs = []
+            for gh in range(0, 7):
+                for ga in range(0, 6):
+                    p = poisson.pmf(gh, xg_home) * poisson.pmf(ga, xg_away)
+                    probs.append((gh, ga, p))
+            probs.sort(key=lambda x: x[2], reverse=True)
+            top5 = probs[:5]
+
+            cols = st.columns(5)
+            for i, (gh, ga, p) in enumerate(top5):
+                with cols[i]:
+                    st.metric(f"**{gh}–{ga}**", f"{p:.1%}")
+                    if gh > ga: st.success(f"{home} wins")
+                    elif gh < ga: st.error(f"{away} wins")
+                    else: st.warning("Draw")
 
 else:
-    st.info("👆 Click the button to load data from all Top 5 leagues and check for missing teams.")
+    st.info("Click the button above to load 2025/26 data and train the model.")
 
-st.markdown("---")
-st.caption("Data: Football-Data.co.uk | Model: GAP Ratings | Updated: Nov 22, 2025")
+st.caption("Data: Football-Data.co.uk • Model: Extended GAP + Conversion Rates • Season: 2025/2026")
