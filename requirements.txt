@@ -7,5 +7,5 @@ Pillow
 requests
 pdfkit
 openpyxl
-BeautifulSoup
+beautifulsoup4
 lxml
