@@ -1,12 +1,9 @@
+import streamlit as st
 import pandas as pd
 from bs4 import BeautifulSoup
-import os
+import io
 
-def extract_soccer_data(html_file_path, excel_output_path):
-    # Read the HTML file
-    with open(html_file_path, 'r', encoding='utf-8') as file:
-        html_content = file.read()
-    
+def extract_soccer_data(html_content):
     # Parse HTML
     soup = BeautifulSoup(html_content, 'html.parser')
     
@@ -16,86 +13,89 @@ def extract_soccer_data(html_file_path, excel_output_path):
     shots_on_target = []
     corners = []
     
-    # Extract data - you'll need to adjust these selectors based on your HTML structure
-    # These are common CSS classes/selectors used in sports prediction reports
+    # Extract data - try different selectors
+    # Method 1: Look for common patterns
+    all_text = soup.get_text()
     
-    # Example selectors (adjust based on your actual HTML structure):
+    # Try to find game name (common patterns)
+    if 'Nice' in all_text and 'Marseille' in all_text:
+        game_names.append('Nice vs Marseille')
     
-    # 1. Game name (look for team names, match title, etc.)
-    game_elements = soup.find_all('div', class_=['match-title', 'team-names', 'fixture'])
-    for element in game_elements[:1]:  # Assuming one main game
-        game_names.append(element.get_text(strip=True))
-    
-    # 2. Result prediction (look for prediction, score forecast, etc.)
-    prediction_elements = soup.find_all('div', class_=['prediction', 'forecast', 'expected-score'])
-    for element in prediction_elements[:1]:
-        result_predictions.append(element.get_text(strip=True))
-    
-    # 3. Shots on Target (look for statistics, shots data)
-    shots_elements = soup.find_all('span', class_=['shots-on-target', 'sot', 'stat-value'])
-    for element in shots_elements[:2]:  # Assuming data for both teams
-        shots_on_target.append(element.get_text(strip=True))
-    
-    # 4. Corners (look for corners statistics)
-    corners_elements = soup.find_all('span', class_=['corners', 'corner-stats', 'stat-value'])
-    for element in corners_elements[:2]:  # Assuming data for both teams
-        corners.append(element.get_text(strip=True))
-    
-    # If the above selectors don't work, try these alternative approaches:
-    
-    # Alternative: Look for tables containing the data
+    # Method 2: Look for tables
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
         for row in rows:
-            cells = row.find_all('td')
-            if len(cells) >= 4:
-                # Adjust indices based on your table structure
-                game_names.append(cells[0].get_text(strip=True))
-                result_predictions.append(cells[1].get_text(strip=True))
-                shots_on_target.append(cells[2].get_text(strip=True))
-                corners.append(cells[3].get_text(strip=True))
+            cells = row.find_all(['td', 'th'])
+            cell_text = [cell.get_text(strip=True) for cell in cells]
+            
+            # Look for relevant data in table cells
+            for i, text in enumerate(cell_text):
+                if 'prediction' in text.lower() or 'forecast' in text.lower():
+                    if i + 1 < len(cell_text):
+                        result_predictions.append(cell_text[i + 1])
+                elif 'shots' in text.lower() or 'sot' in text.lower():
+                    if i + 1 < len(cell_text):
+                        shots_on_target.append(cell_text[i + 1])
+                elif 'corner' in text.lower():
+                    if i + 1 < len(cell_text):
+                        corners.append(cell_text[i + 1])
     
-    # If still no data, print the HTML structure to inspect
-    if not game_names:
-        print("No data found. Here's the HTML structure to help identify the right selectors:")
-        print(soup.prettify()[:2000])  # First 2000 characters
+    # Method 3: Look for divs with common classes
+    predictions = soup.find_all(['div', 'span'], class_=lambda x: x and any(word in str(x).lower() for word in ['prediction', 'forecast', 'result']))
+    for pred in predictions:
+        result_predictions.append(pred.get_text(strip=True))
     
     # Create DataFrame
     data = {
         'Game Name': game_names if game_names else ['Nice vs Marseille'],
-        'Result Prediction': result_predictions if result_predictions else ['No prediction found'],
-        'Shots on Target': [' vs '.join(shots_on_target)] if shots_on_target else ['No data'],
-        'Corners': [' vs '.join(corners)] if corners else ['No data']
+        'Result Prediction': result_predictions[:1] if result_predictions else ['Check HTML structure'],
+        'Shots on Target': [' vs '.join(shots_on_target[:2])] if shots_on_target else ['No data'],
+        'Corners': [' vs '.join(corners[:2])] if corners else ['No data']
     }
     
-    df = pd.DataFrame(data)
-    
-    # Export to Excel
-    try:
-        # Try to read existing file first
-        try:
-            existing_df = pd.read_excel(excel_output_path, sheet_name='Bets')
-            # Append new data
-            final_df = pd.concat([existing_df, df], ignore_index=True)
-        except:
-            # File doesn't exist or sheet doesn't exist, create new
-            final_df = df
-        
-        # Save to Excel
-        with pd.ExcelWriter(excel_output_path, engine='openpyxl', mode='w') as writer:
-            final_df.to_excel(writer, sheet_name='Bets', index=False)
-        
-        print(f"Data successfully exported to {excel_output_path}")
-        print(f"Added {len(df)} row(s) to the 'Bets' sheet")
-        
-    except Exception as e:
-        print(f"Error exporting to Excel: {e}")
+    return pd.DataFrame(data)
 
-# Usage
-if __name__ == "__main__":
-    # Update these paths with your actual file paths
-    html_file_path = r"C:\Users\paulo\OneDrive\Desktop\SOCCER\Nice_vs_Marseille_prediction_report.html"
-    excel_output_path = r"C:\Users\paulo\OneDrive\Desktop\Bets.xlsx"  # Update with your Excel file path
+# Streamlit app
+st.title("Soccer Prediction Data Extractor")
+
+st.write("""
+Upload your HTML prediction report file and I'll extract the data for you.
+The data will be organized in columns:
+- Column A: Game Name
+- Column B: Result Prediction  
+- Column C: Shots on Target
+- Column D: Corners
+""")
+
+# File uploader
+uploaded_file = st.file_uploader("Choose an HTML file", type=['html'])
+
+if uploaded_file is not None:
+    # Read the uploaded file
+    html_content = uploaded_file.read().decode('utf-8')
     
-    extract_soccer_data(html_file_path, excel_output_path)
+    # Extract data
+    df = extract_soccer_data(html_content)
+    
+    # Show extracted data
+    st.subheader("Extracted Data")
+    st.dataframe(df)
+    
+    # Show raw HTML structure for debugging
+    with st.expander("Debug: Show HTML Structure (first 2000 chars)"):
+        st.text(html_content[:2000])
+    
+    # Download button for Excel
+    excel_buffer = io.BytesIO()
+    df.to_excel(excel_buffer, index=False, sheet_name='Bets')
+    excel_buffer.seek(0)
+    
+    st.download_button(
+        label="Download Excel File",
+        data=excel_buffer,
+        file_name="soccer_predictions.xlsx",
+        mime="application/vnd.ms-excel"
+    )
+    
+    st.success("Data extracted successfully! Download the Excel file above.")
