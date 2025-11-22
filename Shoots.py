@@ -1,4 +1,4 @@
-# app.py
+# Shoots.py (Fixed Version)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -155,8 +155,15 @@ if 'ratings' in st.session_state:
     
     teams = st.session_state.all_teams
     if selected_league != "All Leagues":
-        league_teams = pd.unique(st.session_state.league_data[selected_league][['HomeTeam', 'AwayTeam']].values.ravel('K'))
-        teams = sorted([t for t in teams if t in league_teams])
+        if 'league_data' in st.session_state and selected_league in st.session_state.league_data:
+            league_df = st.session_state.league_data[selected_league]
+            if not league_df.empty:
+                league_teams = pd.unique(league_df[['HomeTeam', 'AwayTeam']].values.ravel('K'))
+                teams = sorted([t for t in teams if t in league_teams])
+            else:
+                st.warning(f"No data available for {selected_league}. Using all teams.")
+        else:
+            st.warning(f"League data for '{selected_league}' not loaded yet. Using all teams.")
     
     col1, col2 = st.columns(2)
     
@@ -203,6 +210,10 @@ if 'ratings' in st.session_state:
                 'Away Defense': [r[home_team]['Ad'], r[away_team]['Ad']],
             }).round(2).set_index('Team')
             st.dataframe(df, use_container_width=True)
+    
+    # Debug expander (remove in production)
+    with st.expander("🔧 Debug: Session State Info (Click to View)"):
+        st.json({k: type(v).__name__ if not isinstance(v, (dict, pd.DataFrame)) else f"{type(v).__name__} (len: {len(v)})" for k, v in st.session_state.items()})
 
 else:
     st.info("👆 Click the button to load data from all Top 5 leagues and check for missing teams.")
