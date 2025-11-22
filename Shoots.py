@@ -1,4 +1,4 @@
-# Shoots.py (Fixed Version)
+# Shoots.py (Updated for 2025/2026 Season)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,7 +7,7 @@ import time  # For retries
 
 st.set_page_config(page_title="SoT Predictor - Top 5 Leagues", layout="wide")
 st.title("Shots on Target Predictor")
-st.markdown("### GAP Ratings Model • 2024/25 Season • All Top 5 European Leagues (Team Completeness Checked)")
+st.markdown("### GAP Ratings Model • 2025/2026 Season • All Top 5 European Leagues (Team Completeness Checked)")
 
 # === League configuration ===
 LEAGUES = {
@@ -21,7 +21,7 @@ LEAGUES = {
 @st.cache_data(show_spinner=False)
 def load_league_data(code):
     """Load single league with retry."""
-    url = f"https://www.football-data.co.uk/mmz4281/2425/{code}.csv"
+    url = f"https://www.football-data.co.uk/mmz4281/2526/{code}.csv"
     for attempt in range(3):
         try:
             df = pd.read_csv(url, usecols=['Date', 'HomeTeam', 'AwayTeam', 'HST', 'AST'])
@@ -111,7 +111,7 @@ def train_global_model(_data):
 
 # === Load & Train ===
 if st.button("Load All Top 5 Leagues & Train Model", type="primary"):
-    with st.spinner("Downloading latest 2024/25 data from all 5 leagues..."):
+    with st.spinner("Downloading latest 2025/2026 data from all 5 leagues..."):
         data = load_all_leagues()
     
     if data is not None and len(data) > 0:
