@@ -3,10 +3,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
+import time  # For retries
 
 st.set_page_config(page_title="SoT Predictor - Top 5 Leagues", layout="wide")
 st.title("Shots on Target Predictor")
-st.markdown("### GAP Ratings Model • 2024/25 Season • All Top 5 European Leagues")
+st.markdown("### GAP Ratings Model • 2024/25 Season • All Top 5 European Leagues (Team Completeness Checked)")
 
 # === League configuration ===
 LEAGUES = {
@@ -18,25 +19,35 @@ LEAGUES = {
 }
 
 @st.cache_data(show_spinner=False)
-def load_all_leagues():
-    all_data = []
-    for code, name in LEAGUES.items():
-        url = f"https://www.football-data.co.uk/mmz4281/2425/{code}.csv"
+def load_league_data(code):
+    """Load single league with retry."""
+    url = f"https://www.football-data.co.uk/mmz4281/2425/{code}.csv"
+    for attempt in range(3):
         try:
             df = pd.read_csv(url, usecols=['Date', 'HomeTeam', 'AwayTeam', 'HST', 'AST'])
-            df['League'] = name
+            df['League'] = LEAGUES[code]
             df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
             df = df.dropna(subset=['Date', 'HST', 'AST'])
-            all_data.append(df)
+            df = df.sort_values('Date').reset_index(drop=True)
+            if len(df) == 0:
+                raise ValueError("Empty data")
+            return df
         except Exception as e:
-            st.warning(f"Could not load {name}: {e}")
-    
-    if not all_data:
-        st.error("No league data loaded.")
+            if attempt == 2:
+                st.warning(f"Failed to load {LEAGUES[code]} after 3 tries: {e}")
+                return pd.DataFrame()
+            time.sleep(1)  # Wait before retry
+
+@st.cache_data(show_spinner=False)
+def load_all_leagues():
+    all_data = []
+    for code in LEAGUES:
+        df = load_league_data(code)
+        all_data.append(df)
+    data = pd.concat(all_data, ignore_index=True)
+    if len(data) == 0:
         return None
-    
-    data = pd.concat(all_data, ignore_index=True).sort_values('Date').reset_index(drop=True)
-    return data
+    return data.sort_values('Date').reset_index(drop=True)
 
 # === GAP Rating Functions ===
 def compute_gap_ratings(data, lam, phi1, phi2):
@@ -83,39 +94,69 @@ def objective(params, data):
         pred_a = (ratings[a]['Aa'] + ratings[h]['Hd']) / 2
         errors.append(abs(pred_h - row['HST']))
         errors.append(abs(pred_a - row['AST']))
-    return np.mean(errors)
+    return np.mean(errors) if errors else 1e6
 
 @st.cache_data(show_spinner="Training model on all 5 leagues...")
 def train_global_model(_data):
-    res = minimize(objective, x0=[0.18, 0.55, 0.45], args=(_data,),
+    # Filter to teams with >=2 matches for robustness
+    team_matches = _data.groupby('HomeTeam').size() + _data.groupby('AwayTeam').size()
+    valid_teams = team_matches[team_matches >= 2].index
+    filtered_data = _data[_data['HomeTeam'].isin(valid_teams) & _data['AwayTeam'].isin(valid_teams)]
+    
+    res = minimize(objective, x0=[0.18, 0.55, 0.45], args=(filtered_data,),
                    method='Nelder-Mead', bounds=[(0.01,1), (0.1,0.9), (0.1,0.9)], options={'maxiter': 500})
     best_lam, best_phi1, best_phi2 = res.x
-    final_ratings = compute_gap_ratings(_data, best_lam, best_phi1, best_phi2)
-    return final_ratings, best_lam, best_phi1, best_phi2
+    final_ratings = compute_gap_ratings(filtered_data, best_lam, best_phi1, best_phi2)
+    return final_ratings, best_lam, best_phi1, best_phi2, valid_teams
 
 # === Load & Train ===
 if st.button("Load All Top 5 Leagues & Train Model", type="primary"):
     with st.spinner("Downloading latest 2024/25 data from all 5 leagues..."):
         data = load_all_leagues()
     
-    if data is not None:
+    if data is not None and len(data) > 0:
+        # Team completeness check
+        team_summary = []
+        for code, name in LEAGUES.items():
+            league_data = data[data['League'] == name]
+            if len(league_data) > 0:
+                teams = pd.unique(league_data[['HomeTeam', 'AwayTeam']].values.ravel('K'))
+                team_summary.append({'League': name, 'Unique Teams': len(teams), 'Matches': len(league_data)})
+        
         st.success(f"Loaded {len(data)} matches across all 5 leagues (up to {data['Date'].max().strftime('%d %b %Y')})")
         
-        ratings, lam, phi1, phi2 = train_global_model(data)
+        with st.expander("🔍 Team Completeness Check (Click to View)"):
+            df_summary = pd.DataFrame(team_summary)
+            st.dataframe(df_summary, use_container_width=True)
+            if any(df_summary['Unique Teams'] < 18):
+                st.warning("⚠️ Some leagues may have missing teams (e.g., early season or data gap). Check above.")
+            else:
+                st.info("✅ All leagues have expected teams (~20 each).")
+        
+        with st.spinner("Optimizing GAP parameters..."):
+            ratings, lam, phi1, phi2, valid_teams = train_global_model(data)
         
         st.session_state.ratings = ratings
-        st.session_state.all_teams = sorted(ratings.keys())
+        st.session_state.all_teams = sorted(valid_teams)
         st.session_state.data = data
+        st.session_state.league_data = {name: data[data['League'] == name] for name in LEAGUES.values()}
         
-        st.success("Model trained successfully on all Top 5 leagues!")
+        st.success("Model trained successfully!")
         st.write(f"**Best parameters** → λ = {lam:.3f} | φ₁ = {phi1:.3f} | φ₂ = {phi2:.3f}")
+        st.info(f"Using {len(valid_teams)} teams with ≥2 matches for robust predictions.")
 
 # === Prediction Section ===
 if 'ratings' in st.session_state:
     st.markdown("---")
-    st.subheader("Predict Shots on Target – Any Match from Top 5 Leagues")
+    st.subheader("Predict Shots on Target – Filter by League")
+    
+    # League filter for teams
+    selected_league = st.selectbox("Filter Teams by League", options=list(LEAGUES.values()) + ["All Leagues"])
     
     teams = st.session_state.all_teams
+    if selected_league != "All Leagues":
+        league_teams = pd.unique(st.session_state.league_data[selected_league][['HomeTeam', 'AwayTeam']].values.ravel('K'))
+        teams = sorted([t for t in teams if t in league_teams])
     
     col1, col2 = st.columns(2)
     
@@ -145,11 +186,12 @@ if 'ratings' in st.session_state:
         pred_away = (r[away_team]['Aa'] + r[home_team]['Hd']) / 2
         
         st.markdown(f"""
-        ### Prediction
+        ### Prediction ({selected_league})
         **{home_team}** (H) vs **{away_team}** (A)  
         **Expected Shots on Target**  
         → **{home_team}:** **{pred_home:.2f}**  
-        → **{away_team}:** **{pred_away:.2f}**
+        → **{away_team}:** **{pred_away:.2f}**  
+        *(Total: {pred_home + pred_away:.2f})*
         """)
         
         with st.expander("Show detailed GAP ratings"):
@@ -163,4 +205,7 @@ if 'ratings' in st.session_state:
             st.dataframe(df, use_container_width=True)
 
 else:
-    st.info("Click the button above to load data from all Top 5 leagues and train the model.")
+    st.info("👆 Click the button to load data from all Top 5 leagues and check for missing teams.")
+
+st.markdown("---")
+st.caption("Data: Football-Data.co.uk | Model: GAP Ratings | Updated: Nov 22, 2025")
