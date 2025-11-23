@@ -55,7 +55,10 @@ def create_team_profile(df, team, is_home=True):
     profile['sot_mean'] = np.average(recent[f'{prefix}ST'].values, weights=weights)
     profile['shots_mean'] = np.average(recent[f'{prefix}S'].values, weights=weights)
     profile['corners_mean'] = np.average(recent[f'{prefix}C'].values, weights=weights)
-    profile['goals_mean'] = np.average(recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values, weights=weights)
+    
+    # Goals - use FTHG/FTAG columns
+    goals_col = 'FTHG' if is_home else 'FTAG'
+    profile['goals_mean'] = np.average(recent[goals_col].values, weights=weights)
     
     # Shot accuracy
     shots = recent[f'{prefix}S'].values
@@ -67,7 +70,10 @@ def create_team_profile(df, team, is_home=True):
     opp_prefix = 'A' if is_home else 'H'
     profile['sot_conceded'] = np.average(recent[f'{opp_prefix}ST'].values, weights=weights)
     profile['shots_conceded'] = np.average(recent[f'{opp_prefix}S'].values, weights=weights)
-    profile['goals_conceded'] = np.average(recent[f'{opp_prefix}THG' if not is_home else f'{opp_prefix}TAG'].values, weights=weights)
+    
+    # Goals conceded
+    goals_conceded_col = 'FTAG' if is_home else 'FTHG'
+    profile['goals_conceded'] = np.average(recent[goals_conceded_col].values, weights=weights)
     
     # === FINISHING QUALITY ===
     goals = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values
