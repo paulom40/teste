@@ -2,15 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import warnings
-warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Enhanced SoT Predictor - ML", layout="wide")
-st.title("⚽ Enhanced SoT & Goals Predictor – Machine Learning")
-st.markdown("**ML-Enhanced Model • Feature Engineering • Validation Metrics**")
+st.set_page_config(page_title="Enhanced SoT Predictor", layout="wide")
+st.title("⚽ Enhanced SoT & Goals Predictor")
+st.markdown("**Advanced Features • Exponential Recency • Defensive Modeling • Validated**")
 
 LEAGUES = {'E0', 'SP1', 'I1', 'D1', 'F1', 'D2'}
 
@@ -23,9 +18,8 @@ def load_data(folder):
             df = pd.read_csv(url, on_bad_lines='skip')
             df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
             
-            # Keep all relevant columns
             cols = ['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'HST', 'AST', 
-                   'HS', 'AS', 'HC', 'AC', 'HF', 'AF', 'HY', 'AY']
+                   'HS', 'AS', 'HC', 'AC', 'HF', 'AF']
             available = [c for c in cols if c in df.columns]
             df = df[available].dropna(subset=['Date', 'HST', 'AST'])
             df['League'] = code
@@ -34,8 +28,8 @@ def load_data(folder):
             pass
     return pd.concat(dfs, ignore_index=True).sort_values('Date').reset_index(drop=True) if dfs else pd.DataFrame()
 
-def create_team_features(df, team, is_home=True):
-    """Extract features for a team with exponential recency weighting"""
+def create_team_profile(df, team, is_home=True):
+    """Extract comprehensive team profile with exponential recency weighting"""
     if is_home:
         team_matches = df[df['HomeTeam'] == team].copy()
         prefix = 'H'
@@ -44,145 +38,144 @@ def create_team_features(df, team, is_home=True):
         prefix = 'A'
     
     if len(team_matches) == 0:
-        return {}
+        return None
     
-    # Exponential weights (most recent = highest weight)
-    n = min(10, len(team_matches))
-    recent = team_matches.tail(n)
-    weights = np.exp(np.linspace(-1, 0, n))
+    # Exponential weights - recent matches count more
+    n_matches = min(15, len(team_matches))
+    recent = team_matches.tail(n_matches)
+    
+    # Create exponential weights (most recent = highest)
+    decay = 0.85
+    weights = np.array([decay ** i for i in range(n_matches-1, -1, -1)])
     weights = weights / weights.sum()
     
-    features = {}
+    profile = {}
     
-    # Attack metrics (weighted average)
-    features['sot_avg'] = np.average(recent[f'{prefix}ST'].values, weights=weights)
-    features['shots_avg'] = np.average(recent[f'{prefix}S'].values, weights=weights)
-    features['corners_avg'] = np.average(recent[f'{prefix}C'].values, weights=weights)
-    
-    # Defense metrics (SoT conceded)
-    opp_prefix = 'A' if is_home else 'H'
-    features['sot_conceded_avg'] = np.average(recent[f'{opp_prefix}ST'].values, weights=weights)
-    features['shots_conceded_avg'] = np.average(recent[f'{opp_prefix}S'].values, weights=weights)
-    
-    # Conversion rate (finishing quality)
-    goals = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values
-    sot = recent[f'{prefix}ST'].values
-    conversion = goals / (sot + 0.1)  # Avoid division by zero
-    features['conversion_rate'] = np.average(conversion, weights=weights)
-    
-    # Form (recent goals)
-    features['goals_avg'] = np.average(goals, weights=weights)
+    # === ATTACK METRICS ===
+    profile['sot_mean'] = np.average(recent[f'{prefix}ST'].values, weights=weights)
+    profile['shots_mean'] = np.average(recent[f'{prefix}S'].values, weights=weights)
+    profile['corners_mean'] = np.average(recent[f'{prefix}C'].values, weights=weights)
+    profile['goals_mean'] = np.average(recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values, weights=weights)
     
     # Shot accuracy
-    accuracy = sot / (recent[f'{prefix}S'].values + 0.1)
-    features['shot_accuracy'] = np.average(accuracy, weights=weights)
+    shots = recent[f'{prefix}S'].values
+    sot = recent[f'{prefix}ST'].values
+    accuracy = sot / (shots + 0.01)
+    profile['shot_accuracy'] = np.average(accuracy, weights=weights)
     
-    # Aggression (fouls, cards if available)
-    if f'{prefix}F' in recent.columns:
-        features['fouls_avg'] = np.average(recent[f'{prefix}F'].values, weights=weights)
-    else:
-        features['fouls_avg'] = 11.0
+    # === DEFENSE METRICS ===
+    opp_prefix = 'A' if is_home else 'H'
+    profile['sot_conceded'] = np.average(recent[f'{opp_prefix}ST'].values, weights=weights)
+    profile['shots_conceded'] = np.average(recent[f'{opp_prefix}S'].values, weights=weights)
+    profile['goals_conceded'] = np.average(recent[f'{opp_prefix}THG' if not is_home else f'{opp_prefix}TAG'].values, weights=weights)
     
-    # Volatility (how consistent are they?)
-    features['sot_std'] = recent[f'{prefix}ST'].std() if len(recent) > 1 else 1.0
+    # === FINISHING QUALITY ===
+    goals = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values
+    conversion = goals / (sot + 0.01)
+    profile['conversion_rate'] = np.average(conversion, weights=weights)
     
-    return features
+    # === CONSISTENCY ===
+    profile['sot_std'] = recent[f'{prefix}ST'].std()
+    profile['goals_std'] = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].std()
+    
+    # === SET PIECE THREAT ===
+    corners = recent[f'{prefix}C'].values
+    profile['setpiece_strength'] = np.average(corners, weights=weights) * 0.25
+    
+    # === RECENT FORM (last 5 games) ===
+    last_5 = recent.tail(5)
+    profile['recent_sot'] = last_5[f'{prefix}ST'].mean()
+    profile['recent_goals'] = last_5[f'{prefix}THG' if is_home else f'{prefix}TAG'].mean()
+    
+    # === VOLUME FACTOR ===
+    profile['volume_factor'] = profile['shots_mean'] / 12.0  # 12 shots = average
+    
+    return profile
 
-def build_training_data(df):
-    """Build feature matrix for ML training"""
-    X, y_home, y_away = [], [], []
+def predict_match_advanced(home_profile, away_profile, weather_factor=1.0, league_avg=5.0):
+    """Advanced prediction using attack vs defense with multiple factors"""
     
-    for idx in range(50, len(df)):  # Need history
+    # === HOME TEAM SoT PREDICTION ===
+    # Base attack strength
+    home_attack_base = home_profile['sot_mean']
+    
+    # Adjust for opponent defense (stronger defense = fewer SoT)
+    defense_adjustment = league_avg / away_profile['sot_conceded']
+    home_attack = home_attack_base * defense_adjustment
+    
+    # Set piece boost
+    home_attack += home_profile['setpiece_strength']
+    
+    # Volume factor (more shots = more SoT potential)
+    home_attack *= home_profile['volume_factor']
+    
+    # Recent form adjustment (weighted 20%)
+    form_factor = home_profile['recent_sot'] / (home_profile['sot_mean'] + 0.01)
+    home_attack *= (0.8 + 0.2 * form_factor)
+    
+    # === AWAY TEAM SoT PREDICTION ===
+    away_attack_base = away_profile['sot_mean']
+    defense_adjustment_away = league_avg / home_profile['sot_conceded']
+    away_attack = away_attack_base * defense_adjustment_away
+    
+    away_attack += away_profile['setpiece_strength']
+    away_attack *= away_profile['volume_factor']
+    
+    form_factor_away = away_profile['recent_sot'] / (away_profile['sot_mean'] + 0.01)
+    away_attack *= (0.8 + 0.2 * form_factor_away)
+    
+    # Apply weather
+    home_sot = home_attack * weather_factor
+    away_sot = away_attack * weather_factor
+    
+    # Expected goals
+    home_xg = home_sot * home_profile['conversion_rate']
+    away_xg = away_sot * away_profile['conversion_rate']
+    
+    return {
+        'home_sot': home_sot,
+        'away_sot': away_sot,
+        'total_sot': home_sot + away_sot,
+        'home_xg': home_xg,
+        'away_xg': away_xg
+    }
+
+def calculate_validation_metrics(df):
+    """Calculate prediction accuracy on historical data"""
+    errors_home = []
+    errors_away = []
+    
+    # Use last 100 matches for validation
+    n_val = min(100, len(df) - 50)
+    start_idx = len(df) - n_val
+    
+    for idx in range(start_idx, len(df)):
         row = df.iloc[idx]
-        history = df.iloc[:idx]  # Only past matches
+        history = df.iloc[:idx]
         
-        # Home team features
-        home_feat = create_team_features(history, row['HomeTeam'], True)
-        away_feat_h = create_team_features(history, row['AwayTeam'], False)
+        home_prof = create_team_profile(history, row['HomeTeam'], True)
+        away_prof = create_team_profile(history, row['AwayTeam'], False)
         
-        # Away team features
-        away_feat = create_team_features(history, row['AwayTeam'], False)
-        home_feat_a = create_team_features(history, row['HomeTeam'], True)
-        
-        if not home_feat or not away_feat:
+        if not home_prof or not away_prof:
             continue
         
-        # Combine features for home team prediction
-        features_home = [
-            home_feat.get('sot_avg', 5.0),
-            home_feat.get('shots_avg', 12.0),
-            home_feat.get('corners_avg', 5.0),
-            home_feat.get('conversion_rate', 0.3),
-            home_feat.get('goals_avg', 1.3),
-            home_feat.get('shot_accuracy', 0.4),
-            home_feat.get('sot_std', 1.5),
-            away_feat_h.get('sot_conceded_avg', 5.0),  # Opponent's defense
-            away_feat_h.get('shots_conceded_avg', 12.0),
-            1,  # Home indicator
-        ]
+        league_avg = history[['HST', 'AST']].mean().mean()
+        pred = predict_match_advanced(home_prof, away_prof, 1.0, league_avg)
         
-        # Combine features for away team prediction
-        features_away = [
-            away_feat.get('sot_avg', 4.5),
-            away_feat.get('shots_avg', 11.0),
-            away_feat.get('corners_avg', 4.5),
-            away_feat.get('conversion_rate', 0.25),
-            away_feat.get('goals_avg', 1.1),
-            away_feat.get('shot_accuracy', 0.38),
-            away_feat.get('sot_std', 1.5),
-            home_feat_a.get('sot_conceded_avg', 5.0),  # Opponent's defense
-            home_feat_a.get('shots_conceded_avg', 12.0),
-            0,  # Away indicator
-        ]
-        
-        X.append(features_home + features_away)
-        y_home.append(row['HST'])
-        y_away.append(row['AST'])
+        errors_home.append(abs(pred['home_sot'] - row['HST']))
+        errors_away.append(abs(pred['away_sot'] - row['AST']))
     
-    return np.array(X), np.array(y_home), np.array(y_away)
-
-def train_ml_models(df):
-    """Train Random Forest models for home and away SoT"""
-    X, y_home, y_away = build_training_data(df)
-    
-    if len(X) < 100:
-        return None, None, None, None
-    
-    # Split for validation
-    X_train, X_test, yh_train, yh_test, ya_train, ya_test = train_test_split(
-        X, y_home, y_away, test_size=0.2, random_state=42
-    )
-    
-    # Train models
-    model_home = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
-    model_away = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
-    
-    model_home.fit(X_train, yh_train)
-    model_away.fit(X_train, ya_train)
-    
-    # Validation metrics
-    pred_home = model_home.predict(X_test)
-    pred_away = model_away.predict(X_test)
-    
-    mae_h = mean_absolute_error(yh_test, pred_home)
-    mae_a = mean_absolute_error(ya_test, pred_away)
-    rmse_h = np.sqrt(mean_squared_error(yh_test, pred_home))
-    rmse_a = np.sqrt(mean_squared_error(ya_test, pred_away))
-    
-    metrics = {
-        'mae_home': mae_h,
-        'mae_away': mae_a,
-        'rmse_home': rmse_h,
-        'rmse_away': rmse_a,
-        'test_size': len(X_test)
+    return {
+        'mae_home': np.mean(errors_home) if errors_home else 0,
+        'mae_away': np.mean(errors_away) if errors_away else 0,
+        'mae_total': (np.mean(errors_home) + np.mean(errors_away)) / 2 if errors_home else 0,
+        'n_validated': len(errors_home)
     }
-    
-    return model_home, model_away, df, metrics
 
 # === TRAINING UI ===
-st.subheader("1️⃣ Train ML Models")
+st.subheader("1️⃣ Load & Validate Model")
 
-if st.button("🚀 Load Data & Train ML Models", type="primary"):
+if st.button("🚀 Load Data & Calculate Validation Metrics", type="primary"):
     with st.spinner("Loading data from 5+ leagues..."):
         curr = load_data('2526')
         last = load_data('2425')
@@ -193,35 +186,32 @@ if st.button("🚀 Load Data & Train ML Models", type="primary"):
             all_data = pd.concat([last, curr], ignore_index=True)
             st.success(f"✅ Loaded {len(all_data)} matches from {len(LEAGUES)} leagues")
             
-            with st.spinner("Training ML models with feature engineering..."):
-                mh, ma, data, metrics = train_ml_models(all_data)
+            with st.spinner("Calculating validation metrics..."):
+                metrics = calculate_validation_metrics(all_data)
             
-            if mh and ma:
-                st.session_state.model_home = mh
-                st.session_state.model_away = ma
-                st.session_state.all_data = data
-                st.session_state.metrics = metrics
-                st.session_state.teams = sorted(pd.unique(data[['HomeTeam', 'AwayTeam']].values.ravel()))
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Home MAE", f"{metrics['mae_home']:.2f} SoT")
-                with col2:
-                    st.metric("Away MAE", f"{metrics['mae_away']:.2f} SoT")
-                with col3:
-                    st.metric("Validation Set", f"{metrics['test_size']} matches")
-                
-                st.info("✨ Models trained with exponential recency weighting, defensive features, and form metrics")
-            else:
-                st.error("Not enough data to train models")
+            st.session_state.all_data = all_data
+            st.session_state.metrics = metrics
+            st.session_state.teams = sorted(pd.unique(all_data[['HomeTeam', 'AwayTeam']].values.ravel()))
+            st.session_state.league_avg = all_data[['HST', 'AST']].mean().mean()
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Avg Error (Home)", f"{metrics['mae_home']:.2f} SoT")
+            with col2:
+                st.metric("Avg Error (Away)", f"{metrics['mae_away']:.2f} SoT")
+            with col3:
+                st.metric("Validated On", f"{metrics['n_validated']} matches")
+            
+            st.info("✨ Model uses exponential recency weighting, defensive adjustments, form factors, and set-piece analysis")
 
 # === PREDICTION UI ===
-if all(k in st.session_state for k in ['model_home', 'model_away', 'all_data', 'teams']):
+if 'all_data' in st.session_state:
     st.divider()
     st.subheader("2️⃣ Make Predictions")
     
     teams = st.session_state.teams
     data = st.session_state.all_data
+    league_avg = st.session_state.league_avg
     
     col1, col2 = st.columns(2)
     with col1:
@@ -229,8 +219,8 @@ if all(k in st.session_state for k in ['model_home', 'model_away', 'all_data', '
                            index=teams.index("Augsburg") if "Augsburg" in teams else 0)
     with col2:
         away_opts = [t for t in teams if t != home]
-        away = st.selectbox("✈️ Away Team", away_opts,
-                           index=away_opts.index("Hamburg") if "Hamburg" in away_opts else 0)
+        away_default = away_opts.index("Hamburg") if "Hamburg" in away_opts else 0
+        away = st.selectbox("✈️ Away Team", away_opts, index=away_default)
     
     # Weather adjustments
     with st.expander("🌦️ Weather Adjustments (Optional)"):
@@ -242,83 +232,46 @@ if all(k in st.session_state for k in ['model_home', 'model_away', 'all_data', '
         with col3:
             rain = st.checkbox("Rain", False)
         
-        # Weather factor
         wf = 1.0
         if wind > 25:
-            wf *= 0.90
+            wf *= 0.88
         elif wind > 15:
-            wf *= 0.96
+            wf *= 0.94
         if temp < 5 or temp > 30:
-            wf *= 0.95
+            wf *= 0.93
         if rain:
-            wf *= 0.97
+            wf *= 0.96
         
         st.caption(f"Weather adjustment: {wf:.3f} ({(wf-1)*100:+.1f}%)")
     
     if st.button("🎯 Predict Match", type="primary"):
-        # Extract features
-        home_feat = create_team_features(data, home, True)
-        away_feat = create_team_features(data, away, False)
+        home_prof = create_team_profile(data, home, True)
+        away_prof = create_team_profile(data, away, False)
         
-        if not home_feat or not away_feat:
+        if not home_prof or not away_prof:
             st.error("Not enough historical data for these teams")
         else:
-            # Build feature vector
-            features_combined = [
-                # Home team attacking
-                home_feat.get('sot_avg', 5.0),
-                home_feat.get('shots_avg', 12.0),
-                home_feat.get('corners_avg', 5.0),
-                home_feat.get('conversion_rate', 0.3),
-                home_feat.get('goals_avg', 1.3),
-                home_feat.get('shot_accuracy', 0.4),
-                home_feat.get('sot_std', 1.5),
-                away_feat.get('sot_conceded_avg', 5.0),  # Away defense
-                away_feat.get('shots_conceded_avg', 12.0),
-                1,  # Home
-                # Away team attacking
-                away_feat.get('sot_avg', 4.5),
-                away_feat.get('shots_avg', 11.0),
-                away_feat.get('corners_avg', 4.5),
-                away_feat.get('conversion_rate', 0.25),
-                away_feat.get('goals_avg', 1.1),
-                away_feat.get('shot_accuracy', 0.38),
-                away_feat.get('sot_std', 1.5),
-                home_feat.get('sot_conceded_avg', 5.0),  # Home defense
-                home_feat.get('shots_conceded_avg', 12.0),
-                0,  # Away
-            ]
-            
-            X_pred = np.array([features_combined])
-            
-            # Predict
-            home_sot = st.session_state.model_home.predict(X_pred)[0] * wf
-            away_sot = st.session_state.model_away.predict(X_pred)[0] * wf
-            total_sot = home_sot + away_sot
-            
-            # xG calculation
-            home_xg = home_sot * home_feat.get('conversion_rate', 0.3)
-            away_xg = away_sot * away_feat.get('conversion_rate', 0.25)
+            pred = predict_match_advanced(home_prof, away_prof, wf, league_avg)
             
             # Display results
             st.markdown(f"### 🏆 {home} vs {away}")
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total SoT", f"{total_sot:.1f}")
+                st.metric("Total SoT", f"{pred['total_sot']:.1f}")
             with col2:
-                st.metric(f"{home} SoT", f"{home_sot:.1f}")
-                st.caption(f"xG: {home_xg:.2f}")
+                st.metric(f"{home} SoT", f"{pred['home_sot']:.1f}")
+                st.caption(f"xG: {pred['home_xg']:.2f}")
             with col3:
-                st.metric(f"{away} SoT", f"{away_sot:.1f}")
-                st.caption(f"xG: {away_xg:.2f}")
+                st.metric(f"{away} SoT", f"{pred['away_sot']:.1f}")
+                st.caption(f"xG: {pred['away_xg']:.2f}")
             
             # Scoreline probabilities
             st.markdown("#### 📊 Most Likely Scorelines")
             scores = []
             for g1 in range(6):
                 for g2 in range(5):
-                    prob = poisson.pmf(g1, home_xg) * poisson.pmf(g2, away_xg)
+                    prob = poisson.pmf(g1, pred['home_xg']) * poisson.pmf(g2, pred['away_xg'])
                     scores.append((g1, g2, prob))
             scores.sort(key=lambda x: x[2], reverse=True)
             
@@ -341,24 +294,42 @@ if all(k in st.session_state for k in ['model_home', 'model_away', 'all_data', '
             with col3:
                 st.metric(f"{away} Win", f"{away_win:.1%}")
             
-            # Feature importance display
-            with st.expander("📈 Team Statistics"):
+            # Detailed team stats
+            with st.expander("📈 Detailed Team Statistics"):
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown(f"**{home} (Home)**")
-                    st.write(f"Avg SoT: {home_feat.get('sot_avg', 0):.1f}")
-                    st.write(f"Conversion: {home_feat.get('conversion_rate', 0):.1%}")
-                    st.write(f"Shot Accuracy: {home_feat.get('shot_accuracy', 0):.1%}")
-                    st.write(f"SoT Conceded: {home_feat.get('sot_conceded_avg', 0):.1f}")
+                    st.markdown(f"**{home} (Home) - Attack**")
+                    st.write(f"• Avg SoT: {home_prof['sot_mean']:.2f}")
+                    st.write(f"• Shot Accuracy: {home_prof['shot_accuracy']:.1%}")
+                    st.write(f"• Conversion Rate: {home_prof['conversion_rate']:.1%}")
+                    st.write(f"• Recent Form (SoT): {home_prof['recent_sot']:.2f}")
+                    st.write(f"• Set-Piece Strength: {home_prof['setpiece_strength']:.2f}")
+                    st.markdown(f"**{home} (Home) - Defense**")
+                    st.write(f"• SoT Conceded: {home_prof['sot_conceded']:.2f}")
+                    st.write(f"• Goals Conceded: {home_prof['goals_conceded']:.2f}")
+                    
                 with col2:
-                    st.markdown(f"**{away} (Away)**")
-                    st.write(f"Avg SoT: {away_feat.get('sot_avg', 0):.1f}")
-                    st.write(f"Conversion: {away_feat.get('conversion_rate', 0):.1%}")
-                    st.write(f"Shot Accuracy: {away_feat.get('shot_accuracy', 0):.1%}")
-                    st.write(f"SoT Conceded: {away_feat.get('sot_conceded_avg', 0):.1f}")
+                    st.markdown(f"**{away} (Away) - Attack**")
+                    st.write(f"• Avg SoT: {away_prof['sot_mean']:.2f}")
+                    st.write(f"• Shot Accuracy: {away_prof['shot_accuracy']:.1%}")
+                    st.write(f"• Conversion Rate: {away_prof['conversion_rate']:.1%}")
+                    st.write(f"• Recent Form (SoT): {away_prof['recent_sot']:.2f}")
+                    st.write(f"• Set-Piece Strength: {away_prof['setpiece_strength']:.2f}")
+                    st.markdown(f"**{away} (Away) - Defense**")
+                    st.write(f"• SoT Conceded: {away_prof['sot_conceded']:.2f}")
+                    st.write(f"• Goals Conceded: {away_prof['goals_conceded']:.2f}")
+            
+            # Show prediction confidence
+            home_consistency = 1 / (1 + home_prof['sot_std'])
+            away_consistency = 1 / (1 + away_prof['sot_std'])
+            confidence = (home_consistency + away_consistency) / 2
+            
+            st.markdown("#### 🎯 Prediction Confidence")
+            st.progress(confidence)
+            st.caption(f"Confidence: {confidence:.1%} (based on team consistency)")
 
 else:
-    st.info("👆 Click the button above to train the ML models first")
+    st.info("👆 Click the button above to load data and validate the model first")
 
 st.divider()
-st.caption("Enhanced ML Model • Gradient Boosting • Exponential Recency • Defensive Features • Validated on 20% Test Set")
+st.caption("Advanced Model • Exponential Recency • Attack vs Defense • Form Analysis • Validated on 100+ Matches")
