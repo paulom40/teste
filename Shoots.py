@@ -62,8 +62,8 @@ def create_team_profile(df, team, is_home=True):
     
     # Shot accuracy
     shots = recent[f'{prefix}S'].values
-    sot = recent[f'{prefix}ST'].values
-    accuracy = sot / (shots + 0.01)
+    sot_values = recent[f'{prefix}ST'].values
+    accuracy = sot_values / (shots + 0.01)
     profile['shot_accuracy'] = np.average(accuracy, weights=weights)
     
     # === DEFENSE METRICS ===
@@ -76,13 +76,15 @@ def create_team_profile(df, team, is_home=True):
     profile['goals_conceded'] = np.average(recent[goals_conceded_col].values, weights=weights)
     
     # === FINISHING QUALITY ===
-    goals = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].values
-    conversion = goals / (sot + 0.01)
+    goals_col = 'FTHG' if is_home else 'FTAG'
+    goals = recent[goals_col].values
+    sot_values = recent[f'{prefix}ST'].values
+    conversion = goals / (sot_values + 0.01)
     profile['conversion_rate'] = np.average(conversion, weights=weights)
     
     # === CONSISTENCY ===
     profile['sot_std'] = recent[f'{prefix}ST'].std()
-    profile['goals_std'] = recent[f'{prefix}THG' if is_home else f'{prefix}TAG'].std()
+    profile['goals_std'] = recent[goals_col].std()
     
     # === SET PIECE THREAT ===
     corners = recent[f'{prefix}C'].values
@@ -90,8 +92,9 @@ def create_team_profile(df, team, is_home=True):
     
     # === RECENT FORM (last 5 games) ===
     last_5 = recent.tail(5)
+    goals_col = 'FTHG' if is_home else 'FTAG'
     profile['recent_sot'] = last_5[f'{prefix}ST'].mean()
-    profile['recent_goals'] = last_5[f'{prefix}THG' if is_home else f'{prefix}TAG'].mean()
+    profile['recent_goals'] = last_5[goals_col].mean()
     
     # === VOLUME FACTOR ===
     profile['volume_factor'] = profile['shots_mean'] / 12.0  # 12 shots = average
