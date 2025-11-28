@@ -760,4 +760,243 @@ class Advanced45MinutePredictor:
         
         return {
             'home_xg': round(home_xg, 2),
-           
+            'away_xg': round(away_xg, 2),
+            'most_likely_score': most_likely_score,
+            'home_win_prob': round(home_win * 100, 1),
+            'draw_prob': round(draw * 100, 1),
+            'away_win_prob': round(away_win * 100, 1),
+            'btts_prob': round(btts * 100, 1),
+            'confidence': round(max_prob * 100, 1),
+            'total_expected_goals': round(home_xg + away_xg, 2)
+        }
+    
+    def generate_tier_specific_insights(self, first_half_stats, momentum, second_half_pred):
+        """
+        Generate insights specific to league tier
+        """
+        insights = []
+        
+        # Tier identification
+        tier_text = "2nd Division" if self.is_second_tier else "1st Division"
+        insights.append(f"🏆 **{tier_text} Analysis**: {self.league_profile['style']}")
+        
+        # Second tier specific insights
+        if self.is_second_tier:
+            insights.append("📈 **Higher Volatility**: Second divisions show more unpredictable patterns")
+            insights.append("🔄 **Comeback Mentality**: Trailing teams often show strong second half responses")
+            insights.append("⚡ **Conditioning Factors**: Fitness levels can vary more significantly")
+        
+        # First tier specific insights
+        else:
+            insights.append("🎯 **Tactical Discipline**: Top divisions feature more structured second halves")
+            insights.append("💪 **Professional Fitness**: Consistent performance levels maintained")
+            insights.append("🧠 **Strategic Approach**: Managers make calculated second half adjustments")
+        
+        # League-specific insights
+        if 'Championship' in self.league:
+            insights.append("🏴󠁧󠁢󠁥󠁮󠁧󠁿 **Championship Pattern**: High intensity, physical, frequent comebacks")
+        elif 'Bundesliga' in self.league:
+            insights.append("🇩🇪 **German Football**: High pressing, fitness-focused, goal-rich second halves")
+        elif 'Serie' in self.league:
+            insights.append("🇮🇹 **Italian Style**: Tactical, disciplined, lower-scoring second halves")
+        elif 'La Liga' in self.league:
+            insights.append("🇪🇸 **Spanish Football**: Possession-based, technical, controlled tempo")
+        
+        return insights
+
+# ================================
+# ENHANCED STREAMLIT APPLICATION
+# ================================
+def main():
+    st.sidebar.header("🔴 ADVANCED 45-MINUTE ANALYTICS")
+    
+    # League selection with categorization
+    st.sidebar.markdown("### ⚽ Select League Category")
+    
+    # Categorize leagues
+    first_tier_leagues = [k for k, v in LEAGUE_PROFILES.items() if v['tier'] == 1]
+    second_tier_leagues = [k for k, v in LEAGUE_PROFILES.items() if v['tier'] == 2]
+    
+    league_category = st.sidebar.radio("Division", ["First Division", "Second Division"])
+    
+    if league_category == "First Division":
+        league = st.sidebar.selectbox("Select League", first_tier_leagues, index=0)
+    else:
+        league = st.sidebar.selectbox("Select League", second_tier_leagues, index=0)
+    
+    league_info = LEAGUE_PROFILES[league]
+    
+    # Enhanced league info display
+    with st.sidebar.expander("📊 League Profile"):
+        tier_icon = "2️⃣" if league_info['tier'] == 2 else "1️⃣"
+        st.metric("Division", f"{tier_icon} {league_category}")
+        st.metric("Avg Goals/Game", f"{league_info['avg_goals_per_game']:.2f}")
+        st.metric("Home Advantage", f"{league_info['home_advantage']:.2f}x")
+        st.metric("2H Goal Ratio", f"{league_info['second_half_goals_ratio']*100:.0f}%")
+        st.metric("Comeback Rate", f"{league_info['comeback_rate']*100:.0f}%")
+        st.metric("Volatility", f"{league_info['volatility']:.2f}")
+        st.caption(f"**Style:** {league_info['style']}")
+    
+    # Team inputs and statistics (same as before)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🏃‍♂️ Match Details")
+    
+    home_team = st.sidebar.text_input("🏠 Home Team", "Manchester City")
+    away_team = st.sidebar.text_input("✈️ Away Team", "Liverpool")
+    
+    st.sidebar.markdown("### 📊 First Half Statistics")
+    col1, col2 = st.sidebar.columns(2)
+    
+    with col1:
+        home_goals = st.number_input("Home Goals", 0, 10, 1)
+        home_xg = st.number_input("Home xG", 0.0, 10.0, 1.2, 0.1)
+        home_shots = st.number_input("Home Shots", 0, 30, 8)
+        home_sot = st.number_input("Home SoT", 0, 20, 4)
+        home_corners = st.number_input("Home Corners", 0, 15, 4)
+        home_da = st.number_input("Home DA", 0, 100, 25)
+    
+    with col2:
+        away_goals = st.number_input("Away Goals", 0, 10, 0)
+        away_xg = st.number_input("Away xG", 0.0, 10.0, 0.7, 0.1)
+        away_shots = st.number_input("Away Shots", 0, 30, 5)
+        away_sot = st.number_input("Away SoT", 0, 20, 2)
+        away_corners = st.number_input("Away Corners", 0, 15, 2)
+        away_da = st.number_input("Away DA", 0, 100, 18)
+    
+    # Compile stats
+    first_half_stats = {
+        'home_goals': home_goals, 'away_goals': away_goals,
+        'home_xg': home_xg, 'away_xg': away_xg,
+        'home_shots': home_shots, 'away_shots': away_shots,
+        'home_sot': home_sot, 'away_sot': away_sot,
+        'home_corners': home_corners, 'away_corners': away_corners,
+        'home_dangerous_attacks': home_da, 'away_dangerous_attacks': away_da,
+        'minutes_played': 45
+    }
+    
+    # Initialize advanced predictor
+    predictor = Advanced45MinutePredictor(league=league)
+    
+    # Calculate predictions
+    momentum = predictor.calculate_advanced_momentum(first_half_stats)
+    second_half_pred = predictor.predict_second_half_goals_advanced(first_half_stats, momentum)
+    tier_insights = predictor.generate_tier_specific_insights(first_half_stats, momentum, second_half_pred)
+    
+    # MAIN DISPLAY
+    tier_indicator = "2️⃣" if league_info['tier'] == 2 else "1️⃣"
+    st.markdown(f"## 🎯 HALFTIME ANALYSIS: {home_team} {home_goals}-{away_goals} {away_team}")
+    st.markdown(f"**{tier_indicator} {league} • {league_category} • Volatility: {league_info['volatility']}**")
+    
+    # Enhanced Metrics Dashboard
+    st.markdown("---")
+    st.subheader("📈 ADVANCED MOMENTUM & VOLATILITY METRICS")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        momentum_status = "DOMINANT" if momentum['home'] > 70 else "STRONG" if momentum['home'] > 60 else "NEUTRAL"
+        st.metric(f"{home_team} Momentum", f"{momentum['home']:.0f}/100", momentum_status)
+    
+    with col2:
+        momentum_status = "DOMINANT" if momentum['away'] > 70 else "STRONG" if momentum['away'] > 60 else "NEUTRAL"
+        st.metric(f"{away_team} Momentum", f"{momentum['away']:.0f}/100", momentum_status)
+    
+    with col3:
+        dominance = "HOME" if momentum['dominance_ratio'] > 1.3 else "AWAY" if momentum['dominance_ratio'] < 0.7 else "BALANCED"
+        st.metric("Match Dominance", dominance, delta=f"{momentum['dominance_ratio']:.2f}x")
+    
+    with col4:
+        vol_level = "HIGH" if momentum['volatility_index'] > 0.8 else "MEDIUM" if momentum['volatility_index'] > 0.7 else "LOW"
+        st.metric("Volatility Index", vol_level, delta=f"{momentum['volatility_index']:.2f}")
+    
+    # Second Half Prediction
+    st.markdown("---")
+    st.subheader("🔮 SECOND HALF PREDICTIONS")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("### ⚽ Expected Goals")
+        st.metric("Home 2H xG", second_half_pred['home_xg'])
+        st.metric("Away 2H xG", second_half_pred['away_xg'])
+        st.metric("Most Likely 2H Score", second_half_pred['most_likely_score'])
+    
+    with col2:
+        st.markdown("### 🎯 2H Outcome Probabilities")
+        st.metric(f"{home_team} Win", f"{second_half_pred['home_win_prob']}%")
+        st.metric("Draw", f"{second_half_pred['draw_prob']}%")
+        st.metric(f"{away_team} Win", f"{second_half_pred['away_win_prob']}%")
+    
+    with col3:
+        st.markdown("### 📊 Additional Markets")
+        st.metric("Both Teams Score", f"{second_half_pred['btts_prob']}%")
+        st.metric("Prediction Confidence", f"{second_half_pred['confidence']}%")
+        st.metric("Total Expected Goals", f"{second_half_pred['total_expected_goals']}")
+    
+    # Tier-Specific Insights
+    st.markdown("---")
+    st.subheader("🏆 DIVISION-SPECIFIC ANALYSIS")
+    
+    for insight in tier_insights:
+        st.info(insight)
+    
+    # Enhanced Betting Recommendations
+    st.markdown("---")
+    st.subheader("💰 SMART BETTING RECOMMENDATIONS")
+    
+    recommendations = []
+    
+    # Tier-specific betting approaches
+    if predictor.is_second_tier:
+        recommendations.append("🎯 **2nd Division Strategy**: Focus on value bets with higher odds due to volatility")
+    
+    # Goal line recommendations
+    if second_half_pred['total_expected_goals'] > 1.8:
+        recommendations.append(f"✅ **OVER 1.5 SECOND HALF GOALS** - Expected: {second_half_pred['total_expected_goals']:.2f} goals")
+    elif second_half_pred['total_expected_goals'] < 1.0:
+        recommendations.append(f"✅ **UNDER 1.5 SECOND HALF GOALS** - Expected: {second_half_pred['total_expected_goals']:.2f} goals")
+    
+    # BTTS recommendations with tier adjustment
+    btts_threshold = 60 if predictor.is_second_tier else 65
+    if second_half_pred['btts_prob'] > btts_threshold:
+        recommendations.append(f"✅ **BOTH TEAMS TO SCORE - YES** ({second_half_pred['btts_prob']}% probability)")
+    elif second_half_pred['btts_prob'] < (100 - btts_threshold):
+        recommendations.append(f"✅ **BOTH TEAMS TO SCORE - NO** ({100-second_half_pred['btts_prob']}% probability)")
+    
+    # Team-specific recommendations
+    win_threshold = 55 if predictor.is_second_tier else 60
+    if second_half_pred['home_win_prob'] > win_threshold:
+        recommendations.append(f"✅ **{home_team} TO WIN SECOND HALF** ({second_half_pred['home_win_prob']}% probability)")
+    if second_half_pred['away_win_prob'] > win_threshold:
+        recommendations.append(f"✅ **{away_team} TO WIN SECOND HALF** ({second_half_pred['away_win_prob']}% probability)")
+    
+    for rec in recommendations:
+        st.success(rec)
+    
+    if not recommendations:
+        st.warning("⚠️ No clear value bets identified - consider waiting for in-play opportunities or lower stakes")
+    
+    # Risk Management by Tier
+    st.markdown("---")
+    st.subheader("📊 RISK MANAGEMENT BY DIVISION")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if predictor.is_second_tier:
+            st.metric("Recommended Stake", "1-2%", "Lower due to volatility")
+        else:
+            st.metric("Recommended Stake", "2-3%", "Standard for top divisions")
+    
+    with col2:
+        confidence_level = "HIGH" if second_half_pred['confidence'] > 70 else "MEDIUM" if second_half_pred['confidence'] > 50 else "LOW"
+        st.metric("Prediction Confidence", confidence_level)
+    
+    with col3:
+        if predictor.is_second_tier:
+            st.metric("Bankroll Advice", "Conservative", "Higher variance expected")
+        else:
+            st.metric("Bankroll Advice", "Standard", "Stable patterns")
+
+if __name__ == "__main__":
+    main()
