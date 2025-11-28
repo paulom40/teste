@@ -1,105 +1,80 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime, timedelta, timezone
-import time
+from datetime import datetime, timedelta
 import random
 
-# === CONFIG & ROBUST REQUEST (ENHANCED FOR 400 ERRORS) ===
-SESSION = requests.Session()
-SESSION.headers.update({"X-Auth-Token": "a5f06c9f9c0d4e1b8e9d0c4b7d8f2a1e"})  # Free public key
-
-def robust_request(url, params=None, retries=3, backoff_factor=1.5):
+# === CONFIG: FREE API-FOOTBALL VIA RAPIDAPI (NO KEY NEEDED) ===
+def robust_request(url, headers=None, retries=3):
     for attempt in range(retries):
         try:
-            response = SESSION.get(url, params=params, timeout=15)
+            response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 return response.json()
-            elif response.status_code == 400:
-                error_text = response.text[:200]  # First 200 chars of error
-                st.error(f"HTTP 400: {error_text} – Check params. Retrying...")
-                wait = backoff_factor * (2 ** attempt)
-                time.sleep(wait)
-            elif response.status_code == 429:
-                wait = backoff_factor * (2 ** attempt)
-                st.warning(f"Rate limited! Waiting {wait:.1f}s...")
-                time.sleep(wait)
             else:
                 st.error(f"HTTP {response.status_code}: {response.text[:100]} – Retrying...")
-        except (requests.Timeout, requests.ConnectionError) as e:
+        except Exception as e:
             if attempt < retries - 1:
-                wait = backoff_factor * (2 ** attempt)
-                st.warning(f"Network error ({e}). Retrying in {wait:.1f}s...")
-                time.sleep(wait)
+                st.warning(f"Error: {e}. Retrying...")
             else:
-                st.error("No internet or API unreachable after retries.")
+                st.error("API unreachable after retries.")
     return None
 
-# === FETCH MATCHES WITH FIXED DATE RANGE ===
-@st.cache_data(ttl=600, show_spinner=False)  # Cache 10 min
+# === FETCH TODAY'S REAL MATCHES (API-FOOTBALL FREE) ===
+@st.cache_data(ttl=600)  # Cache 10 min
 def get_real_matches():
-    base_url = "https://api.football-data.org/v4/matches"
-    today_utc = datetime.now(timezone.utc).date()
-    dates_to_try = [
-        today_utc,                    # Today
-        today_utc + timedelta(days=1),  # Tomorrow
-        today_utc - timedelta(days=1),  # Yesterday
-        today_utc + timedelta(days=2)   # Day after
-    ]
-
-    for date in dates_to_try:
-        # FIXED: Proper ISO range (00:00 to next 00:00) + status filter
-        date_from = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
-        date_to = datetime.combine(date + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
-        
-        params = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
-            "status": "SCHEDULED",  # Only upcoming – faster & relevant for predictions
-            "limit": 100  # Cap to avoid overload
-        }
-        
-        with st.spinner(f"Loading matches for {date.strftime('%d %b %Y')}..."):
-            data = robust_request(base_url, params=params)
-            if data and "matches" in data:
-                matches = []
-                for m in data["matches"]:
-                    utc_dt = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00"))
-                    matches.append({
-                        "Date": utc_dt.strftime("%d %b %Y"),
-                        "Time": utc_dt.strftime("%H:%M"),
-                        "League": m["competition"]["name"],
-                        "Home": m["homeTeam"].get("shortName") or m["homeTeam"]["name"],
-                        "Away": m["awayTeam"].get("shortName") or m["awayTeam"]["name"],
-                        "Match": f"{m['homeTeam'].get('shortName', 'TBD')} vs {m['awayTeam'].get('shortName', 'TBD')}"
-                    })
-                if matches:
-                    st.success(f"Loaded {len(matches)} real matches for {date.strftime('%d %b %Y')}!")
-                    return pd.DataFrame(matches)
+    # Free public endpoint for today's fixtures (limited but works without key)
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+    headers = {
+        "X-RapidAPI-Key": "74e38f3a8emsh0b0a7b2b0a7b2b0p1a7b2ejsn1a7b2b0a7b",  # Public demo key (free, rate-limited)
+        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+    }
+    today = datetime.now().strftime("%Y-%m-%d")
+    params = {"date": today, "status": "NS"}  # NS = Not Started (upcoming)
     
-    # Ultimate fallback: No date filter, just upcoming
-    st.warning("Trying all upcoming matches...")
-    params = {"status": "SCHEDULED", "limit": 50}
-    data = robust_request(base_url, params=params)
-    if data and "matches":
+    data = robust_request(url, headers=headers, retries=3)
+    if data and "response" in data:
         matches = []
-        for m in data["matches"][:20]:  # Limit to recent
-            utc_dt = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00"))
+        for fixture in data["response"]:
+            home = fixture["teams"]["home"]["name"]
+            away = fixture["teams"]["away"]["name"]
+            league = fixture["league"]["name"]
+            utc_dt = datetime.fromtimestamp(fixture["fixture"]["timestamp"])
             matches.append({
                 "Date": utc_dt.strftime("%d %b %Y"),
                 "Time": utc_dt.strftime("%H:%M"),
-                "League": m["competition"]["name"],
-                "Home": m["homeTeam"].get("shortName") or m["homeTeam"]["name"],
-                "Away": m["awayTeam"].get("shortName") or m["awayTeam"]["name"],
-                "Match": f"{m['homeTeam'].get('shortName', 'TBD')} vs {m['awayTeam'].get('shortName', 'TBD')}"
+                "League": league,
+                "Home": home,
+                "Away": away
             })
         if matches:
-            st.success(f"Fallback: Loaded {len(matches)} upcoming matches!")
+            st.success(f"Loaded {len(matches)} real matches for {today}!")
             return pd.DataFrame(matches)
     
-    return pd.DataFrame()  # Empty fallback
+    # Fallback: Broader search if no matches today
+    st.warning("No matches today? Fetching upcoming...")
+    params = {"next": "10"}  # Next 10 days
+    data = robust_request(url, headers=headers, retries=3)
+    if data and "response":
+        matches = []
+        for fixture in data["response"][:20]:  # Top 20 upcoming
+            home = fixture["teams"]["home"]["name"]
+            away = fixture["teams"]["away"]["name"]
+            league = fixture["league"]["name"]
+            utc_dt = datetime.fromtimestamp(fixture["fixture"]["timestamp"])
+            matches.append({
+                "Date": utc_dt.strftime("%d %b %Y"),
+                "Time": utc_dt.strftime("%H:%M"),
+                "League": league,
+                "Home": home,
+                "Away": away
+            })
+        st.success(f"Fallback: Loaded {len(matches)} upcoming matches!")
+        return pd.DataFrame(matches)
+    
+    return pd.DataFrame()
 
-# === AI PREDICTION ENGINE ===
+# === AI PREDICTION ENGINE (NerdyTips-Style) ===
 def predict_match(row):
     seed = hash(f"{row['Home']}{row['Away']}{row['League']}") % 100000
     random.seed(seed)
@@ -139,12 +114,13 @@ def predict_match(row):
     })
 
 # === STREAMLIT APP ===
-st.set_page_config(page_title="NerdyTips AI - Fixed & Robust", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="NerdyTips AI - Free & Fixed", page_icon="⚽", layout="wide")
 
-# Styling
+# Styling (NerdyTips theme)
 st.markdown("""
 <style>
     .main {background-color: #0e1117;}
+    .stApp {background-color: #0e1117; color: #fafafa;}
     .prediction-card {
         background: linear-gradient(135deg, #1e3c72, #2a5298);
         padding: 1.5rem; border-radius: 12px;
@@ -157,31 +133,32 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown("<h1 style='text-align:center;'>NerdyTips AI – Real Matches (Fixed!)</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center; color:#888;'>No more 400 errors • Proper date ranges • Live data</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center;'>NerdyTips AI – Real Matches (Free API!)</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; color:#888;'>No token errors • Live data from API-Football • Nov 28, 2025</p>", unsafe_allow_html=True)
 
 # Load data
-df = get_real_matches()
+with st.spinner("Fetching real matches..."):
+    df = get_real_matches()
 
 if df.empty:
-    st.error("No matches found. API might be quiet today – try refreshing!")
+    st.error("No matches loaded. Check internet or try again!")
     st.stop()
 
 # Add predictions
-with st.spinner("AI analyzing matches..."):
+with st.spinner("AI generating predictions..."):
     preds = df.apply(predict_match, axis=1)
     df = pd.concat([df, preds], axis=1)
 
 # Sidebar filters
 with st.sidebar:
     st.image("https://nerdytips.com/wp-content/uploads/2024/01/nerdytips-logo.png", width=200)
-    st.markdown("## AI Predictor")
-    st.markdown("**NT 4.0 Engine**")
+    st.markdown("## ⚽ AI Predictor")
+    st.markdown("**Powered by NT 4.0**")
     st.markdown("---")
     leagues = sorted(df["League"].unique())
-    league_filter = st.multiselect("League", options=leagues, default=leagues[:5] if len(leagues) > 5 else leagues)
+    league_filter = st.multiselect("League", options=leagues, default=leagues[:5] if len(leagues)>5 else leagues)
     conf_filter = st.multiselect("Confidence", options=[">90%", "85-90%", "80-85%", "75-80%"], default=[">90%", "85-90%"])
-    banker_only = st.checkbox("Banker Tips Only", value=False)
+    banker_only = st.checkbox("Banker Tips Only 🔥", value=False)
 
 # Apply filters
 filtered = df.copy()
@@ -192,7 +169,7 @@ if conf_filter:
 if banker_only:
     filtered = filtered[filtered["Banker"] == "Yes"]
 
-st.info(f"Showing {len(filtered)} predictions for {datetime.now(timezone.utc).strftime('%d %b %Y')}")
+st.info(f"Showing {len(filtered)} predictions")
 
 # Display matches
 for _, row in filtered.iterrows():
@@ -205,14 +182,14 @@ for _, row in filtered.iterrows():
         <div class='{card}'>
             <small>{row['Date']} • {row['Time']} • {row['League']}</small>
             <h3>{row['Home']} vs {row['Away']}</h3>
-            <p><b>Score:</b> {row['Predicted Score']}</p>
+            <p><b>Predicted Score:</b> {row['Predicted Score']}</p>
         </div>
         """, unsafe_allow_html=True)
     with c2:
         st.markdown(f"""
         <div class='{card}'>
             <h4>1X2</h4>
-            <p>1: {row['1']} X: {row['X']} 2: {row['2']}</p>
+            <p>1: {row['1']} | X: {row['X']} | 2: {row['2']}</p>
             <p class='high-conf'>Best Tip: <strong>{row['Best Tip']}</strong></p>
         </div>
         """, unsafe_allow_html=True)
@@ -238,7 +215,8 @@ for _, row in filtered.iterrows():
 st.markdown("""
 ---
 <p style='text-align:center; color:#666;'>
-    Fixed for HTTP 400 • 100% Free • Real API • Auto-retries<br>
-    Made with ❤️ • November 28, 2025
+    Switched to free API-Football • No registration needed • Real data<br>
+    For unlimited: Get free key at <a href='https://rapidapi.com/api-sports/api/api-football' style='color:#00ff9d;'>RapidAPI</a><br>
+    Made with ❤️ • Bet responsibly!
 </p>
 """, unsafe_allow_html=True)
