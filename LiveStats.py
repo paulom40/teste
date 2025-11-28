@@ -21,39 +21,161 @@ st.markdown("""
 """)
 
 # ================================
+# LEAGUE PROFILES
+# ================================
+LEAGUE_PROFILES = {
+    'Premier League': {
+        'avg_goals_per_game': 2.82,
+        'home_advantage': 1.35,
+        'avg_shots': 24.5,
+        'avg_sot': 8.2,
+        'avg_corners': 10.8,
+        'avg_dangerous_attacks': 85,
+        'pace_factor': 1.15,  # Fast-paced
+        'physicality': 1.20,
+        'style': 'High intensity, direct play'
+    },
+    'La Liga': {
+        'avg_goals_per_game': 2.65,
+        'home_advantage': 1.28,
+        'avg_shots': 22.8,
+        'avg_sot': 7.5,
+        'avg_corners': 9.5,
+        'avg_dangerous_attacks': 78,
+        'pace_factor': 1.05,  # Possession-based
+        'physicality': 0.95,
+        'style': 'Technical, possession-focused'
+    },
+    'Serie A': {
+        'avg_goals_per_game': 2.58,
+        'home_advantage': 1.25,
+        'avg_shots': 21.5,
+        'avg_sot': 7.0,
+        'avg_corners': 9.2,
+        'avg_dangerous_attacks': 72,
+        'pace_factor': 0.95,  # Tactical, slower
+        'physicality': 1.05,
+        'style': 'Tactical, defensive discipline'
+    },
+    'Bundesliga': {
+        'avg_goals_per_game': 3.05,
+        'home_advantage': 1.32,
+        'avg_shots': 26.2,
+        'avg_sot': 8.8,
+        'avg_corners': 11.2,
+        'avg_dangerous_attacks': 92,
+        'pace_factor': 1.25,  # Very fast
+        'physicality': 1.15,
+        'style': 'High-pressing, counter-attacking'
+    },
+    'Ligue 1': {
+        'avg_goals_per_game': 2.68,
+        'home_advantage': 1.30,
+        'avg_shots': 23.5,
+        'avg_sot': 7.8,
+        'avg_corners': 10.0,
+        'avg_dangerous_attacks': 80,
+        'pace_factor': 1.10,
+        'physicality': 1.10,
+        'style': 'Athletic, transition-focused'
+    },
+    'Eredivisie': {
+        'avg_goals_per_game': 3.15,
+        'home_advantage': 1.38,
+        'avg_shots': 27.0,
+        'avg_sot': 9.2,
+        'avg_corners': 11.8,
+        'avg_dangerous_attacks': 95,
+        'pace_factor': 1.30,  # Very attacking
+        'physicality': 0.90,
+        'style': 'Attacking, open play'
+    },
+    'Primeira Liga': {
+        'avg_goals_per_game': 2.62,
+        'home_advantage': 1.33,
+        'avg_shots': 22.0,
+        'avg_sot': 7.3,
+        'avg_corners': 9.8,
+        'avg_dangerous_attacks': 75,
+        'pace_factor': 1.08,
+        'physicality': 1.00,
+        'style': 'Technical, competitive'
+    },
+    'Belgian Pro League': {
+        'avg_goals_per_game': 2.88,
+        'home_advantage': 1.35,
+        'avg_shots': 24.0,
+        'avg_sot': 8.0,
+        'avg_corners': 10.5,
+        'avg_dangerous_attacks': 82,
+        'pace_factor': 1.12,
+        'physicality': 1.08,
+        'style': 'Balanced, physical'
+    },
+    'Super Lig': {
+        'avg_goals_per_game': 2.75,
+        'home_advantage': 1.42,
+        'avg_shots': 23.8,
+        'avg_sot': 7.6,
+        'avg_corners': 10.3,
+        'avg_dangerous_attacks': 80,
+        'pace_factor': 1.08,
+        'physicality': 1.12,
+        'style': 'Passionate, home-focused'
+    },
+    'Championship': {
+        'avg_goals_per_game': 2.65,
+        'home_advantage': 1.30,
+        'avg_shots': 23.5,
+        'avg_sot': 7.5,
+        'avg_corners': 10.2,
+        'avg_dangerous_attacks': 80,
+        'pace_factor': 1.12,
+        'physicality': 1.18,
+        'style': 'Physical, competitive'
+    }
+}
+
+# ================================
 # LIVE MATCH PREDICTOR
 # ================================
 class LiveMatchPredictor:
     """Predict second half outcome based on first half statistics"""
     
-    def __init__(self):
+    def __init__(self, league='Premier League'):
         self.momentum_weight = 0.65
         self.historical_weight = 0.35
+        self.league = league
+        self.league_profile = LEAGUE_PROFILES.get(league, LEAGUE_PROFILES['Premier League'])
     
     def calculate_momentum(self, first_half_stats):
-        """Calculate team momentum from first half performance"""
+        """Calculate team momentum from first half performance (league-adjusted)"""
         home_momentum = 0
         away_momentum = 0
         
+        # League-specific weights
+        pace_factor = self.league_profile['pace_factor']
+        physicality = self.league_profile['physicality']
+        
         # xG momentum (most important)
         xg_diff = first_half_stats['home_xg'] - first_half_stats['away_xg']
-        home_momentum += xg_diff * 2.5
-        away_momentum -= xg_diff * 2.5
+        home_momentum += xg_diff * 2.5 * pace_factor
+        away_momentum -= xg_diff * 2.5 * pace_factor
         
         # Shots on target momentum
         sot_diff = first_half_stats['home_sot'] - first_half_stats['away_sot']
-        home_momentum += sot_diff * 0.8
-        away_momentum -= sot_diff * 0.8
+        home_momentum += sot_diff * 0.8 * pace_factor
+        away_momentum -= sot_diff * 0.8 * pace_factor
         
         # Dangerous attacks momentum
         da_diff = first_half_stats['home_dangerous_attacks'] - first_half_stats['away_dangerous_attacks']
         home_momentum += da_diff * 0.15
         away_momentum -= da_diff * 0.15
         
-        # Corners momentum
+        # Corners momentum (more important in physical leagues)
         corner_diff = first_half_stats['home_corners'] - first_half_stats['away_corners']
-        home_momentum += corner_diff * 0.3
-        away_momentum -= corner_diff * 0.3
+        home_momentum += corner_diff * 0.3 * physicality
+        away_momentum -= corner_diff * 0.3 * physicality
         
         # Normalize to 0-100 scale
         total = abs(home_momentum) + abs(away_momentum)
@@ -69,29 +191,42 @@ class LiveMatchPredictor:
         }
     
     def predict_second_half_goals(self, first_half_stats, momentum, historical_avg=None):
-        """Predict second half goals using Bayesian updating"""
+        """Predict second half goals using Bayesian updating (league-adjusted)"""
         
+        # Use league-specific averages if historical not provided
         if historical_avg is None:
-            historical_avg = {'home': 0.85, 'away': 0.70}
+            league_avg = self.league_profile['avg_goals_per_game']
+            historical_avg = {
+                'home': league_avg * 0.55,  # Home teams score ~55% of total
+                'away': league_avg * 0.45
+            }
         
         # Base expected goals from first half xG rate
         if first_half_stats.get('minutes_played', 45) > 0:
             home_xg_rate = first_half_stats['home_xg'] / (first_half_stats.get('minutes_played', 45) / 45)
             away_xg_rate = first_half_stats['away_xg'] / (first_half_stats.get('minutes_played', 45) / 45)
         else:
-            home_xg_rate = 0.8
-            away_xg_rate = 0.65
+            home_xg_rate = historical_avg['home']
+            away_xg_rate = historical_avg['away']
         
         # Momentum adjustment
         momentum_factor_home = momentum['home'] / 50
         momentum_factor_away = momentum['away'] / 50
         
-        # Second half predictions (teams often score more in 2nd half due to tired defenses)
+        # League-specific pace factor (second half multiplier)
+        pace_multiplier = 1.0 + (self.league_profile['pace_factor'] - 1.0) * 0.15
+        
+        # Second half predictions
         home_second_half_xg = (home_xg_rate * momentum_factor_home * self.momentum_weight + 
-                               historical_avg['home'] * self.historical_weight) * 1.15
+                               historical_avg['home'] * self.historical_weight) * pace_multiplier
         
         away_second_half_xg = (away_xg_rate * momentum_factor_away * self.momentum_weight + 
-                               historical_avg['away'] * self.historical_weight) * 1.15
+                               historical_avg['away'] * self.historical_weight) * pace_multiplier
+        
+        # Home advantage adjustment (league-specific)
+        home_advantage_factor = self.league_profile['home_advantage']
+        home_second_half_xg *= home_advantage_factor
+        away_second_half_xg /= (home_advantage_factor * 0.8)
         
         # Adjust for current scoreline (losing teams push forward)
         current_score_diff = first_half_stats.get('home_goals', 0) - first_half_stats.get('away_goals', 0)
@@ -188,37 +323,41 @@ class LiveMatchPredictor:
         }
     
     def predict_match_stats(self, first_half_stats, momentum):
-        """Predict second half match statistics"""
+        """Predict second half match statistics (league-adjusted)"""
         
         minutes_played = first_half_stats.get('minutes_played', 45)
         
         # Calculate rates from first half
-        home_shot_rate = first_half_stats['home_shots'] / (minutes_played / 45) if minutes_played > 0 else 6
-        away_shot_rate = first_half_stats['away_shots'] / (minutes_played / 45) if minutes_played > 0 else 5
+        home_shot_rate = first_half_stats['home_shots'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_shots'] * 0.5
+        away_shot_rate = first_half_stats['away_shots'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_shots'] * 0.45
         
-        home_sot_rate = first_half_stats['home_sot'] / (minutes_played / 45) if minutes_played > 0 else 3
-        away_sot_rate = first_half_stats['away_sot'] / (minutes_played / 45) if minutes_played > 0 else 2
+        home_sot_rate = first_half_stats['home_sot'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_sot'] * 0.5
+        away_sot_rate = first_half_stats['away_sot'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_sot'] * 0.45
         
-        home_corner_rate = first_half_stats['home_corners'] / (minutes_played / 45) if minutes_played > 0 else 3
-        away_corner_rate = first_half_stats['away_corners'] / (minutes_played / 45) if minutes_played > 0 else 2
+        home_corner_rate = first_half_stats['home_corners'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_corners'] * 0.5
+        away_corner_rate = first_half_stats['away_corners'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_corners'] * 0.45
         
-        home_da_rate = first_half_stats['home_dangerous_attacks'] / (minutes_played / 45) if minutes_played > 0 else 20
-        away_da_rate = first_half_stats['away_dangerous_attacks'] / (minutes_played / 45) if minutes_played > 0 else 15
+        home_da_rate = first_half_stats['home_dangerous_attacks'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_dangerous_attacks'] * 0.5
+        away_da_rate = first_half_stats['away_dangerous_attacks'] / (minutes_played / 45) if minutes_played > 0 else self.league_profile['avg_dangerous_attacks'] * 0.45
         
         # Momentum adjustments
         momentum_factor_home = momentum['home'] / 50
         momentum_factor_away = momentum['away'] / 50
         
-        # Second half is typically more attacking (1.1x multiplier)
+        # League pace and physicality factors
+        pace_factor = self.league_profile['pace_factor']
+        physicality = self.league_profile['physicality']
+        
+        # Second half predictions (adjusted for league style)
         return {
-            'home_shots_2h': round(home_shot_rate * momentum_factor_home * 1.1, 1),
-            'away_shots_2h': round(away_shot_rate * momentum_factor_away * 1.1, 1),
-            'home_sot_2h': round(home_sot_rate * momentum_factor_home * 1.1, 1),
-            'away_sot_2h': round(away_sot_rate * momentum_factor_away * 1.1, 1),
-            'home_corners_2h': round(home_corner_rate * momentum_factor_home * 1.05, 1),
-            'away_corners_2h': round(away_corner_rate * momentum_factor_away * 1.05, 1),
-            'home_da_2h': round(home_da_rate * momentum_factor_home * 1.15, 0),
-            'away_da_2h': round(away_da_rate * momentum_factor_away * 1.15, 0)
+            'home_shots_2h': round(home_shot_rate * momentum_factor_home * pace_factor, 1),
+            'away_shots_2h': round(away_shot_rate * momentum_factor_away * pace_factor, 1),
+            'home_sot_2h': round(home_sot_rate * momentum_factor_home * pace_factor, 1),
+            'away_sot_2h': round(away_sot_rate * momentum_factor_away * pace_factor, 1),
+            'home_corners_2h': round(home_corner_rate * momentum_factor_home * physicality, 1),
+            'away_corners_2h': round(away_corner_rate * momentum_factor_away * physicality, 1),
+            'home_da_2h': round(home_da_rate * momentum_factor_home * pace_factor * 1.05, 0),
+            'away_da_2h': round(away_da_rate * momentum_factor_away * pace_factor * 1.05, 0)
         }
 
 # ================================
@@ -226,6 +365,23 @@ class LiveMatchPredictor:
 # ================================
 def main():
     st.sidebar.header("🔴 LIVE MATCH ANALYSIS")
+    
+    # League selection
+    st.sidebar.markdown("### ⚽ Select League")
+    league = st.sidebar.selectbox(
+        "Competition",
+        list(LEAGUE_PROFILES.keys()),
+        index=0
+    )
+    
+    # Display league info
+    league_info = LEAGUE_PROFILES[league]
+    with st.sidebar.expander("📊 League Statistics"):
+        st.metric("Avg Goals/Game", f"{league_info['avg_goals_per_game']:.2f}")
+        st.metric("Home Advantage", f"{league_info['home_advantage']:.2f}")
+        st.caption(f"**Style:** {league_info['style']}")
+    
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### Enter First Half Statistics")
     
     # Team names
@@ -291,12 +447,23 @@ def main():
         'minutes_played': minutes_played
     }
     
-    # Initialize predictor
-    predictor = LiveMatchPredictor()
+    # Initialize predictor with selected league
+    predictor = LiveMatchPredictor(league=league)
     
     # Main display
     st.markdown(f"## 🔴 LIVE: {home_team} {home_goals} - {away_goals} {away_team}")
-    st.markdown(f"**{minutes_played}' - Half Time Analysis**")
+    st.markdown(f"**{minutes_played}' - Half Time Analysis • {league}**")
+    
+    # League context display
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("League", league)
+    with col2:
+        st.metric("Avg Goals", f"{league_info['avg_goals_per_game']:.2f}")
+    with col3:
+        st.metric("Pace Factor", f"{league_info['pace_factor']:.2f}x")
+    with col4:
+        st.metric("Home Advantage", f"{league_info['home_advantage']:.2f}x")
     
     # Calculate predictions
     momentum = predictor.calculate_momentum(first_half_stats)
@@ -423,6 +590,9 @@ def main():
     
     insights = []
     
+    # League-specific insight
+    insights.append(f"🏆 **{league}**: {league_info['style']}")
+    
     # Momentum insights
     if momentum['home'] > 65:
         insights.append(f"🔥 **{home_team}** has dominant momentum - expect them to push for more goals")
@@ -436,6 +606,15 @@ def main():
     if abs(xg_diff) > 0.5:
         dominant = home_team if xg_diff > 0 else away_team
         insights.append(f"📊 **{dominant}** has been creating better chances (xG difference: {abs(xg_diff):.1f})")
+    
+    # League-adjusted performance
+    home_shots_vs_avg = (first_half_stats['home_shots'] / (league_info['avg_shots'] * 0.5) - 1) * 100
+    away_shots_vs_avg = (first_half_stats['away_shots'] / (league_info['avg_shots'] * 0.45) - 1) * 100
+    
+    if home_shots_vs_avg > 20:
+        insights.append(f"📈 **{home_team}** shooting {home_shots_vs_avg:.0f}% above league average")
+    if away_shots_vs_avg > 20:
+        insights.append(f"📈 **{away_team}** shooting {away_shots_vs_avg:.0f}% above league average")
     
     # Efficiency insights
     home_efficiency = (home_goals / home_xg * 100) if home_xg > 0 else 0
@@ -463,20 +642,31 @@ def main():
     st.markdown("---")
     st.subheader("💰 Betting Recommendations")
     
-    if full_time_pred['ft_home_win_prob'] > 55:
+    # League-adjusted confidence thresholds
+    confidence_threshold = 55 if league_info['avg_goals_per_game'] > 2.8 else 58
+    
+    if full_time_pred['ft_home_win_prob'] > confidence_threshold:
         st.success(f"✅ **Recommended:** {home_team} to win (Model: {full_time_pred['ft_home_win_prob']}% confidence)")
-    elif full_time_pred['ft_away_win_prob'] > 55:
+    elif full_time_pred['ft_away_win_prob'] > confidence_threshold:
         st.success(f"✅ **Recommended:** {away_team} to win (Model: {full_time_pred['ft_away_win_prob']}% confidence)")
     else:
         st.info("⚠️ **Caution:** Match is too close to call - consider avoiding 1X2 bets")
     
-    # Over/Under recommendation
+    # Over/Under recommendation (league-adjusted)
     total_ft_xg = full_time_pred['ft_home_xg'] + full_time_pred['ft_away_xg']
     current_goals = home_goals + away_goals
     expected_additional = second_half_pred['second_half_xg_home'] + second_half_pred['second_half_xg_away']
     
-    if total_ft_xg > 2.5:
-        st.info(f"📈 **Over 2.5 Goals:** Strong value (Expected FT total: {total_ft_xg:.1f})")
+    # League-specific thresholds
+    if league in ['Bundesliga', 'Eredivisie']:
+        ou_threshold = 2.8
+    elif league in ['Serie A']:
+        ou_threshold = 2.3
+    else:
+        ou_threshold = 2.5
+    
+    if total_ft_xg > ou_threshold:
+        st.info(f"📈 **Over {ou_threshold} Goals:** Strong value (Expected FT total: {total_ft_xg:.1f})")
     
     if expected_additional > 1.5:
         st.info(f"⚽ **Over {current_goals + 1}.5 Goals FT:** Good value (Expected 2H goals: {expected_additional:.1f})")
@@ -485,6 +675,23 @@ def main():
     if second_half_pred['second_half_xg_home'] > 0.5 and second_half_pred['second_half_xg_away'] > 0.5:
         btts_prob = (1 - np.exp(-second_half_pred['second_half_xg_home'])) * (1 - np.exp(-second_half_pred['second_half_xg_away']))
         st.info(f"🎯 **Both Teams to Score 2H:** Probability {btts_prob*100:.0f}%")
+    
+    # League-specific betting tips
+    st.markdown("---")
+    st.subheader(f"📋 {league} Betting Context")
+    
+    if league == 'Bundesliga':
+        st.info("🇩🇪 Bundesliga averages most goals in Europe - favor OVER bets and high-scoring outcomes")
+    elif league == 'Serie A':
+        st.info("🇮🇹 Serie A is tactically defensive - favor UNDER bets and consider clean sheets")
+    elif league == 'La Liga':
+        st.info("🇪🇸 La Liga features possession football - late goals common as teams tire")
+    elif league == 'Premier League':
+        st.info("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League is high-intensity - momentum shifts can be dramatic in 2nd half")
+    elif league == 'Eredivisie':
+        st.info("🇳🇱 Eredivisie is most attacking - expect open, high-scoring games")
+    elif league == 'Super Lig':
+        st.info("🇹🇷 Super Lig has strongest home advantage - home teams push hard late")
 
 if __name__ == "__main__":
     main()
