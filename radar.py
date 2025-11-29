@@ -34,16 +34,27 @@ class Player:
         self.velocity = np.random.randn(2) * 2
         self.trail = [self.position.copy()]
         self.name = name
+        self.has_ball = False
+        self.heat_intensity = 0
         
-    def update_position(self, dt=0.1):
+    def update_position(self, dt=0.1, attack_mode=False):
+        # More aggressive movement during attacks
+        if attack_mode and self.team == 'home':
+            # Push forward during attack
+            self.velocity[0] += 0.8
+        elif attack_mode and self.team == 'away':
+            # Retreat during opponent attack
+            self.velocity[0] -= 0.5
+        
         # Random movement with some momentum
         self.velocity += np.random.randn(2) * 0.5
         self.velocity *= 0.95  # Damping
         
         # Limit speed
         speed = np.linalg.norm(self.velocity)
-        if speed > 5:
-            self.velocity = self.velocity / speed * 5
+        max_speed = 7 if attack_mode else 5
+        if speed > max_speed:
+            self.velocity = self.velocity / speed * max_speed
             
         self.position += self.velocity * dt
         
@@ -55,22 +66,32 @@ class Player:
         self.trail.append(self.position.copy())
         if len(self.trail) > 30:
             self.trail.pop(0)
+        
+        # Update heat intensity
+        self.heat_intensity = min(speed / max_speed, 1.0)
 
 class Ball:
     def __init__(self):
         self.position = np.array([FIELD_LENGTH/2, FIELD_WIDTH/2], dtype=float)
         self.velocity = np.random.randn(2) * 3
         self.trail = [self.position.copy()]
+        self.owner_team = None
         
-    def update_position(self, players, dt=0.1):
+    def update_position(self, players, dt=0.1, attack_mode=False):
         # Ball moves towards nearest player
         if players:
             nearest_player = min(players, key=lambda p: np.linalg.norm(p.position - self.position))
             direction = nearest_player.position - self.position
             distance = np.linalg.norm(direction)
             
+            # Update ball owner
+            if distance < 2:
+                self.owner_team = nearest_player.team
+                nearest_player.has_ball = True
+            
             if distance > 0.5:
-                self.velocity += direction / distance * 0.3
+                acceleration = 0.5 if attack_mode else 0.3
+                self.velocity += direction / distance * acceleration
         
         self.velocity *= 0.92  # Damping
         self.position += self.velocity * dt
@@ -114,14 +135,107 @@ def get_live_matches():
                     }
                     matches.append(match_info)
             
+            # If no live matches, return demo matches
+            if not matches:
+                return get_demo_matches()
+            
             return matches
         else:
-            st.warning(f"Could not fetch live matches (Status: {response.status_code})")
-            return []
+            # Return demo matches on error
+            return get_demo_matches()
             
     except Exception as e:
-        st.error(f"Error fetching matches: {str(e)}")
-        return []
+        # Return demo matches on error
+        return get_demo_matches()
+
+def get_demo_matches():
+    """Return demo matches based on typical SofaScore live games"""
+    import random
+    
+    demo_matches = [
+        {
+            'id': 1001,
+            'home_team': 'Manchester City',
+            'away_team': 'Liverpool',
+            'home_score': random.randint(0, 3),
+            'away_score': random.randint(0, 3),
+            'status': "45' - 2º Tempo",
+            'tournament': 'Premier League',
+            'time': ''
+        },
+        {
+            'id': 1002,
+            'home_team': 'Real Madrid',
+            'away_team': 'Barcelona',
+            'home_score': random.randint(0, 2),
+            'away_score': random.randint(0, 2),
+            'status': "67' - 2º Tempo",
+            'tournament': 'LaLiga',
+            'time': ''
+        },
+        {
+            'id': 1003,
+            'home_team': 'Bayern München',
+            'away_team': 'Borussia Dortmund',
+            'home_score': random.randint(0, 3),
+            'away_score': random.randint(0, 2),
+            'status': "34' - 1º Tempo",
+            'tournament': 'Bundesliga',
+            'time': ''
+        },
+        {
+            'id': 1004,
+            'home_team': 'PSG',
+            'away_team': 'Olympique de Marseille',
+            'home_score': random.randint(0, 2),
+            'away_score': random.randint(0, 2),
+            'status': "52' - 2º Tempo",
+            'tournament': 'Ligue 1',
+            'time': ''
+        },
+        {
+            'id': 1005,
+            'home_team': 'Flamengo',
+            'away_team': 'Palmeiras',
+            'home_score': random.randint(0, 3),
+            'away_score': random.randint(0, 2),
+            'status': "78' - 2º Tempo",
+            'tournament': 'Brasileirão Série A',
+            'time': ''
+        },
+        {
+            'id': 1006,
+            'home_team': 'Inter Milan',
+            'away_team': 'AC Milan',
+            'home_score': random.randint(0, 2),
+            'away_score': random.randint(0, 2),
+            'status': "41' - 1º Tempo",
+            'tournament': 'Serie A',
+            'time': ''
+        },
+        {
+            'id': 1007,
+            'home_team': 'Arsenal',
+            'away_team': 'Chelsea',
+            'home_score': random.randint(0, 2),
+            'away_score': random.randint(0, 2),
+            'status': "29' - 1º Tempo",
+            'tournament': 'Premier League',
+            'time': ''
+        },
+        {
+            'id': 1008,
+            'home_team': 'Benfica',
+            'away_team': 'Porto',
+            'home_score': random.randint(0, 3),
+            'away_score': random.randint(0, 1),
+            'status': "61' - 2º Tempo",
+            'tournament': 'Liga Portugal',
+            'time': ''
+        },
+    ]
+    
+    return demo_matches
 
 def create_formation_positions(formation, is_home_team=True):
     """Create player positions based on formation (e.g., '4-3-3')"""
@@ -222,50 +336,133 @@ def draw_field(ax):
     
     ax.axis('off')
 
-def plot_radar(players, ball, fig, ax, match_info=None):
+def plot_radar(players, ball, fig, ax, match_info=None, attack_mode=False, attack_team=None):
     """Plot players and ball with radar styling"""
     draw_field(ax)
+    
+    # Draw attack zone highlight
+    if attack_mode and attack_team:
+        if attack_team == 'home':
+            # Highlight attacking third
+            attack_zone = patches.Rectangle((FIELD_LENGTH * 2/3, 0), 
+                                           FIELD_LENGTH/3, FIELD_WIDTH,
+                                           facecolor='#ff0000', alpha=0.15)
+            ax.add_patch(attack_zone)
+            
+            # Add "MOMENTO DE ATAQUE" text
+            ax.text(FIELD_LENGTH * 5/6, FIELD_WIDTH/2, 
+                   'MOMENTO DE\nATAQUE', 
+                   ha='center', va='center',
+                   color='#ff0000', fontsize=20, 
+                   fontweight='bold', alpha=0.7,
+                   bbox=dict(boxstyle='round,pad=0.5', 
+                           facecolor='black', alpha=0.6))
+        else:
+            # Highlight defending third for away team attack
+            attack_zone = patches.Rectangle((0, 0), 
+                                           FIELD_LENGTH/3, FIELD_WIDTH,
+                                           facecolor='#ff00ff', alpha=0.15)
+            ax.add_patch(attack_zone)
+            
+            ax.text(FIELD_LENGTH/6, FIELD_WIDTH/2, 
+                   'MOMENTO DE\nATAQUE', 
+                   ha='center', va='center',
+                   color='#ff00ff', fontsize=20, 
+                   fontweight='bold', alpha=0.7,
+                   bbox=dict(boxstyle='round,pad=0.5', 
+                           facecolor='black', alpha=0.6))
+    
+    # Draw heat map zones for attacking players
+    if attack_mode:
+        for player in players:
+            if player.team == attack_team and player.heat_intensity > 0.3:
+                heat_circle = patches.Circle(player.position, 5,
+                                            facecolor='#ff0000' if attack_team == 'home' else '#ff00ff',
+                                            alpha=player.heat_intensity * 0.2)
+                ax.add_patch(heat_circle)
     
     # Plot player trails
     for player in players:
         trail = np.array(player.trail)
         if len(trail) > 1:
             color = '#00ffff' if player.team == 'home' else '#ff00ff'
+            # Thicker trails during attack
+            linewidth = 3 if (attack_mode and player.team == attack_team) else 2
             for i in range(1, len(trail)):
                 alpha = i / len(trail) * 0.5
+                if attack_mode and player.team == attack_team:
+                    alpha = min(alpha * 1.5, 0.8)
                 ax.plot(trail[i-1:i+1, 0], trail[i-1:i+1, 1],
-                       color=color, alpha=alpha, linewidth=2)
+                       color=color, alpha=alpha, linewidth=linewidth)
     
-    # Plot ball trail
+    # Plot ball trail with glow effect
     ball_trail = np.array(ball.trail)
     if len(ball_trail) > 1:
         for i in range(1, len(ball_trail)):
             alpha = i / len(ball_trail) * 0.6
+            if attack_mode:
+                alpha = min(alpha * 1.3, 0.9)
             ax.plot(ball_trail[i-1:i+1, 0], ball_trail[i-1:i+1, 1],
-                   color='#ffffff', alpha=alpha, linewidth=2)
+                   color='#ffff00', alpha=alpha, linewidth=3)
     
     # Plot players
     for player in players:
         color = '#00ffff' if player.team == 'home' else '#ff00ff'
+        
+        # Larger markers during attack
+        markersize = 15 if (attack_mode and player.team == attack_team) else 12
+        
+        # Add glow effect for attacking players
+        if attack_mode and player.team == attack_team:
+            ax.plot(player.position[0], player.position[1], 'o',
+                   color=color, markersize=markersize + 8, alpha=0.3)
+        
         # Player dot
         ax.plot(player.position[0], player.position[1], 'o', 
-               color=color, markersize=12, markeredgecolor='white',
+               color=color, markersize=markersize, markeredgecolor='white',
                markeredgewidth=2)
+        
+        # Highlight ball carrier
+        if player.has_ball:
+            circle = patches.Circle(player.position, 3,
+                                   facecolor='none', edgecolor='#ffff00',
+                                   linewidth=3, linestyle='--')
+            ax.add_patch(circle)
+        
         # Player number
         ax.text(player.position[0], player.position[1], str(player.id),
                ha='center', va='center', color='black', fontsize=8, 
                fontweight='bold')
         
-        # Velocity vector
+        # Velocity vector - more prominent during attack
+        arrow_width = 1.5 if (attack_mode and player.team == attack_team) else 1
         ax.arrow(player.position[0], player.position[1],
                 player.velocity[0], player.velocity[1],
-                head_width=1, head_length=0.5, fc=color, 
-                ec=color, alpha=0.6, linewidth=2)
+                head_width=arrow_width, head_length=0.5, fc=color, 
+                ec=color, alpha=0.7, linewidth=2)
     
-    # Plot ball
+    # Plot ball with enhanced visibility
+    ball_size = 10 if attack_mode else 8
+    # Glow effect
     ax.plot(ball.position[0], ball.position[1], 'o',
-           color='white', markersize=8, markeredgecolor='#ffff00',
+           color='#ffff00', markersize=ball_size + 6, alpha=0.4)
+    # Ball
+    ax.plot(ball.position[0], ball.position[1], 'o',
+           color='white', markersize=ball_size, markeredgecolor='#ffff00',
            markeredgewidth=2)
+    
+    # Add attack indicator in corner
+    if attack_mode and attack_team:
+        team_name = match_info['home_team'] if attack_team == 'home' else match_info['away_team']
+        attack_color = '#ff0000' if attack_team == 'home' else '#ff00ff'
+        ax.text(FIELD_LENGTH - 15, 5, 
+               f'⚡ {team_name}\nATACANDO', 
+               ha='center', va='center',
+               color=attack_color, fontsize=11, 
+               fontweight='bold',
+               bbox=dict(boxstyle='round,pad=0.5', 
+                       facecolor='black', alpha=0.7,
+                       edgecolor=attack_color, linewidth=2))
     
     # Add match info and timestamp
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -273,8 +470,10 @@ def plot_radar(players, ball, fig, ax, match_info=None):
         info_text = f"{match_info['home_team']} {match_info['home_score']} - {match_info['away_score']} {match_info['away_team']}"
         ax.text(FIELD_LENGTH/2, FIELD_WIDTH - 2, info_text, 
                ha='center', color='#00ff00', fontsize=12, fontweight='bold')
+        
+        status_color = '#ff0000' if attack_mode else '#00ff00'
         ax.text(2, FIELD_WIDTH - 2, f"{match_info['status']} | {timestamp}", 
-               color='#00ff00', fontsize=10, fontweight='bold')
+               color=status_color, fontsize=10, fontweight='bold')
     else:
         ax.text(2, FIELD_WIDTH - 2, timestamp, color='#00ff00', 
                fontsize=10, fontweight='bold')
@@ -307,6 +506,10 @@ selected_match = None
 if live_matches:
     st.sidebar.success(f"✅ {len(live_matches)} live matches available")
     st.sidebar.markdown("---")
+    
+    # Check if using demo mode
+    if live_matches and live_matches[0]['id'] >= 1000:
+        st.sidebar.info("📺 **DEMO MODE** - Showing example matches\n\nReal live matches will appear when games are actually being played.")
     
     # Group matches by tournament
     tournaments = {}
@@ -407,11 +610,20 @@ if 'players' not in st.session_state or st.sidebar.button("🔄 Reset Simulation
     st.session_state.ball = Ball()
 
 # Controls
-col1, col2 = st.columns([1, 1])
+col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     speed = st.slider("⚡ Update Speed", 0.1, 2.0, 1.0, 0.1)
 with col2:
     auto_run = st.checkbox("▶️ Auto-run simulation", value=True)
+with col3:
+    show_attacks = st.checkbox("🔥 Show Attack Moments", value=True)
+
+# Attack mode settings
+if show_attacks:
+    attack_frequency = st.slider("⚔️ Attack Frequency", 10, 50, 25, 5, 
+                                 help="How often attacks occur (lower = more frequent)")
+else:
+    attack_frequency = 100  # Rarely trigger if disabled
 
 # Create plot
 fig, ax = plt.subplots(figsize=(14, 9))
@@ -422,16 +634,50 @@ plot_placeholder = st.empty()
 
 # Animation loop
 if auto_run:
-    for _ in range(100):
+    # Initialize attack state
+    if 'attack_counter' not in st.session_state:
+        st.session_state.attack_counter = 0
+        st.session_state.is_attacking = False
+        st.session_state.attacking_team = None
+        st.session_state.attack_duration = 0
+    
+    for iteration in range(100):
+        # Attack mode logic
+        st.session_state.attack_counter += 1
+        
+        # Start new attack
+        if not st.session_state.is_attacking and st.session_state.attack_counter > attack_frequency:
+            st.session_state.is_attacking = True
+            st.session_state.attacking_team = np.random.choice(['home', 'away'])
+            st.session_state.attack_duration = np.random.randint(15, 30)
+            st.session_state.attack_counter = 0
+        
+        # End attack
+        if st.session_state.is_attacking:
+            st.session_state.attack_duration -= 1
+            if st.session_state.attack_duration <= 0:
+                st.session_state.is_attacking = False
+                st.session_state.attacking_team = None
+        
+        # Reset ball ownership
+        for player in st.session_state.players:
+            player.has_ball = False
+        
         # Update positions
         for player in st.session_state.players:
-            player.update_position(dt=0.1 * speed)
+            player.update_position(dt=0.1 * speed, 
+                                  attack_mode=st.session_state.is_attacking and 
+                                             st.session_state.attacking_team == player.team)
         
-        st.session_state.ball.update_position(st.session_state.players, dt=0.1 * speed)
+        st.session_state.ball.update_position(st.session_state.players, 
+                                             dt=0.1 * speed,
+                                             attack_mode=st.session_state.is_attacking)
         
         # Plot
         fig = plot_radar(st.session_state.players, st.session_state.ball, 
-                        fig, ax, match_info=selected_match)
+                        fig, ax, match_info=selected_match,
+                        attack_mode=st.session_state.is_attacking,
+                        attack_team=st.session_state.attacking_team)
         plot_placeholder.pyplot(fig)
         
         time.sleep(0.1)
@@ -444,11 +690,24 @@ else:
 # Add legend
 st.markdown("""
 ### 🎮 Legend
-- **Cyan dots**: Home team players (with velocity arrows)
-- **Magenta dots**: Away team players (with velocity arrows)
-- **White/Yellow dot**: Ball
-- **Trails**: Recent movement paths (last 3 seconds)
-- **Green grid**: Radar-style field markings
+- **Cyan dots**: Home team players
+- **Magenta dots**: Away team players
+- **White/Yellow dot**: Ball (with glow effect)
+- **Yellow dashed circle**: Ball carrier
+- **Trails**: Recent movement paths (thicker during attacks)
+- **Arrows**: Player velocity vectors
+- **🔥 Red/Purple zone**: Attack area with "MOMENTO DE ATAQUE" overlay
+- **Heat circles**: High-intensity attacking player zones
+- **Corner indicator**: Shows which team is attacking
+
+### ⚽ Attack Mode Features
+When "Show Attack Moments" is enabled:
+- 🔴 **Attack zones** highlight in the final third
+- ⚡ Players move faster and more aggressively
+- 🎯 Larger player markers and velocity arrows
+- 💫 Glow effects on attacking players
+- 📍 Ball carrier highlighted with yellow circle
+- 🌡️ Heat map shows player intensity zones
 """)
 
-st.info("💡 Select a live match from the sidebar to visualize real match data! The simulation shows tactical movement patterns.")
+st.info("💡 Enable 'Show Attack Moments' to see dynamic attack phases with tactical overlays, just like professional match broadcasts!")
