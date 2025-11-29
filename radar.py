@@ -17,10 +17,39 @@ st.markdown("""
     .stApp {
         background-color: #0a0a0a;
     }
+    .sofascore-link {
+        background: linear-gradient(45deg, #FF6B00, #FF8C00);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 25px;
+        text-decoration: none;
+        font-weight: bold;
+        display: inline-block;
+        margin: 10px 0;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    .sofascore-link:hover {
+        background: linear-gradient(45deg, #FF8C00, #FF6B00);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(255, 107, 0, 0.4);
+    }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("⚽ Live Soccer Radar - Real Match Data")
+
+# Add SofaScore link at the top
+st.markdown(
+    """
+    <div style="text-align: center; margin-bottom: 20px;">
+        <a href="https://www.sofascore.com/pt/" target="_blank" class="sofascore-link">
+        🔴 VER JOGOS AO VIVO NO SOFASCORE
+        </a>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
 
 # Soccer field dimensions (in meters)
 FIELD_LENGTH = 105
@@ -484,6 +513,18 @@ def plot_radar(players, ball, fig, ax, match_info=None, attack_mode=False, attac
 st.sidebar.title("🔴 LIVE MATCHES")
 st.sidebar.markdown("---")
 
+# Add SofaScore link in sidebar too
+st.sidebar.markdown(
+    """
+    <div style="text-align: center;">
+        <a href="https://www.sofascore.com/pt/" target="_blank" class="sofascore-link">
+        🔴 VER JOGOS AO VIVO
+        </a>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+
 # Refresh button
 col_refresh1, col_refresh2 = st.sidebar.columns([3, 1])
 with col_refresh1:
@@ -517,7 +558,7 @@ if live_matches:
         tournament = match['tournament']
         if tournament not in tournaments:
             tournaments[tournament] = []
-        tournaments[tournament].append(match)
+        tournaments[tournament] = tournaments.get(tournament, []) + [match]
     
     # Display matches grouped by tournament
     st.sidebar.subheader("📺 Select a Match")
@@ -689,7 +730,7 @@ else:
                     fig, ax, match_info=selected_match)
     plot_placeholder.pyplot(fig)
 
-# Add legend
+# Add legend and SofaScore link at the bottom
 st.markdown("""
 ### 🎮 Legend
 - **Cyan dots**: Home team players
@@ -711,5 +752,20 @@ When "Show Attack Moments" is enabled:
 - 📍 Ball carrier highlighted with yellow circle
 - 🌡️ Heat map shows player intensity zones
 """)
+
+# Final SofaScore link at the bottom
+st.markdown("---")
+st.markdown(
+    """
+    <div style="text-align: center; margin: 20px 0;">
+        <h3>📺 Para ver jogos reais ao vivo:</h3>
+        <a href="https://www.sofascore.com/pt/" target="_blank" class="sofascore-link" style="font-size: 18px; padding: 15px 30px;">
+        🔴 CLIQUE AQUI PARA VER JOGOS AO VIVO NO SOFASCORE
+        </a>
+        <p style="color: #666; margin-top: 10px;">O SofaScore oferece estatísticas em tempo real, placares ao vivo e transmissões de jogos</p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
 
 st.info("💡 Enable 'Show Attack Moments' to see dynamic attack phases with tactical overlays, just like professional match broadcasts!")
