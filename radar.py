@@ -632,15 +632,15 @@ fig.patch.set_facecolor('#0a0a0a')
 # Placeholder for the plot
 plot_placeholder = st.empty()
 
+# Initialize attack state
+if 'attack_counter' not in st.session_state:
+    st.session_state.attack_counter = 0
+    st.session_state.is_attacking = False
+    st.session_state.attacking_team = None
+    st.session_state.attack_duration = 0
+
 # Animation loop
 if auto_run:
-    # Initialize attack state
-    if 'attack_counter' not in st.session_state:
-        st.session_state.attack_counter = 0
-        st.session_state.is_attacking = False
-        st.session_state.attacking_team = None
-        st.session_state.attack_duration = 0
-    
     for iteration in range(100):
         # Attack mode logic
         st.session_state.attack_counter += 1
@@ -664,20 +664,22 @@ if auto_run:
             player.has_ball = False
         
         # Update positions
+        current_attacking_team = st.session_state.attacking_team
+        is_attack_active = st.session_state.is_attacking
+        
         for player in st.session_state.players:
-            player.update_position(dt=0.1 * speed, 
-                                  attack_mode=st.session_state.is_attacking and 
-                                             st.session_state.attacking_team == player.team)
+            player_is_attacking = is_attack_active and current_attacking_team == player.team
+            player.update_position(dt=0.1 * speed, attack_mode=player_is_attacking)
         
         st.session_state.ball.update_position(st.session_state.players, 
                                              dt=0.1 * speed,
-                                             attack_mode=st.session_state.is_attacking)
+                                             attack_mode=is_attack_active)
         
         # Plot
         fig = plot_radar(st.session_state.players, st.session_state.ball, 
                         fig, ax, match_info=selected_match,
-                        attack_mode=st.session_state.is_attacking,
-                        attack_team=st.session_state.attacking_team)
+                        attack_mode=is_attack_active,
+                        attack_team=current_attacking_team)
         plot_placeholder.pyplot(fig)
         
         time.sleep(0.1)
