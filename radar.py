@@ -669,11 +669,11 @@ if auto_run:
         
         for player in st.session_state.players:
             player_is_attacking = is_attack_active and current_attacking_team == player.team
-            player.update_position(dt=0.1 * speed, attack_mode=player_is_attacking)
+            player.update_position(attack_mode=player_is_attacking, dt=0.1 * speed)
         
         st.session_state.ball.update_position(st.session_state.players, 
-                                             dt=0.1 * speed,
-                                             attack_mode=is_attack_active)
+                                             attack_mode=is_attack_active,
+                                             dt=0.1 * speed)
         
         # Plot
         fig = plot_radar(st.session_state.players, st.session_state.ball, 
