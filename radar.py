@@ -281,47 +281,97 @@ def plot_radar(players, ball, fig, ax, match_info=None):
     
     return fig
 
-# Fetch live matches
-st.sidebar.header("🔴 Live Matches")
-with st.sidebar:
-    if st.button("🔄 Refresh Live Matches"):
+# Sidebar - Live Match Selection
+st.sidebar.title("🔴 LIVE MATCHES")
+st.sidebar.markdown("---")
+
+# Refresh button
+col_refresh1, col_refresh2 = st.sidebar.columns([3, 1])
+with col_refresh1:
+    if st.button("🔄 Refresh Live Matches", use_container_width=True):
         st.session_state.live_matches = get_live_matches()
+        if 'selected_match_id' in st.session_state:
+            del st.session_state.selected_match_id
         st.rerun()
 
 # Get live matches if not in session state
 if 'live_matches' not in st.session_state:
-    with st.spinner("Fetching live matches from SofaScore..."):
+    with st.spinner("🔍 Fetching live matches from SofaScore..."):
         st.session_state.live_matches = get_live_matches()
 
 live_matches = st.session_state.live_matches
 
 # Display match selection
+selected_match = None
+
 if live_matches:
-    st.sidebar.success(f"Found {len(live_matches)} live matches!")
-    
-    match_options = [
-        f"{m['home_team']} vs {m['away_team']} ({m['home_score']}-{m['away_score']}) - {m['tournament']}"
-        for m in live_matches
-    ]
-    
-    selected_match_idx = st.sidebar.selectbox(
-        "Select a live match:",
-        range(len(match_options)),
-        format_func=lambda x: match_options[x]
-    )
-    
-    selected_match = live_matches[selected_match_idx]
-    
-    # Display match details
+    st.sidebar.success(f"✅ {len(live_matches)} live matches available")
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**🏆 Tournament:** {selected_match['tournament']}")
-    st.sidebar.markdown(f"**🏠 Home:** {selected_match['home_team']}")
-    st.sidebar.markdown(f"**✈️ Away:** {selected_match['away_team']}")
-    st.sidebar.markdown(f"**⚽ Score:** {selected_match['home_score']} - {selected_match['away_score']}")
-    st.sidebar.markdown(f"**⏱️ Status:** {selected_match['status']}")
+    
+    # Group matches by tournament
+    tournaments = {}
+    for match in live_matches:
+        tournament = match['tournament']
+        if tournament not in tournaments:
+            tournaments[tournament] = []
+        tournaments[tournament].append(match)
+    
+    # Display matches grouped by tournament
+    st.sidebar.subheader("📺 Select a Match")
+    
+    for tournament, matches in tournaments.items():
+        with st.sidebar.expander(f"🏆 {tournament} ({len(matches)} matches)", expanded=True):
+            for match in matches:
+                match_key = f"{match['id']}"
+                
+                # Create match button
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    match_label = f"{match['home_team']}\n🆚\n{match['away_team']}"
+                    
+                with col2:
+                    score_label = f"{match['home_score']}\n-\n{match['away_score']}"
+                
+                # Full width button
+                if st.button(
+                    f"⚽ {match['home_team']} vs {match['away_team']}\n📊 {match['home_score']} - {match['away_score']} | ⏱️ {match['status']}",
+                    key=f"match_{match_key}",
+                    use_container_width=True,
+                    type="primary" if st.session_state.get('selected_match_id') == match['id'] else "secondary"
+                ):
+                    st.session_state.selected_match_id = match['id']
+                    # Reset players to regenerate with new match
+                    if 'players' in st.session_state:
+                        del st.session_state.players
+                    st.rerun()
+    
+    # Get selected match
+    if 'selected_match_id' in st.session_state:
+        selected_match = next(
+            (m for m in live_matches if m['id'] == st.session_state.selected_match_id),
+            live_matches[0]
+        )
+    else:
+        # Auto-select first match
+        selected_match = live_matches[0]
+        st.session_state.selected_match_id = selected_match['id']
+    
+    # Display selected match details
+    if selected_match:
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🎯 SELECTED MATCH")
+        st.sidebar.markdown(f"**🏆 {selected_match['tournament']}**")
+        st.sidebar.markdown(f"**🏠 {selected_match['home_team']}**")
+        st.sidebar.markdown(f"**✈️ {selected_match['away_team']}**")
+        st.sidebar.markdown(f"### ⚽ {selected_match['home_score']} - {selected_match['away_score']}")
+        st.sidebar.markdown(f"**⏱️ {selected_match['status']}**")
     
 else:
-    st.sidebar.warning("No live matches found. Using simulation mode.")
+    st.sidebar.warning("⚠️ No live matches found")
+    st.sidebar.info("💡 Try refreshing or check back later when matches are live!")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Running in simulation mode**")
     selected_match = None
 
 # Initialize or reset simulation
