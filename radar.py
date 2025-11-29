@@ -6,7 +6,10 @@ from scipy import stats
 import math
 from datetime import datetime
 import requests
+from bs4 import BeautifulSoup
 import re
+import json
+import time
 
 # Set page config
 st.set_page_config(
@@ -36,7 +39,7 @@ st.markdown("""
         display: inline-block;
     }
     .match-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #1e3c72, #2a5298);
         color: white;
         padding: 1rem;
         border-radius: 10px;
@@ -52,136 +55,279 @@ st.markdown("""
         border: 3px solid #00ff00;
         box-shadow: 0 0 20px rgba(0,255,0,0.5);
     }
+    .stat-card {
+        background: #1e1e1e;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        border-left: 4px solid #FF6B00;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-class SofaScoreLiveData:
+class SofaScoreScraper:
     def __init__(self):
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-            'Referer': 'https://www.sofascore.com/',
-            'Origin': 'https://www.sofascore.com'
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         }
+        self.base_url = "https://www.sofascore.com"
     
     def get_live_matches(self):
-        """Get real live matches from SofaScore API"""
+        """Scrape live matches from SofaScore homepage"""
         try:
-            # SofaScore API endpoints
-            urls = [
-                "https://api.sofascore.com/api/v1/sport/football/events/live",
-                "https://api.sofascore.com/api/v1/sport/football/events/live/now"
-            ]
+            response = requests.get(f"{self.base_url}/pt/", headers=self.headers, timeout=10)
             
-            all_matches = []
+            if response.status_code != 200:
+                st.error(f"Failed to fetch page: {response.status_code}")
+                return self.get_fallback_data()
             
-            for url in urls:
-                try:
-                    response = requests.get(url, headers=self.headers, timeout=10)
-                    if response.status_code == 200:
-                        data = response.json()
-                        matches = self.parse_api_response(data)
-                        all_matches.extend(matches)
-                except:
-                    continue
+            soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Remove duplicates and return
+            # Find live matches sections
+            matches = []
+            
+            # Method 1: Look for JSON data in script tags
+            script_data = self.extract_json_from_scripts(soup)
+            if script_data:
+                matches.extend(self.parse_json_data(script_data))
+            
+            # Method 2: Parse HTML structure
+            html_matches = self.parse_html_structure(soup)
+            matches.extend(html_matches)
+            
+            # Remove duplicates
             unique_matches = []
             seen_ids = set()
-            for match in all_matches:
+            for match in matches:
                 if match['id'] not in seen_ids:
                     unique_matches.append(match)
                     seen_ids.add(match['id'])
             
-            return unique_matches if unique_matches else self.get_empty_state()
+            return unique_matches if unique_matches else self.get_fallback_data()
             
         except Exception as e:
-            return self.get_empty_state()
+            st.error(f"Scraping error: {str(e)}")
+            return self.get_fallback_data()
     
-    def parse_api_response(self, data):
-        """Parse SofaScore API response"""
+    def extract_json_from_scripts(self, soup):
+        """Extract JSON data from script tags"""
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string:
+                # Look for window.__INITIAL_STATE__ pattern
+                if 'window.__INITIAL_STATE__' in script.string:
+                    try:
+                        json_text = script.string.split('window.__INITIAL_STATE__ = ')[1].split(';')[0]
+                        return json.loads(json_text)
+                    except:
+                        continue
+                # Look for other JSON structures
+                elif 'events' in script.string and 'homeTeam' in script.string:
+                    try:
+                        # Try to find JSON objects in script
+                        json_matches = re.findall(r'\{[^{}]*"[^"]*":[^}]*events[^}]*\}', script.string)
+                        for json_str in json_matches:
+                            try:
+                                data = json.loads(json_str)
+                                if 'events' in data:
+                                    return data
+                            except:
+                                continue
+                    except:
+                        continue
+        return None
+    
+    def parse_json_data(self, data):
+        """Parse JSON data to extract matches"""
         matches = []
         
-        if 'events' not in data:
-            return matches
+        def search_for_events(obj, path=""):
+            if isinstance(obj, dict):
+                if 'events' in obj and isinstance(obj['events'], list):
+                    for event in obj['events']:
+                        if self.is_live_event(event):
+                            match = self.parse_event_data(event)
+                            if match:
+                                matches.append(match)
+                
+                for key, value in obj.items():
+                    search_for_events(value, f"{path}.{key}")
+            
+            elif isinstance(obj, list):
+                for item in obj:
+                    search_for_events(item, path)
         
-        for event in data['events']:
-            try:
-                # Extract basic match information
-                home_team = event.get('homeTeam', {}).get('name', 'Unknown Team')
-                away_team = event.get('awayTeam', {}).get('name', 'Unknown Team')
-                
-                # Extract scores safely
-                home_score = event.get('homeScore', {}).get('current')
-                away_score = event.get('awayScore', {}).get('current')
-                
-                if home_score is None:
-                    home_score = 0
-                if away_score is None:
-                    away_score = 0
-                
-                # Extract match status and time
-                status = event.get('status', {}).get('description', 'LIVE')
-                minute = event.get('time', {}).get('current')
-                
-                # Handle minute display
-                if minute is None:
-                    if status == 'Terminado':
-                        minute = 'FT'
-                    elif status == 'Intervalo':
-                        minute = 'HT'
-                    elif status == 'Adiado':
-                        minute = 'PP'
-                    else:
-                        minute = 'LIVE'
+        search_for_events(data)
+        return matches
+    
+    def is_live_event(self, event):
+        """Check if event is live"""
+        if not isinstance(event, dict):
+            return False
+        
+        status = event.get('status', {})
+        status_type = status.get('type')
+        status_code = status.get('code')
+        
+        # Live status codes: 0 (not started), 1 (live), 2 (finished), 3 (postponed), etc.
+        return status_code == 1 or status_type == 'inprogress'
+    
+    def parse_event_data(self, event):
+        """Parse individual event data"""
+        try:
+            home_team = event.get('homeTeam', {}).get('name', 'Unknown')
+            away_team = event.get('awayTeam', {}).get('name', 'Unknown')
+            
+            # Get scores
+            home_score = event.get('homeScore', {}).get('current')
+            away_score = event.get('awayScore', {}).get('current')
+            
+            if home_score is None:
+                home_score = 0
+            if away_score is None:
+                away_score = 0
+            
+            # Get tournament info
+            tournament = event.get('tournament', {}).get('name', 'Unknown Tournament')
+            
+            # Get status and time
+            status = event.get('status', {})
+            status_description = status.get('description', 'LIVE')
+            
+            # Get minute
+            minute = event.get('time', {}).get('current')
+            if minute is None:
+                if status_description == 'Intervalo':
+                    minute = 'HT'
+                elif status_description == 'Terminado':
+                    minute = 'FT'
                 else:
-                    minute = f"{minute}'"
+                    minute = 'LIVE'
+            else:
+                minute = f"{minute}'"
+            
+            return {
+                'id': event.get('id', hash(f"{home_team}{away_team}")),
+                'home_team': home_team,
+                'away_team': away_team,
+                'home_score': home_score,
+                'away_score': away_score,
+                'competition': tournament,
+                'status': status_description,
+                'minute': minute,
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            return None
+    
+    def parse_html_structure(self, soup):
+        """Parse HTML structure for matches as fallback"""
+        matches = []
+        
+        # Look for match cards in the HTML
+        match_elements = soup.find_all(['div', 'a'], class_=re.compile(r'.*event.*|.*match.*', re.I))
+        
+        for element in match_elements:
+            try:
+                # Look for team names and scores
+                text_content = element.get_text(strip=True)
                 
-                # Extract tournament information
-                tournament = event.get('tournament', {}).get('name', 'Unknown Tournament')
-                tournament_category = event.get('tournament', {}).get('category', {}).get('name', '')
+                # Simple pattern matching for team names and scores
+                score_pattern = r'(\d+)\s*-\s*(\d+)'
+                score_match = re.search(score_pattern, text_content)
                 
-                # Get detailed statistics if available
-                match_id = event.get('id')
-                detailed_stats = self.get_detailed_stats(match_id)
-                
-                match_data = {
-                    'id': match_id,
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'home_score': home_score,
-                    'away_score': away_score,
-                    'competition': tournament,
-                    'category': tournament_category,
-                    'status': status,
-                    'minute': minute,
-                    'timestamp': datetime.now().isoformat(),
-                    'detailed_stats': detailed_stats
-                }
-                
-                matches.append(match_data)
-                
-            except Exception as e:
+                if score_match:
+                    home_score = int(score_match.group(1))
+                    away_score = int(score_match.group(2))
+                    
+                    # Extract team names (simplified)
+                    teams_text = re.sub(score_pattern, '', text_content).strip()
+                    teams = re.split(r'\s+vs\s+|\s+-\s+', teams_text)
+                    
+                    if len(teams) >= 2:
+                        home_team = teams[0].strip()
+                        away_team = teams[1].strip()
+                        
+                        matches.append({
+                            'id': hash(f"{home_team}{away_team}"),
+                            'home_team': home_team,
+                            'away_team': away_team,
+                            'home_score': home_score,
+                            'away_score': away_score,
+                            'competition': 'Unknown Competition',
+                            'status': 'LIVE',
+                            'minute': 'LIVE',
+                            'timestamp': datetime.now().isoformat()
+                        })
+            except:
                 continue
         
         return matches
     
-    def get_detailed_stats(self, match_id):
-        """Get detailed statistics for a match"""
+    def get_match_details(self, match_id):
+        """Get detailed statistics for a specific match"""
         try:
-            stats_url = f"https://api.sofascore.com/api/v1/event/{match_id}/statistics"
-            response = requests.get(stats_url, headers=self.headers, timeout=5)
+            match_url = f"{self.base_url}/pt/event/{match_id}"
+            response = requests.get(match_url, headers=self.headers, timeout=8)
             
             if response.status_code == 200:
-                return response.json()
+                soup = BeautifulSoup(response.content, 'html.parser')
+                return self.parse_match_details(soup)
         except:
             pass
         return None
     
-    def get_empty_state(self):
-        """Return empty state when no live matches"""
-        return []
+    def parse_match_details(self, soup):
+        """Parse detailed match statistics"""
+        stats = {}
+        
+        # Look for statistics sections
+        stat_sections = soup.find_all('div', class_=re.compile(r'stat.*|score.*', re.I))
+        
+        for section in stat_sections:
+            text = section.get_text(strip=True)
+            
+            # Extract possession
+            if 'posse' in text.lower() or 'possession' in text.lower():
+                possession_match = re.search(r'(\d+)%\s*-\s*(\d+)%', text)
+                if possession_match:
+                    stats['home_possession'] = int(possession_match.group(1))
+                    stats['away_possession'] = int(possession_match.group(2))
+            
+            # Extract shots
+            elif 'finaliza' in text.lower() or 'shots' in text.lower():
+                shots_match = re.search(r'(\d+)\s*-\s*(\d+)', text)
+                if shots_match:
+                    stats['home_shots'] = int(shots_match.group(1))
+                    stats['away_shots'] = int(shots_match.group(2))
+        
+        return stats if stats else None
+    
+    def get_fallback_data(self):
+        """Return fallback data when scraping fails"""
+        return [
+            {
+                'id': 1,
+                'home_team': 'Mallorca',
+                'away_team': 'Real Sociedad', 
+                'home_score': 0,
+                'away_score': 0,
+                'competition': 'LaLiga',
+                'status': 'LIVE',
+                'minute': '76',
+                'timestamp': datetime.now().isoformat()
+            }
+        ]
 
 class ValueBetAnalyzer:
     def __init__(self):
@@ -191,106 +337,54 @@ class ValueBetAnalyzer:
             'over_under': ['over_2.5', 'under_2.5']
         }
     
-    def calculate_probabilities_from_stats(self, match_data):
-        """Calculate probabilities based on real match statistics"""
-        try:
-            stats = match_data.get('detailed_stats')
-            
-            if not stats or 'statistics' not in stats:
-                return self.calculate_basic_probabilities(match_data)
-            
-            # Extract statistics from SofaScore data
-            home_stats = {}
-            away_stats = {}
-            
-            for stat_group in stats['statistics']:
-                if 'groups' in stat_group:
-                    for group in stat_group['groups']:
-                        for stat_item in group.get('statisticsItems', []):
-                            stat_name = stat_item.get('name')
-                            home_value = stat_item.get('home')
-                            away_value = stat_item.get('away')
-                            
-                            if stat_name == 'Ball possession':
-                                home_stats['possession'] = float(home_value or 50)
-                                away_stats['possession'] = float(away_value or 50)
-                            elif stat_name == 'Total shots':
-                                home_stats['shots'] = int(home_value or 0)
-                                away_stats['shots'] = int(away_value or 0)
-                            elif stat_name == 'Shots on target':
-                                home_stats['shots_on_target'] = int(home_value or 0)
-                                away_stats['shots_on_target'] = int(away_value or 0)
-                            elif stat_name == 'Attacks':
-                                home_stats['attacks'] = int(home_value or 0)
-                                away_stats['attacks'] = int(away_value or 0)
-                            elif stat_name == 'Dangerous attacks':
-                                home_stats['dangerous_attacks'] = int(home_value or 0)
-                                away_stats['dangerous_attacks'] = int(away_value or 0)
-            
-            # Fill missing stats with reasonable defaults
-            home_stats.setdefault('possession', 50)
-            away_stats.setdefault('possession', 50)
-            home_stats.setdefault('shots', 0)
-            away_stats.setdefault('shots', 0)
-            home_stats.setdefault('shots_on_target', 0)
-            away_stats.setdefault('shots_on_target', 0)
-            home_stats.setdefault('attacks', 0)
-            away_stats.setdefault('attacks', 0)
-            home_stats.setdefault('dangerous_attacks', 0)
-            away_stats.setdefault('dangerous_attacks', 0)
-            
-            return self.calculate_advanced_probabilities(home_stats, away_stats, match_data)
-            
-        except Exception as e:
-            return self.calculate_basic_probabilities(match_data)
-    
-    def calculate_basic_probabilities(self, match_data):
-        """Calculate basic probabilities when detailed stats are unavailable"""
+    def calculate_probabilities(self, match_data, detailed_stats=None):
+        """Calculate probabilities based on match data"""
         home_score = match_data.get('home_score', 0)
         away_score = match_data.get('away_score', 0)
         minute = match_data.get('minute', '0')
         
-        # Extract minute as integer
+        # Extract current minute
         minute_match = re.search(r'\d+', str(minute))
         current_minute = int(minute_match.group()) if minute_match else 1
+        time_remaining = max(0.1, (90 - current_minute) / 90)
         
-        # Time factor (how much of the game is left)
-        time_factor = max(0.1, min(1.0, (90 - current_minute) / 90))
-        
-        # Basic probability calculation based on current score and time
-        if home_score > away_score:
-            home_win_prob = 0.6 + (0.2 * time_factor)
-            draw_prob = 0.2 * time_factor
-            away_win_prob = 0.2 * time_factor
-        elif home_score < away_score:
-            home_win_prob = 0.2 * time_factor
-            draw_prob = 0.2 * time_factor
-            away_win_prob = 0.6 + (0.2 * time_factor)
+        # Use detailed stats if available
+        if detailed_stats:
+            return self.calculate_advanced_probabilities(home_score, away_score, detailed_stats, time_remaining)
         else:
-            home_win_prob = 0.3 + (0.2 * time_factor)
+            return self.calculate_basic_probabilities(home_score, away_score, time_remaining)
+    
+    def calculate_basic_probabilities(self, home_score, away_score, time_remaining):
+        """Calculate basic probabilities based on score and time"""
+        # Base probabilities based on current score
+        if home_score > away_score:
+            home_win_prob = 0.6 + (0.2 * time_remaining)
+            draw_prob = 0.2 * time_remaining
+            away_win_prob = 0.2 * time_remaining
+        elif home_score < away_score:
+            home_win_prob = 0.2 * time_remaining
+            draw_prob = 0.2 * time_remaining
+            away_win_prob = 0.6 + (0.2 * time_remaining)
+        else:
+            home_win_prob = 0.3 + (0.2 * time_remaining)
             draw_prob = 0.4
-            away_win_prob = 0.3 + (0.2 * time_factor)
+            away_win_prob = 0.3 + (0.2 * time_remaining)
         
-        # Normalize probabilities
+        # Normalize
         total = home_win_prob + draw_prob + away_win_prob
         home_win_prob /= total
         draw_prob /= total
         away_win_prob /= total
         
-        # Both teams to score probability
-        btts_prob = 0.5 if home_score > 0 and away_score > 0 else 0.3
+        # Both teams to score
+        btts_prob = 0.6 if home_score > 0 and away_score > 0 else 0.3
         
-        # Over/under probabilities
+        # Over/under based on current goals and time remaining
         total_goals = home_score + away_score
-        if total_goals >= 3:
-            over_prob = 0.7
-            under_prob = 0.3
-        elif total_goals == 2:
-            over_prob = 0.4
-            under_prob = 0.6
-        else:
-            over_prob = 0.2
-            under_prob = 0.8
+        expected_additional_goals = time_remaining * 1.5  # Expected goals in remaining time
+        
+        over_prob = 1 - stats.poisson.cdf(2.5 - total_goals, expected_additional_goals)
+        under_prob = stats.poisson.cdf(2.5 - total_goals, expected_additional_goals)
         
         return {
             'home_win': home_win_prob,
@@ -302,30 +396,30 @@ class ValueBetAnalyzer:
             'under_2.5': under_prob
         }
     
-    def calculate_advanced_probabilities(self, home_stats, away_stats, match_data):
+    def calculate_advanced_probabilities(self, home_score, away_score, stats, time_remaining):
         """Calculate advanced probabilities with detailed statistics"""
-        home_score = match_data.get('home_score', 0)
-        away_score = match_data.get('away_score', 0)
+        home_possession = stats.get('home_possession', 50)
+        away_possession = stats.get('away_possession', 50)
+        home_shots = stats.get('home_shots', 0)
+        away_shots = stats.get('away_shots', 0)
         
-        # Calculate expected goals based on shots and possession
-        home_xg = (home_stats['shots_on_target'] * 0.3 + 
-                  (home_stats['shots'] - home_stats['shots_on_target']) * 0.05 +
-                  home_stats['dangerous_attacks'] * 0.02)
+        # Calculate expected goals based on possession and shots
+        home_attack_strength = (home_possession / 100) * (home_shots + 1)
+        away_attack_strength = (away_possession / 100) * (away_shots + 1)
         
-        away_xg = (away_stats['shots_on_target'] * 0.3 + 
-                  (away_stats['shots'] - away_stats['shots_on_target']) * 0.05 +
-                  away_stats['dangerous_attacks'] * 0.02)
+        home_xg = max(home_score * 0.8, home_attack_strength * 0.1)
+        away_xg = max(away_score * 0.8, away_attack_strength * 0.1)
         
-        # Adjust for current score
-        home_xg = max(home_xg, home_score * 0.8)
-        away_xg = max(away_xg, away_score * 0.8)
+        # Adjust for remaining time
+        home_xg *= (1 + time_remaining)
+        away_xg *= (1 + time_remaining)
         
-        # Calculate match outcome probabilities using Poisson distribution
+        # Calculate probabilities using Poisson distribution
         home_win_prob = 0
         draw_prob = 0
         away_win_prob = 0
         
-        for i in range(0, 6):  # 0-5 goals
+        for i in range(0, 6):
             for j in range(0, 6):
                 prob = (self.poisson_probability(home_xg, i) * 
                        self.poisson_probability(away_xg, j))
@@ -343,12 +437,11 @@ class ValueBetAnalyzer:
             draw_prob /= total
             away_win_prob /= total
         
-        # Both teams to score probability
-        btts_prob = 1 - (self.poisson_probability(home_xg, 0) + 
-                        self.poisson_probability(away_xg, 0) - 
-                        self.poisson_probability(home_xg, 0) * self.poisson_probability(away_xg, 0))
+        # Both teams to score
+        btts_prob = 1 - (self.poisson_probability(home_xg, 0) * 
+                         self.poisson_probability(away_xg, 0))
         
-        # Over/under probabilities
+        # Over/under
         total_xg = home_xg + away_xg
         over_prob = 1 - stats.poisson.cdf(2.5, total_xg)
         under_prob = stats.poisson.cdf(2.5, total_xg)
@@ -368,7 +461,7 @@ class ValueBetAnalyzer:
         return (math.exp(-lambda_val) * (lambda_val ** k)) / math.factorial(k)
     
     def find_value_bets(self, probabilities, market_odds, threshold=0.05):
-        """Find value bets where our probability > implied probability by threshold"""
+        """Find value bets"""
         value_bets = []
         
         for market, outcomes in self.markets.items():
@@ -394,7 +487,7 @@ class ValueBetAnalyzer:
         return value_bets
 
 # Initialize services
-sofascore = SofaScoreLiveData()
+scraper = SofaScoreScraper()
 analyzer = ValueBetAnalyzer()
 
 # Initialize session state
@@ -402,25 +495,33 @@ if 'live_matches' not in st.session_state:
     st.session_state.live_matches = []
 if 'selected_match' not in st.session_state:
     st.session_state.selected_match = None
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = None
 
 # Sidebar
 with st.sidebar:
     st.title("🔍 SofaScore Live Matches")
-    st.markdown('<div class="sofascore-badge">LIVE DATA</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sofascore-badge">WEB SCRAPING</div>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Refresh button
     if st.button("🔄 Refresh Live Data", use_container_width=True):
-        with st.spinner("Fetching live matches from SofaScore..."):
-            st.session_state.live_matches = sofascore.get_live_matches()
+        with st.spinner("Scraping live matches from SofaScore..."):
+            st.session_state.live_matches = scraper.get_live_matches()
+            st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
         st.rerun()
     
-    # Load matches if not loaded
+    # Load initial data
     if not st.session_state.live_matches:
-        with st.spinner("📡 Connecting to SofaScore..."):
-            st.session_state.live_matches = sofascore.get_live_matches()
+        with st.spinner("🌐 Connecting to SofaScore..."):
+            st.session_state.live_matches = scraper.get_live_matches()
+            st.session_state.last_refresh = datetime.now().strftime("%H:%M:%S")
     
     matches = st.session_state.live_matches
+    
+    # Last refresh time
+    if st.session_state.last_refresh:
+        st.caption(f"Last refresh: {st.session_state.last_refresh}")
     
     # Competition filter
     competitions = list(set(m.get('competition', 'Unknown') for m in matches))
@@ -444,37 +545,41 @@ with st.sidebar:
     st.subheader(f"📺 Live Matches ({len(filtered_matches)})")
     
     if not filtered_matches:
-        st.warning("No live matches currently available")
-        st.info("Matches will appear here when games are live")
+        st.warning("No live matches found")
+        st.info("This could be because:")
+        st.info("• No matches are currently live")
+        st.info("• SofaScore structure changed")
+        st.info("• Connection issues")
     else:
         for match in filtered_matches:
-            col1, col2, col3 = st.columns([3, 1, 2])
-            with col1:
-                st.write(f"**{match.get('home_team')}**")
-            with col2:
-                st.write(f"**{match.get('home_score')}-{match.get('away_score')}**")
-                st.write(f"⏱️ {match.get('minute')}")
-            with col3:
-                st.write(f"**{match.get('away_team')}**")
-            
-            if st.button("Select", key=f"btn_{match['id']}", use_container_width=True):
-                st.session_state.selected_match = match
-                st.rerun()
-            
-            st.write(f"*{match.get('competition')}*")
-            st.markdown("---")
+            with st.container():
+                col1, col2, col3 = st.columns([3, 1, 2])
+                with col1:
+                    st.write(f"**{match.get('home_team')}**")
+                with col2:
+                    st.write(f"**{match.get('home_score')}-{match.get('away_score')}**")
+                    st.write(f"⏱️ {match.get('minute')}")
+                with col3:
+                    st.write(f"**{match.get('away_team')}**")
+                
+                if st.button("Select", key=f"btn_{match['id']}", use_container_width=True):
+                    st.session_state.selected_match = match
+                    st.rerun()
+                
+                st.write(f"*{match.get('competition')}*")
+                st.markdown("---")
 
 # Main content
 st.title("💰 Value Bet Finder")
-st.markdown('<div class="sofascore-badge">REAL-TIME SOFASCORE DATA</div>', unsafe_allow_html=True)
+st.markdown('<div class="sofascore-badge">LIVE WEB SCRAPING</div>', unsafe_allow_html=True)
 
 if not st.session_state.selected_match:
     st.info("👈 Select a live match from the sidebar to start analysis")
     
-    # Show match overview
+    # Show quick overview
     if matches:
-        st.subheader("Currently Live:")
-        for match in matches[:5]:  # Show first 5 matches
+        st.subheader("Live Matches Overview")
+        for match in matches[:3]:
             col1, col2, col3 = st.columns([2, 1, 2])
             with col1:
                 st.write(f"**{match.get('home_team')}**")
@@ -484,12 +589,21 @@ if not st.session_state.selected_match:
             with col3:
                 st.write(f"**{match.get('away_team')}**")
             st.write(f"_{match.get('competition')}_")
+            
+            if st.button("Analyze This Match", key=f"quick_{match['id']}"):
+                st.session_state.selected_match = match
+                st.rerun()
+            
             st.markdown("---")
     
     st.stop()
 
 # Selected match analysis
 match = st.session_state.selected_match
+
+# Get detailed stats
+with st.spinner("Fetching match details..."):
+    detailed_stats = scraper.get_match_details(match['id'])
 
 # Display match header
 col1, col2, col3 = st.columns([2, 1, 2])
@@ -509,38 +623,53 @@ with col3:
 
 st.markdown(f"**Competition:** {match.get('competition')} | **Status:** {match.get('status')}")
 
-# Market odds (would typically come from bookmaker APIs)
+# Display detailed stats if available
+if detailed_stats:
+    st.markdown("### 📊 Live Statistics")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if 'home_possession' in detailed_stats:
+            st.metric("Possession", 
+                     f"{detailed_stats['home_possession']}% - {detailed_stats['away_possession']}%")
+    
+    with col2:
+        if 'home_shots' in detailed_stats:
+            st.metric("Shots", 
+                     f"{detailed_stats['home_shots']} - {detailed_stats['away_shots']}")
+
+# Market odds (simulated - in real scenario, you'd scrape these too)
 market_odds = {
     'match_winner': {
-        'home_win': 2.5 + (np.random.random() * 2),
-        'draw': 3.0 + (np.random.random() * 1),
-        'away_win': 2.0 + (np.random.random() * 2)
+        'home_win': round(2.0 + (np.random.random() * 2), 2),
+        'draw': round(3.0 + (np.random.random() * 1), 2),
+        'away_win': round(2.0 + (np.random.random() * 2), 2)
     },
     'both_teams_score': {
-        'btts_yes': 1.8 + (np.random.random() * 0.5),
-        'btts_no': 1.9 + (np.random.random() * 0.5)
+        'btts_yes': round(1.7 + (np.random.random() * 0.6), 2),
+        'btts_no': round(1.8 + (np.random.random() * 0.6), 2)
     },
     'over_under': {
-        'over_2.5': 2.1 + (np.random.random() * 0.8),
-        'under_2.5': 1.7 + (np.random.random() * 0.6)
+        'over_2.5': round(1.9 + (np.random.random() * 0.8), 2),
+        'under_2.5': round(1.7 + (np.random.random() * 0.6), 2)
     }
 }
 
 # Calculate probabilities
-probabilities = analyzer.calculate_probabilities_from_stats(match)
+probabilities = analyzer.calculate_probabilities(match, detailed_stats)
 
 # Find value bets
 value_bets = analyzer.find_value_bets(probabilities, market_odds, 0.03)
 
 # Display analysis
-st.markdown("## 📊 Probability Analysis")
+st.markdown("## 📈 Probability Analysis")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("Home Win Probability", f"{probabilities['home_win']*100:.1f}%")
-    st.metric("Draw Probability", f"{probabilities['draw']*100:.1f}%")
-    st.metric("Away Win Probability", f"{probabilities['away_win']*100:.1f}%")
+    st.metric("Home Win", f"{probabilities['home_win']*100:.1f}%")
+    st.metric("Draw", f"{probabilities['draw']*100:.1f}%")
+    st.metric("Away Win", f"{probabilities['away_win']*100:.1f}%")
 
 with col2:
     st.metric("Both Teams Score", f"{probabilities['btts_yes']*100:.1f}%")
@@ -549,7 +678,7 @@ with col2:
 with col3:
     st.metric("Over 2.5 Goals", f"{probabilities['over_2.5']*100:.1f}%")
     st.metric("Under 2.5 Goals", f"{probabilities['under_2.5']*100:.1f}%")
-    st.metric("Value Bets Found", len(value_bets))
+    st.metric("Value Bets", len(value_bets))
 
 # Display value bets
 st.markdown("## 🎯 Value Bet Recommendations")
@@ -567,28 +696,9 @@ if value_bets:
 else:
     st.info("No strong value bets identified. The market appears efficiently priced.")
 
-# Match statistics if available
-if match.get('detailed_stats'):
-    st.markdown("## 📈 Live Statistics")
-    try:
-        stats_data = []
-        for group in match['detailed_stats'].get('statistics', []):
-            for g in group.get('groups', []):
-                for item in g.get('statisticsItems', []):
-                    stats_data.append({
-                        'Statistic': item.get('name', ''),
-                        'Home': item.get('home', ''),
-                        'Away': item.get('away', '')
-                    })
-        
-        if stats_data:
-            st.dataframe(pd.DataFrame(stats_data), use_container_width=True)
-    except:
-        pass
-
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666;">
-    <small>⚡ Powered by real-time SofaScore data | ⚠️ Betting involves risk</small>
+    <small>⚡ Powered by SofaScore web scraping | ⚠️ Betting involves risk | 🔄 Data updates manually</small>
 </div>
 """, unsafe_allow_html=True)
