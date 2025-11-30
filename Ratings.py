@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+from scipy.stats import poisson
 
 # Page config
 st.set_page_config(page_title="Football Ratings System", page_icon="⚽", layout="wide")
@@ -45,6 +46,9 @@ with st.expander("📖 How to Use This App", expanded=True):
     
     The **Wisdom of the Crowd** method removes bookmaker margins to find true probabilities, achieving 
     **+3.4% yield** across 22,318 European matches (2012-2015).
+    
+    The **Monte Carlo simulation** uses Poisson distribution to model goal scoring, providing exact score 
+    probabilities and alternative betting markets.
     """)
 
 st.divider()
@@ -113,7 +117,7 @@ fair_draw_odds = 100 / draw_prob_norm
 fair_away_odds = 100 / away_prob_norm
 
 # Main content
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "🧠 Wisdom of Crowd", "📚 About"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "🧠 Wisdom of Crowd", "🎲 Monte Carlo", "📚 About"])
 
 with tab1:
     st.header("Match Prediction")
@@ -508,12 +512,316 @@ with tab4:
     """)
 
 with tab5:
+    st.header("🎲 Monte Carlo Simulation")
+    
+    st.markdown("""
+    This model simulates match outcomes thousands of times using **Poisson distribution** for goal scoring.
+    It provides detailed probability distributions for exact scores and alternative betting markets.
+    """)
+    
+    st.divider()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Expected Goals (xG)")
+        st.markdown("Enter the expected goals for each team based on their attacking/defensive strength")
+        
+        home_xg = st.number_input("Home Team Expected Goals", min_value=0.1, max_value=5.0, value=1.5, step=0.1, key="mc_home_xg")
+        away_xg = st.number_input("Away Team Expected Goals", min_value=0.1, max_value=5.0, value=1.2, step=0.1, key="mc_away_xg")
+        
+        st.info("""
+        **Tip**: Calculate xG from:
+        - Recent goals scored/conceded averages
+        - League average adjustments
+        - Home advantage factor (~1.3x multiplier)
+        """)
+    
+    with col2:
+        st.subheader("Simulation Settings")
+        num_simulations = st.select_slider(
+            "Number of Simulations",
+            options=[1000, 5000, 10000, 50000, 100000],
+            value=10000
+        )
+        
+        max_goals = st.slider("Maximum Goals per Team", 5, 10, 8)
+        
+        st.metric("Simulations", f"{num_simulations:,}")
+        st.caption(f"Calculating {num_simulations:,} random matches...")
+    
+    # Run Monte Carlo simulation
+    if st.button("🎲 Run Simulation", type="primary", use_container_width=True):
+        with st.spinner("Running Monte Carlo simulation..."):
+            # Simulate using Poisson distribution
+            np.random.seed(42)
+            home_goals_sim = np.random.poisson(home_xg, num_simulations)
+            away_goals_sim = np.random.poisson(away_xg, num_simulations)
+            
+            # Calculate results
+            home_wins = np.sum(home_goals_sim > away_goals_sim)
+            draws = np.sum(home_goals_sim == away_goals_sim)
+            away_wins = np.sum(home_goals_sim < away_goals_sim)
+            
+            # Calculate probabilities
+            home_win_prob = (home_wins / num_simulations) * 100
+            draw_prob = (draws / num_simulations) * 100
+            away_win_prob = (away_wins / num_simulations) * 100
+            
+            # Calculate fair odds
+            mc_fair_home_odds = 100 / home_win_prob
+            mc_fair_draw_odds = 100 / draw_prob
+            mc_fair_away_odds = 100 / away_win_prob
+            
+            st.success("✅ Simulation Complete!")
+            
+            st.divider()
+            
+            # Display main results
+            st.subheader("Match Outcome Probabilities")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    f"{home_team} Win",
+                    f"{home_win_prob:.2f}%",
+                    delta=f"Fair odds: {mc_fair_home_odds:.2f}"
+                )
+            
+            with col2:
+                st.metric(
+                    "Draw",
+                    f"{draw_prob:.2f}%",
+                    delta=f"Fair odds: {mc_fair_draw_odds:.2f}"
+                )
+            
+            with col3:
+                st.metric(
+                    f"{away_team} Win",
+                    f"{away_win_prob:.2f}%",
+                    delta=f"Fair odds: {mc_fair_away_odds:.2f}"
+                )
+            
+            # Probability distribution chart
+            results_df_mc = pd.DataFrame({
+                'Result': [f'{home_team} Win', 'Draw', f'{away_team} Win'],
+                'Probability (%)': [home_win_prob, draw_prob, away_win_prob],
+                'Simulations': [home_wins, draws, away_wins]
+            })
+            
+            fig = px.bar(
+                results_df_mc,
+                x='Result',
+                y='Probability (%)',
+                color='Result',
+                text='Probability (%)',
+                color_discrete_map={
+                    f'{home_team} Win': '#2E86AB',
+                    'Draw': '#A23B72',
+                    f'{away_team} Win': '#F18F01'
+                }
+            )
+            fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+            fig.update_layout(showlegend=False, height=400)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.divider()
+            
+            # Exact score probabilities
+            st.subheader("Most Likely Exact Scores")
+            
+            # Calculate exact score probabilities
+            from scipy.stats import poisson
+            
+            score_probs = []
+            for h in range(max_goals + 1):
+                for a in range(max_goals + 1):
+                    prob = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg) * 100
+                    score_probs.append({
+                        'Score': f"{h}-{a}",
+                        'Home': h,
+                        'Away': a,
+                        'Probability (%)': prob,
+                        'Fair Odds': 100 / prob if prob > 0 else 999
+                    })
+            
+            # Sort by probability
+            score_probs_df = pd.DataFrame(score_probs).sort_values('Probability (%)', ascending=False)
+            
+            # Display top 10 scores
+            top_scores = score_probs_df.head(10)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                fig_scores = px.bar(
+                    top_scores,
+                    x='Score',
+                    y='Probability (%)',
+                    text='Probability (%)',
+                    title='Top 10 Most Likely Scores'
+                )
+                fig_scores.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+                fig_scores.update_layout(height=400)
+                st.plotly_chart(fig_scores, use_container_width=True)
+            
+            with col2:
+                st.dataframe(
+                    top_scores[['Score', 'Probability (%)', 'Fair Odds']].style.format({
+                        'Probability (%)': '{:.2f}%',
+                        'Fair Odds': '{:.2f}'
+                    }),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400
+                )
+            
+            st.divider()
+            
+            # Alternative markets
+            st.subheader("Alternative Betting Markets")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            # Over/Under goals
+            with col1:
+                st.markdown("**Over/Under 2.5 Goals**")
+                
+                over_25_count = np.sum((home_goals_sim + away_goals_sim) > 2.5)
+                under_25_count = num_simulations - over_25_count
+                
+                over_25_prob = (over_25_count / num_simulations) * 100
+                under_25_prob = (under_25_count / num_simulations) * 100
+                
+                st.metric("Over 2.5", f"{over_25_prob:.1f}%", delta=f"Odds: {100/over_25_prob:.2f}")
+                st.metric("Under 2.5", f"{under_25_prob:.1f}%", delta=f"Odds: {100/under_25_prob:.2f}")
+            
+            # Both teams to score
+            with col2:
+                st.markdown("**Both Teams to Score**")
+                
+                btts_yes = np.sum((home_goals_sim > 0) & (away_goals_sim > 0))
+                btts_no = num_simulations - btts_yes
+                
+                btts_yes_prob = (btts_yes / num_simulations) * 100
+                btts_no_prob = (btts_no / num_simulations) * 100
+                
+                st.metric("Yes", f"{btts_yes_prob:.1f}%", delta=f"Odds: {100/btts_yes_prob:.2f}")
+                st.metric("No", f"{btts_no_prob:.1f}%", delta=f"Odds: {100/btts_no_prob:.2f}")
+            
+            # Total goals exact
+            with col3:
+                st.markdown("**Most Likely Total Goals**")
+                
+                total_goals = home_goals_sim + away_goals_sim
+                unique_totals, counts = np.unique(total_goals, return_counts=True)
+                
+                for i in range(min(3, len(unique_totals))):
+                    idx = np.argsort(counts)[-i-1]
+                    total = unique_totals[idx]
+                    prob = (counts[idx] / num_simulations) * 100
+                    st.metric(f"{total} goals", f"{prob:.1f}%", delta=f"Odds: {100/prob:.2f}")
+            
+            st.divider()
+            
+            # Goal distribution heatmap
+            st.subheader("Score Probability Heatmap")
+            
+            # Create matrix for heatmap
+            score_matrix = np.zeros((max_goals + 1, max_goals + 1))
+            for h in range(max_goals + 1):
+                for a in range(max_goals + 1):
+                    score_matrix[a, h] = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg) * 100
+            
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=score_matrix,
+                x=[str(i) for i in range(max_goals + 1)],
+                y=[str(i) for i in range(max_goals + 1)],
+                colorscale='Viridis',
+                text=score_matrix,
+                texttemplate='%{text:.1f}%',
+                textfont={"size": 10},
+                colorbar=dict(title="Probability (%)")
+            ))
+            
+            fig_heatmap.update_layout(
+                title="Score Probability Matrix",
+                xaxis_title=f"{home_team} Goals",
+                yaxis_title=f"{away_team} Goals",
+                height=500
+            )
+            
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            st.divider()
+            
+            # Expected statistics
+            st.subheader("Expected Match Statistics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                avg_home_goals = np.mean(home_goals_sim)
+                st.metric("Avg Home Goals", f"{avg_home_goals:.2f}")
+            
+            with col2:
+                avg_away_goals = np.mean(away_goals_sim)
+                st.metric("Avg Away Goals", f"{avg_away_goals:.2f}")
+            
+            with col3:
+                avg_total_goals = np.mean(home_goals_sim + away_goals_sim)
+                st.metric("Avg Total Goals", f"{avg_total_goals:.2f}")
+            
+            with col4:
+                goal_diff = np.mean(home_goals_sim - away_goals_sim)
+                st.metric("Avg Goal Difference", f"{goal_diff:+.2f}")
+    
+    else:
+        st.info("👆 Click 'Run Simulation' to generate predictions")
+    
+    st.divider()
+    
+    st.markdown("""
+    ### How Monte Carlo Simulation Works
+    
+    1. **Poisson Distribution**: Goals in football follow a Poisson distribution, where the probability 
+       of scoring X goals depends on the expected goals (λ parameter)
+    
+    2. **Random Sampling**: The simulation generates thousands of random match outcomes based on each 
+       team's expected goals
+    
+    3. **Aggregation**: By counting how many simulations result in each outcome, we estimate the true 
+       probability distribution
+    
+    4. **Law of Large Numbers**: With enough simulations (10,000+), the results converge to the theoretical 
+       probabilities
+    
+    ### Advantages of Monte Carlo
+    
+    - ✅ Provides **exact score probabilities**
+    - ✅ Can calculate **any betting market** (over/under, BTTS, handicaps, etc.)
+    - ✅ **Accounts for variance** in goal scoring
+    - ✅ Based on **statistical reality** (Poisson distribution fits football well)
+    - ✅ **Flexible**: Easy to add factors like red cards, weather, etc.
+    
+    ### Calculating Expected Goals (xG)
+    
+    ```
+    Home xG = (Home Attack Strength × Away Defense Weakness × League Avg Goals) × Home Advantage
+    Away xG = (Away Attack Strength × Home Defense Weakness × League Avg Goals)
+    ```
+    
+    Typical home advantage multiplier: **1.3x**
+    """)
+
+with tab6:
     st.header("About This System")
     
     st.markdown("""
-    ### Two Powerful Rating Systems
+    ### Three Powerful Rating Systems
     
-    This app combines two complementary approaches to football match prediction:
+    This app combines three complementary approaches to football match prediction:
     
     ---
     
@@ -570,11 +878,44 @@ with tab5:
     
     ---
     
+    ### 3. Monte Carlo Simulation
+    
+    Implemented in tab 5, uses statistical modeling of goal-scoring patterns.
+    
+    #### How It Works
+    
+    1. **Poisson Distribution**: Models goal scoring based on expected goals (xG) for each team
+    
+    2. **Random Sampling**: Simulates thousands of matches by randomly generating goals according to Poisson distribution
+    
+    3. **Probability Calculation**: Aggregates results to determine outcome probabilities
+    
+    4. **Exact Scores**: Can predict probability of any specific scoreline (e.g., 2-1, 0-0, etc.)
+    
+    5. **Alternative Markets**: Calculates probabilities for over/under, BTTS, and other betting markets
+    
+    #### Key Advantages
+    
+    - **Exact score probabilities** not available from other methods
+    - **Any betting market** can be calculated (corners, cards, etc. with proper data)
+    - **Statistically grounded** in Poisson distribution (proven to fit football)
+    - **Flexible modeling** - can incorporate additional factors
+    
+    #### Calculating Expected Goals
+    
+    ```
+    Home xG = (Home Attack × Away Defense × League Avg) × Home Advantage (1.3x)
+    Away xG = (Away Attack × Home Defense × League Avg)
+    ```
+    
+    ---
+    
     ### Which System to Use?
     
     - **Goal Superiority**: Best for early predictions before markets are fully formed, or when you have detailed form data
     - **Wisdom of Crowd**: Best when sharp bookmaker odds are available; relies on market efficiency
-    - **Combined**: Use both! If both systems agree on value, confidence increases
+    - **Monte Carlo**: Best for exact scores and alternative markets; requires expected goals estimation
+    - **Combined**: Use all three! Agreement across systems = highest confidence
     
     ---
     
@@ -592,6 +933,12 @@ with tab5:
     - Bookmakers may limit accounts of consistent winners
     - Margin removal model is simplified
     
+    **Monte Carlo:**
+    - Accuracy depends on **quality of xG estimates**
+    - Assumes **Poisson distribution** (good for football, not perfect)
+    - Does not account for **dynamic game situations** (red cards, weather, etc.)
+    - Requires **more input data** to calculate xG properly
+    
     ---
     
     ### References
@@ -601,8 +948,11 @@ with tab5:
     
     2. **Wisdom of Crowd System**: Football-Data.co.uk - "The Wisdom of the Crowd"
        - Based on research by Francis Galton (1906) and Vernon Lomax Smith
+    
+    3. **Monte Carlo Method**: Based on Poisson distribution modeling of football scores
+       - Widely used in sports analytics and betting
     """)
 
 # Footer
 st.divider()
-st.caption("⚽ Football Ratings System | Two proven methodologies: Goal Superiority + Wisdom of the Crowd | Data-driven match predictions")
+st.caption("⚽ Football Ratings System | Three proven methodologies: Goal Superiority + Wisdom of the Crowd + Monte Carlo | Data-driven match predictions")
