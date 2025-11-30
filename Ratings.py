@@ -49,6 +49,9 @@ with st.expander("📖 How to Use This App", expanded=True):
     
     The **Monte Carlo simulation** uses Poisson distribution to model goal scoring, providing exact score 
     probabilities and alternative betting markets.
+    
+    The **xG Calculator** helps estimate goal-scoring probability based on shot characteristics like distance, 
+    angle, body part, and defensive pressure.
     """)
 
 st.divider()
@@ -117,7 +120,7 @@ fair_draw_odds = 100 / draw_prob_norm
 fair_away_odds = 100 / away_prob_norm
 
 # Main content
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "🧠 Wisdom of Crowd", "🎲 Monte Carlo", "📚 About"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "🧠 Wisdom of Crowd", "🎯 xG Calculator", "🎲 Monte Carlo", "📚 About"])
 
 with tab1:
     st.header("Match Prediction")
@@ -512,6 +515,470 @@ with tab4:
     """)
 
 with tab5:
+    st.header("🎯 Expected Goals (xG) Calculator")
+    
+    st.markdown("""
+    Calculate Expected Goals for individual shots or aggregate team xG based on multiple factors.
+    This tool helps estimate the quality of goal-scoring opportunities.
+    """)
+    
+    # Mode selection
+    calc_mode = st.radio(
+        "Calculation Mode",
+        ["Single Shot xG", "Team Match xG Builder"],
+        horizontal=True
+    )
+    
+    st.divider()
+    
+    if calc_mode == "Single Shot xG":
+        st.subheader("Calculate xG for a Single Shot")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Shot Location")
+            
+            shot_distance = st.slider("Distance from Goal (meters)", 1, 35, 12, 1)
+            shot_angle = st.slider("Angle from Center (degrees)", 0, 90, 15, 5,
+                                  help="0° = straight on, 90° = from sideline")
+            
+            # Visual representation
+            st.caption(f"**Shot Position**: {shot_distance}m at {shot_angle}° angle")
+            
+            # Calculate goal mouth width visible
+            import math
+            if shot_angle == 0:
+                goal_width_visible = 7.32  # Full goal width
+            else:
+                # Approximate visible goal width based on angle
+                goal_width_visible = 7.32 * math.cos(math.radians(shot_angle))
+            
+            st.caption(f"Visible goal width: {goal_width_visible:.2f}m")
+        
+        with col2:
+            st.markdown("#### Shot Characteristics")
+            
+            body_part = st.selectbox(
+                "Body Part",
+                ["Foot (Right)", "Foot (Left)", "Header", "Other"]
+            )
+            
+            shot_type = st.selectbox(
+                "Shot Type",
+                ["Regular Shot", "Volley", "Half-Volley", "Diving Header"]
+            )
+            
+            assist_type = st.selectbox(
+                "Assist Type",
+                ["None (Dribble)", "Through Ball", "Cross", "Cut Back", "Set Piece", "Corner"],
+                help="How did the ball arrive to the shooter?"
+            )
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            st.markdown("#### Game Context")
+            
+            defenders_nearby = st.slider("Defenders Within 2m", 0, 5, 1)
+            
+            big_chance = st.checkbox("Big Chance", 
+                                    help="Clear goal-scoring opportunity (1-on-1, open goal, etc.)")
+            
+            counter_attack = st.checkbox("Counter Attack")
+        
+        with col4:
+            st.markdown("#### Goalkeeper")
+            
+            gk_position = st.selectbox(
+                "Goalkeeper Position",
+                ["Normal Position", "Out of Position", "Off Line"]
+            )
+            
+            one_on_one = st.checkbox("1-on-1 with Keeper")
+        
+        # Calculate xG using a simplified logistic regression model
+        # Base coefficients (simplified version of real models)
+        import math
+        
+        def calculate_xg(distance, angle, body_part, shot_type, assist_type, 
+                        defenders, big_chance, counter, gk_pos, one_v_one):
+            
+            # Start with base intercept
+            logit = -1.5
+            
+            # Distance factor (negative - further = worse)
+            logit += -0.09 * distance
+            
+            # Angle factor (negative - wider angle = worse)
+            logit += -0.02 * angle
+            
+            # Body part adjustments
+            if "Header" in body_part:
+                logit += -0.4
+            elif "Foot" in body_part:
+                logit += 0.1
+            
+            # Shot type adjustments
+            if shot_type == "Volley":
+                logit += -0.2
+            elif shot_type == "Half-Volley":
+                logit += -0.1
+            elif shot_type == "Diving Header":
+                logit += -0.5
+            
+            # Assist type adjustments
+            if assist_type == "Through Ball":
+                logit += 0.4
+            elif assist_type == "Cross":
+                logit += -0.2
+            elif assist_type == "Cut Back":
+                logit += 0.5
+            elif assist_type == "Set Piece":
+                logit += 0.2
+            elif assist_type == "Corner":
+                logit += -0.1
+            
+            # Defensive pressure (negative)
+            logit += -0.3 * defenders
+            
+            # Big chance bonus
+            if big_chance:
+                logit += 0.8
+            
+            # Counter attack bonus
+            if counter:
+                logit += 0.3
+            
+            # Goalkeeper position
+            if gk_pos == "Out of Position":
+                logit += 0.6
+            elif gk_pos == "Off Line":
+                logit += 0.4
+            
+            # 1-on-1 bonus
+            if one_v_one:
+                logit += 0.7
+            
+            # Convert logit to probability using sigmoid function
+            xg = 1 / (1 + math.exp(-logit))
+            
+            return xg
+        
+        calculated_xg = calculate_xg(
+            shot_distance, shot_angle, body_part, shot_type, assist_type,
+            defenders_nearby, big_chance, counter_attack, gk_position, one_on_one
+        )
+        
+        st.divider()
+        
+        # Display result
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Expected Goals (xG)", f"{calculated_xg:.3f}")
+        
+        with col2:
+            st.metric("Conversion Rate", f"{calculated_xg*100:.1f}%")
+        
+        with col3:
+            shots_to_score = 1 / calculated_xg if calculated_xg > 0 else 999
+            st.metric("Expected Shots to Score", f"{shots_to_score:.1f}")
+        
+        # Quality rating
+        if calculated_xg >= 0.5:
+            quality = "🔥 Excellent Chance"
+            color = "green"
+        elif calculated_xg >= 0.3:
+            quality = "✅ Good Chance"
+            color = "blue"
+        elif calculated_xg >= 0.15:
+            quality = "⚠️ Half Chance"
+            color = "orange"
+        elif calculated_xg >= 0.05:
+            quality = "📉 Poor Chance"
+            color = "orange"
+        else:
+            quality = "❌ Very Difficult"
+            color = "red"
+        
+        st.markdown(f"**Quality Rating:** :{color}[{quality}]")
+        
+        # Comparison examples
+        st.divider()
+        st.subheader("Reference Examples")
+        
+        ref_col1, ref_col2, ref_col3 = st.columns(3)
+        
+        with ref_col1:
+            st.markdown("**Penalty Kick**")
+            st.metric("xG", "0.76 - 0.79")
+            st.caption("Standard conversion rate for penalties")
+        
+        with ref_col2:
+            st.markdown("**6-Yard Box Tap-in**")
+            st.metric("xG", "0.80 - 0.95")
+            st.caption("Close range, open goal")
+        
+        with ref_col3:
+            st.markdown("**Long Range Strike**")
+            st.metric("xG", "0.01 - 0.05")
+            st.caption("25+ meters, low success rate")
+    
+    else:  # Team Match xG Builder
+        st.subheader("Build Team xG from Multiple Shots")
+        
+        st.markdown("""
+        Add multiple shots to calculate the total Expected Goals for a team in a match.
+        This helps evaluate overall attacking performance.
+        """)
+        
+        # Initialize session state for shots
+        if 'shots_list' not in st.session_state:
+            st.session_state.shots_list = []
+        
+        with st.expander("➕ Add New Shot", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                add_distance = st.number_input("Distance (m)", 1, 35, 12, key="add_dist")
+                add_angle = st.number_input("Angle (°)", 0, 90, 15, key="add_angle")
+            
+            with col2:
+                add_body = st.selectbox("Body Part", ["Foot", "Header"], key="add_body")
+                add_assist = st.selectbox("Assist", ["Open Play", "Through Ball", "Cross", "Set Piece"], key="add_assist")
+            
+            with col3:
+                add_defenders = st.number_input("Defenders", 0, 5, 1, key="add_def")
+                add_big = st.checkbox("Big Chance", key="add_big")
+            
+            with col4:
+                add_result = st.selectbox("Result", ["Goal ⚽", "Saved", "Missed", "Blocked"], key="add_result")
+                
+                if st.button("➕ Add Shot", type="primary", use_container_width=True):
+                    # Calculate xG for this shot
+                    logit = -1.5 - 0.09 * add_distance - 0.02 * add_angle
+                    if add_body == "Header":
+                        logit -= 0.4
+                    if add_assist == "Through Ball":
+                        logit += 0.4
+                    elif add_assist == "Cross":
+                        logit -= 0.2
+                    elif add_assist == "Set Piece":
+                        logit += 0.2
+                    logit -= 0.3 * add_defenders
+                    if add_big:
+                        logit += 0.8
+                    
+                    shot_xg = 1 / (1 + math.exp(-logit))
+                    
+                    st.session_state.shots_list.append({
+                        'Distance': add_distance,
+                        'Angle': add_angle,
+                        'Body': add_body,
+                        'Assist': add_assist,
+                        'Defenders': add_defenders,
+                        'Big Chance': add_big,
+                        'Result': add_result,
+                        'xG': shot_xg
+                    })
+                    st.success(f"Shot added! xG: {shot_xg:.3f}")
+                    st.rerun()
+        
+        # Display shots table
+        if st.session_state.shots_list:
+            st.divider()
+            st.subheader(f"Shots Summary ({len(st.session_state.shots_list)} shots)")
+            
+            shots_df = pd.DataFrame(st.session_state.shots_list)
+            
+            # Format the dataframe
+            display_df = shots_df.copy()
+            display_df['xG'] = display_df['xG'].apply(lambda x: f"{x:.3f}")
+            display_df['Big Chance'] = display_df['Big Chance'].apply(lambda x: '✓' if x else '')
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            # Calculate totals
+            total_xg = shots_df['xG'].sum()
+            goals_scored = len(shots_df[shots_df['Result'] == 'Goal ⚽'])
+            shots_on_target = len(shots_df[shots_df['Result'].isin(['Goal ⚽', 'Saved'])])
+            big_chances_count = shots_df['Big Chance'].sum()
+            
+            # Performance metrics
+            st.divider()
+            st.subheader("Match Statistics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total xG", f"{total_xg:.2f}")
+            
+            with col2:
+                st.metric("Goals Scored", goals_scored, delta=f"{goals_scored - total_xg:+.2f} vs xG")
+            
+            with col3:
+                st.metric("Shots on Target", f"{shots_on_target}/{len(shots_df)}")
+            
+            with col4:
+                st.metric("Big Chances", big_chances_count)
+            
+            # Performance analysis
+            st.divider()
+            st.subheader("Performance Analysis")
+            
+            xg_diff = goals_scored - total_xg
+            
+            if xg_diff > 1:
+                st.success(f"""
+                **🔥 Outstanding Finishing!** The team scored {goals_scored} goal(s) from {total_xg:.2f} xG, 
+                outperforming by {xg_diff:+.2f}. This suggests exceptional finishing or good fortune.
+                """)
+            elif xg_diff > 0:
+                st.info(f"""
+                **✅ Above Average Finishing.** The team scored {goals_scored} goal(s) from {total_xg:.2f} xG, 
+                slightly outperforming by {xg_diff:+.2f}.
+                """)
+            elif xg_diff > -1:
+                st.warning(f"""
+                **⚠️ Below Average Finishing.** The team scored {goals_scored} goal(s) from {total_xg:.2f} xG, 
+                underperforming by {xg_diff:.2f}. More clinical finishing needed.
+                """)
+            else:
+                st.error(f"""
+                **❌ Poor Finishing.** The team scored {goals_scored} goal(s) from {total_xg:.2f} xG, 
+                significantly underperforming by {xg_diff:.2f}. Major finishing issues.
+                """)
+            
+            # Shot map visualization
+            st.divider()
+            st.subheader("Shot Map")
+            
+            # Create a simple shot map
+            fig = go.Figure()
+            
+            # Add pitch outline (simplified)
+            fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, 
+                         line=dict(color="green", width=2))
+            
+            # Add goal
+            fig.add_shape(type="rect", x0=45, y0=0, x1=55, y1=5,
+                         line=dict(color="white", width=3), fillcolor="lightgray")
+            
+            # Plot shots
+            for idx, shot in shots_df.iterrows():
+                # Convert distance and angle to x,y coordinates
+                x = 50 + shot['Angle'] * 0.5 * (1 if idx % 2 == 0 else -1)
+                y = shot['Distance'] * 2
+                
+                # Color based on result
+                if shot['Result'] == 'Goal ⚽':
+                    color = 'green'
+                    symbol = 'circle'
+                elif shot['Result'] == 'Saved':
+                    color = 'orange'
+                    symbol = 'circle'
+                elif shot['Result'] == 'Blocked':
+                    color = 'red'
+                    symbol = 'x'
+                else:
+                    color = 'gray'
+                    symbol = 'x'
+                
+                # Size based on xG
+                size = max(10, shot['xG'] * 50)
+                
+                fig.add_trace(go.Scatter(
+                    x=[x], y=[y],
+                    mode='markers',
+                    marker=dict(size=size, color=color, symbol=symbol, 
+                              line=dict(width=2, color='white')),
+                    name=f"{shot['Result']} ({shot['xG']:.2f})",
+                    hovertemplate=f"<b>{shot['Result']}</b><br>" +
+                                 f"xG: {shot['xG']:.3f}<br>" +
+                                 f"{shot['Distance']}m, {shot['Angle']}°<br>" +
+                                 f"{shot['Body']}, {shot['Assist']}<extra></extra>"
+                ))
+            
+            fig.update_layout(
+                title="Shot Locations (size = xG value)",
+                xaxis=dict(showgrid=False, zeroline=False, visible=False),
+                yaxis=dict(showgrid=False, zeroline=False, visible=False),
+                showlegend=False,
+                height=500,
+                plot_bgcolor='rgba(0,100,0,0.1)'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Clear button
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                if st.button("🗑️ Clear All Shots", type="secondary"):
+                    st.session_state.shots_list = []
+                    st.rerun()
+        
+        else:
+            st.info("👆 Add shots using the form above to build your team's xG")
+    
+    st.divider()
+    
+    st.markdown("""
+    ### Understanding xG Values
+    
+    | xG Range | Quality | Example |
+    |----------|---------|---------|
+    | 0.76-0.79 | Penalty | Standard penalty kick |
+    | 0.50-1.00 | Big Chance | 1-on-1, tap-in, open goal |
+    | 0.30-0.49 | Good Chance | Inside box, decent position |
+    | 0.15-0.29 | Half Chance | Edge of box, some pressure |
+    | 0.05-0.14 | Poor Chance | Outside box, difficult angle |
+    | 0.00-0.04 | Very Low | Long range, tight angle |
+    
+    ### Key Factors in xG Calculation
+    
+    1. **Shot Location** (Most Important)
+       - Distance to goal (closer = higher xG)
+       - Angle to goal (center = higher xG)
+       - Inside vs outside penalty box
+    
+    2. **Shot Type**
+       - Foot shots generally better than headers
+       - Volleys are more difficult
+       - Diving headers very difficult
+    
+    3. **Assist Type**
+       - Through balls create better chances
+       - Cut backs are very dangerous
+       - Crosses typically lower xG (headers)
+    
+    4. **Defensive Context**
+       - Number of defenders nearby
+       - Goalkeeper position
+       - Counter-attack situations
+    
+    5. **Big Chances**
+       - Clear goal-scoring opportunities
+       - 1-on-1 with goalkeeper
+       - Open goal situations
+    
+    ### Using xG for Analysis
+    
+    - **Team Performance**: Total xG shows quality of chances created
+    - **Finishing Quality**: Compare goals scored to xG
+    - **Underperformance**: xG > goals suggests poor finishing or bad luck
+    - **Overperformance**: Goals > xG suggests great finishing or good luck
+    - **Expected**: Over time, goals should roughly match xG
+    
+    ### Limitations
+    
+    - Doesn't account for individual player skill
+    - Historical averages may not reflect specific situations
+    - Can't predict individual outcomes, only probabilities
+    - Different models use different variables
+    """)
+
+with tab7:
     st.header("🎲 Monte Carlo Simulation")
     
     st.markdown("""
@@ -819,9 +1286,9 @@ with tab6:
     st.header("About This System")
     
     st.markdown("""
-    ### Three Powerful Rating Systems
+    ### Four Powerful Rating Systems
     
-    This app combines three complementary approaches to football match prediction:
+    This app combines four complementary approaches to football match prediction:
     
     ---
     
@@ -910,12 +1377,54 @@ with tab6:
     
     ---
     
+    ### 4. Expected Goals (xG) Calculator
+    
+    Implemented in tab 5, calculates individual shot quality and team attacking performance.
+    
+    #### How It Works
+    
+    1. **Shot Characteristics**: Considers distance, angle, body part, shot type
+    
+    2. **Context Factors**: Assist type, defensive pressure, goalkeeper position
+    
+    3. **Logistic Regression**: Uses mathematical model to calculate probability (0 to 1)
+    
+    4. **Quality Assessment**: Rates chances from "Very Difficult" to "Excellent"
+    
+    5. **Team Builder**: Aggregate multiple shots to calculate total match xG
+    
+    #### Key Applications
+    
+    - **Individual Shot Analysis**: Evaluate quality of specific chances
+    - **Team Performance**: Measure attacking effectiveness
+    - **Finishing Quality**: Compare actual goals to expected goals
+    - **Player Evaluation**: Assess strikers' conversion rates vs xG
+    - **Match Analysis**: See who created better quality chances
+    
+    #### The Formula
+    
+    ```
+    xG = 1 / (1 + e^(-logit))
+    
+    where logit includes:
+    - Base intercept
+    - Distance penalty
+    - Angle penalty  
+    - Body part adjustments
+    - Assist type bonuses
+    - Defensive pressure penalties
+    - Context bonuses (big chance, 1v1, etc.)
+    ```
+    
+    ---
+    
     ### Which System to Use?
     
     - **Goal Superiority**: Best for early predictions before markets are fully formed, or when you have detailed form data
     - **Wisdom of Crowd**: Best when sharp bookmaker odds are available; relies on market efficiency
+    - **xG Calculator**: Best for evaluating individual chances and team attacking quality
     - **Monte Carlo**: Best for exact scores and alternative markets; requires expected goals estimation
-    - **Combined**: Use all three! Agreement across systems = highest confidence
+    - **Combined**: Use all four! Agreement across systems = highest confidence
     
     ---
     
@@ -939,6 +1448,13 @@ with tab6:
     - Does not account for **dynamic game situations** (red cards, weather, etc.)
     - Requires **more input data** to calculate xG properly
     
+    **xG Calculator:**
+    - Simplified model vs professional xG (StatsBomb, Opta use thousands of variables)
+    - Doesn't account for **individual player skill**
+    - Based on **historical averages**, not specific situations
+    - Can't predict **individual outcomes**, only probabilities
+    - Different providers use different models, values will vary
+    
     ---
     
     ### References
@@ -951,8 +1467,11 @@ with tab6:
     
     3. **Monte Carlo Method**: Based on Poisson distribution modeling of football scores
        - Widely used in sports analytics and betting
+    
+    4. **xG Calculator**: Based on logistic regression models used by analytics providers
+       - Methodology adapted from StatsBomb, Opta, and academic research
     """)
 
 # Footer
 st.divider()
-st.caption("⚽ Football Ratings System | Three proven methodologies: Goal Superiority + Wisdom of the Crowd + Monte Carlo | Data-driven match predictions")
+st.caption("⚽ Football Ratings System | Four proven methodologies: Goal Superiority + Wisdom of the Crowd + xG Calculator + Monte Carlo | Data-driven match predictions")
