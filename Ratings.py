@@ -14,6 +14,38 @@ This app implements the **Goal Superiority Rating System** described in the Foot
 It calculates match ratings based on recent form and predicts match outcomes with fair odds.
 """)
 
+# Instructions
+with st.expander("📖 How to Use This App", expanded=True):
+    st.markdown("""
+    ### Quick Start Guide
+    
+    1. **Enter the team names** in the sidebar (default: Tottenham vs Leeds)
+    
+    2. **Input goals scored/conceded** for the last 6 matches for each team
+       - Home team recent form
+       - Away team recent form
+    
+    3. **(Optional) Enter bookmaker odds** to identify value bets
+       - Home win odds
+       - Draw odds
+       - Away win odds
+    
+    4. **Explore the tabs** to see:
+       - 📊 Match predictions and probabilities
+       - 📈 Rating analysis and confidence levels
+       - 💰 Value betting opportunities
+       - 📚 Methodology and research background
+    
+    ---
+    
+    **About the System:** This app uses exact equations from the original research with R² values of 
+    **0.86** for home wins, **0.75** for away wins, and **0.39** for draws, based on 14,002 English 
+    league matches from 1993-2001. The system achieved a **+10.1% yield** for matches with ratings 
+    between -2 and +2 in the 2001/02 season.
+    """)
+
+st.divider()
+
 # Sidebar for input
 st.sidebar.header("Match Configuration")
 
