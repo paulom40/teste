@@ -42,6 +42,9 @@ with st.expander("📖 How to Use This App", expanded=True):
     **0.86** for home wins, **0.75** for away wins, and **0.39** for draws, based on 14,002 English 
     league matches from 1993-2001. The system achieved a **+10.1% yield** for matches with ratings 
     between -2 and +2 in the 2001/02 season.
+    
+    The **Wisdom of the Crowd** method removes bookmaker margins to find true probabilities, achieving 
+    **+3.4% yield** across 22,318 European matches (2012-2015).
     """)
 
 st.divider()
@@ -110,7 +113,7 @@ fair_draw_odds = 100 / draw_prob_norm
 fair_away_odds = 100 / away_prob_norm
 
 # Main content
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "📚 About"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Match Prediction", "📈 Rating Analysis", "💰 Value Bets", "🧠 Wisdom of Crowd", "📚 About"])
 
 with tab1:
     st.header("Match Prediction")
@@ -286,14 +289,18 @@ with tab3:
     
     value_df['Is Value Bet?'] = value_df['Value (%)'] > 0
     
-    # Display table
+    # Display table with conditional formatting
+    def highlight_value(row):
+        if row['Is Value Bet?']:
+            return ['background-color: #90EE90'] * len(row)
+        return [''] * len(row)
+    
     st.dataframe(
         value_df.style.format({
             'Fair Odds': '{:.2f}',
             'Bookmaker Odds': '{:.2f}',
             'Value (%)': '{:+.2f}%'
-        }).apply(lambda x: ['background-color: #90EE90' if v else '' 
-                           for v in (x.name == 'Value (%)' and value_df['Is Value Bet?'])], axis=0),
+        }).apply(highlight_value, axis=1),
         hide_index=True,
         use_container_width=True
     )
@@ -340,13 +347,179 @@ with tab3:
             st.info("No value bets available for calculation")
 
 with tab4:
+    st.header("🧠 Wisdom of the Crowd")
+    
+    st.markdown("""
+    This method uses market odds (particularly from sharp bookmakers like Pinnacle) to estimate 
+    "true" probabilities by removing the bookmaker's margin. The betting market collectively 
+    contains the wisdom of thousands of bettors.
+    """)
+    
+    st.divider()
+    
+    st.subheader("Fair Odds Calculator")
+    st.markdown("Remove bookmaker margins to find the 'true' probabilities")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Input Bookmaker Odds")
+        wotc_home_odds = st.number_input("Home Win Odds", min_value=1.01, max_value=100.0, value=2.50, step=0.01, key="wotc_home")
+        wotc_draw_odds = st.number_input("Draw Odds", min_value=1.01, max_value=100.0, value=3.40, step=0.01, key="wotc_draw")
+        wotc_away_odds = st.number_input("Away Win Odds", min_value=1.01, max_value=100.0, value=2.90, step=0.01, key="wotc_away")
+        
+        # Calculate margin
+        margin = (1/wotc_home_odds + 1/wotc_draw_odds + 1/wotc_away_odds) - 1
+        overround = (margin + 1) * 100
+        
+        st.metric("Book Margin", f"{margin*100:.2f}%")
+        st.metric("Overround", f"{overround:.2f}%")
+    
+    with col2:
+        st.markdown("#### Fair Odds (Margin Removed)")
+        
+        # Calculate fair odds using differential margin weighting
+        # Fair odds = (3 × Published odds) / (3 - Margin × Published odds)
+        fair_home = (3 * wotc_home_odds) / (3 - margin * wotc_home_odds)
+        fair_draw = (3 * wotc_draw_odds) / (3 - margin * wotc_draw_odds)
+        fair_away = (3 * wotc_away_odds) / (3 - margin * wotc_away_odds)
+        
+        # Calculate implied probabilities
+        fair_home_prob = (1 / fair_home) * 100
+        fair_draw_prob = (1 / fair_draw) * 100
+        fair_away_prob = (1 / fair_away) * 100
+        
+        st.metric("Fair Home Odds", f"{fair_home:.2f}", delta=f"{fair_home_prob:.1f}% probability")
+        st.metric("Fair Draw Odds", f"{fair_draw:.2f}", delta=f"{fair_draw_prob:.1f}% probability")
+        st.metric("Fair Away Odds", f"{fair_away:.2f}", delta=f"{fair_away_prob:.1f}% probability")
+        
+        # Verify probabilities sum to 100%
+        total_fair_prob = fair_home_prob + fair_draw_prob + fair_away_prob
+        st.caption(f"Total probability: {total_fair_prob:.2f}% (should be ~100%)")
+    
+    st.divider()
+    
+    st.subheader("Compare Against Other Bookmakers")
+    st.markdown("Find value bets by comparing other bookmaker odds to the fair odds")
+    
+    # Create input for multiple bookmakers
+    num_bookies = st.number_input("Number of bookmakers to compare", min_value=1, max_value=10, value=3)
+    
+    comparison_data = []
+    
+    for i in range(num_bookies):
+        with st.expander(f"Bookmaker {i+1}", expanded=(i==0)):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                bookie_name = st.text_input("Name", f"Bookie {i+1}", key=f"name_{i}")
+            with col2:
+                bookie_home = st.number_input("Home", 1.01, 100.0, 2.60, 0.01, key=f"home_{i}")
+            with col3:
+                bookie_draw = st.number_input("Draw", 1.01, 100.0, 3.50, 0.01, key=f"draw_{i}")
+            with col4:
+                bookie_away = st.number_input("Away", 1.01, 100.0, 3.00, 0.01, key=f"away_{i}")
+            
+            # Calculate value
+            home_value = ((bookie_home / fair_home) - 1) * 100
+            draw_value = ((bookie_draw / fair_draw) - 1) * 100
+            away_value = ((bookie_away / fair_away) - 1) * 100
+            
+            comparison_data.append({
+                'Bookmaker': bookie_name,
+                'Home Odds': bookie_home,
+                'Home Value %': home_value,
+                'Draw Odds': bookie_draw,
+                'Draw Value %': draw_value,
+                'Away Odds': bookie_away,
+                'Away Value %': away_value
+            })
+    
+    # Display comparison table
+    if comparison_data:
+        comp_df = pd.DataFrame(comparison_data)
+        
+        # Highlight positive values
+        def highlight_positive(val):
+            if isinstance(val, (int, float)) and val > 0:
+                return 'background-color: #90EE90'
+            return ''
+        
+        st.dataframe(
+            comp_df.style.format({
+                'Home Odds': '{:.2f}',
+                'Home Value %': '{:+.2f}',
+                'Draw Odds': '{:.2f}',
+                'Draw Value %': '{:+.2f}',
+                'Away Odds': '{:.2f}',
+                'Away Value %': '{:+.2f}'
+            }).applymap(highlight_positive),
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Find best values
+        st.subheader("Best Value Opportunities")
+        
+        all_values = []
+        for row in comparison_data:
+            if row['Home Value %'] > 0:
+                all_values.append((row['Bookmaker'], 'Home Win', row['Home Odds'], row['Home Value %']))
+            if row['Draw Value %'] > 0:
+                all_values.append((row['Bookmaker'], 'Draw', row['Draw Odds'], row['Draw Value %']))
+            if row['Away Value %'] > 0:
+                all_values.append((row['Bookmaker'], 'Away Win', row['Away Odds'], row['Away Value %']))
+        
+        if all_values:
+            # Sort by value
+            all_values.sort(key=lambda x: x[3], reverse=True)
+            
+            for bookie, outcome, odds, value in all_values[:5]:  # Show top 5
+                st.success(f"**{bookie}** - {outcome}: {odds:.2f} odds ({value:+.2f}% value)")
+        else:
+            st.info("No value bets found. Try adjusting the odds.")
+    
+    st.divider()
+    
+    st.markdown("""
+    ### How It Works
+    
+    1. **The Wisdom of the Crowd**: Betting markets aggregate the opinions of thousands of bettors, 
+       creating remarkably accurate probability estimates
+    
+    2. **Margin Removal**: Bookmakers add a margin (overround) to make profit. By removing this using 
+       differential weighting, we can estimate the "true" odds
+    
+    3. **Differential Weighting**: The formula accounts for the favourite-longshot bias where bookmakers 
+       shorten longer odds more than shorter ones
+    
+    4. **Finding Value**: Compare other bookmaker odds to these fair odds to identify where the market 
+       has made mistakes
+    
+    **Formula Used:**
+    ```
+    Fair Odds = (3 × Published Odds) / (3 - Margin × Published Odds)
+    ```
+    
+    **Research Results** (2012/13 to 2014/15, 22,318 matches):
+    - Betting all value opportunities (where odds > fair odds): **+3.4% yield**
+    - Betting only when advantage > 3%: **+8.8% yield**
+    - The fair odds broke even (0.08% yield), confirming market accuracy
+    """)
+
+with tab5:
     st.header("About This System")
     
     st.markdown("""
-    ### Goal Superiority Rating System
+    ### Two Powerful Rating Systems
     
-    This application implements the rating system described in the Football-Data article 
-    *"Rating Systems for Fixed Odds Football Match Prediction"* by Joe Buchdahl.
+    This app combines two complementary approaches to football match prediction:
+    
+    ---
+    
+    ### 1. Goal Superiority Rating System
+    
+    Implemented in tabs 1-3, based on Football-Data's article by Joe Buchdahl.
     
     #### How It Works
     
@@ -365,25 +538,71 @@ with tab4:
     
     #### Key Findings
     
-    The original research showed:
     - **+2.1% yield** betting on all value home wins (2001/02 season)
     - **+10.1% yield** for match ratings between -2 and +2 (most reliable range)
     - Predictions most reliable for ratings close to 0 (evenly matched teams)
     
-    #### Limitations
+    ---
     
-    - Does not account for **quality of opposition** in the simple form
+    ### 2. Wisdom of the Crowd System
+    
+    Implemented in tab 4, based on the principle that betting markets aggregate collective intelligence.
+    
+    #### How It Works
+    
+    1. **Market Wisdom**: Sharp bookmakers like Pinnacle reflect the collective knowledge of thousands of bettors
+    
+    2. **Margin Removal**: Remove the bookmaker's profit margin using differential weighting:
+       ```
+       Fair Odds = (3 × Published Odds) / (3 - Margin × Published Odds)
+       ```
+    
+    3. **Favourite-Longshot Bias**: The formula accounts for bookmakers shortening longer odds more than shorter ones
+    
+    4. **Value Identification**: Compare other bookmakers' odds to the fair odds to find mistakes
+    
+    #### Key Findings (2012/13 to 2014/15, 22,318 matches)
+    
+    - **+3.4% yield** betting all value opportunities
+    - **+8.8% yield** when value advantage > 3%
+    - Fair odds broke even (0.08% yield), confirming market accuracy
+    - Works with 67% of opportunities even in overround books
+    
+    ---
+    
+    ### Which System to Use?
+    
+    - **Goal Superiority**: Best for early predictions before markets are fully formed, or when you have detailed form data
+    - **Wisdom of Crowd**: Best when sharp bookmaker odds are available; relies on market efficiency
+    - **Combined**: Use both! If both systems agree on value, confidence increases
+    
+    ---
+    
+    ### Limitations
+    
+    **Goal Superiority:**
+    - Does not account for **quality of opposition** in simple form
     - Based on **historical data** (1993-2001 English leagues)
     - **Draw predictions** have lower reliability (R² = 0.39)
     - Requires at least 6 matches of form data
     
-    #### References
+    **Wisdom of Crowd:**
+    - Requires access to sharp bookmaker odds (e.g., Pinnacle)
+    - Assumes market efficiency and independence of opinions
+    - Bookmakers may limit accounts of consistent winners
+    - Margin removal model is simplified
     
-    Source: Football-Data.co.uk - "Rating Systems for Fixed Odds Football Match Prediction"
+    ---
     
-    Material adapted from *Fixed Odds Sports Betting: The Essential Guide* by Joe Buchdahl
+    ### References
+    
+    1. **Goal Superiority System**: Football-Data.co.uk - "Rating Systems for Fixed Odds Football Match Prediction" 
+       - Material adapted from *Fixed Odds Sports Betting: The Essential Guide* by Joe Buchdahl
+    
+    2. **Wisdom of Crowd System**: Football-Data.co.uk - "The Wisdom of the Crowd"
+       - Based on research by Francis Galton (1906) and Vernon Lomax Smith
     """)
 
 # Footer
 st.divider()
-st.caption("⚽ Football Ratings System | Based on Goal Superiority Rating methodology | Data-driven match predictions")
+st.caption("⚽ Football Ratings System | Two proven methodologies: Goal Superiority + Wisdom of the Crowd | Data-driven match predictions")
