@@ -264,27 +264,7 @@ def find_value_bets(df, team_stats, threshold=0.05):
     
     return pd.DataFrame(value_bets)
 
-# Load data
-with st.spinner('Loading football data...'):
-    if data_source == "📤 Upload CSV File" and uploaded_file is not None:
-        df = load_data('upload', uploaded_file)
-    else:
-        df = load_data('default')
-    
-    if df is None:
-        st.stop()
-    
-    team_stats = calculate_team_stats(df)
-
-# Display league info
-st.sidebar.markdown("---")
-st.sidebar.markdown(f"### 📊 Current Dataset")
-st.sidebar.write(f"**League:** {league_name}")
-st.sidebar.write(f"**Matches:** {len(df)}")
-st.sidebar.write(f"**Teams:** {len(df['HomeTeam'].unique())}")
-st.sidebar.write(f"**Date Range:** {df['Date'].min().strftime('%d/%m/%Y')} to {df['Date'].max().strftime('%d/%m/%Y')}")
-
-# Sidebar
+# Sidebar configuration
 st.sidebar.title("📁 Data Source")
 
 # Data source selection
@@ -336,6 +316,27 @@ st.sidebar.info("💡 **How it works:**\n\n"
                 "- Recent form\n"
                 "- Home advantage\n"
                 "- Expected goals (xG)")
+
+# Load data based on selection
+with st.spinner('Loading football data...'):
+    if data_source == "📤 Upload CSV File" and uploaded_file is not None:
+        df = load_data('upload', uploaded_file)
+    else:
+        df = load_data('default')
+    
+    if df is None:
+        st.stop()
+    
+    team_stats = calculate_team_stats(df)
+
+# Display league info
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"### 📊 Current Dataset")
+st.sidebar.write(f"**League:** {league_name}")
+st.sidebar.write(f"**Matches:** {len(df)}")
+st.sidebar.write(f"**Teams:** {len(df['HomeTeam'].unique())}")
+if not df.empty and 'Date' in df.columns:
+    st.sidebar.write(f"**Date Range:** {df['Date'].min().strftime('%d/%m/%Y')} to {df['Date'].max().strftime('%d/%m/%Y')}")
 
 # Create tabs
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔮 Predictor", "💰 Value Finder", "📈 Team Stats"])
