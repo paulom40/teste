@@ -200,12 +200,52 @@ def predict_match(home_team, away_team, team_stats, df):
     prob_draw /= total
     prob_away /= total
     
+    # Calculate Over/Under probabilities
+    total_xg = home_xg + away_xg
+    prob_over_15 = min(0.95, max(0.05, 1 / (1 + np.exp(-2 * (total_xg - 1.5)))))
+    prob_over_25 = min(0.95, max(0.05, 1 / (1 + np.exp(-2 * (total_xg - 2.5)))))
+    prob_over_35 = min(0.95, max(0.05, 1 / (1 + np.exp(-2 * (total_xg - 3.5)))))
+    
+    # Get historical stats for shots and corners
+    home_games = df[df['HomeTeam'] == home_team]
+    away_games = df[df['AwayTeam'] == away_team]
+    
+    # Shots on Target prediction
+    home_sot_avg = home_games['HST'].mean() if len(home_games) > 0 else 5
+    away_sot_avg = away_games['AST'].mean() if len(away_games) > 0 else 4
+    total_sot = home_sot_avg + away_sot_avg
+    
+    prob_sot_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 8)))))
+    prob_sot_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 10)))))
+    prob_sot_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 12)))))
+    
+    # Corners prediction
+    home_corners_avg = home_games['HC'].mean() if len(home_games) > 0 and 'HC' in home_games.columns else 5
+    away_corners_avg = away_games['AC'].mean() if len(away_games) > 0 and 'AC' in away_games.columns else 4
+    total_corners = home_corners_avg + away_corners_avg
+    
+    prob_corners_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 8)))))
+    prob_corners_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 10)))))
+    prob_corners_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 12)))))
+    
     return {
         'home': prob_home,
         'draw': prob_draw,
         'away': prob_away,
         'home_xg': home_xg,
-        'away_xg': away_xg
+        'away_xg': away_xg,
+        'total_goals': total_xg,
+        'over_15': prob_over_15,
+        'over_25': prob_over_25,
+        'over_35': prob_over_35,
+        'total_sot': total_sot,
+        'sot_over_8': prob_sot_over_8,
+        'sot_over_10': prob_sot_over_10,
+        'sot_over_12': prob_sot_over_12,
+        'total_corners': total_corners,
+        'corners_over_8': prob_corners_over_8,
+        'corners_over_10': prob_corners_over_10,
+        'corners_over_12': prob_corners_over_12
     }
 
 def find_value_bets(df, team_stats, threshold=0.05):
@@ -339,7 +379,7 @@ if not df.empty and 'Date' in df.columns:
     st.sidebar.write(f"**Date Range:** {df['Date'].min().strftime('%d/%m/%Y')} to {df['Date'].max().strftime('%d/%m/%Y')}")
 
 # Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔮 Predictor", "💰 Value Finder", "📈 Team Stats"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔮 Predictor", "💰 Value Finder", "📈 Team Stats", "🎯 Special Markets"])
 
 with tab1:
     st.header(f"Season Overview - {league_name}")
@@ -449,6 +489,126 @@ with tab2:
             with col2:
                 st.metric(f"{away_team} Expected Goals", f"{prediction['away_xg']:.2f}")
             
+            # Goal Line Markets
+            st.markdown("---")
+            st.markdown("### ⚽ Goal Line Markets")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                over_15 = prediction['over_15']
+                under_15 = 1 - over_15
+                st.markdown(f"""
+                <div style='background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+                            padding: 1.5rem; border-radius: 10px; text-align: center; color: white;'>
+                    <h4 style='margin: 0;'>Over 1.5 Goals</h4>
+                    <h2 style='margin: 0.5rem 0;'>{over_15*100:.1f}%</h2>
+                    <p style='margin: 0; font-size: 0.9rem;'>Under: {under_15*100:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                over_25 = prediction['over_25']
+                under_25 = 1 - over_25
+                st.markdown(f"""
+                <div style='background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
+                            padding: 1.5rem; border-radius: 10px; text-align: center; color: white;'>
+                    <h4 style='margin: 0;'>Over 2.5 Goals</h4>
+                    <h2 style='margin: 0.5rem 0;'>{over_25*100:.1f}%</h2>
+                    <p style='margin: 0; font-size: 0.9rem;'>Under: {under_25*100:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                over_35 = prediction['over_35']
+                under_35 = 1 - over_35
+                st.markdown(f"""
+                <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                            padding: 1.5rem; border-radius: 10px; text-align: center; color: white;'>
+                    <h4 style='margin: 0;'>Over 3.5 Goals</h4>
+                    <h2 style='margin: 0.5rem 0;'>{over_35*100:.1f}%</h2>
+                    <p style='margin: 0; font-size: 0.9rem;'>Under: {under_35*100:.1f}%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Shots on Target Line
+            st.markdown("---")
+            st.markdown("### 🎯 Shots on Target")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"""
+                <div style='background: #2d3748; padding: 1rem; border-radius: 8px; border-left: 4px solid #4299e1;'>
+                    <p style='margin: 0; color: #a0aec0;'>Expected Total SOT</p>
+                    <h3 style='margin: 0.5rem 0; color: white;'>{prediction['total_sot']:.1f}</h3>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                # Create SOT gauge chart
+                sot_data = pd.DataFrame({
+                    'Line': ['Over 8.5', 'Over 10.5', 'Over 12.5'],
+                    'Probability': [
+                        prediction['sot_over_8'] * 100,
+                        prediction['sot_over_10'] * 100,
+                        prediction['sot_over_12'] * 100
+                    ]
+                })
+                
+                fig = px.bar(sot_data, x='Line', y='Probability',
+                            color='Probability',
+                            color_continuous_scale='Blues',
+                            text='Probability')
+                fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                fig.update_layout(
+                    showlegend=False,
+                    height=250,
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    yaxis_title="Probability (%)",
+                    xaxis_title=""
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Corners Line
+            st.markdown("---")
+            st.markdown("### 🚩 Corners")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"""
+                <div style='background: #2d3748; padding: 1rem; border-radius: 8px; border-left: 4px solid #48bb78;'>
+                    <p style='margin: 0; color: #a0aec0;'>Expected Total Corners</p>
+                    <h3 style='margin: 0.5rem 0; color: white;'>{prediction['total_corners']:.1f}</h3>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                # Create Corners gauge chart
+                corners_data = pd.DataFrame({
+                    'Line': ['Over 8.5', 'Over 10.5', 'Over 12.5'],
+                    'Probability': [
+                        prediction['corners_over_8'] * 100,
+                        prediction['corners_over_10'] * 100,
+                        prediction['corners_over_12'] * 100
+                    ]
+                })
+                
+                fig = px.bar(corners_data, x='Line', y='Probability',
+                            color='Probability',
+                            color_continuous_scale='Greens',
+                            text='Probability')
+                fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                fig.update_layout(
+                    showlegend=False,
+                    height=250,
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    yaxis_title="Probability (%)",
+                    xaxis_title=""
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
             # Recent form comparison
             st.markdown("### Recent Form (Last 5 Games)")
             home_form = calculate_form(df, home_team, 5)
@@ -545,7 +705,241 @@ with tab4:
                     color='Goal Diff', color_continuous_scale='Viridis')
         st.plotly_chart(fig, use_container_width=True)
 
-# Footer
+with tab5:
+    st.header("🎯 Special Markets Analysis")
+    
+    st.info("📊 Comprehensive analysis of Goals, Shots on Target, and Corners markets across all matches")
+    
+    # Calculate market statistics
+    if 'HST' in df.columns and 'AST' in df.columns:
+        df['TotalSOT'] = df['HST'] + df['AST']
+    else:
+        df['TotalSOT'] = 0
+    
+    if 'HC' in df.columns and 'AC' in df.columns:
+        df['TotalCorners'] = df['HC'] + df['AC']
+    else:
+        df['TotalCorners'] = 0
+    
+    df['TotalGoals'] = df['FTHG'] + df['FTAG']
+    
+    # Market Overview
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        avg_goals = df['TotalGoals'].mean()
+        over_25_pct = (df['TotalGoals'] > 2.5).sum() / len(df) * 100
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                    padding: 2rem; border-radius: 15px; text-align: center; color: white;'>
+            <h3 style='margin: 0;'>⚽ Goals Market</h3>
+            <h1 style='margin: 1rem 0;'>{avg_goals:.2f}</h1>
+            <p style='margin: 0;'>Avg Total Goals</p>
+            <p style='margin: 0.5rem 0; font-size: 1.2rem;'>{over_25_pct:.1f}% Over 2.5</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        avg_sot = df['TotalSOT'].mean()
+        over_10_sot_pct = (df['TotalSOT'] > 10.5).sum() / len(df) * 100 if df['TotalSOT'].sum() > 0 else 0
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
+                    padding: 2rem; border-radius: 15px; text-align: center; color: white;'>
+            <h3 style='margin: 0;'>🎯 Shots on Target</h3>
+            <h1 style='margin: 1rem 0;'>{avg_sot:.2f}</h1>
+            <p style='margin: 0;'>Avg Total SOT</p>
+            <p style='margin: 0.5rem 0; font-size: 1.2rem;'>{over_10_sot_pct:.1f}% Over 10.5</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        avg_corners = df['TotalCorners'].mean()
+        over_10_corners_pct = (df['TotalCorners'] > 10.5).sum() / len(df) * 100 if df['TotalCorners'].sum() > 0 else 0
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+                    padding: 2rem; border-radius: 15px; text-align: center; color: white;'>
+            <h3 style='margin: 0;'>🚩 Corners</h3>
+            <h1 style='margin: 1rem 0;'>{avg_corners:.2f}</h1>
+            <p style='margin: 0;'>Avg Total Corners</p>
+            <p style='margin: 0.5rem 0; font-size: 1.2rem;'>{over_10_corners_pct:.1f}% Over 10.5</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # Distribution Charts
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### ⚽ Goals Distribution")
+        
+        goals_dist = df['TotalGoals'].value_counts().sort_index()
+        fig = go.Figure(data=[
+            go.Bar(x=goals_dist.index, y=goals_dist.values,
+                   marker_color='rgb(102, 126, 234)',
+                   text=goals_dist.values,
+                   textposition='auto')
+        ])
+        fig.update_layout(
+            xaxis_title="Total Goals",
+            yaxis_title="Frequency",
+            height=300,
+            margin=dict(t=20, b=20, l=20, r=20)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Goals market performance
+        goal_lines = [1.5, 2.5, 3.5, 4.5]
+        over_pct = [(df['TotalGoals'] > line).sum() / len(df) * 100 for line in goal_lines]
+        
+        market_df = pd.DataFrame({
+            'Line': [f'Over {line}' for line in goal_lines],
+            'Hit Rate (%)': over_pct,
+            'Under Rate (%)': [100 - pct for pct in over_pct]
+        })
+        
+        st.dataframe(market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
+                    use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.markdown("### 🎯 Shots on Target Distribution")
+        
+        if df['TotalSOT'].sum() > 0:
+            # Create bins for SOT
+            sot_bins = pd.cut(df['TotalSOT'], bins=[0, 6, 8, 10, 12, 14, 100])
+            sot_counts = sot_bins.value_counts().sort_index()
+            
+            fig = go.Figure(data=[
+                go.Bar(x=[str(x) for x in sot_counts.index], y=sot_counts.values,
+                       marker_color='rgb(79, 172, 254)',
+                       text=sot_counts.values,
+                       textposition='auto')
+            ])
+            fig.update_layout(
+                xaxis_title="Total SOT Range",
+                yaxis_title="Frequency",
+                height=300,
+                margin=dict(t=20, b=20, l=20, r=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # SOT market performance
+            sot_lines = [8.5, 10.5, 12.5, 14.5]
+            over_sot_pct = [(df['TotalSOT'] > line).sum() / len(df) * 100 for line in sot_lines]
+            
+            sot_market_df = pd.DataFrame({
+                'Line': [f'Over {line}' for line in sot_lines],
+                'Hit Rate (%)': over_sot_pct,
+                'Under Rate (%)': [100 - pct for pct in over_sot_pct]
+            })
+            
+            st.dataframe(sot_market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
+                        use_container_width=True, hide_index=True)
+        else:
+            st.warning("No shots on target data available")
+    
+    st.markdown("---")
+    
+    # Corners Analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 🚩 Corners Distribution")
+        
+        if df['TotalCorners'].sum() > 0:
+            # Create bins for corners
+            corners_bins = pd.cut(df['TotalCorners'], bins=[0, 6, 8, 10, 12, 14, 100])
+            corners_counts = corners_bins.value_counts().sort_index()
+            
+            fig = go.Figure(data=[
+                go.Bar(x=[str(x) for x in corners_counts.index], y=corners_counts.values,
+                       marker_color='rgb(72, 187, 120)',
+                       text=corners_counts.values,
+                       textposition='auto')
+            ])
+            fig.update_layout(
+                xaxis_title="Total Corners Range",
+                yaxis_title="Frequency",
+                height=300,
+                margin=dict(t=20, b=20, l=20, r=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Corners market performance
+            corners_lines = [8.5, 10.5, 12.5, 14.5]
+            over_corners_pct = [(df['TotalCorners'] > line).sum() / len(df) * 100 for line in corners_lines]
+            
+            corners_market_df = pd.DataFrame({
+                'Line': [f'Over {line}' for line in corners_lines],
+                'Hit Rate (%)': over_corners_pct,
+                'Under Rate (%)': [100 - pct for pct in over_corners_pct]
+            })
+            
+            st.dataframe(corners_market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
+                        use_container_width=True, hide_index=True)
+        else:
+            st.warning("No corners data available")
+    
+    with col2:
+        st.markdown("### 📊 Market Correlation")
+        
+        # Correlation heatmap
+        if df['TotalSOT'].sum() > 0 and df['TotalCorners'].sum() > 0:
+            corr_data = df[['TotalGoals', 'TotalSOT', 'TotalCorners']].corr()
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=corr_data.values,
+                x=['Goals', 'SOT', 'Corners'],
+                y=['Goals', 'SOT', 'Corners'],
+                colorscale='RdBu',
+                zmid=0,
+                text=np.round(corr_data.values, 2),
+                texttemplate='%{text}',
+                textfont={"size": 16},
+                colorbar=dict(title="Correlation")
+            ))
+            fig.update_layout(
+                height=300,
+                margin=dict(t=20, b=20, l=20, r=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.info("💡 **Insights:**\n\n"
+                   f"- Goals ↔ SOT correlation: **{corr_data.loc['TotalGoals', 'TotalSOT']:.2f}**\n"
+                   f"- Goals ↔ Corners correlation: **{corr_data.loc['TotalGoals', 'TotalCorners']:.2f}**\n"
+                   f"- SOT ↔ Corners correlation: **{corr_data.loc['TotalSOT', 'TotalCorners']:.2f}**")
+        else:
+            st.warning("Insufficient data for correlation analysis")
+    
+    # Top Teams by Market
+    st.markdown("---")
+    st.markdown("### 🏆 Top Performers by Market")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("**⚽ Highest Scoring Matches**")
+        top_goals = df.nlargest(5, 'TotalGoals')[['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'TotalGoals']]
+        top_goals['Match'] = top_goals['HomeTeam'] + ' ' + top_goals['FTHG'].astype(str) + '-' + top_goals['FTAG'].astype(str) + ' ' + top_goals['AwayTeam']
+        st.dataframe(top_goals[['Date', 'Match', 'TotalGoals']], use_container_width=True, hide_index=True)
+    
+    with col2:
+        if df['TotalSOT'].sum() > 0:
+            st.markdown("**🎯 Most Shots on Target**")
+            top_sot = df.nlargest(5, 'TotalSOT')[['Date', 'HomeTeam', 'AwayTeam', 'HST', 'AST', 'TotalSOT']]
+            top_sot['Match'] = top_sot['HomeTeam'] + ' vs ' + top_sot['AwayTeam']
+            st.dataframe(top_sot[['Date', 'Match', 'TotalSOT']], use_container_width=True, hide_index=True)
+        else:
+            st.warning("No SOT data")
+    
+    with col3:
+        if df['TotalCorners'].sum() > 0:
+            st.markdown("**🚩 Most Corners**")
+            top_corners = df.nlargest(5, 'TotalCorners')[['Date', 'HomeTeam', 'AwayTeam', 'HC', 'AC', 'TotalCorners']]
+            top_corners['Match'] = top_corners['HomeTeam'] + ' vs ' + top_corners['AwayTeam']
+            st.dataframe(top_corners[['Date', 'Match', 'TotalCorners']], use_container_width=True, hide_index=True)
+        else:
+            st.warning("No corners data")
 st.markdown("---")
 st.markdown(f"""
 <div style='text-align: center; color: gray;'>
