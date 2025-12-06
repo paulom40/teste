@@ -47,10 +47,36 @@ st.markdown('<h1 class="main-header">⚽ Professional Football Betting Model</h1
 
 # Load and process data
 @st.cache_data
-def load_data():
-    url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
-    df = pd.read_csv(url)
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+def load_data(source='default', uploaded_file=None):
+    """Load data from default URL or uploaded file"""
+    if source == 'upload' and uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+    else:
+        url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
+        df = pd.read_csv(url)
+    
+    # Try different date formats
+    date_formats = ['%d/%m/%Y', '%Y-%m-%d', '%m/%d/%Y']
+    for fmt in date_formats:
+        try:
+            df['Date'] = pd.to_datetime(df['Date'], format=fmt)
+            break
+        except:
+            continue
+    
+    # If all formats fail, use automatic parsing
+    if df['Date'].dtype != 'datetime64[ns]':
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    
+    # Validate required columns
+    required_cols = ['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR', 'B365H', 'B365D', 'B365A']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+        st.info("Please ensure your CSV has these columns: Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR, B365H, B365D, B365A")
+        return None
+    
     return df
 
 def calculate_team_stats(df):
@@ -239,11 +265,66 @@ def find_value_bets(df, team_stats, threshold=0.05):
     return pd.DataFrame(value_bets)
 
 # Load data
-with st.spinner('Loading Premier League data...'):
-    df = load_data()
+with st.spinner('Loading football data...'):
+    if data_source == "📤 Upload CSV File" and uploaded_file is not None:
+        df = load_data('upload', uploaded_file)
+    else:
+        df = load_data('default')
+    
+    if df is None:
+        st.stop()
+    
     team_stats = calculate_team_stats(df)
 
+# Display league info
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"### 📊 Current Dataset")
+st.sidebar.write(f"**League:** {league_name}")
+st.sidebar.write(f"**Matches:** {len(df)}")
+st.sidebar.write(f"**Teams:** {len(df['HomeTeam'].unique())}")
+st.sidebar.write(f"**Date Range:** {df['Date'].min().strftime('%d/%m/%Y')} to {df['Date'].max().strftime('%d/%m/%Y')}")
+
 # Sidebar
+st.sidebar.title("📁 Data Source")
+
+# Data source selection
+data_source = st.sidebar.radio(
+    "Choose Data Source:",
+    ["📊 Premier League (Default)", "📤 Upload CSV File"]
+)
+
+uploaded_file = None
+league_name = "Premier League 2025/26"
+
+if data_source == "📤 Upload CSV File":
+    st.sidebar.markdown("### Upload Your League Data")
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose a CSV file",
+        type=['csv'],
+        help="Upload football data in the same format as football-data.co.uk"
+    )
+    
+    if uploaded_file is not None:
+        league_name = st.sidebar.text_input("League Name", "Custom League")
+        st.sidebar.success("✅ File uploaded successfully!")
+    else:
+        st.sidebar.info("📋 **Required CSV columns:**\n\n"
+                       "- Date, HomeTeam, AwayTeam\n"
+                       "- FTHG, FTAG, FTR\n"
+                       "- HS, AS, HST, AST\n"
+                       "- B365H, B365D, B365A\n"
+                       "- HC, AC, HY, AY")
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**📥 Download Sample Leagues:**")
+        st.sidebar.markdown("""
+        - [🇪🇸 La Liga](https://www.football-data.co.uk/mmz4281/2526/SP1.csv)
+        - [🇮🇹 Serie A](https://www.football-data.co.uk/mmz4281/2526/I1.csv)
+        - [🇩🇪 Bundesliga](https://www.football-data.co.uk/mmz4281/2526/D1.csv)
+        - [🇫🇷 Ligue 1](https://www.football-data.co.uk/mmz4281/2526/F1.csv)
+        """)
+
+st.sidebar.markdown("---")
 st.sidebar.title("🎯 Model Settings")
 value_threshold = st.sidebar.slider("Value Bet Threshold (%)", 1, 20, 5) / 100
 form_games = st.sidebar.slider("Recent Form (games)", 3, 10, 5)
@@ -260,7 +341,7 @@ st.sidebar.info("💡 **How it works:**\n\n"
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔮 Predictor", "💰 Value Finder", "📈 Team Stats"])
 
 with tab1:
-    st.header("Season Overview")
+    st.header(f"Season Overview - {league_name}")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -465,9 +546,9 @@ with tab4:
 
 # Footer
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
 <div style='text-align: center; color: gray;'>
-    <p>⚽ Professional Football Betting Model | Premier League 2025/26</p>
+    <p>⚽ Professional Football Betting Model | {league_name}</p>
     <p>📊 Statistical Model using Team Strength, Form & Expected Goals</p>
     <p>⚠️ For educational purposes only. Always gamble responsibly.</p>
 </div>
