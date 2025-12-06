@@ -207,26 +207,68 @@ def predict_match(home_team, away_team, team_stats, df):
     prob_over_35 = min(0.95, max(0.05, 1 / (1 + np.exp(-2 * (total_xg - 3.5)))))
     
     # Get historical stats for shots and corners
-    home_games = df[df['HomeTeam'] == home_team]
-    away_games = df[df['AwayTeam'] == away_team]
+    home_games_home = df[df['HomeTeam'] == home_team]
+    home_games_away = df[df['AwayTeam'] == home_team]
+    away_games_home = df[df['HomeTeam'] == away_team]
+    away_games_away = df[df['AwayTeam'] == away_team]
     
-    # Shots on Target prediction
-    home_sot_avg = home_games['HST'].mean() if len(home_games) > 0 else 5
-    away_sot_avg = away_games['AST'].mean() if len(away_games) > 0 else 4
-    total_sot = home_sot_avg + away_sot_avg
+    # Shots on Target prediction - more accurate calculation
+    # Home team when playing at home
+    home_sot_home = home_games_home['HST'].mean() if len(home_games_home) > 0 and 'HST' in df.columns else 4.5
+    # Away team when playing away
+    away_sot_away = away_games_away['AST'].mean() if len(away_games_away) > 0 and 'AST' in df.columns else 3.5
     
-    prob_sot_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 8)))))
-    prob_sot_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 10)))))
-    prob_sot_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.5 * (total_sot - 12)))))
+    # Also consider their overall SOT average for more accuracy
+    home_all_sot = pd.concat([
+        home_games_home['HST'] if 'HST' in df.columns else pd.Series([]),
+        home_games_away['AST'] if 'AST' in df.columns else pd.Series([])
+    ])
+    away_all_sot = pd.concat([
+        away_games_home['HST'] if 'HST' in df.columns else pd.Series([]),
+        away_games_away['AST'] if 'AST' in df.columns else pd.Series([])
+    ])
     
-    # Corners prediction
-    home_corners_avg = home_games['HC'].mean() if len(home_games) > 0 and 'HC' in home_games.columns else 5
-    away_corners_avg = away_games['AC'].mean() if len(away_games) > 0 and 'AC' in away_games.columns else 4
-    total_corners = home_corners_avg + away_corners_avg
+    home_sot_overall = home_all_sot.mean() if len(home_all_sot) > 0 else 4.0
+    away_sot_overall = away_all_sot.mean() if len(away_all_sot) > 0 else 3.5
     
-    prob_corners_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 8)))))
-    prob_corners_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 10)))))
-    prob_corners_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.4 * (total_corners - 12)))))
+    # Weighted average: 70% home/away specific, 30% overall
+    home_sot_predicted = home_sot_home * 0.7 + home_sot_overall * 0.3
+    away_sot_predicted = away_sot_away * 0.7 + away_sot_overall * 0.3
+    total_sot = home_sot_predicted + away_sot_predicted
+    
+    # More accurate probability calculation using actual distribution
+    prob_sot_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.8 * (total_sot - 8.5)))))
+    prob_sot_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.8 * (total_sot - 10.5)))))
+    prob_sot_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.8 * (total_sot - 12.5)))))
+    
+    # Corners prediction - more accurate calculation
+    # Home team when playing at home
+    home_corners_home = home_games_home['HC'].mean() if len(home_games_home) > 0 and 'HC' in df.columns else 5.0
+    # Away team when playing away
+    away_corners_away = away_games_away['AC'].mean() if len(away_games_away) > 0 and 'AC' in df.columns else 4.5
+    
+    # Overall corners average
+    home_all_corners = pd.concat([
+        home_games_home['HC'] if 'HC' in df.columns else pd.Series([]),
+        home_games_away['AC'] if 'AC' in df.columns else pd.Series([])
+    ])
+    away_all_corners = pd.concat([
+        away_games_home['HC'] if 'HC' in df.columns else pd.Series([]),
+        away_games_away['AC'] if 'AC' in df.columns else pd.Series([])
+    ])
+    
+    home_corners_overall = home_all_corners.mean() if len(home_all_corners) > 0 else 4.8
+    away_corners_overall = away_all_corners.mean() if len(away_all_corners) > 0 else 4.2
+    
+    # Weighted average: 70% home/away specific, 30% overall
+    home_corners_predicted = home_corners_home * 0.7 + home_corners_overall * 0.3
+    away_corners_predicted = away_corners_away * 0.7 + away_corners_overall * 0.3
+    total_corners = home_corners_predicted + away_corners_predicted
+    
+    # More accurate probability calculation
+    prob_corners_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 8.5)))))
+    prob_corners_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 10.5)))))
+    prob_corners_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 12.5)))))
     
     return {
         'home': prob_home,
@@ -626,6 +668,46 @@ with tab2:
                 st.write(f"Points: {away_form['points']}/15")
                 st.write(f"Goals Scored: {away_form['goals_scored']}")
                 st.write(f"Goals Conceded: {away_form['goals_conceded']}")
+            
+            # Team Statistics for Special Markets
+            st.markdown("---")
+            st.markdown("### 📊 Team Averages (Special Markets)")
+            
+            # Get team-specific stats
+            home_games_h = df[df['HomeTeam'] == home_team]
+            away_games_a = df[df['AwayTeam'] == away_team]
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("**⚽ Goals Per Game**")
+                home_goals_h = home_games_h['FTHG'].mean() if len(home_games_h) > 0 else 0
+                away_goals_a = away_games_a['FTAG'].mean() if len(away_games_a) > 0 else 0
+                st.write(f"{home_team} (Home): {home_goals_h:.2f}")
+                st.write(f"{away_team} (Away): {away_goals_a:.2f}")
+                st.write(f"**Combined: {home_goals_h + away_goals_a:.2f}**")
+            
+            with col2:
+                st.markdown("**🎯 SOT Per Game**")
+                if 'HST' in df.columns and 'AST' in df.columns:
+                    home_sot_h = home_games_h['HST'].mean() if len(home_games_h) > 0 else 0
+                    away_sot_a = away_games_a['AST'].mean() if len(away_games_a) > 0 else 0
+                    st.write(f"{home_team} (Home): {home_sot_h:.2f}")
+                    st.write(f"{away_team} (Away): {away_sot_a:.2f}")
+                    st.write(f"**Combined: {home_sot_h + away_sot_a:.2f}**")
+                else:
+                    st.write("No data available")
+            
+            with col3:
+                st.markdown("**🚩 Corners Per Game**")
+                if 'HC' in df.columns and 'AC' in df.columns:
+                    home_corners_h = home_games_h['HC'].mean() if len(home_games_h) > 0 else 0
+                    away_corners_a = away_games_a['AC'].mean() if len(away_games_a) > 0 else 0
+                    st.write(f"{home_team} (Home): {home_corners_h:.2f}")
+                    st.write(f"{away_team} (Away): {away_corners_a:.2f}")
+                    st.write(f"**Combined: {home_corners_h + away_corners_a:.2f}**")
+                else:
+                    st.write("No data available")
 
 with tab3:
     st.header("Value Betting Opportunities")
