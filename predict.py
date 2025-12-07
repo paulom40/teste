@@ -367,6 +367,8 @@ def generate_excel_special_markets(df):
     
     output.seek(0)
     return output
+
+def generate_html_report(df, team_stats, league_name, prediction_model):
     """Generate HTML report for export"""
     
     # Calculate statistics
@@ -670,6 +672,8 @@ def generate_excel_special_markets(df):
     """
     
     return html_content
+
+def calculate_form(df, team, last_n=5):
     """Calculate recent form for a team"""
     team_games = df[(df['HomeTeam'] == team) | (df['AwayTeam'] == team)].tail(last_n)
     
@@ -1070,37 +1074,6 @@ if data_source == "📤 Upload CSV File":
                        "- HC, AC, HY, AY")
         
         st.sidebar.markdown("---")
-st.sidebar.markdown("### 📥 Export Reports")
-
-col1, col2 = st.sidebar.columns(2)
-
-with col1:
-    if st.button("📄 HTML", type="secondary", use_container_width=True):
-        with st.spinner("Generating..."):
-            html_report = generate_html_report(df, team_stats, league_name, prediction_model)
-            
-            st.download_button(
-                label="⬇️ Download HTML",
-                data=html_report,
-                file_name=f"football_report_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-                mime="text/html",
-                use_container_width=True
-            )
-
-with col2:
-    if st.button("📊 Excel", type="secondary", use_container_width=True):
-        with st.spinner("Generating..."):
-            excel_file = generate_excel_special_markets(df)
-            
-            st.download_button(
-                label="⬇️ Download Excel",
-                data=excel_file,
-                file_name=f"special_markets_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-st.sidebar.markdown("---")
         st.sidebar.markdown("**📥 Download Sample Leagues:**")
         st.sidebar.markdown("""
         - [🇪🇸 La Liga](https://www.football-data.co.uk/mmz4281/2526/SP1.csv)
