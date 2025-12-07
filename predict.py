@@ -150,7 +150,7 @@ def export_prediction_to_excel(home_team, away_team, prediction):
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = writer.sheets['Sheet1']
+        worksheet = workbook.add_worksheet('Prediction')
         
         # Define formats
         title_format = workbook.add_format({
