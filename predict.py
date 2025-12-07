@@ -536,12 +536,26 @@ if data_source == "📤 Upload CSV File":
 st.sidebar.markdown("---")
 st.sidebar.title("🎯 Model Settings")
 
-# Model selection
+# Model selection - highlighted
+st.sidebar.markdown("### 🤖 Select Prediction Model")
 prediction_model = st.sidebar.selectbox(
-    "Prediction Model",
+    "Choose Model:",
     ["Statistical (Fast)", "Poisson", "Dixon-Coles", "Negative Binomial", "Ensemble"],
-    help="Choose the mathematical model for predictions"
+    help="Choose the mathematical model for predictions",
+    index=0
 )
+
+# Show current model badge
+if prediction_model == "Ensemble":
+    st.sidebar.success("🏆 Using **Ensemble** - Most Accurate!")
+elif prediction_model == "Dixon-Coles":
+    st.sidebar.info("📊 Using **Dixon-Coles** - Industry Standard")
+elif prediction_model == "Negative Binomial":
+    st.sidebar.info("📈 Using **Negative Binomial** - High Variance")
+elif prediction_model == "Poisson":
+    st.sidebar.info("⚡ Using **Poisson** - Fast & Simple")
+else:
+    st.sidebar.info("🔍 Using **Statistical** - Fast & Versatile")
 
 value_threshold = st.sidebar.slider("Value Bet Threshold (%)", 1, 20, 5) / 100
 form_games = st.sidebar.slider("Recent Form (games)", 3, 10, 5)
