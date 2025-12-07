@@ -155,6 +155,153 @@ def calculate_form(df, team, last_n=5):
         'games': len(team_games)
     }
 
+def calculate_poisson_params(df, team, is_home=True):
+    """Calculate attack and defense parameters for Poisson model"""
+    all_teams = pd.concat([df['HomeTeam'], df['AwayTeam']]).unique()
+    
+    # Average goals
+    avg_home_goals = df['FTHG'].mean()
+    avg_away_goals = df['FTAG'].mean()
+    
+    # Team specific
+    if is_home:
+        team_games = df[df['HomeTeam'] == team]
+        team_goals_scored = team_games['FTHG'].mean() if len(team_games) > 0 else avg_home_goals
+        team_goals_conceded = team_games['FTAG'].mean() if len(team_games) > 0 else avg_away_goals
+        league_avg = avg_home_goals
+    else:
+        team_games = df[df['AwayTeam'] == team]
+        team_goals_scored = team_games['FTAG'].mean() if len(team_games) > 0 else avg_away_goals
+        team_goals_conceded = team_games['FTHG'].mean() if len(team_games) > 0 else avg_home_goals
+        league_avg = avg_away_goals
+    
+    attack_strength = team_goals_scored / league_avg if league_avg > 0 else 1.0
+    defense_strength = team_goals_conceded / league_avg if league_avg > 0 else 1.0
+    
+    return attack_strength, defense_strength
+
+def poisson_probability(lambda_param, k):
+    """Calculate Poisson probability for k goals"""
+    return (lambda_param ** k) * np.exp(-lambda_param) / np.math.factorial(k)
+
+def predict_poisson(home_team, away_team, df, max_goals=10):
+    """Poisson model prediction"""
+    avg_home = df['FTHG'].mean()
+    avg_away = df['FTAG'].mean()
+    
+    home_attack, home_defense = calculate_poisson_params(df, home_team, is_home=True)
+    away_attack, away_defense = calculate_poisson_params(df, away_team, is_home=False)
+    
+    lambda_home = home_attack * away_defense * avg_home
+    lambda_away = away_attack * home_defense * avg_away
+    
+    # Calculate probability matrix
+    prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            prob_matrix[i][j] = poisson_probability(lambda_home, i) * poisson_probability(lambda_away, j)
+    
+    # Calculate match outcome probabilities
+    prob_home = np.sum(np.tril(prob_matrix, -1))  # Home wins
+    prob_draw = np.sum(np.diag(prob_matrix))  # Draws
+    prob_away = np.sum(np.triu(prob_matrix, 1))  # Away wins
+    
+    return {
+        'home': prob_home,
+        'draw': prob_draw,
+        'away': prob_away,
+        'lambda_home': lambda_home,
+        'lambda_away': lambda_away,
+        'model': 'Poisson'
+    }
+
+def dixon_coles_adjustment(home_goals, away_goals, lambda_home, lambda_away, rho=0.1):
+    """Dixon-Coles adjustment for low scores"""
+    if home_goals == 0 and away_goals == 0:
+        return 1 - lambda_home * lambda_away * rho
+    elif home_goals == 0 and away_goals == 1:
+        return 1 + lambda_home * rho
+    elif home_goals == 1 and away_goals == 0:
+        return 1 + lambda_away * rho
+    elif home_goals == 1 and away_goals == 1:
+        return 1 - rho
+    else:
+        return 1.0
+
+def predict_dixon_coles(home_team, away_team, df, max_goals=10, rho=0.1):
+    """Dixon-Coles model prediction"""
+    avg_home = df['FTHG'].mean()
+    avg_away = df['FTAG'].mean()
+    
+    home_attack, home_defense = calculate_poisson_params(df, home_team, is_home=True)
+    away_attack, away_defense = calculate_poisson_params(df, away_team, is_home=False)
+    
+    lambda_home = home_attack * away_defense * avg_home
+    lambda_away = away_attack * home_defense * avg_away
+    
+    # Calculate probability matrix with Dixon-Coles adjustment
+    prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            base_prob = poisson_probability(lambda_home, i) * poisson_probability(lambda_away, j)
+            adjustment = dixon_coles_adjustment(i, j, lambda_home, lambda_away, rho)
+            prob_matrix[i][j] = base_prob * adjustment
+    
+    # Normalize
+    prob_matrix = prob_matrix / prob_matrix.sum()
+    
+    # Calculate match outcome probabilities
+    prob_home = np.sum(np.tril(prob_matrix, -1))
+    prob_draw = np.sum(np.diag(prob_matrix))
+    prob_away = np.sum(np.triu(prob_matrix, 1))
+    
+    return {
+        'home': prob_home,
+        'draw': prob_draw,
+        'away': prob_away,
+        'lambda_home': lambda_home,
+        'lambda_away': lambda_away,
+        'model': 'Dixon-Coles'
+    }
+
+def predict_negative_binomial(home_team, away_team, df, max_goals=10, alpha=0.5):
+    """Negative Binomial model - handles overdispersion"""
+    avg_home = df['FTHG'].mean()
+    avg_away = df['FTAG'].mean()
+    
+    home_attack, home_defense = calculate_poisson_params(df, home_team, is_home=True)
+    away_attack, away_defense = calculate_poisson_params(df, away_team, is_home=False)
+    
+    mu_home = home_attack * away_defense * avg_home
+    mu_away = away_attack * home_defense * avg_away
+    
+    # Negative binomial probability
+    def nb_prob(mu, k, alpha):
+        r = 1 / alpha
+        p = r / (r + mu)
+        from scipy.special import comb
+        return comb(k + r - 1, k) * (p ** r) * ((1 - p) ** k)
+    
+    prob_matrix = np.zeros((max_goals + 1, max_goals + 1))
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            prob_matrix[i][j] = nb_prob(mu_home, i, alpha) * nb_prob(mu_away, j, alpha)
+    
+    prob_matrix = prob_matrix / prob_matrix.sum()
+    
+    prob_home = np.sum(np.tril(prob_matrix, -1))
+    prob_draw = np.sum(np.diag(prob_matrix))
+    prob_away = np.sum(np.triu(prob_matrix, 1))
+    
+    return {
+        'home': prob_home,
+        'draw': prob_draw,
+        'away': prob_away,
+        'lambda_home': mu_home,
+        'lambda_away': mu_away,
+        'model': 'Negative Binomial'
+    }
+
 def predict_match(home_team, away_team, team_stats, df):
     """Predict match outcome using statistical model"""
     home_stats = team_stats[home_team]
@@ -388,16 +535,50 @@ if data_source == "📤 Upload CSV File":
 
 st.sidebar.markdown("---")
 st.sidebar.title("🎯 Model Settings")
+
+# Model selection
+prediction_model = st.sidebar.selectbox(
+    "Prediction Model",
+    ["Statistical (Fast)", "Poisson", "Dixon-Coles", "Negative Binomial", "Ensemble"],
+    help="Choose the mathematical model for predictions"
+)
+
 value_threshold = st.sidebar.slider("Value Bet Threshold (%)", 1, 20, 5) / 100
 form_games = st.sidebar.slider("Recent Form (games)", 3, 10, 5)
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **How it works:**\n\n"
-                "The model uses statistical analysis combining:\n"
-                "- Team offensive/defensive strength\n"
-                "- Recent form\n"
-                "- Home advantage\n"
-                "- Expected goals (xG)")
+st.sidebar.markdown("### 📚 Model Information")
+
+if prediction_model == "Poisson":
+    st.sidebar.info("**Poisson Model**\n\n"
+                   "✓ Simple & fast\n"
+                   "✓ Based on average goals\n"
+                   "✓ Good baseline model\n"
+                   "- May overpredict high scores")
+elif prediction_model == "Dixon-Coles":
+    st.sidebar.info("**Dixon-Coles Model**\n\n"
+                   "✓ Adjusts for low-score bias\n"
+                   "✓ Better for 0-0, 1-0, 1-1\n"
+                   "✓ Industry standard\n"
+                   "✓ More accurate than Poisson")
+elif prediction_model == "Negative Binomial":
+    st.sidebar.info("**Negative Binomial Model**\n\n"
+                   "✓ Handles overdispersion\n"
+                   "✓ Better for unpredictable leagues\n"
+                   "✓ More realistic high scores\n"
+                   "- Slightly slower")
+elif prediction_model == "Ensemble":
+    st.sidebar.info("**Ensemble Model**\n\n"
+                   "✓ Combines all models\n"
+                   "✓ Most robust predictions\n"
+                   "✓ Averages different approaches\n"
+                   "- Slower computation")
+else:
+    st.sidebar.info("**Statistical Model**\n\n"
+                   "✓ Very fast\n"
+                   "✓ Form-based analysis\n"
+                   "✓ Team strength metrics\n"
+                   "✓ Good for general use")
 
 # Load data based on selection
 with st.spinner('Loading football data...'):
@@ -489,7 +670,51 @@ with tab2:
         if home_team == away_team:
             st.error("Please select different teams!")
         else:
-            prediction = predict_match(home_team, away_team, team_stats, df)
+            # Get prediction based on selected model
+            if prediction_model == "Poisson":
+                prediction = predict_poisson(home_team, away_team, df)
+            elif prediction_model == "Dixon-Coles":
+                prediction = predict_dixon_coles(home_team, away_team, df)
+            elif prediction_model == "Negative Binomial":
+                prediction = predict_negative_binomial(home_team, away_team, df)
+            elif prediction_model == "Ensemble":
+                # Combine all models
+                pred_poisson = predict_poisson(home_team, away_team, df)
+                pred_dc = predict_dixon_coles(home_team, away_team, df)
+                pred_nb = predict_negative_binomial(home_team, away_team, df)
+                pred_stat = predict_match(home_team, away_team, team_stats, df)
+                
+                prediction = {
+                    'home': (pred_poisson['home'] + pred_dc['home'] + pred_nb['home'] + pred_stat['home']) / 4,
+                    'draw': (pred_poisson['draw'] + pred_dc['draw'] + pred_nb['draw'] + pred_stat['draw']) / 4,
+                    'away': (pred_poisson['away'] + pred_dc['away'] + pred_nb['away'] + pred_stat['away']) / 4,
+                    'lambda_home': (pred_poisson['lambda_home'] + pred_dc['lambda_home'] + pred_nb['lambda_home']) / 3,
+                    'lambda_away': (pred_poisson['lambda_away'] + pred_dc['lambda_away'] + pred_nb['lambda_away']) / 3,
+                    'model': 'Ensemble'
+                }
+                # Add special markets from statistical model
+                prediction.update({
+                    'home_xg': pred_stat['home_xg'],
+                    'away_xg': pred_stat['away_xg'],
+                    'total_goals': pred_stat['total_goals'],
+                    'over_15': pred_stat['over_15'],
+                    'over_25': pred_stat['over_25'],
+                    'over_35': pred_stat['over_35'],
+                    'total_sot': pred_stat['total_sot'],
+                    'sot_over_8': pred_stat['sot_over_8'],
+                    'sot_over_10': pred_stat['sot_over_10'],
+                    'sot_over_12': pred_stat['sot_over_12'],
+                    'total_corners': pred_stat['total_corners'],
+                    'corners_over_8': pred_stat['corners_over_8'],
+                    'corners_over_10': pred_stat['corners_over_10'],
+                    'corners_over_12': pred_stat['corners_over_12']
+                })
+            else:
+                prediction = predict_match(home_team, away_team, team_stats, df)
+            
+            # Display model info
+            model_name = prediction.get('model', 'Statistical')
+            st.success(f"✅ Using **{model_name}** Model")
             
             st.markdown("### Prediction Results")
             
@@ -527,15 +752,19 @@ with tab2:
             # Expected Goals
             col1, col2 = st.columns(2)
             with col1:
-                st.metric(f"{home_team} Expected Goals", f"{prediction['home_xg']:.2f}")
+                xg_home = prediction.get('home_xg', prediction.get('lambda_home', 0))
+                st.metric(f"{home_team} Expected Goals", f"{xg_home:.2f}")
             with col2:
-                st.metric(f"{away_team} Expected Goals", f"{prediction['away_xg']:.2f}")
+                xg_away = prediction.get('away_xg', prediction.get('lambda_away', 0))
+                st.metric(f"{away_team} Expected Goals", f"{xg_away:.2f}")
             
             # Goal Line Markets
             st.markdown("---")
             st.markdown("### ⚽ Goal Line Markets")
             
-            col1, col2, col3 = st.columns(3)
+            # Check if special markets are available
+            if 'over_15' in prediction:
+                col1, col2, col3 = st.columns(3)
             
             with col1:
                 over_15 = prediction['over_15']
@@ -574,8 +803,9 @@ with tab2:
                 """, unsafe_allow_html=True)
             
             # Shots on Target Line
-            st.markdown("---")
-            st.markdown("### 🎯 Shots on Target")
+            if 'total_sot' in prediction:
+                st.markdown("---")
+                st.markdown("### 🎯 Shots on Target")
             
             col1, col2 = st.columns(2)
             
