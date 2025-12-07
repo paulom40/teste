@@ -631,7 +631,7 @@ with tab1:
                      title="Match Results Distribution", 
                      hole=0.4,
                      color_discrete_sequence=['#667eea', '#764ba2', '#f093fb'])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     with col2:
         goals_data = df.groupby('HomeTeam').agg({
@@ -645,7 +645,7 @@ with tab1:
                      title="Top 10 Goal Scoring Teams",
                      color='Total',
                      color_continuous_scale='Viridis')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     # Recent matches
     st.subheader("Recent Matches")
@@ -653,7 +653,7 @@ with tab1:
     recent['Result'] = recent.apply(lambda x: f"{x['FTHG']} - {x['FTAG']}", axis=1)
     recent['Outcome'] = recent['FTR'].map({'H': '🏠 Home Win', 'D': '🤝 Draw', 'A': '✈️ Away Win'})
     st.dataframe(recent[['Date', 'HomeTeam', 'AwayTeam', 'Result', 'Outcome']], 
-                 use_container_width=True, hide_index=True)
+                 width='stretch', hide_index=True)
 
 with tab2:
     st.header("Match Predictor")
@@ -969,13 +969,13 @@ with tab3:
         
         # Display value bets
         st.dataframe(value_df.sort_values('Expected Value', ascending=False), 
-                     use_container_width=True, hide_index=True)
+                     width='stretch', hide_index=True)
         
         # Visualization
         fig = px.bar(value_df.groupby('Bet').size().reset_index(name='Count'),
                      x='Bet', y='Count', title="Value Bets by Type",
                      color='Bet', color_discrete_sequence=['#667eea', '#764ba2', '#f093fb'])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
     else:
         st.warning("No value opportunities found. Try adjusting the threshold.")
@@ -997,7 +997,7 @@ with tab4:
         })
     
     league_df = pd.DataFrame(league_data).sort_values('Goal Diff', ascending=False)
-    st.dataframe(league_df, use_container_width=True, hide_index=True)
+    st.dataframe(league_df, width='stretch', hide_index=True)
     
     # Visualizations
     col1, col2 = st.columns(2)
@@ -1008,14 +1008,14 @@ with tab4:
                         color='Goal Diff', size='Wins',
                         color_continuous_scale='RdYlGn')
         fig.update_traces(textposition='top center')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     with col2:
         top_teams = league_df.head(10)
         fig = px.bar(top_teams, x='Team', y='Goal Diff',
                     title="Top 10 Teams by Goal Difference",
                     color='Goal Diff', color_continuous_scale='Viridis')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 with tab5:
     st.header("🎯 Special Markets Analysis")
@@ -1098,7 +1098,7 @@ with tab5:
             height=300,
             margin=dict(t=20, b=20, l=20, r=20)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Goals market performance
         goal_lines = [1.5, 2.5, 3.5, 4.5]
@@ -1111,7 +1111,7 @@ with tab5:
         })
         
         st.dataframe(market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
-                    use_container_width=True, hide_index=True)
+                    width='stretch', hide_index=True)
     
     with col2:
         st.markdown("### 🎯 Shots on Target Distribution")
@@ -1133,7 +1133,7 @@ with tab5:
                 height=300,
                 margin=dict(t=20, b=20, l=20, r=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
             # SOT market performance
             sot_lines = [8.5, 10.5, 12.5, 14.5]
@@ -1146,7 +1146,7 @@ with tab5:
             })
             
             st.dataframe(sot_market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
-                        use_container_width=True, hide_index=True)
+                        width='stretch', hide_index=True)
         else:
             st.warning("No shots on target data available")
     
@@ -1175,7 +1175,7 @@ with tab5:
                 height=300,
                 margin=dict(t=20, b=20, l=20, r=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
             # Corners market performance
             corners_lines = [8.5, 10.5, 12.5, 14.5]
@@ -1188,7 +1188,7 @@ with tab5:
             })
             
             st.dataframe(corners_market_df.style.background_gradient(subset=['Hit Rate (%)'], cmap='RdYlGn'),
-                        use_container_width=True, hide_index=True)
+                        width='stretch', hide_index=True)
         else:
             st.warning("No corners data available")
     
@@ -1214,7 +1214,7 @@ with tab5:
                 height=300,
                 margin=dict(t=20, b=20, l=20, r=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
             st.info("💡 **Insights:**\n\n"
                    f"- Goals ↔ SOT correlation: **{corr_data.loc['TotalGoals', 'TotalSOT']:.2f}**\n"
@@ -1233,14 +1233,14 @@ with tab5:
         st.markdown("**⚽ Highest Scoring Matches**")
         top_goals = df.nlargest(5, 'TotalGoals')[['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'TotalGoals']]
         top_goals['Match'] = top_goals['HomeTeam'] + ' ' + top_goals['FTHG'].astype(str) + '-' + top_goals['FTAG'].astype(str) + ' ' + top_goals['AwayTeam']
-        st.dataframe(top_goals[['Date', 'Match', 'TotalGoals']], use_container_width=True, hide_index=True)
+        st.dataframe(top_goals[['Date', 'Match', 'TotalGoals']], width='stretch', hide_index=True)
     
     with col2:
         if df['TotalSOT'].sum() > 0:
             st.markdown("**🎯 Most Shots on Target**")
             top_sot = df.nlargest(5, 'TotalSOT')[['Date', 'HomeTeam', 'AwayTeam', 'HST', 'AST', 'TotalSOT']]
             top_sot['Match'] = top_sot['HomeTeam'] + ' vs ' + top_sot['AwayTeam']
-            st.dataframe(top_sot[['Date', 'Match', 'TotalSOT']], use_container_width=True, hide_index=True)
+            st.dataframe(top_sot[['Date', 'Match', 'TotalSOT']], width='stretch', hide_index=True)
         else:
             st.warning("No SOT data")
     
@@ -1249,7 +1249,7 @@ with tab5:
             st.markdown("**🚩 Most Corners**")
             top_corners = df.nlargest(5, 'TotalCorners')[['Date', 'HomeTeam', 'AwayTeam', 'HC', 'AC', 'TotalCorners']]
             top_corners['Match'] = top_corners['HomeTeam'] + ' vs ' + top_corners['AwayTeam']
-            st.dataframe(top_corners[['Date', 'Match', 'TotalCorners']], use_container_width=True, hide_index=True)
+            st.dataframe(top_corners[['Date', 'Match', 'TotalCorners']], width='stretch', hide_index=True)
         else:
             st.warning("No corners data")
 st.markdown("---")
