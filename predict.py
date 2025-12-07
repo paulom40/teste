@@ -201,7 +201,9 @@ def predict_match(home_team, away_team, team_stats, df):
     away_corners_away = away_games_away['AC'].mean() if len(away_games_away) > 0 and 'AC' in df.columns else 4.5
     
     total_corners = home_corners_home + away_corners_away
+    prob_corners_over_8 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 8.5)))))
     prob_corners_over_10 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 10.5)))))
+    prob_corners_over_12 = min(0.95, max(0.05, 1 / (1 + np.exp(-0.6 * (total_corners - 12.5)))))
     
     return {
         'home': prob_home,
@@ -216,7 +218,9 @@ def predict_match(home_team, away_team, team_stats, df):
         'total_sot': total_sot,
         'sot_over_10': prob_sot_over_10,
         'total_corners': total_corners,
-        'corners_over_10': prob_corners_over_10
+        'corners_over_8': prob_corners_over_8,
+        'corners_over_10': prob_corners_over_10,
+        'corners_over_12': prob_corners_over_12
     }
 
 def find_value_bets(df, team_stats, threshold=0.05):
@@ -307,11 +311,28 @@ st.sidebar.write(f"**League:** {league_name}")
 st.sidebar.write(f"**Matches:** {len(df)}")
 st.sidebar.write(f"**Teams:** {len(df['HomeTeam'].unique())}")
 
+# Add TotalCorners and TotalSOT to df before tabs
+df['TotalGoals'] = df['FTHG'] + df['FTAG']
+if 'HST' in df.columns and 'AST' in df.columns:
+    df['TotalSOT'] = df['HST'] + df['AST']
+else:
+    df['TotalSOT'] = 0
+
+if 'HC' in df.columns and 'AC' in df.columns:
+    df['TotalCorners'] = df['HC'] + df['AC']
+else:
+    df['TotalCorners'] = 0
+
 # Create tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔮 Predictor", "💰 Value Finder", "📈 Team Stats", "🎯 Special Markets"])
 
 with tab1:
     st.header(f"Season Overview - {league_name}")
+    
+    # Match selector
+    st.markdown("### Select a Match to Highlight")
+    matches_list = df.apply(lambda x: f"{x['HomeTeam']} vs {x['AwayTeam']} ({x['Date'].strftime('%d/%m/%Y')})", axis=1).tolist()
+    selected_match_idx = st.selectbox("Choose match:", range(len(matches_list)), format_func=lambda i: matches_list[i], key="tab1_match")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -358,8 +379,6 @@ with tab2:
         home_team = st.selectbox("Home Team", teams, index=0)
     with col2:
         away_team = st.selectbox("Away Team", teams, index=1)
-    
-    if st.button("🔮 Predict Match", type="primary", use_container_width=True):
         if home_team == away_team:
             st.error("Please select different teams!")
         else:
@@ -392,6 +411,24 @@ with tab2:
             with col3:
                 st.metric("Over 3.5 Goals", f"{prediction['over_35']*100:.1f}%")
             
+            st.markdown("### 🎯 Special Markets")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("**Shots on Target**")
+                st.metric("Expected Total", f"{prediction['total_sot']:.1f}")
+                st.metric("Over 10.5", f"{prediction['sot_over_10']*100:.1f}%")
+            
+            with col2:
+                st.markdown("**Corners**")
+                st.metric("Expected Total", f"{prediction['total_corners']:.1f}")
+                st.metric("Over 8.5", f"{prediction['corners_over_8']*100:.1f}%")
+            
+            with col3:
+                st.markdown("**Corners (cont.)**")
+                st.metric("Over 10.5", f"{prediction['corners_over_10']*100:.1f}%")
+                st.metric("Over 12.5", f"{prediction['corners_over_12']*100:.1f}%")
+            
             # Recent form
             st.markdown("### Recent Form (Last 5 Games)")
             home_form = calculate_form(df, home_team, 5)
@@ -412,6 +449,10 @@ with tab2:
 
 with tab3:
     st.header("Value Betting Opportunities")
+    
+    st.markdown("### Select a Match")
+    matches_list_tab3 = df.apply(lambda x: f"{x['HomeTeam']} vs {x['AwayTeam']} ({x['Date'].strftime('%d/%m/%Y')})", axis=1).tolist()
+    selected_match_idx_tab3 = st.selectbox("Choose match:", range(len(matches_list_tab3)), format_func=lambda i: matches_list_tab3[i], key="tab3_match")
     
     st.info("🎯 Value bets occur when the model's probability exceeds the bookmaker's implied probability")
     
@@ -439,6 +480,10 @@ with tab3:
 
 with tab4:
     st.header("Team Statistics")
+    
+    st.markdown("### Select a Match")
+    matches_list_tab4 = df.apply(lambda x: f"{x['HomeTeam']} vs {x['AwayTeam']} ({x['Date'].strftime('%d/%m/%Y')})", axis=1).tolist()
+    selected_match_idx_tab4 = st.selectbox("Choose match:", range(len(matches_list_tab4)), format_func=lambda i: matches_list_tab4[i], key="tab4_match")
     
     league_data = []
     for team, stats in team_stats.items():
@@ -474,6 +519,10 @@ with tab4:
 
 with tab5:
     st.header("🎯 Special Markets Analysis")
+    
+    st.markdown("### Select a Match")
+    matches_list_tab5 = df.apply(lambda x: f"{x['HomeTeam']} vs {x['AwayTeam']} ({x['Date'].strftime('%d/%m/%Y')})", axis=1).tolist()
+    selected_match_idx_tab5 = st.selectbox("Choose match:", range(len(matches_list_tab5)), format_func=lambda i: matches_list_tab5[i], key="tab5_match")
     
     df['TotalGoals'] = df['FTHG'] + df['FTAG']
     if 'HST' in df.columns and 'AST' in df.columns:
