@@ -144,6 +144,129 @@ def calculate_form(df, team, last_n=5):
         'games': len(team_games)
     }
 
+def export_prediction_to_excel(home_team, away_team, prediction):
+    """Export match prediction to Excel"""
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        worksheet = writer.sheets['Sheet1']
+        
+        # Define formats
+        title_format = workbook.add_format({
+            'bold': True,
+            'font_size': 14,
+            'bg_color': '#667eea',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+        
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#764ba2',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1
+        })
+        
+        data_format = workbook.add_format({
+            'border': 1,
+            'align': 'center',
+            'num_format': '0.0%'
+        })
+        
+        value_format = workbook.add_format({
+            'border': 1,
+            'align': 'center',
+            'num_format': '0.00'
+        })
+        
+        # Title
+        worksheet.merge_range('A1:D1', f'{home_team} vs {away_team} - Match Prediction', title_format)
+        worksheet.write('A2', f'Generated: {datetime.now().strftime("%d/%m/%Y %H:%M")}')
+        
+        # Match Odds
+        worksheet.write('A4', 'MATCH ODDS', header_format)
+        worksheet.write('B4', 'Probability', header_format)
+        worksheet.write('C4', 'Percentage', header_format)
+        worksheet.write('D4', 'Implied Odds', header_format)
+        
+        outcomes = [
+            (f'{home_team} Win', prediction['home']),
+            ('Draw', prediction['draw']),
+            (f'{away_team} Win', prediction['away'])
+        ]
+        
+        for idx, (outcome, prob) in enumerate(outcomes, start=5):
+            worksheet.write(f'A{idx}', outcome)
+            worksheet.write(f'B{idx}', prob, data_format)
+            worksheet.write(f'C{idx}', prob, data_format)
+            worksheet.write(f'D{idx}', 1/prob if prob > 0 else 0, value_format)
+        
+        # Expected Goals
+        worksheet.write('A9', 'EXPECTED GOALS', header_format)
+        worksheet.write('B9', 'Expected Goals', header_format)
+        
+        worksheet.write('A10', f'{home_team}')
+        worksheet.write('B10', prediction['home_xg'], value_format)
+        
+        worksheet.write('A11', f'{away_team}')
+        worksheet.write('B11', prediction['away_xg'], value_format)
+        
+        worksheet.write('A12', 'Total Expected Goals')
+        worksheet.write('B12', prediction['total_goals'], value_format)
+        
+        # Goal Line Markets
+        worksheet.write('A14', 'GOAL LINE MARKETS', header_format)
+        worksheet.write('B14', 'Probability', header_format)
+        
+        goal_lines = [
+            ('Over 1.5 Goals', prediction['over_15']),
+            ('Over 2.5 Goals', prediction['over_25']),
+            ('Over 3.5 Goals', prediction['over_35'])
+        ]
+        
+        for idx, (line, prob) in enumerate(goal_lines, start=15):
+            worksheet.write(f'A{idx}', line)
+            worksheet.write(f'B{idx}', prob, data_format)
+        
+        # Shots on Target
+        worksheet.write('A19', 'SHOTS ON TARGET', header_format)
+        worksheet.write('B19', 'Data', header_format)
+        
+        worksheet.write('A20', 'Expected Total SOT')
+        worksheet.write('B20', prediction['total_sot'], value_format)
+        
+        worksheet.write('A21', 'Over 10.5 SOT')
+        worksheet.write('B21', prediction['sot_over_10'], data_format)
+        
+        # Corners
+        worksheet.write('A23', 'CORNERS', header_format)
+        worksheet.write('B23', 'Data', header_format)
+        
+        worksheet.write('A24', 'Expected Total Corners')
+        worksheet.write('B24', prediction['total_corners'], value_format)
+        
+        worksheet.write('A25', 'Over 8.5 Corners')
+        worksheet.write('B25', prediction['corners_over_8'], data_format)
+        
+        worksheet.write('A26', 'Over 10.5 Corners')
+        worksheet.write('B26', prediction['corners_over_10'], data_format)
+        
+        worksheet.write('A27', 'Over 12.5 Corners')
+        worksheet.write('B27', prediction['corners_over_12'], data_format)
+        
+        # Set column widths
+        worksheet.set_column('A:A', 25)
+        worksheet.set_column('B:B', 20)
+        worksheet.set_column('C:C', 15)
+        worksheet.set_column('D:D', 15)
+    
+    output.seek(0)
+    return output
+
 def predict_match(home_team, away_team, team_stats, df):
     """Predict match outcome using statistical model"""
     home_stats = team_stats[home_team]
@@ -446,6 +569,32 @@ with tab2:
                 st.write(f"Points: {away_form['points']}/15")
                 st.write(f"Goals Scored: {away_form['goals_scored']}")
                 st.write(f"Goals Conceded: {away_form['goals_conceded']}")
+            
+            # Export button
+            st.markdown("---")
+            st.markdown("### 📥 Export Prediction")
+            
+            excel_file = export_prediction_to_excel(home_team, away_team, prediction)
+            st.download_button(
+                label="📊 Download Excel Report",
+                data=excel_file,
+                file_name=f"{home_team}_vs_{away_team}_prediction.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+    
+    # Display stored prediction if exists
+    if 'last_prediction' in st.session_state and not predict_clicked:
+        prediction = st.session_state.last_prediction['prediction']
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Home Win Probability", f"{prediction['home']*100:.1f}%")
+        with col2:
+            st.metric("Draw Probability", f"{prediction['draw']*100:.1f}%")
+        with col3:
+            st.metric("Away Win Probability", f"{prediction['away']*100:.1f}%")
 
 with tab3:
     st.header("Value Betting Opportunities")
