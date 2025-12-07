@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+import math
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -182,7 +183,7 @@ def calculate_poisson_params(df, team, is_home=True):
 
 def poisson_probability(lambda_param, k):
     """Calculate Poisson probability for k goals"""
-    return (lambda_param ** k) * np.exp(-lambda_param) / np.math.factorial(k)
+    return (lambda_param ** k) * np.exp(-lambda_param) / math.factorial(k)
 
 def predict_poisson(home_team, away_team, df, max_goals=10):
     """Poisson model prediction"""
