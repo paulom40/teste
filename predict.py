@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
+from io import BytesIO
 import math
 import warnings
 warnings.filterwarnings('ignore')
@@ -125,7 +126,550 @@ def calculate_team_stats(df):
     
     return stats
 
-def calculate_form(df, team, last_n=5):
+def generate_excel_special_markets(df):
+    """Generate Excel file with special markets analysis"""
+    
+    # Create Excel writer object
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        
+        # Define formats
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#667eea',
+            'font_color': 'white',
+            'border': 1,
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+        
+        title_format = workbook.add_format({
+            'bold': True,
+            'font_size': 14,
+            'bg_color': '#764ba2',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+        
+        data_format = workbook.add_format({
+            'border': 1,
+            'align': 'center'
+        })
+        
+        percent_format = workbook.add_format({
+            'border': 1,
+            'align': 'center',
+            'num_format': '0.0%'
+        })
+        
+        # Calculate totals
+        if 'HST' in df.columns and 'AST' in df.columns:
+            df['TotalSOT'] = df['HST'] + df['AST']
+        else:
+            df['TotalSOT'] = 0
+        
+        if 'HC' in df.columns and 'AC' in df.columns:
+            df['TotalCorners'] = df['HC'] + df['AC']
+        else:
+            df['TotalCorners'] = 0
+        
+        df['TotalGoals'] = df['FTHG'] + df['FTAG']
+        
+        # Sheet 1: Match by Match Analysis
+        match_analysis = df[['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'TotalGoals', 
+                             'HST', 'AST', 'TotalSOT', 'HC', 'AC', 'TotalCorners']].copy()
+        match_analysis['Date'] = pd.to_datetime(match_analysis['Date']).dt.strftime('%Y-%m-%d')
+        match_analysis.to_excel(writer, sheet_name='Match Analysis', index=False, startrow=2)
+        
+        worksheet1 = writer.sheets['Match Analysis']
+        worksheet1.merge_range('A1:L1', '⚽ MATCH BY MATCH SPECIAL MARKETS ANALYSIS', title_format)
+        
+        for col_num, value in enumerate(match_analysis.columns.values):
+            worksheet1.write(2, col_num, value, header_format)
+        
+        worksheet1.set_column('A:A', 12)
+        worksheet1.set_column('B:C', 15)
+        worksheet1.set_column('D:L', 12)
+        
+        # Sheet 2: Goals Market Summary
+        goals_summary = pd.DataFrame({
+            'Market Line': ['Over 0.5', 'Over 1.5', 'Over 2.5', 'Over 3.5', 'Over 4.5'],
+            'Hit Rate': [
+                (df['TotalGoals'] > 0.5).sum() / len(df),
+                (df['TotalGoals'] > 1.5).sum() / len(df),
+                (df['TotalGoals'] > 2.5).sum() / len(df),
+                (df['TotalGoals'] > 3.5).sum() / len(df),
+                (df['TotalGoals'] > 4.5).sum() / len(df)
+            ],
+            'Total Matches': [
+                (df['TotalGoals'] > 0.5).sum(),
+                (df['TotalGoals'] > 1.5).sum(),
+                (df['TotalGoals'] > 2.5).sum(),
+                (df['TotalGoals'] > 3.5).sum(),
+                (df['TotalGoals'] > 4.5).sum()
+            ],
+            'Average Goals': df['TotalGoals'].mean()
+        })
+        
+        goals_summary.to_excel(writer, sheet_name='Goals Market', index=False, startrow=2)
+        
+        worksheet2 = writer.sheets['Goals Market']
+        worksheet2.merge_range('A1:D1', '⚽ GOALS MARKET ANALYSIS', title_format)
+        
+        for col_num, value in enumerate(goals_summary.columns.values):
+            worksheet2.write(2, col_num, value, header_format)
+        
+        for row_num in range(len(goals_summary)):
+            worksheet2.write(row_num + 3, 1, goals_summary.iloc[row_num, 1], percent_format)
+        
+        worksheet2.set_column('A:A', 15)
+        worksheet2.set_column('B:D', 15)
+        
+        # Sheet 3: Shots on Target Market
+        if df['TotalSOT'].sum() > 0:
+            sot_summary = pd.DataFrame({
+                'Market Line': ['Over 6.5', 'Over 8.5', 'Over 10.5', 'Over 12.5', 'Over 14.5'],
+                'Hit Rate': [
+                    (df['TotalSOT'] > 6.5).sum() / len(df),
+                    (df['TotalSOT'] > 8.5).sum() / len(df),
+                    (df['TotalSOT'] > 10.5).sum() / len(df),
+                    (df['TotalSOT'] > 12.5).sum() / len(df),
+                    (df['TotalSOT'] > 14.5).sum() / len(df)
+                ],
+                'Total Matches': [
+                    (df['TotalSOT'] > 6.5).sum(),
+                    (df['TotalSOT'] > 8.5).sum(),
+                    (df['TotalSOT'] > 10.5).sum(),
+                    (df['TotalSOT'] > 12.5).sum(),
+                    (df['TotalSOT'] > 14.5).sum()
+                ],
+                'Average SOT': df['TotalSOT'].mean()
+            })
+            
+            sot_summary.to_excel(writer, sheet_name='Shots on Target', index=False, startrow=2)
+            
+            worksheet3 = writer.sheets['Shots on Target']
+            worksheet3.merge_range('A1:D1', '🎯 SHOTS ON TARGET MARKET ANALYSIS', title_format)
+            
+            for col_num, value in enumerate(sot_summary.columns.values):
+                worksheet3.write(2, col_num, value, header_format)
+            
+            for row_num in range(len(sot_summary)):
+                worksheet3.write(row_num + 3, 1, sot_summary.iloc[row_num, 1], percent_format)
+            
+            worksheet3.set_column('A:A', 15)
+            worksheet3.set_column('B:D', 15)
+        
+        # Sheet 4: Corners Market
+        if df['TotalCorners'].sum() > 0:
+            corners_summary = pd.DataFrame({
+                'Market Line': ['Over 6.5', 'Over 8.5', 'Over 10.5', 'Over 12.5', 'Over 14.5'],
+                'Hit Rate': [
+                    (df['TotalCorners'] > 6.5).sum() / len(df),
+                    (df['TotalCorners'] > 8.5).sum() / len(df),
+                    (df['TotalCorners'] > 10.5).sum() / len(df),
+                    (df['TotalCorners'] > 12.5).sum() / len(df),
+                    (df['TotalCorners'] > 14.5).sum() / len(df)
+                ],
+                'Total Matches': [
+                    (df['TotalCorners'] > 6.5).sum(),
+                    (df['TotalCorners'] > 8.5).sum(),
+                    (df['TotalCorners'] > 10.5).sum(),
+                    (df['TotalCorners'] > 12.5).sum(),
+                    (df['TotalCorners'] > 14.5).sum()
+                ],
+                'Average Corners': df['TotalCorners'].mean()
+            })
+            
+            corners_summary.to_excel(writer, sheet_name='Corners Market', index=False, startrow=2)
+            
+            worksheet4 = writer.sheets['Corners Market']
+            worksheet4.merge_range('A1:D1', '🚩 CORNERS MARKET ANALYSIS', title_format)
+            
+            for col_num, value in enumerate(corners_summary.columns.values):
+                worksheet4.write(2, col_num, value, header_format)
+            
+            for row_num in range(len(corners_summary)):
+                worksheet4.write(row_num + 3, 1, corners_summary.iloc[row_num, 1], percent_format)
+            
+            worksheet4.set_column('A:A', 15)
+            worksheet4.set_column('B:D', 15)
+        
+        # Sheet 5: Team Statistics
+        team_stats_data = []
+        for team in df['HomeTeam'].unique():
+            home_games = df[df['HomeTeam'] == team]
+            away_games = df[df['AwayTeam'] == team]
+            
+            team_stats_data.append({
+                'Team': team,
+                'Matches': len(home_games) + len(away_games),
+                'Avg Goals Scored': (home_games['FTHG'].sum() + away_games['FTAG'].sum()) / (len(home_games) + len(away_games)),
+                'Avg Goals Conceded': (home_games['FTAG'].sum() + away_games['FTHG'].sum()) / (len(home_games) + len(away_games)),
+                'Avg SOT For': (home_games['HST'].sum() + away_games['AST'].sum()) / (len(home_games) + len(away_games)) if 'HST' in df.columns else 0,
+                'Avg SOT Against': (home_games['AST'].sum() + away_games['HST'].sum()) / (len(home_games) + len(away_games)) if 'AST' in df.columns else 0,
+                'Avg Corners For': (home_games['HC'].sum() + away_games['AC'].sum()) / (len(home_games) + len(away_games)) if 'HC' in df.columns else 0,
+                'Avg Corners Against': (home_games['AC'].sum() + away_games['HC'].sum()) / (len(home_games) + len(away_games)) if 'AC' in df.columns else 0
+            })
+        
+        team_stats_df = pd.DataFrame(team_stats_data)
+        team_stats_df = team_stats_df.sort_values('Avg Goals Scored', ascending=False)
+        team_stats_df.to_excel(writer, sheet_name='Team Statistics', index=False, startrow=2)
+        
+        worksheet5 = writer.sheets['Team Statistics']
+        worksheet5.merge_range('A1:H1', '📊 TEAM SPECIAL MARKETS STATISTICS', title_format)
+        
+        for col_num, value in enumerate(team_stats_df.columns.values):
+            worksheet5.write(2, col_num, value, header_format)
+        
+        worksheet5.set_column('A:A', 20)
+        worksheet5.set_column('B:H', 15)
+        
+        # Sheet 6: Summary Dashboard
+        summary_data = pd.DataFrame({
+            'Metric': [
+                'Total Matches',
+                'Average Goals per Match',
+                'Average SOT per Match',
+                'Average Corners per Match',
+                'Over 2.5 Goals %',
+                'Over 10.5 SOT %',
+                'Over 10.5 Corners %',
+                'Highest Scoring Match',
+                'Most Corners Match'
+            ],
+            'Value': [
+                len(df),
+                f"{df['TotalGoals'].mean():.2f}",
+                f"{df['TotalSOT'].mean():.2f}" if df['TotalSOT'].sum() > 0 else 'N/A',
+                f"{df['TotalCorners'].mean():.2f}" if df['TotalCorners'].sum() > 0 else 'N/A',
+                f"{((df['TotalGoals'] > 2.5).sum() / len(df) * 100):.1f}%",
+                f"{((df['TotalSOT'] > 10.5).sum() / len(df) * 100):.1f}%" if df['TotalSOT'].sum() > 0 else 'N/A',
+                f"{((df['TotalCorners'] > 10.5).sum() / len(df) * 100):.1f}%" if df['TotalCorners'].sum() > 0 else 'N/A',
+                f"{df['TotalGoals'].max():.0f} goals",
+                f"{df['TotalCorners'].max():.0f} corners" if df['TotalCorners'].sum() > 0 else 'N/A'
+            ]
+        })
+        
+        summary_data.to_excel(writer, sheet_name='Summary Dashboard', index=False, startrow=2)
+        
+        worksheet6 = writer.sheets['Summary Dashboard']
+        worksheet6.merge_range('A1:B1', '📈 SPECIAL MARKETS SUMMARY DASHBOARD', title_format)
+        
+        for col_num, value in enumerate(summary_data.columns.values):
+            worksheet6.write(2, col_num, value, header_format)
+        
+        worksheet6.set_column('A:A', 30)
+        worksheet6.set_column('B:B', 20)
+    
+    output.seek(0)
+    return output
+    """Generate HTML report for export"""
+    
+    # Calculate statistics
+    total_matches = len(df)
+    home_wins = (df['FTR'] == 'H').sum()
+    draws = (df['FTR'] == 'D').sum()
+    away_wins = (df['FTR'] == 'A').sum()
+    avg_goals = df['TotalGoals'].mean() if 'TotalGoals' in df.columns else (df['FTHG'] + df['FTAG']).mean()
+    
+    # Get top teams
+    league_data = []
+    for team, stats in team_stats.items():
+        league_data.append({
+            'Team': team,
+            'Games': stats['games'],
+            'Wins': stats['wins'],
+            'Win Rate': f"{stats['win_rate']*100:.1f}%",
+            'Goals/Game': f"{stats['goals_per_game']:.2f}",
+            'Goal Diff': stats['goal_difference']
+        })
+    
+    league_df = pd.DataFrame(league_data).sort_values('Goal Diff', ascending=False)
+    top_5_teams = league_df.head(5).to_html(index=False, classes='table')
+    
+    # Recent matches
+    recent = df.tail(10)[['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR']].copy()
+    recent['Result'] = recent['FTHG'].astype(str) + '-' + recent['FTAG'].astype(str)
+    recent['Outcome'] = recent['FTR'].map({'H': 'Home Win', 'D': 'Draw', 'A': 'Away Win'})
+    recent_html = recent[['Date', 'HomeTeam', 'AwayTeam', 'Result', 'Outcome']].to_html(index=False, classes='table')
+    
+    # Generate HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Football Betting Analysis Report - {league_name}</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 20px;
+                color: #333;
+            }}
+            
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 20px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                overflow: hidden;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 40px;
+                text-align: center;
+            }}
+            
+            .header h1 {{
+                font-size: 2.5rem;
+                margin-bottom: 10px;
+            }}
+            
+            .header p {{
+                font-size: 1.2rem;
+                opacity: 0.9;
+            }}
+            
+            .content {{
+                padding: 40px;
+            }}
+            
+            .section {{
+                margin-bottom: 40px;
+            }}
+            
+            .section h2 {{
+                color: #667eea;
+                margin-bottom: 20px;
+                font-size: 1.8rem;
+                border-bottom: 3px solid #667eea;
+                padding-bottom: 10px;
+            }}
+            
+            .stats-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin-bottom: 30px;
+            }}
+            
+            .stat-card {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 25px;
+                border-radius: 15px;
+                text-align: center;
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+            }}
+            
+            .stat-card h3 {{
+                font-size: 2rem;
+                margin-bottom: 5px;
+            }}
+            
+            .stat-card p {{
+                font-size: 1rem;
+                opacity: 0.9;
+            }}
+            
+            .table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            
+            .table th {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 15px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            
+            .table td {{
+                padding: 12px 15px;
+                border-bottom: 1px solid #eee;
+            }}
+            
+            .table tr:hover {{
+                background: #f5f5f5;
+            }}
+            
+            .model-info {{
+                background: #f0f4ff;
+                border-left: 4px solid #667eea;
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 30px;
+            }}
+            
+            .model-info h3 {{
+                color: #667eea;
+                margin-bottom: 10px;
+            }}
+            
+            .footer {{
+                background: #f8f9fa;
+                padding: 30px;
+                text-align: center;
+                color: #666;
+                border-top: 1px solid #eee;
+            }}
+            
+            .footer p {{
+                margin: 5px 0;
+            }}
+            
+            .warning {{
+                background: #fff3cd;
+                border-left: 4px solid #ffc107;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }}
+            
+            @media print {{
+                body {{
+                    background: white;
+                    padding: 0;
+                }}
+                
+                .container {{
+                    box-shadow: none;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>⚽ Football Betting Analysis Report</h1>
+                <p>{league_name}</p>
+                <p style="font-size: 1rem; margin-top: 10px;">Generated on {datetime.now().strftime('%B %d, %Y at %H:%M')}</p>
+            </div>
+            
+            <div class="content">
+                <div class="model-info">
+                    <h3>🤖 Prediction Model: {prediction_model}</h3>
+                    <p>This report was generated using the <strong>{prediction_model}</strong> prediction model for match outcome analysis.</p>
+                </div>
+                
+                <div class="section">
+                    <h2>📊 Season Overview</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>{total_matches}</h3>
+                            <p>Total Matches</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>{home_wins}</h3>
+                            <p>Home Wins ({home_wins/total_matches*100:.1f}%)</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>{draws}</h3>
+                            <p>Draws ({draws/total_matches*100:.1f}%)</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>{away_wins}</h3>
+                            <p>Away Wins ({away_wins/total_matches*100:.1f}%)</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>{avg_goals:.2f}</h3>
+                            <p>Avg Goals per Match</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <h2>🏆 Top 5 Teams by Goal Difference</h2>
+                    {top_5_teams}
+                </div>
+                
+                <div class="section">
+                    <h2>📅 Recent Matches (Last 10)</h2>
+                    {recent_html}
+                </div>
+                
+                <div class="section">
+                    <h2>🤖 Available Prediction Models</h2>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Model</th>
+                                <th>Speed</th>
+                                <th>Accuracy</th>
+                                <th>Best Use Case</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Statistical</strong></td>
+                                <td>⚡⚡⚡</td>
+                                <td>⭐⭐⭐</td>
+                                <td>General purpose, special markets</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Poisson</strong></td>
+                                <td>⚡⚡⚡</td>
+                                <td>⭐⭐⭐</td>
+                                <td>Fast baseline predictions</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Dixon-Coles</strong></td>
+                                <td>⚡⚡</td>
+                                <td>⭐⭐⭐⭐</td>
+                                <td>Low-scoring leagues, draws</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Negative Binomial</strong></td>
+                                <td>⚡⚡</td>
+                                <td>⭐⭐⭐⭐</td>
+                                <td>High-scoring, unpredictable</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Ensemble</strong></td>
+                                <td>⚡</td>
+                                <td>⭐⭐⭐⭐⭐</td>
+                                <td>Maximum reliability</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="warning">
+                    <strong>⚠️ Disclaimer:</strong> This report is for educational and analytical purposes only. 
+                    Always gamble responsibly and never bet more than you can afford to lose. 
+                    Past performance does not guarantee future results.
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p><strong>⚽ Professional Football Betting Model</strong></p>
+                <p>Powered by Advanced Statistical Analysis</p>
+                <p>© {datetime.now().year} - Data from football-data.co.uk</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html_content
     """Calculate recent form for a team"""
     team_games = df[(df['HomeTeam'] == team) | (df['AwayTeam'] == team)].tail(last_n)
     
@@ -526,6 +1070,37 @@ if data_source == "📤 Upload CSV File":
                        "- HC, AC, HY, AY")
         
         st.sidebar.markdown("---")
+st.sidebar.markdown("### 📥 Export Reports")
+
+col1, col2 = st.sidebar.columns(2)
+
+with col1:
+    if st.button("📄 HTML", type="secondary", use_container_width=True):
+        with st.spinner("Generating..."):
+            html_report = generate_html_report(df, team_stats, league_name, prediction_model)
+            
+            st.download_button(
+                label="⬇️ Download HTML",
+                data=html_report,
+                file_name=f"football_report_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                mime="text/html",
+                use_container_width=True
+            )
+
+with col2:
+    if st.button("📊 Excel", type="secondary", use_container_width=True):
+        with st.spinner("Generating..."):
+            excel_file = generate_excel_special_markets(df)
+            
+            st.download_button(
+                label="⬇️ Download Excel",
+                data=excel_file,
+                file_name=f"special_markets_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+st.sidebar.markdown("---")
         st.sidebar.markdown("**📥 Download Sample Leagues:**")
         st.sidebar.markdown("""
         - [🇪🇸 La Liga](https://www.football-data.co.uk/mmz4281/2526/SP1.csv)
