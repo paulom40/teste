@@ -42,6 +42,15 @@ st.markdown("""
         margin: 0.5rem 0;
         border-radius: 5px;
     }
+    .download-btn {
+        background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        text-decoration: none;
+        display: inline-block;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -367,6 +376,92 @@ def generate_excel_special_markets(df):
     
     output.seek(0)
     return output
+
+def generate_special_markets_summary(df):
+    """Generate a summary DataFrame for special markets"""
+    # Calculate totals
+    if 'HST' in df.columns and 'AST' in df.columns:
+        df['TotalSOT'] = df['HST'] + df['AST']
+    else:
+        df['TotalSOT'] = 0
+    
+    if 'HC' in df.columns and 'AC' in df.columns:
+        df['TotalCorners'] = df['HC'] + df['AC']
+    else:
+        df['TotalCorners'] = 0
+    
+    df['TotalGoals'] = df['FTHG'] + df['FTAG']
+    
+    # Goals Market Summary
+    goals_summary = pd.DataFrame({
+        'Market': ['Goals Market'] * 5,
+        'Line': ['Over 0.5', 'Over 1.5', 'Over 2.5', 'Over 3.5', 'Over 4.5'],
+        'Hit Rate': [
+            (df['TotalGoals'] > 0.5).sum() / len(df),
+            (df['TotalGoals'] > 1.5).sum() / len(df),
+            (df['TotalGoals'] > 2.5).sum() / len(df),
+            (df['TotalGoals'] > 3.5).sum() / len(df),
+            (df['TotalGoals'] > 4.5).sum() / len(df)
+        ],
+        'Hit Count': [
+            (df['TotalGoals'] > 0.5).sum(),
+            (df['TotalGoals'] > 1.5).sum(),
+            (df['TotalGoals'] > 2.5).sum(),
+            (df['TotalGoals'] > 3.5).sum(),
+            (df['TotalGoals'] > 4.5).sum()
+        ],
+        'Average': df['TotalGoals'].mean()
+    })
+    
+    # Shots on Target Summary
+    sot_summary = pd.DataFrame({
+        'Market': ['Shots on Target'] * 5,
+        'Line': ['Over 6.5', 'Over 8.5', 'Over 10.5', 'Over 12.5', 'Over 14.5'],
+        'Hit Rate': [
+            (df['TotalSOT'] > 6.5).sum() / len(df) if df['TotalSOT'].sum() > 0 else 0,
+            (df['TotalSOT'] > 8.5).sum() / len(df) if df['TotalSOT'].sum() > 0 else 0,
+            (df['TotalSOT'] > 10.5).sum() / len(df) if df['TotalSOT'].sum() > 0 else 0,
+            (df['TotalSOT'] > 12.5).sum() / len(df) if df['TotalSOT'].sum() > 0 else 0,
+            (df['TotalSOT'] > 14.5).sum() / len(df) if df['TotalSOT'].sum() > 0 else 0
+        ],
+        'Hit Count': [
+            (df['TotalSOT'] > 6.5).sum(),
+            (df['TotalSOT'] > 8.5).sum(),
+            (df['TotalSOT'] > 10.5).sum(),
+            (df['TotalSOT'] > 12.5).sum(),
+            (df['TotalSOT'] > 14.5).sum()
+        ],
+        'Average': df['TotalSOT'].mean() if df['TotalSOT'].sum() > 0 else 0
+    })
+    
+    # Corners Summary
+    corners_summary = pd.DataFrame({
+        'Market': ['Corners'] * 5,
+        'Line': ['Over 6.5', 'Over 8.5', 'Over 10.5', 'Over 12.5', 'Over 14.5'],
+        'Hit Rate': [
+            (df['TotalCorners'] > 6.5).sum() / len(df) if df['TotalCorners'].sum() > 0 else 0,
+            (df['TotalCorners'] > 8.5).sum() / len(df) if df['TotalCorners'].sum() > 0 else 0,
+            (df['TotalCorners'] > 10.5).sum() / len(df) if df['TotalCorners'].sum() > 0 else 0,
+            (df['TotalCorners'] > 12.5).sum() / len(df) if df['TotalCorners'].sum() > 0 else 0,
+            (df['TotalCorners'] > 14.5).sum() / len(df) if df['TotalCorners'].sum() > 0 else 0
+        ],
+        'Hit Count': [
+            (df['TotalCorners'] > 6.5).sum(),
+            (df['TotalCorners'] > 8.5).sum(),
+            (df['TotalCorners'] > 10.5).sum(),
+            (df['TotalCorners'] > 12.5).sum(),
+            (df['TotalCorners'] > 14.5).sum()
+        ],
+        'Average': df['TotalCorners'].mean() if df['TotalCorners'].sum() > 0 else 0
+    })
+    
+    # Combine all summaries
+    summary_df = pd.concat([goals_summary, sot_summary, corners_summary], ignore_index=True)
+    
+    # Format percentages
+    summary_df['Hit Rate'] = summary_df['Hit Rate'].apply(lambda x: f"{x*100:.1f}%")
+    
+    return summary_df
 
 def generate_html_report(df, team_stats, league_name, prediction_model):
     """Generate HTML report for export"""
@@ -1693,6 +1788,39 @@ with tab4:
 
 with tab5:
     st.header("🎯 Special Markets Analysis")
+    
+    # Add download button at the top
+    col1, col2, col3 = st.columns([3, 1, 1])
+    
+    with col2:
+        # Generate and download Excel button
+        if st.button("📥 Download Excel Report", type="secondary", use_container_width=True):
+            with st.spinner("Generating Excel report..."):
+                excel_file = generate_excel_special_markets(df)
+                
+                st.download_button(
+                    label="⬇️ Download Excel",
+                    data=excel_file,
+                    file_name=f"special_markets_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+    
+    with col3:
+        # Generate simple summary CSV
+        if st.button("📊 Download Summary CSV", type="secondary", use_container_width=True):
+            summary_df = generate_special_markets_summary(df)
+            csv = summary_df.to_csv(index=False)
+            
+            st.download_button(
+                label="⬇️ Download CSV",
+                data=csv,
+                file_name=f"special_markets_summary_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+    
+    st.markdown("---")
     
     # Model comparison table
     with st.expander("📊 Model Comparison Guide", expanded=False):
