@@ -607,6 +607,36 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "🔮 Predictor", "�
 with tab1:
     st.header(f"Season Overview - {league_name}")
     
+    # Model comparison table
+    st.markdown("### 🤖 Available Prediction Models")
+    
+    model_comparison = pd.DataFrame({
+        'Model': ['Statistical', 'Poisson', 'Dixon-Coles', 'Negative Binomial', 'Ensemble'],
+        'Speed': ['⚡⚡⚡', '⚡⚡⚡', '⚡⚡', '⚡⚡', '⚡'],
+        'Accuracy': ['⭐⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐'],
+        'Best Use Case': [
+            'General purpose, special markets',
+            'Fast baseline predictions',
+            'Low-scoring leagues, draws',
+            'High-scoring, unpredictable',
+            'Maximum reliability'
+        ]
+    })
+    
+    st.dataframe(
+        model_comparison,
+        width='stretch',
+        hide_index=True,
+        column_config={
+            "Model": st.column_config.TextColumn("Model", width="medium"),
+            "Speed": st.column_config.TextColumn("Speed", width="small"),
+            "Accuracy": st.column_config.TextColumn("Accuracy", width="medium"),
+            "Best Use Case": st.column_config.TextColumn("Best Use Case", width="large")
+        }
+    )
+    
+    st.markdown("---")
+    
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -657,6 +687,33 @@ with tab1:
 
 with tab2:
     st.header("Match Predictor")
+    
+    # Model comparison table
+    with st.expander("📊 Model Comparison Guide", expanded=False):
+        model_comparison = pd.DataFrame({
+            'Model': ['Statistical', 'Poisson', 'Dixon-Coles', 'Negative Binomial', 'Ensemble'],
+            'Speed': ['⚡⚡⚡', '⚡⚡⚡', '⚡⚡', '⚡⚡', '⚡'],
+            'Accuracy': ['⭐⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐'],
+            'Best Use Case': [
+                'General purpose, special markets',
+                'Fast baseline predictions',
+                'Low-scoring leagues, draws',
+                'High-scoring, unpredictable',
+                'Maximum reliability'
+            ]
+        })
+        
+        st.dataframe(
+            model_comparison,
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "Model": st.column_config.TextColumn("Model", width="medium"),
+                "Speed": st.column_config.TextColumn("Speed", width="small"),
+                "Accuracy": st.column_config.TextColumn("Accuracy", width="medium"),
+                "Best Use Case": st.column_config.TextColumn("Best Use Case", width="large")
+            }
+        )
     
     teams = sorted(df['HomeTeam'].unique())
     
@@ -942,6 +999,33 @@ with tab2:
 with tab3:
     st.header("Value Betting Opportunities")
     
+    # Model comparison table
+    with st.expander("📊 Model Comparison Guide", expanded=False):
+        model_comparison = pd.DataFrame({
+            'Model': ['Statistical', 'Poisson', 'Dixon-Coles', 'Negative Binomial', 'Ensemble'],
+            'Speed': ['⚡⚡⚡', '⚡⚡⚡', '⚡⚡', '⚡⚡', '⚡'],
+            'Accuracy': ['⭐⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐'],
+            'Best Use Case': [
+                'General purpose, special markets',
+                'Fast baseline predictions',
+                'Low-scoring leagues, draws',
+                'High-scoring, unpredictable',
+                'Maximum reliability'
+            ]
+        })
+        
+        st.dataframe(
+            model_comparison,
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "Model": st.column_config.TextColumn("Model", width="medium"),
+                "Speed": st.column_config.TextColumn("Speed", width="small"),
+                "Accuracy": st.column_config.TextColumn("Accuracy", width="medium"),
+                "Best Use Case": st.column_config.TextColumn("Best Use Case", width="large")
+            }
+        )
+    
     st.info("🎯 Value bets occur when the model's probability exceeds the bookmaker's implied probability")
     
     with st.spinner('Analyzing all matches for value...'):
@@ -983,6 +1067,33 @@ with tab3:
 with tab4:
     st.header("Team Statistics")
     
+    # Model comparison table
+    with st.expander("📊 Model Comparison Guide", expanded=False):
+        model_comparison = pd.DataFrame({
+            'Model': ['Statistical', 'Poisson', 'Dixon-Coles', 'Negative Binomial', 'Ensemble'],
+            'Speed': ['⚡⚡⚡', '⚡⚡⚡', '⚡⚡', '⚡⚡', '⚡'],
+            'Accuracy': ['⭐⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐'],
+            'Best Use Case': [
+                'General purpose, special markets',
+                'Fast baseline predictions',
+                'Low-scoring leagues, draws',
+                'High-scoring, unpredictable',
+                'Maximum reliability'
+            ]
+        })
+        
+        st.dataframe(
+            model_comparison,
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "Model": st.column_config.TextColumn("Model", width="medium"),
+                "Speed": st.column_config.TextColumn("Speed", width="small"),
+                "Accuracy": st.column_config.TextColumn("Accuracy", width="medium"),
+                "Best Use Case": st.column_config.TextColumn("Best Use Case", width="large")
+            }
+        )
+    
     # Create league table
     league_data = []
     for team, stats in team_stats.items():
@@ -1019,6 +1130,33 @@ with tab4:
 
 with tab5:
     st.header("🎯 Special Markets Analysis")
+    
+    # Model comparison table
+    with st.expander("📊 Model Comparison Guide", expanded=False):
+        model_comparison = pd.DataFrame({
+            'Model': ['Statistical', 'Poisson', 'Dixon-Coles', 'Negative Binomial', 'Ensemble'],
+            'Speed': ['⚡⚡⚡', '⚡⚡⚡', '⚡⚡', '⚡⚡', '⚡'],
+            'Accuracy': ['⭐⭐⭐', '⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐', '⭐⭐⭐⭐⭐'],
+            'Best Use Case': [
+                'General purpose, special markets',
+                'Fast baseline predictions',
+                'Low-scoring leagues, draws',
+                'High-scoring, unpredictable',
+                'Maximum reliability'
+            ]
+        })
+        
+        st.dataframe(
+            model_comparison,
+            width='stretch',
+            hide_index=True,
+            column_config={
+                "Model": st.column_config.TextColumn("Model", width="medium"),
+                "Speed": st.column_config.TextColumn("Speed", width="small"),
+                "Accuracy": st.column_config.TextColumn("Accuracy", width="medium"),
+                "Best Use Case": st.column_config.TextColumn("Best Use Case", width="large")
+            }
+        )
     
     st.info("📊 Comprehensive analysis of Goals, Shots on Target, and Corners markets across all matches")
     
