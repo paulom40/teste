@@ -1794,31 +1794,11 @@ with tab5:
     
     with col2:
         # Generate and download Excel button
-        if st.button("📥 Download Excel Report", type="secondary", use_container_width=True):
-            with st.spinner("Generating Excel report..."):
-                excel_file = generate_excel_special_markets(df)
-                
-                st.download_button(
-                    label="⬇️ Download Excel",
-                    data=excel_file,
-                    file_name=f"special_markets_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+        download_clicked = st.button("📥 Download Excel Report", type="secondary", use_container_width=True)
     
     with col3:
         # Generate simple summary CSV
-        if st.button("📊 Download Summary CSV", type="secondary", use_container_width=True):
-            summary_df = generate_special_markets_summary(df)
-            csv = summary_df.to_csv(index=False)
-            
-            st.download_button(
-                label="⬇️ Download CSV",
-                data=csv,
-                file_name=f"special_markets_summary_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        csv_clicked = st.button("📊 Download Summary CSV", type="secondary", use_container_width=True)
     
     st.markdown("---")
     
@@ -1905,6 +1885,69 @@ with tab5:
             <p style='margin: 0.5rem 0; font-size: 1.2rem;'>{over_10_corners_pct:.1f}% Over 10.5</p>
         </div>
         """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # NEW SECTION: Team Performance in Special Markets
+    st.markdown("### 🏆 Team Performance in Special Markets")
+    
+    # Calculate team-specific special markets stats
+    team_special_stats = []
+    for team in df['HomeTeam'].unique():
+        home_games = df[df['HomeTeam'] == team]
+        away_games = df[df['AwayTeam'] == team]
+        all_games = pd.concat([home_games, away_games])
+        
+        if len(all_games) > 0:
+            # Calculate team's performance in special markets
+            team_special_stats.append({
+                'Team': team,
+                'Matches': len(all_games),
+                'Avg Goals For': (home_games['FTHG'].sum() + away_games['FTAG'].sum()) / len(all_games),
+                'Avg Goals Against': (home_games['FTAG'].sum() + away_games['FTHG'].sum()) / len(all_games),
+                'Avg Total Goals': all_games['TotalGoals'].mean(),
+                'Over 2.5 %': (all_games['TotalGoals'] > 2.5).sum() / len(all_games) * 100,
+                'Avg SOT For': (home_games['HST'].sum() + away_games['AST'].sum()) / len(all_games) if 'HST' in df.columns else 0,
+                'Avg SOT Against': (home_games['AST'].sum() + away_games['HST'].sum()) / len(all_games) if 'AST' in df.columns else 0,
+                'Over 10.5 SOT %': (all_games['TotalSOT'] > 10.5).sum() / len(all_games) * 100 if 'HST' in df.columns else 0,
+                'Avg Corners For': (home_games['HC'].sum() + away_games['AC'].sum()) / len(all_games) if 'HC' in df.columns else 0,
+                'Avg Corners Against': (home_games['AC'].sum() + away_games['HC'].sum()) / len(all_games) if 'AC' in df.columns else 0,
+                'Over 10.5 Corners %': (all_games['TotalCorners'] > 10.5).sum() / len(all_games) * 100 if 'HC' in df.columns else 0
+            })
+    
+    team_special_df = pd.DataFrame(team_special_stats)
+    
+    # Sort by different metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown("**Top 5 Scoring Teams**")
+        top_scoring = team_special_df.nlargest(5, 'Avg Goals For')[['Team', 'Avg Goals For', 'Avg Total Goals']]
+        st.dataframe(top_scoring, width='stretch', hide_index=True)
+    
+    with col2:
+        st.markdown("**Highest Over 2.5%**")
+        top_over25 = team_special_df.nlargest(5, 'Over 2.5 %')[['Team', 'Over 2.5 %', 'Avg Total Goals']]
+        top_over25['Over 2.5 %'] = top_over25['Over 2.5 %'].apply(lambda x: f"{x:.1f}%")
+        st.dataframe(top_over25, width='stretch', hide_index=True)
+    
+    with col3:
+        if 'HST' in df.columns:
+            st.markdown("**Top 5 SOT Teams**")
+            top_sot = team_special_df.nlargest(5, 'Avg SOT For')[['Team', 'Avg SOT For', 'Over 10.5 SOT %']]
+            top_sot['Over 10.5 SOT %'] = top_sot['Over 10.5 SOT %'].apply(lambda x: f"{x:.1f}%" if x > 0 else "N/A")
+            st.dataframe(top_sot, width='stretch', hide_index=True)
+        else:
+            st.warning("No SOT data")
+    
+    with col4:
+        if 'HC' in df.columns:
+            st.markdown("**Top 5 Corners Teams**")
+            top_corners = team_special_df.nlargest(5, 'Avg Corners For')[['Team', 'Avg Corners For', 'Over 10.5 Corners %']]
+            top_corners['Over 10.5 Corners %'] = top_corners['Over 10.5 Corners %'].apply(lambda x: f"{x:.1f}%" if x > 0 else "N/A")
+            st.dataframe(top_corners, width='stretch', hide_index=True)
+        else:
+            st.warning("No corners data")
     
     st.markdown("---")
     
@@ -2081,6 +2124,38 @@ with tab5:
             st.dataframe(top_corners[['Date', 'Match', 'TotalCorners']], width='stretch', hide_index=True)
         else:
             st.warning("No corners data")
+    
+    # Handle download buttons
+    if download_clicked:
+        try:
+            with st.spinner("Generating Excel report..."):
+                excel_file = generate_excel_special_markets(df)
+                
+                st.download_button(
+                    label="⬇️ Download Excel",
+                    data=excel_file,
+                    file_name=f"special_markets_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="excel_download"
+                )
+        except Exception as e:
+            st.error(f"Error generating Excel file: {str(e)}")
+            st.info("Please make sure xlsxwriter is installed. Run: pip install xlsxwriter")
+    
+    if csv_clicked:
+        summary_df = generate_special_markets_summary(df)
+        csv = summary_df.to_csv(index=False)
+        
+        st.download_button(
+            label="⬇️ Download CSV",
+            data=csv,
+            file_name=f"special_markets_summary_{league_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="csv_download"
+        )
+
 st.markdown("---")
 st.markdown(f"""
 <div style='text-align: center; color: gray;'>
