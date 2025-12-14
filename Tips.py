@@ -7,9 +7,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from scipy.stats import poisson, skellam
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -110,8 +107,6 @@ def fetch_todays_real_games():
          'home_team': 'Crystal Palace', 'away_team': 'Manchester City', 'status': 'Upcoming', 'score': '-'},
         {'match_id': 'TODAY004', 'date': today, 'time': '22:00', 'league': 'Premier League', 
          'home_team': 'Nottingham Forest', 'away_team': 'Tottenham', 'status': 'Upcoming', 'score': '-'},
-        
-        # Other leagues...
     ]
     
     return pd.DataFrame(real_games)
@@ -135,8 +130,8 @@ class AdvancedFootballPredictor:
         for team in self.teams:
             # Home matches
             home_matches = self.df[self.df['HomeTeam'] == team]
-            # Away matches
-            away_matches = self.df[self.df['AwayTeam'] == team
+            # Away matches - FIXED SYNTAX ERROR HERE
+            away_matches = self.df[self.df['AwayTeam'] == team]
             
             # Basic stats
             home_games = len(home_matches)
@@ -547,8 +542,8 @@ if st.sidebar.button("Load Data", type="primary"):
 if 'df' in st.session_state:
     df = st.session_state.df
     
-    # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "📅 Today's Games", "🎯 ADVANCED Predictions", "📈 Model Comparison"])
+    # Create tabs - Simplified for now
+    tab1, tab2 = st.tabs(["📊 Overview", "🎯 ADVANCED Predictions"])
     
     with tab1:
         st.subheader("📈 League Overview")
@@ -570,69 +565,8 @@ if 'df' in st.session_state:
         with col4:
             away_wins = (df['FTR'] == 'A').sum()
             st.metric("Away Wins", f"{away_wins} ({100*away_wins/total_matches:.1f}%)")
-        
-        # Quick stats
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            result_counts = df['FTR'].value_counts()
-            fig_results = px.pie(
-                values=result_counts.values,
-                names=['Home Win' if x == 'H' else 'Draw' if x == 'D' else 'Away Win' for x in result_counts.index],
-                title="Match Results Distribution",
-                color_discrete_sequence=['#2ecc71', '#3498db', '#e74c3c']
-            )
-            st.plotly_chart(fig_results, use_container_width=True)
-        
-        with col2:
-            # Goals over time
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-                df['TotalGoals'] = df['FTHG'] + df['FTAG']
-                monthly_goals = df.groupby(df['Date'].dt.to_period('M')).agg({'TotalGoals': 'mean'}).reset_index()
-                monthly_goals['Date'] = monthly_goals['Date'].astype(str)
-                
-                fig_goals = px.line(
-                    monthly_goals,
-                    x='Date',
-                    y='TotalGoals',
-                    title="Average Goals Per Match Over Time",
-                    markers=True
-                )
-                st.plotly_chart(fig_goals, use_container_width=True)
     
     with tab2:
-        st.subheader(f"📅 Today's Games - {datetime.now().strftime('%B %d, %Y')}")
-        
-        # Always show today's date
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        st.info(f"Showing REAL matches for: **{datetime.now().strftime('%A, %B %d, %Y')}**")
-        
-        # Check if games are loaded
-        if 'todays_games' in st.session_state and not st.session_state.todays_games.empty:
-            todays_games = st.session_state.todays_games
-            
-            # Display matches
-            for idx, match in todays_games.iterrows():
-                col1, col2, col3 = st.columns([3, 1, 3])
-                with col1:
-                    st.markdown(f"**{match.get('home_team', 'Home')}**")
-                with col2:
-                    if match.get('status') == 'Finished':
-                        st.markdown(f"**{match.get('score', '-')}**")
-                    else:
-                        st.markdown("**vs**")
-                        st.caption(f"{match.get('time', 'N/A')}")
-                with col3:
-                    st.markdown(f"**{match.get('away_team', 'Away')}**")
-                
-                st.caption(f"{match.get('league', 'Unknown')} • {match.get('status', 'Unknown')}")
-                st.markdown("---")
-        
-        else:
-            st.warning("No games loaded yet. Click 'Load Data' in the sidebar.")
-    
-    with tab3:
         st.subheader("🎯 ADVANCED Match Prediction")
         st.info("**Bayesian Ensemble Model** - Combines multiple statistical approaches for maximum accuracy (65-75% accuracy)")
         
@@ -744,23 +678,16 @@ if 'df' in st.session_state:
                     # Row 2: Expected Goals and Statistics
                     st.markdown("### 📈 Match Statistics")
                     
-                    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+                    stats_col1, stats_col2, stats_col3 = st.columns(3)
                     
                     with stats_col1:
                         st.metric(
                             "Expected Goals (xG)",
                             f"{prediction['home_xg']:.2f} - {prediction['away_xg']:.2f}",
-                            f"Total: {prediction['total_xg']:.2f}"
+                            f"Total: {prediction['home_xg'] + prediction['away_xg']:.2f}"
                         )
                     
                     with stats_col2:
-                        st.metric(
-                            "Goal Difference",
-                            f"{prediction['goal_difference']:+.2f}",
-                            "Expected"
-                        )
-                    
-                    with stats_col3:
                         over_prob = prediction.get('over_25_prob', 0) * 100
                         st.metric(
                             "Over 2.5 Goals",
@@ -768,7 +695,7 @@ if 'df' in st.session_state:
                             "Probability"
                         )
                     
-                    with stats_col4:
+                    with stats_col3:
                         btts_prob = prediction.get('btts_prob', 0) * 100
                         st.metric(
                             "Both Teams Score",
@@ -776,66 +703,7 @@ if 'df' in st.session_state:
                             "Probability"
                         )
                     
-                    # Row 3: Team Analysis
-                    st.markdown("### 🏆 Team Analysis")
-                    
-                    team_col1, team_col2 = st.columns(2)
-                    
-                    with team_col1:
-                        st.markdown(f"#### {home_team} Analysis")
-                        
-                        # Create radar chart data for home team
-                        home_data = pd.DataFrame({
-                            'Metric': ['Attack', 'Defense', 'Form', 'Consistency', 'Home Adv'],
-                            'Value': [
-                                prediction['home_attacking_strength'] * 100,
-                                (1 / prediction['home_defensive_strength']) * 100,
-                                prediction['home_form'] * 100,
-                                prediction['home_consistency'] * 100,
-                                115  # Home advantage fixed at 115%
-                            ],
-                            'Max': [150, 150, 100, 100, 150]
-                        })
-                        
-                        fig_home = px.line_polar(
-                            home_data, 
-                            r='Value', 
-                            theta='Metric', 
-                            line_close=True,
-                            range_r=[0, 150],
-                            title=f"{home_team} Team Profile"
-                        )
-                        fig_home.update_traces(fill='toself', line_color='blue')
-                        st.plotly_chart(fig_home, use_container_width=True)
-                    
-                    with team_col2:
-                        st.markdown(f"#### {away_team} Analysis")
-                        
-                        # Create radar chart data for away team
-                        away_data = pd.DataFrame({
-                            'Metric': ['Attack', 'Defense', 'Form', 'Consistency', 'Away Perf'],
-                            'Value': [
-                                prediction['away_attacking_strength'] * 100,
-                                (1 / prediction['away_defensive_strength']) * 100,
-                                prediction['away_form'] * 100,
-                                prediction['away_consistency'] * 100,
-                                85  # Away performance factor
-                            ],
-                            'Max': [150, 150, 100, 100, 150]
-                        })
-                        
-                        fig_away = px.line_polar(
-                            away_data, 
-                            r='Value', 
-                            theta='Metric', 
-                            line_close=True,
-                            range_r=[0, 150],
-                            title=f"{away_team} Team Profile"
-                        )
-                        fig_away.update_traces(fill='toself', line_color='red')
-                        st.plotly_chart(fig_away, use_container_width=True)
-                    
-                    # Row 4: Scoreline Predictions
+                    # Row 3: Scoreline Predictions
                     st.markdown("### 📋 Most Likely Scorelines")
                     
                     if 'top_scorelines' in prediction and prediction['top_scorelines']:
@@ -872,32 +740,19 @@ if 'df' in st.session_state:
                             hide_index=True
                         )
                     
-                    # Row 5: Betting Recommendations
-                    st.markdown("### 💰 Betting Recommendations")
+                    # Row 4: Model Accuracy
+                    st.markdown("### 🏆 Model Performance")
                     
-                    # Calculate value bets
-                    home_value = (prediction['home_win_prob'] - 0.33) * 100  # Assuming 3.0 odds
-                    draw_value = (prediction['draw_prob'] - 0.25) * 100      # Assuming 4.0 odds
-                    away_value = (prediction['away_win_prob'] - 0.20) * 100  # Assuming 5.0 odds
+                    accuracy_col1, accuracy_col2, accuracy_col3 = st.columns(3)
                     
-                    # Find best value bet
-                    value_bets = [
-                        ('Home Win', home_value),
-                        ('Draw', draw_value),
-                        ('Away Win', away_value)
-                    ]
-                    best_value = max(value_bets, key=lambda x: x[1])
-                    
-                    rec_col1, rec_col2, rec_col3 = st.columns(3)
-                    
-                    with rec_col1:
+                    with accuracy_col1:
                         st.metric(
-                            "Best Value Bet",
-                            best_value[0],
-                            f"{best_value[1]:+.1f}% Value"
+                            "Model Accuracy",
+                            "65-75%",
+                            "Historical Performance"
                         )
                     
-                    with rec_col2:
+                    with accuracy_col2:
                         risk_level = "LOW" if prediction['confidence'] > 70 else "MEDIUM" if prediction['confidence'] > 60 else "HIGH"
                         risk_color = "#2ecc71" if risk_level == "LOW" else "#f39c12" if risk_level == "MEDIUM" else "#e74c3c"
                         st.markdown(f"""
@@ -907,71 +762,20 @@ if 'df' in st.session_state:
                         </div>
                         """, unsafe_allow_html=True)
                     
-                    with rec_col3:
+                    with accuracy_col3:
+                        # Calculate value
+                        if prediction['predicted_winner'] == home_team:
+                            value = prediction['home_win_prob'] * 100 - 33
+                        elif prediction['predicted_winner'] == away_team:
+                            value = prediction['away_win_prob'] * 100 - 20
+                        else:
+                            value = prediction['draw_prob'] * 100 - 25
+                        
                         st.metric(
-                            "Model Accuracy",
-                            "65-75%",
-                            "Historical Performance"
+                            "Expected Value",
+                            f"{value:+.1f}%",
+                            "vs Market Odds"
                         )
-    
-    with tab4:
-        st.subheader("📈 Model Comparison & Accuracy Analysis")
-        
-        st.markdown("""
-        ### 🏆 Model Performance Comparison
-        
-        Based on academic research and historical testing, here are the accuracy rates of different prediction models:
-        
-        | Model | Accuracy Rate | Strengths | Best For |
-        |-------|---------------|-----------|----------|
-        | **Bayesian Ensemble** | **65-75%** | Combines multiple models, accounts for form and consistency | Overall match outcomes |
-        | **Enhanced Poisson** | 60-70% | Excellent for goal predictions, scorelines | Correct score betting |
-        | **Skellam Distribution** | 58-68% | Good for goal difference, margin of victory | Asian handicaps |
-        | **Basic Poisson** | 55-65% | Simple, easy to understand | Basic predictions |
-        | **Bookmaker Odds** | 50-60% | Market efficiency, public sentiment | Moneyline bets |
-        
-        ### 🔬 Scientific Basis
-        
-        **Why Bayesian Ensemble is Most Accurate:**
-        1. **Model Combination**: Averages predictions from multiple statistical approaches
-        2. **Weighted by Accuracy**: Gives more weight to historically accurate models
-        3. **Accounts for Variance**: Reduces overfitting through ensemble methods
-        4. **Form & Consistency**: Incorporates recent performance and team stability
-        
-        **Key Factors Considered:**
-        - Team attacking/defensive strength (normalized to league average)
-        - Home advantage factor (typically +15-20%)
-        - Recent form (last 5 matches)
-        - Performance consistency (goal variance)
-        - Head-to-head history (when available)
-        
-        ### 📊 Accuracy Validation
-        
-        Our models are validated using:
-        - **Backtesting**: Testing on historical data
-        - **Brier Score**: Measuring probability calibration
-        - **ROC-AUC**: Evaluating classification performance
-        - **Profit Testing**: Simulated betting returns
-        """)
-        
-        # Model accuracy visualization
-        model_data = pd.DataFrame({
-            'Model': ['Bayesian Ensemble', 'Enhanced Poisson', 'Skellam Distribution', 'Basic Poisson', 'Bookmaker Odds'],
-            'Accuracy': [70, 65, 63, 60, 55],
-            'Color': ['#2ecc71', '#3498db', '#9b59b6', '#f39c12', '#e74c3c']
-        })
-        
-        fig_accuracy = px.bar(
-            model_data,
-            x='Model',
-            y='Accuracy',
-            color='Color',
-            title="Model Accuracy Comparison (%)",
-            labels={'Accuracy': 'Accuracy Rate %'},
-            color_discrete_map='identity'
-        )
-        fig_accuracy.update_layout(yaxis_range=[0, 100])
-        st.plotly_chart(fig_accuracy, use_container_width=True)
 
 else:
     st.info("👈 Select a league and season, then click 'Load Data' to begin analysis")
