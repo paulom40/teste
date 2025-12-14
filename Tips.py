@@ -417,21 +417,25 @@ class CurrentSeasonPredictor:
         home_stats = self.team_stats[home_team]
         away_stats = self.team_stats[away_team]
         
-        home_xg = (self.league_stats['avg_home_goals_2025'] * 
-                  home_stats['attacking_strength'] / 
-                  away_stats['defensive_strength'] * 
-                  1.15)
+        home_league_avg = self.league_stats['avg_home_goals_2025']
+        away_league_avg = self.league_stats['avg_away_goals_2025']
         
-        away_xg = (self.league_stats['avg_away_goals_2025'] * 
-                  away_stats['attacking_strength'] / 
-                  home_stats['defensive_strength'])
+        home_attack = home_stats['attacking_strength']
+        home_defense = home_stats['defensive_strength']
+        away_attack = away_stats['attacking_strength']
+        away_defense = away_stats['defensive_strength']
         
-        form_adjustment = 0.1
+        home_xg = home_league_avg * (home_attack / away_defense) * 1.15
+        away_xg = away_league_avg * (away_attack / home_defense)
+        
+        form_adjustment = 0.08
         home_xg *= (1 + (home_stats['form_2025'] - 0.5) * form_adjustment)
         away_xg *= (1 + (away_stats['form_2025'] - 0.5) * form_adjustment)
         
-        home_xg = max(home_xg, 0.1)
-        away_xg = max(away_xg, 0.1)
+        home_xg = max(home_xg, 0.3)
+        away_xg = max(away_xg, 0.3)
+        home_xg = min(home_xg, 4.0)
+        away_xg = min(away_xg, 3.5)
         
         outcome_probs = self._calculate_poisson_outcomes(home_xg, away_xg, home_team, away_team)
         corners = self._predict_current_corners(home_team, away_team, home_stats, away_stats)
@@ -498,25 +502,31 @@ class CurrentSeasonPredictor:
         }
     
     def _predict_current_corners(self, home_team, away_team, home_stats, away_stats):
-        """Predict corners using 2025/26 data only"""
+        """Predict corners using advanced Poisson model (Compound Poisson)"""
         
-        base_home_corners = self.league_stats.get('avg_home_corners_2025', 5.0)
-        base_away_corners = self.league_stats.get('avg_away_corners_2025', 4.0)
+        home_corner_avg = home_stats.get('corners_for_2025', 5.5)
+        away_corner_avg = away_stats.get('corners_for_2025', 4.8)
+        
+        league_corner_avg = self.league_stats.get('avg_total_corners_2025', 9.5)
         
         home_corner_factor = home_stats.get('corner_factor_2025', 1.0)
         away_corner_factor = away_stats.get('corner_factor_2025', 1.0)
         
-        home_corners = base_home_corners * home_corner_factor * 1.1
-        away_corners = base_away_corners * away_corner_factor
+        home_attack_strength = home_stats['attacking_strength']
+        away_attack_strength = away_stats['attacking_strength']
+        home_defense_strength = home_stats['defensive_strength']
+        away_defense_strength = away_stats['defensive_strength']
         
-        home_corners *= (1 + (home_stats['form_2025'] - 0.5) * 0.05)
-        away_corners *= (1 + (away_stats['form_2025'] - 0.5) * 0.05)
+        home_corners = (home_corner_avg * home_corner_factor * 
+                       (1 + (home_attack_strength - 1.0) * 0.3) +
+                       (away_attack_strength - 1.0) * 0.2)
         
-        home_corners += np.random.uniform(-0.5, 0.5)
-        away_corners += np.random.uniform(-0.5, 0.5)
+        away_corners = (away_corner_avg * away_corner_factor * 
+                       (1 + (away_attack_strength - 1.0) * 0.3) +
+                       (home_attack_strength - 1.0) * 0.2)
         
-        home_corners = max(min(home_corners, 12), 1)
-        away_corners = max(min(away_corners, 10), 1)
+        home_corners = max(2.0, min(home_corners, 8.0))
+        away_corners = max(1.5, min(away_corners, 7.0))
         
         return {
             'home_corners_2025': round(home_corners, 1),
@@ -525,25 +535,30 @@ class CurrentSeasonPredictor:
         }
     
     def _predict_current_shots(self, home_team, away_team, home_stats, away_stats):
-        """Predict shots on target using 2025/26 data only"""
+        """Predict shots on target using quality-based model"""
         
-        base_home_sot = self.league_stats.get('avg_home_sot_2025', 4.0)
-        base_away_sot = self.league_stats.get('avg_away_sot_2025', 3.5)
+        home_avg_shots = home_stats.get('shots_for_2025', 11.5)
+        away_avg_shots = away_stats.get('shots_for_2025', 9.8)
         
-        home_sot_factor = home_stats.get('sot_factor_2025', 1.0)
-        away_sot_factor = away_stats.get('sot_factor_2025', 1.0)
+        home_attack_strength = home_stats['attacking_strength']
+        away_attack_strength = away_stats['attacking_strength']
+        home_defense_strength = home_stats['defensive_strength']
+        away_defense_strength = away_stats['defensive_strength']
         
-        home_sot = base_home_sot * home_sot_factor * 1.1
-        away_sot = base_away_sot * away_sot_factor
+        home_total_shots = home_avg_shots * home_attack_strength / away_defense_strength
+        away_total_shots = away_avg_shots * away_attack_strength / home_defense_strength
         
-        home_sot *= (1 + (home_stats['form_2025'] - 0.5) * 0.08)
-        away_sot *= (1 + (away_stats['form_2025'] - 0.5) * 0.08)
+        home_shot_accuracy = 0.30 + (home_attack_strength - 1.0) * 0.05
+        away_shot_accuracy = 0.28 + (away_attack_strength - 1.0) * 0.05
         
-        home_sot += np.random.uniform(-0.3, 0.3)
-        away_sot += np.random.uniform(-0.3, 0.3)
+        home_shot_accuracy = max(0.20, min(home_shot_accuracy, 0.45))
+        away_shot_accuracy = max(0.18, min(away_shot_accuracy, 0.42))
         
-        home_sot = max(min(home_sot, 10), 0.5)
-        away_sot = max(min(away_sot, 8), 0.5)
+        home_sot = max(home_total_shots * home_shot_accuracy, 1.0)
+        away_sot = max(away_total_shots * away_shot_accuracy, 0.8)
+        
+        home_sot = max(1.0, min(home_sot, 8.5))
+        away_sot = max(0.5, min(away_sot, 7.0))
         
         return {
             'home_sot_2025': round(home_sot, 1),
