@@ -147,9 +147,8 @@ season = "2526"
 # ============================================================================
 
 def get_todays_fixtures():
-    """Get today's fixtures for predictions and export"""
+    """Get todays fixtures for predictions and export"""
     today = datetime.now().strftime("%Y-%m-%d")
-    
     fixtures = [
         {
             'id': 1,
