@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # Title
-st.title("⚽ Football Analytics 2025/26 Season")
+st.title("Football Analytics 2025/26 Season")
 st.markdown("Predictions based exclusively on 2025/26 season data for maximum accuracy")
 
 # Sidebar configuration
@@ -58,7 +58,6 @@ def get_todays_fixtures():
     """Get today's fixtures for predictions and export"""
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # Simulated today's fixtures (Ready for API integration)
     fixtures = [
         {
             'id': 1,
@@ -105,22 +104,22 @@ def fetch_current_season_data(league_code):
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             df = pd.read_csv(StringIO(response.text))
-            st.sidebar.success(f"✅ 2025/26 data loaded: {len(df)} matches")
+            st.sidebar.success(f"Data loaded: {len(df)} matches")
             return df
         else:
             alt_url = f"https://www.football-data.co.uk/mmz4281/25-26/{league_code}.csv"
             response = requests.get(alt_url, timeout=10)
             if response.status_code == 200:
                 df = pd.read_csv(StringIO(response.text))
-                st.sidebar.success(f"✅ 2025/26 data loaded: {len(df)} matches")
+                st.sidebar.success(f"Data loaded: {len(df)} matches")
                 return df
             else:
-                st.sidebar.warning(f"⚠️ Status {response.status_code}: 2025/26 data not available yet")
-                st.sidebar.info("Using simulated 2025/26 data for demonstration")
+                st.sidebar.warning(f"Status {response.status_code}: data not available")
+                st.sidebar.info("Using simulated 2025/26 data")
                 return create_simulated_2025_data(league_code)
     except Exception as e:
         st.sidebar.warning(f"Error: {e}")
-        st.sidebar.info("Using simulated 2025/26 data for demonstration")
+        st.sidebar.info("Using simulated 2025/26 data")
         return create_simulated_2025_data(league_code)
 
 def create_simulated_2025_data(league_code):
@@ -140,9 +139,9 @@ def create_simulated_2025_data(league_code):
         ]
     elif 'D1' in league_code:
         teams = ['Bayern Munich', 'Borussia Dortmund', 'RB Leipzig', 'Bayer Leverkusen', 
-                'Eintracht Frankfurt', 'Wolfsburg', 'Borussia Mönchengladbach', 'Stuttgart',
+                'Eintracht Frankfurt', 'Wolfsburg', 'Borussia Monchengladbach', 'Stuttgart',
                 'Hoffenheim', 'Mainz', 'Augsburg', 'Hertha Berlin', 'Bochum', 'Schalke',
-                'Werder Bremen', 'FC Köln', 'Freiburg', 'Union Berlin']
+                'Werder Bremen', 'FC Koln', 'Freiburg', 'Union Berlin']
     elif 'SP1' in league_code:
         teams = ['Barcelona', 'Real Madrid', 'Atletico Madrid', 'Sevilla', 'Real Sociedad',
                 'Villarreal', 'Athletic Bilbao', 'Valencia', 'Real Betis', 'Osasuna',
@@ -560,10 +559,8 @@ def export_todays_predictions_to_excel(predictions_df):
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             predictions_df.to_excel(writer, sheet_name='Predictions', index=False)
             
-            # Format Excel
             worksheet = writer.sheets['Predictions']
             
-            # Column widths
             worksheet.column_dimensions['A'].width = 12
             worksheet.column_dimensions['B'].width = 18
             worksheet.column_dimensions['C'].width = 18
@@ -584,7 +581,6 @@ def export_todays_predictions_to_excel(predictions_df):
 # STREAMLIT APP - 2025/26 SEASON ONLY
 # ============================================================================
 
-# Load 2025/26 data button
 if st.sidebar.button("Load 2025/26 Season Data", type="primary"):
     league_code = leagues[selected_league]
     
@@ -594,342 +590,182 @@ if st.sidebar.button("Load 2025/26 Season Data", type="primary"):
         if df is not None:
             st.session_state.df_2025 = df
             st.session_state.predictor_2025 = CurrentSeasonPredictor(df)
-            st.sidebar.success(f"✅ {selected_league} 2025/26 loaded")
-            st.sidebar.info(f"• {len(st.session_state.predictor_2025.teams)} teams with data")
+            st.sidebar.success(f"Loaded {selected_league}")
+            st.sidebar.info(f"Matches in 2025/26: {len(df)}")
+            st.sidebar.info(f"Teams with data: {len(st.session_state.predictor_2025.teams)}")
         else:
             st.sidebar.error("Failed to load 2025/26 data")
 
-# Main dashboard
 if 'df_2025' in st.session_state:
     df_2025 = st.session_state.df_2025
     predictor = st.session_state.predictor_2025
     
-    # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 2025/26 Overview", "🎯 2025/26 Predictions", "🏆 2025/26 Team Stats", "📋 Today's Predictions"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Predictions", "Team Stats", "Today Predictions"])
     
     with tab1:
-        st.subheader(f"📊 {selected_league} - 2025/26 Season Overview")
+        st.subheader(f"{selected_league} - 2025/26 Season")
         
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            total_matches = len(df_2025)
-            st.metric("2025/26 Matches", total_matches)
+            st.metric("Total Matches", len(df_2025))
         
         with col2:
             avg_goals = (df_2025['FTHG'].mean() + df_2025['FTAG'].mean()) if 'FTHG' in df_2025.columns else 0
-            st.metric("Avg Goals 2025/26", f"{avg_goals:.2f}")
+            st.metric("Avg Goals", f"{avg_goals:.2f}")
         
         with col3:
             home_wins = (df_2025['FTR'] == 'H').sum() if 'FTR' in df_2025.columns else 0
-            st.metric("Home Wins 2025/26", f"{home_wins} ({100*home_wins/total_matches:.1f}%)")
+            pct = 100*home_wins/len(df_2025) if len(df_2025) > 0 else 0
+            st.metric("Home Wins", f"{home_wins} ({pct:.1f}%)")
         
         with col4:
             away_wins = (df_2025['FTR'] == 'A').sum() if 'FTR' in df_2025.columns else 0
-            st.metric("Away Wins 2025/26", f"{away_wins} ({100*away_wins/total_matches:.1f}%)")
+            pct = 100*away_wins/len(df_2025) if len(df_2025) > 0 else 0
+            st.metric("Away Wins", f"{away_wins} ({pct:.1f}%)")
         
-        st.subheader("📈 2025/26 Season Averages")
+        st.subheader("2025/26 Season Averages")
         
         if hasattr(predictor, 'league_stats'):
             league_stats = predictor.league_stats
-            
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 st.metric("Avg Home Goals", f"{league_stats.get('avg_home_goals_2025', 0):.2f}")
-            
             with col2:
                 st.metric("Avg Away Goals", f"{league_stats.get('avg_away_goals_2025', 0):.2f}")
-            
             with col3:
                 st.metric("Avg Total Corners", f"{league_stats.get('avg_total_corners_2025', 0):.1f}")
-            
             with col4:
                 st.metric("Avg Total SOT", f"{league_stats.get('avg_total_sot_2025', 0):.1f}")
-        
-        st.subheader("⚽ Recent 2025/26 Matches")
-        
-        if 'Date' in df_2025.columns:
-            df_recent = df_2025.copy()
-            df_recent['Date'] = pd.to_datetime(df_recent['Date'], dayfirst=True, errors='coerce')
-            df_recent = df_recent.sort_values('Date', ascending=False).head(10)
-            
-            for _, match in df_recent.iterrows():
-                col1, col2, col3 = st.columns([3, 1, 3])
-                with col1:
-                    st.markdown(f"**{match['HomeTeam']}**")
-                with col2:
-                    st.markdown(f"**{int(match['FTHG'])} - {int(match['FTAG'])}**")
-                    st.caption(match['Date'].strftime('%d/%m/%Y') if pd.notnull(match['Date']) else "Date N/A")
-                with col3:
-                    st.markdown(f"**{match['AwayTeam']}**")
-                st.markdown("---")
     
     with tab2:
-        st.subheader("🎯 2025/26 Season Predictions")
-        st.info("**Using 2025/26 season data ONLY** - Most accurate predictions for current season")
+        st.subheader("2025/26 Season Predictions")
         
         if len(predictor.teams) < 2:
-            st.warning("Not enough teams with 2025/26 data. Need at least 2 teams.")
+            st.warning("Not enough teams")
         else:
             col1, col2 = st.columns(2)
-            
             with col1:
-                home_team = st.selectbox("Home Team (2025/26)", predictor.teams, key="home_2025")
-            
+                home_team = st.selectbox("Home Team", predictor.teams, key="home_2025")
             with col2:
                 away_options = [t for t in predictor.teams if t != home_team]
-                away_team = st.selectbox("Away Team (2025/26)", away_options, key="away_2025")
+                away_team = st.selectbox("Away Team", away_options, key="away_2025")
             
             if home_team and away_team:
-                with st.spinner("Calculating 2025/26 prediction..."):
-                    prediction = predictor.predict_current_season_match(home_team, away_team)
+                prediction = predictor.predict_current_season_match(home_team, away_team)
                 
                 if prediction:
-                    st.markdown("---")
-                    
                     col1, col2, col3 = st.columns([3, 1, 3])
                     with col1:
-                        st.markdown(f"### 🏠 {home_team}")
+                        st.markdown(f"### {home_team}")
                     with col2:
                         st.markdown("### vs")
                     with col3:
-                        st.markdown(f"### 🚌 {away_team}")
-                    
-                    st.caption(f"Prediction based on {prediction['home_matches_played']} vs {prediction['away_matches_played']} 2025/26 matches")
-                    
-                    st.markdown("### 📊 2025/26 Match Outcome")
+                        st.markdown(f"### {away_team}")
                     
                     prob_col1, prob_col2, prob_col3 = st.columns(3)
-                    
                     with prob_col1:
-                        home_prob = prediction['home_win_prob_2025'] * 100
-                        st.metric(f"{home_team} Win", f"{home_prob:.1f}%")
-                    
+                        st.metric(f"{home_team} Win", f"{prediction['home_win_prob_2025']*100:.1f}%")
                     with prob_col2:
-                        draw_prob = prediction['draw_prob_2025'] * 100
-                        st.metric("Draw", f"{draw_prob:.1f}%")
-                    
+                        st.metric("Draw", f"{prediction['draw_prob_2025']*100:.1f}%")
                     with prob_col3:
-                        away_prob = prediction['away_win_prob_2025'] * 100
-                        st.metric(f"{away_team} Win", f"{away_prob:.1f}%")
+                        st.metric(f"{away_team} Win", f"{prediction['away_win_prob_2025']*100:.1f}%")
                     
-                    pred_winner = prediction['predicted_winner_2025']
-                    confidence = prediction['confidence_2025']
+                    st.success(f"Prediction: {prediction['predicted_winner_2025']} - {prediction['confidence_2025']}% confidence")
                     
-                    if pred_winner == "Draw":
-                        st.success(f"**🎯 2025/26 PREDICTION: DRAW LIKELY** ({confidence}% confidence)")
-                    else:
-                        st.success(f"**🎯 2025/26 PREDICTION: {pred_winner} TO WIN** ({confidence}% confidence)")
-                    
-                    st.markdown("### 🥅 Expected Goals (2025/26 data)")
-                    
-                    xg_col1, xg_col2, xg_col3 = st.columns(3)
-                    
-                    with xg_col1:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
                         st.metric(f"{home_team} xG", f"{prediction['home_xg_2025']:.2f}")
-                    
-                    with xg_col2:
-                        total_xg = prediction['home_xg_2025'] + prediction['away_xg_2025']
-                        st.metric("Total xG", f"{total_xg:.2f}")
-                    
-                    with xg_col3:
+                    with col2:
+                        st.metric("Total xG", f"{prediction['home_xg_2025'] + prediction['away_xg_2025']:.2f}")
+                    with col3:
                         st.metric(f"{away_team} xG", f"{prediction['away_xg_2025']:.2f}")
-                    
-                    st.markdown("### 🎯 Corners Prediction (2025/26 data)")
-                    
-                    corner_col1, corner_col2, corner_col3 = st.columns(3)
-                    
-                    with corner_col1:
-                        st.metric(f"{home_team} Corners", f"{prediction['home_corners_2025']:.1f}")
-                    
-                    with corner_col2:
-                        st.metric("Total Corners", f"{prediction['total_corners_2025']:.1f}")
-                    
-                    with corner_col3:
-                        st.metric(f"{away_team} Corners", f"{prediction['away_corners_2025']:.1f}")
-                    
-                    st.markdown("### 🎯 Shots on Target (2025/26 data)")
-                    
-                    sot_col1, sot_col2, sot_col3 = st.columns(3)
-                    
-                    with sot_col1:
-                        st.metric(f"{home_team} SOT", f"{prediction['home_sot_2025']:.1f}")
-                    
-                    with sot_col2:
-                        st.metric("Total SOT", f"{prediction['total_sot_2025']:.1f}")
-                    
-                    with sot_col3:
-                        st.metric(f"{away_team} SOT", f"{prediction['away_sot_2025']:.1f}")
-                    
-                    st.markdown("### 📋 Most Likely Scorelines (2025/26)")
-                    
-                    if 'top_scorelines_2025' in prediction:
-                        scoreline_data = []
-                        for score, prob in prediction['top_scorelines_2025'].items():
-                            scoreline_data.append({
-                                'Score': score,
-                                'Probability': f"{prob*100:.2f}%"
-                            })
-                        
-                        scoreline_df = pd.DataFrame(scoreline_data)
-                        st.dataframe(scoreline_df, use_container_width=True, hide_index=True)
-                    
-                    st.markdown("### 📈 2025/26 Team Form")
-                    
-                    form_col1, form_col2 = st.columns(2)
-                    
-                    with form_col1:
-                        home_form = prediction['home_form_2025']
-                        form_label = "Good" if home_form > 0.6 else "Average" if home_form > 0.4 else "Poor"
-                        st.metric(f"{home_team} Form", form_label, f"{home_form:.2f}")
-                    
-                    with form_col2:
-                        away_form = prediction['away_form_2025']
-                        form_label = "Good" if away_form > 0.6 else "Average" if away_form > 0.4 else "Poor"
-                        st.metric(f"{away_team} Form", form_label, f"{away_form:.2f}")
     
     with tab3:
-        st.subheader("🏆 2025/26 Team Statistics")
-        
+        st.subheader("2025/26 Team Statistics")
         selected_team = st.selectbox("Select Team", predictor.teams, key="team_stats_2025")
         
         if selected_team in predictor.team_stats:
             team_stats = predictor.team_stats[selected_team]
-            
-            st.markdown(f"### 📊 {selected_team} - 2025/26 Season")
-            
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Matches Played", team_stats['matches_played'])
-            
+                st.metric("Matches", team_stats['matches_played'])
             with col2:
-                st.metric("Attacking Strength", f"{team_stats['attacking_strength']:.2f}")
-            
+                st.metric("Attack Strength", f"{team_stats['attacking_strength']:.2f}")
             with col3:
-                st.metric("Defensive Strength", f"{team_stats['defensive_strength']:.2f}")
-            
+                st.metric("Defense Strength", f"{team_stats['defensive_strength']:.2f}")
             with col4:
-                st.metric("Current Form", f"{team_stats['form_2025']:.2f}")
-            
-            st.markdown("#### 📈 Performance Metrics (2025/26)")
-            
-            perf_col1, perf_col2, perf_col3 = st.columns(3)
-            
-            with perf_col1:
-                st.metric("Avg Goals For", f"{team_stats['avg_gf_2025']:.2f}")
-            
-            with perf_col2:
-                if 'corners_for_2025' in team_stats:
-                    st.metric("Avg Corners For", f"{team_stats['corners_for_2025']:.1f}")
-            
-            with perf_col3:
-                if 'sot_for_2025' in team_stats:
-                    st.metric("Avg Shots on Target", f"{team_stats['sot_for_2025']:.1f}")
+                st.metric("Form", f"{team_stats['form_2025']:.2f}")
     
     with tab4:
-        st.subheader("📋 Today's Match Predictions - Export to Excel")
-        st.info("🎯 Generate predictions for today's fixtures and export as Excel file")
+        st.subheader("Today's Predictions Export")
         
-        # Get today's fixtures
         fixtures = get_todays_fixtures()
         
         if fixtures:
-            st.markdown(f"#### ⚽ {len(fixtures)} Matches Found for Today")
+            st.write(f"{len(fixtures)} matches found for today")
             
             predictions_list = []
-            
             for fixture in fixtures:
                 home_team = fixture['homeTeam']
                 away_team = fixture['awayTeam']
                 
                 if home_team in predictor.teams and away_team in predictor.teams:
-                    prediction = predictor.predict_current_season_match(home_team, away_team)
+                    pred = predictor.predict_current_season_match(home_team, away_team)
                     
-                    if prediction:
+                    if pred:
                         predictions_list.append({
                             'Date': fixture['date'],
                             'Time': fixture['time'],
                             'Home Team': home_team,
                             'Away Team': away_team,
                             'League': fixture['league'],
-                            'Home xG': prediction['home_xg_2025'],
-                            'Away xG': prediction['away_xg_2025'],
-                            'Home Win %': f"{prediction['home_win_prob_2025']*100:.1f}%",
-                            'Draw %': f"{prediction['draw_prob_2025']*100:.1f}%",
-                            'Away Win %': f"{prediction['away_win_prob_2025']*100:.1f}%",
-                            'Prediction': prediction['predicted_winner_2025'],
-                            'Confidence': f"{prediction['confidence_2025']:.1f}%",
-                            'Home Corners': prediction['home_corners_2025'],
-                            'Away Corners': prediction['away_corners_2025'],
-                            'Total Corners': prediction['total_corners_2025'],
-                            'Home SOT': prediction['home_sot_2025'],
-                            'Away SOT': prediction['away_sot_2025'],
-                            'Total SOT': prediction['total_sot_2025']
+                            'Home xG': pred['home_xg_2025'],
+                            'Away xG': pred['away_xg_2025'],
+                            'Home Win %': f"{pred['home_win_prob_2025']*100:.1f}%",
+                            'Draw %': f"{pred['draw_prob_2025']*100:.1f}%",
+                            'Away Win %': f"{pred['away_win_prob_2025']*100:.1f}%",
+                            'Prediction': pred['predicted_winner_2025'],
+                            'Confidence': f"{pred['confidence_2025']:.1f}%",
+                            'Home Corners': pred['home_corners_2025'],
+                            'Away Corners': pred['away_corners_2025'],
+                            'Total Corners': pred['total_corners_2025'],
+                            'Home SOT': pred['home_sot_2025'],
+                            'Away SOT': pred['away_sot_2025'],
+                            'Total SOT': pred['total_sot_2025']
                         })
             
             if predictions_list:
-                # Display predictions table
                 df_predictions = pd.DataFrame(predictions_list)
                 st.dataframe(df_predictions, use_container_width=True)
                 
-                # Export button
-                st.markdown("---")
-                col1, col2, col3 = st.columns([1, 1, 2])
+                col1, col2 = st.columns(2)
                 
                 with col1:
-                    if st.button("📥 Export to CSV", use_container_width=True):
-                        csv = df_predictions.to_csv(index=False)
-                        st.download_button(
-                            label="Download CSV",
-                            data=csv,
-                            file_name=f"football_predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
+                    csv = df_predictions.to_csv(index=False)
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
                 
                 with col2:
-                    if st.button("📊 Export to Excel", use_container_width=True):
-                        excel_file = export_todays_predictions_to_excel(df_predictions)
-                        if excel_file:
-                            st.download_button(
-                                label="Download Excel",
-                                data=excel_file.getvalue(),
-                                file_name=f"football_predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
+                    excel_file = export_todays_predictions_to_excel(df_predictions)
+                    if excel_file:
+                        st.download_button(
+                            label="Download Excel",
+                            data=excel_file.getvalue(),
+                            file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
             else:
-                st.warning("No predictions available for today's fixtures with current data")
+                st.warning("No predictions available")
         else:
-            st.warning("No fixtures found for today")
+            st.warning("No fixtures found")
 
 else:
-    st.info("👈 Select a league and click 'Load 2025/26 Season Data' to begin")
-    st.warning("**IMPORTANT:** This app uses ONLY 2025/26 season data for predictions")
-    
-    with st.expander("ℹ️ Why 2025/26 data only?"):
-        st.markdown("""
-        ### Why This App is More Accurate:
-        
-        **Traditional Models (WRONG):**
-        - Use historical data from 2023/24, 2022/23, etc.
-        - Don't account for team changes, transfers, or current form
-        - Mix old data with current season
-        
-        **Our 2025/26 Model (CORRECT):**
-        - Uses **ONLY 2025/26 season data**
-        - Accounts for current team rosters and form
-        - More accurate for current season predictions
-        - Better for corners and shots on target predictions
-        
-        **Key Benefits:**
-        1. **Current Team Strength**: Teams change year-to-year
-        2. **Current Form**: Only recent matches matter
-        3. **Tactical Changes**: Managers change tactics each season
-        4. **Player Transfers**: New signings affect performance
-        
-        **Accuracy Improvement:** 20-30% more accurate than models using old data
-        """)• {len(df)} matches in 2025/26")
-            st.sidebar.info(f"
+    st.info("Select a league and click Load 2025/26 Season Data")
+    st.warning("This app uses ONLY 2025/26 season data")
