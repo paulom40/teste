@@ -706,7 +706,7 @@ if st.sidebar.button("Load 2025/26 Season Data", type="primary"):
         else:
             st.sidebar.error("Failed to load 2025/26 data")
 
-if 'df_2025' in st.session_state and 'predictor_2025' in st.session_state:
+if 'df_2025' in st.session_state:
     df_2025 = st.session_state.df_2025
     predictor = st.session_state.predictor_2025
     
