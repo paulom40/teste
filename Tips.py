@@ -664,6 +664,34 @@ if 'df_2025' in st.session_state:
                     with col3:
                         st.markdown(f"### {away_team}")
                     
+                    if st.button("Save to Today Predictions", key="save_prediction"):
+                        if 'saved_predictions' not in st.session_state:
+                            st.session_state.saved_predictions = []
+                        
+                        saved_prediction = {
+                            'Date': datetime.now().strftime("%d/%m/%Y"),
+                            'Time': 'Manual',
+                            'Home Team': home_team,
+                            'Away Team': away_team,
+                            'League': selected_league,
+                            'Home xG': prediction['home_xg_2025'],
+                            'Away xG': prediction['away_xg_2025'],
+                            'Home Win %': f"{prediction['home_win_prob_2025']*100:.1f}%",
+                            'Draw %': f"{prediction['draw_prob_2025']*100:.1f}%",
+                            'Away Win %': f"{prediction['away_win_prob_2025']*100:.1f}%",
+                            'Prediction': prediction['predicted_winner_2025'],
+                            'Confidence': f"{prediction['confidence_2025']:.1f}%",
+                            'Home Corners': prediction['home_corners_2025'],
+                            'Away Corners': prediction['away_corners_2025'],
+                            'Total Corners': prediction['total_corners_2025'],
+                            'Home SOT': prediction['home_sot_2025'],
+                            'Away SOT': prediction['away_sot_2025'],
+                            'Total SOT': prediction['total_sot_2025']
+                        }
+                        
+                        st.session_state.saved_predictions.append(saved_prediction)
+                        st.success(f"Prediction saved! Total saved: {len(st.session_state.saved_predictions)}")
+                    
                     prob_col1, prob_col2, prob_col3 = st.columns(3)
                     with prob_col1:
                         st.metric(f"{home_team} Win", f"{prediction['home_win_prob_2025']*100:.1f}%")
@@ -731,12 +759,17 @@ if 'df_2025' in st.session_state:
     with tab4:
         st.subheader("Today's Predictions Export")
         
+        all_predictions = []
+        
+        if 'saved_predictions' in st.session_state and len(st.session_state.saved_predictions) > 0:
+            st.info(f"You have {len(st.session_state.saved_predictions)} saved predictions")
+            all_predictions.extend(st.session_state.saved_predictions)
+        
         fixtures = get_todays_fixtures()
         
         if fixtures:
             st.write(f"{len(fixtures)} matches found for today")
             
-            predictions_list = []
             for fixture in fixtures:
                 home_team = fixture['homeTeam']
                 away_team = fixture['awayTeam']
@@ -745,7 +778,7 @@ if 'df_2025' in st.session_state:
                     pred = predictor.predict_current_season_match(home_team, away_team)
                     
                     if pred:
-                        predictions_list.append({
+                        prediction_item = {
                             'Date': fixture['date'],
                             'Time': fixture['time'],
                             'Home Team': home_team,
@@ -764,36 +797,47 @@ if 'df_2025' in st.session_state:
                             'Home SOT': pred['home_sot_2025'],
                             'Away SOT': pred['away_sot_2025'],
                             'Total SOT': pred['total_sot_2025']
-                        })
-            
-            if predictions_list:
-                df_predictions = pd.DataFrame(predictions_list)
-                st.dataframe(df_predictions, use_container_width=True)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    csv = df_predictions.to_csv(index=False)
-                    st.download_button(
-                        label="Download CSV",
-                        data=csv,
-                        file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
-                    )
-                
-                with col2:
-                    excel_file = export_todays_predictions_to_excel(df_predictions)
-                    if excel_file:
-                        st.download_button(
-                            label="Download Excel",
-                            data=excel_file.getvalue(),
-                            file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        }
+                        
+                        already_saved = any(
+                            p['Home Team'] == home_team and p['Away Team'] == away_team 
+                            for p in all_predictions
                         )
-            else:
-                st.warning("No predictions available")
+                        
+                        if not already_saved:
+                            all_predictions.append(prediction_item)
+        
+        if all_predictions:
+            df_predictions = pd.DataFrame(all_predictions)
+            st.dataframe(df_predictions, use_container_width=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                csv = df_predictions.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            
+            with col2:
+                excel_file = export_todays_predictions_to_excel(df_predictions)
+                if excel_file:
+                    st.download_button(
+                        label="Download Excel",
+                        data=excel_file.getvalue(),
+                        file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            
+            with col3:
+                if st.button("Clear Saved Predictions"):
+                    st.session_state.saved_predictions = []
+                    st.rerun()
         else:
-            st.warning("No fixtures found")
+            st.warning("No predictions available yet. Save predictions from the Predictions tab!")
 
 else:
     st.info("Select a league and click Load 2025/26 Season Data")
