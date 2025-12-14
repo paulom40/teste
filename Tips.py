@@ -40,23 +40,26 @@ leagues = {
 }
 
 selected_league = st.sidebar.selectbox("Select League", list(leagues.keys()))
-season = st.sidebar.text_input("Enter Season (e.g., 202526 for 2025/26)", value="202526")
+season = st.sidebar.text_input("Enter Season (e.g., 2526 for 2025/26 or 202526)", value="2526")
 
 # Function to fetch data from football-data.co.uk
 @st.cache_data
 def fetch_football_data(league_code, season_code):
     """Fetch CSV data from football-data.co.uk"""
-    url = f"https://www.football-data.co.uk/mmz4281/{season_code}/{league_code}.csv"
+    # Convert season code: 202526 -> 2526
+    season_short = season_code[-4:] if len(season_code) == 6 else season_code
+    
+    url = f"https://www.football-data.co.uk/mmz4281/{season_short}/{league_code}.csv"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             df = pd.read_csv(StringIO(response.text))
             return df
         else:
-            st.error(f"Failed to fetch data. Status code: {response.status_code}")
+            st.warning(f"Status code: {response.status_code}. Data may not be available yet for this season.")
             return None
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.warning(f"Error: {e}")
         return None
 
 # Poisson probability calculation
@@ -181,6 +184,24 @@ if st.sidebar.button("Load Data", type="primary"):
         st.success(f"✅ Data loaded successfully for {selected_league} ({season})")
     else:
         st.warning("Could not load data. Please check the season code.")
+        with st.expander("ℹ️ Available Seasons & Troubleshooting"):
+            st.write("""
+            **Available Season Codes:**
+            - 2526 → 2025/26 season
+            - 2425 → 2024/25 season
+            - 2324 → 2023/24 season
+            - 2223 → 2022/23 season
+            - 2122 → 2021/22 season
+            - 1920 → 2019/20 season
+            
+            **Why data might not load:**
+            1. Season hasn't started or no matches played yet
+            2. Data updates twice weekly (Sundays & Wednesdays)
+            3. For current season 2025/26, matches must be played first
+            
+            **Try previous seasons first** to test the app functionality.
+            """)
+
 
 # Main dashboard
 if 'df' in st.session_state:
