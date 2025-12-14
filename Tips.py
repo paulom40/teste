@@ -1,4 +1,59 @@
-import streamlit as st
+st.plotly_chart(fig_pred, use_container_width=True)
+                
+                # Additional Predictions: Correct Score, Shots, Corners
+                st.subheader("🎯 Detailed Predictions")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Home Shots on Target", f"{prediction['home_sot']:.1f}")
+                with col2:
+                    st.metric("Away Shots on Target", f"{prediction['away_sot']:.1f}")
+                with col3:
+                    st.metric("Total Shots on Target", f"{prediction['total_sot']:.1f}")
+                with col4:
+                    st.metric("Total Corners", f"{prediction['total_corners']:.1f}")
+                
+                # Correct Score Predictions
+                st.write("**Top 5 Most Likely Correct Scores:**")
+                scoreline_data = pd.DataFrame(
+                    list(prediction['top_scorelines'].items()),
+                    columns=['Correct Score', 'Probability']
+                )
+                scoreline_data['Probability'] = scoreline_data['Probability'].apply(lambda x: f"{x*100:.2f}%")
+                st.dataframe(scoreline_data, use_container_width=True)
+                
+                # Corners and SOT visualization
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    corners_data = pd.DataFrame({
+                        'Team': [home_team, away_team],
+                        'Corners': [prediction['home_corners'], prediction['away_corners']]
+                    })
+                    fig_corners = px.bar(
+                        corners_data,
+                        x='Team',
+                        y='Corners',
+                        title="Predicted Corners",
+                        color='Team',
+                        color_discrete_sequence=['#3498db', '#e74c3c']
+                    )
+                    st.plotly_chart(fig_corners, use_container_width=True)
+                
+                with col2:
+                    sot_data = pd.DataFrame({
+                        'Team': [home_team, away_team],
+                        'Shots on Target': [prediction['home_sot'], prediction['away_sot']]
+                    })
+                    fig_sot = px.bar(
+                        sot_data,
+                        x='Team',
+                        y='Shots on Target',
+                        title="Predicted Shots on Target",
+                        color='Team',
+                        color_discrete_sequence=['#3498db', '#e74c3c']
+                    )
+                    st.plotly_chart(fig_sot, use_container_width=True)import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
@@ -149,13 +204,18 @@ def calculate_team_strength(df):
     return strength
 
 # Poisson-based match prediction model
-def predict_match(home_team, away_team, team_strength, df, league_avg_goals=2.5):
+def predict_match(home_team, away_team, team_strength, df):
     """
     Predict match outcome using xG + Poisson model
-    Returns probabilities for Home Win, Draw, Away Win
+    Returns dictionary with predictions
     """
     
-    if home_team not in team_strength or away_team not in team_strength:
+    # Verify teams exist in strength dict
+    if home_team not in team_strength:
+        st.error(f"Home team {home_team} not found in strength ratings")
+        return None
+    if away_team not in team_strength:
+        st.error(f"Away team {away_team} not found in strength ratings")
         return None
     
     home_attack = team_strength[home_team]['attack']
@@ -197,14 +257,21 @@ def predict_match(home_team, away_team, team_strength, df, league_avg_goals=2.5)
     top_scorelines = dict(sorted(scorelines.items(), key=lambda x: x[1], reverse=True)[:5])
     
     # Calculate shots on target
-    league_avg_shots = df['HS'].mean() + df['AS'].mean()
-    home_sot = predict_shots_on_target(home_attack, away_defense, league_avg_shots, as_home=True)
-    away_sot = predict_shots_on_target(away_attack, home_defense, league_avg_shots, as_home=False)
+    league_avg_shots_home = df['HS'].mean() if 'HS' in df.columns else 12
+    league_avg_shots_away = df['AS'].mean() if 'AS' in df.columns else 10
+    
+    home_sot = max((league_avg_shots_home * home_attack) * 0.30, 0.5)
+    away_sot = max((league_avg_shots_away * away_attack) * 0.30, 0.5)
     
     # Calculate corners
-    league_avg_corners = (df['Corner'].mean() if 'Corner' in df.columns else 8.5)
-    home_corners = predict_corners(home_attack, away_defense, league_avg_corners)
-    away_corners = predict_corners(away_attack, home_defense, league_avg_corners)
+    league_avg_corners = 8.5
+    if 'Corner' in df.columns:
+        league_avg_corners = df['Corner'].mean()
+    elif 'Corners' in df.columns:
+        league_avg_corners = df['Corners'].mean()
+    
+    home_corners = max(league_avg_corners * (home_attack * 0.6 + away_defense * 0.4), 1.0)
+    away_corners = max(league_avg_corners * (away_attack * 0.6 + home_defense * 0.4), 1.0)
     total_corners = home_corners + away_corners
     
     return {
@@ -342,14 +409,13 @@ if 'df' in st.session_state:
         with col1:
             home_team = st.selectbox("Select Home Team", teams, key="home_pred")
         
-        with col2:
-            away_team = st.selectbox("Select Away Team", teams, key="away_pred", 
-                                     index=1 if len(teams) > 1 else 0)
+
+
         
         if home_team != away_team:
             prediction = predict_match(home_team, away_team, team_strength, df)
             
-            if prediction:
+            if prediction is not None:
                 # Display predictions
                 col1, col2, col3 = st.columns(3)
                 
@@ -404,12 +470,9 @@ if 'df' in st.session_state:
                     color_discrete_sequence=['#2ecc71', '#3498db', '#e74c3c'],
                     labels={'Probability': 'Probability (%)'}
                 )
-                fig_pred.update_layout(showlegend=False, yaxis_range=[0, 100])
-                st.plotly_chart(fig_pred, use_container_width=True)
+
         else:
             st.warning("Please select different teams")
-        
-        # Prediction for recent unplayed matches
         st.subheader("📋 Recent Matches Analysis")
         
         recent_matches = df.tail(10).copy()
