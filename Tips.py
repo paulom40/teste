@@ -69,11 +69,11 @@ with tab5:
         except Exception as e:
             st.error(f"Error loading Wisdom of the Crowd data: {e}")
             
-            st.info("The Wisdom of the Crowd is a betting strategy based on:")
+            st.info("Wisdom of the Crowd strategy based on:")
             st.markdown("""
-            - Using Pinnacle.com betting odds as the gold standard
-            - Removing bookmaker margins to find 'true' probabilities
-            - Identifying value bets where implied probability < actual probability
+            - Pinnacle.com betting odds as gold standard
+            - Remove bookmaker margins to find true probabilities
+            - Identify value bets where implied probability is lower than actual
             - Based on research by Joseph Buchdahl
             - Typical ROI: 3-5% on long-term bets
             """)
@@ -85,11 +85,11 @@ else:
     st.markdown("---")
     st.subheader("Features Available After Loading Data:")
     st.markdown("""
-    - **Overview Tab**: Season statistics and recent matches
-    - **Predictions Tab**: Create custom match predictions with Save button
-    - **Team Stats Tab**: Detailed team performance metrics
-    - **Today Predictions Tab**: Export all predictions to Excel/CSV
-    - **Wisdom of Crowd Tab**: View professional betting value tips
+    - Overview Tab: Season statistics and recent matches
+    - Predictions Tab: Create custom match predictions with Save button
+    - Team Stats Tab: Detailed team performance metrics
+    - Today Predictions Tab: Export all predictions to Excel/CSV
+    - Wisdom of Crowd Tab: View professional betting value tips
     """)import streamlit as st
 import pandas as pd
 import numpy as np
@@ -687,24 +687,19 @@ def export_todays_predictions_to_excel(predictions_df):
         st.error(f"Error exporting to Excel: {e}")
         return None
 
-# ============================================================================
-# STREAMLIT APP - 2025/26 SEASON ONLY
-# ============================================================================
-
+# Load 2025/26 data button
 if st.sidebar.button("Load 2025/26 Season Data", type="primary"):
     league_code = leagues[selected_league]
-    
     with st.spinner(f"Loading {selected_league} 2025/26 data..."):
         df = fetch_current_season_data(league_code)
-        
         if df is not None:
             st.session_state.df_2025 = df
             st.session_state.predictor_2025 = CurrentSeasonPredictor(df)
             st.sidebar.success(f"Loaded {selected_league}")
-            st.sidebar.info(f"Matches in 2025/26: {len(df)}")
-            st.sidebar.info(f"Teams with data: {len(st.session_state.predictor_2025.teams)}")
+            st.sidebar.info(f"Matches: {len(df)}")
+            st.sidebar.info(f"Teams: {len(st.session_state.predictor_2025.teams)}")
         else:
-            st.sidebar.error("Failed to load 2025/26 data")
+            st.sidebar.error("Failed to load data")
 
 if 'df_2025' in st.session_state:
     df_2025 = st.session_state.df_2025
