@@ -253,10 +253,13 @@ class CurrentSeasonPredictor:
             avg_gf = total_gf / total_matches
             avg_ga = total_ga / total_matches
             
-            league_avg_gf = (self.df['FTHG'].mean() + self.df['FTAG'].mean()) / 2
+            league_avg_gf = (self.df['FTHG'].sum() + self.df['FTAG'].sum()) / len(self.df) if len(self.df) > 0 else 1.5
             
             attacking_strength = avg_gf / league_avg_gf if league_avg_gf > 0 else 1.0
             defensive_strength = avg_ga / league_avg_gf if league_avg_gf > 0 else 1.0
+            
+            attacking_strength = max(0.5, min(attacking_strength, 2.0))
+            defensive_strength = max(0.5, min(defensive_strength, 2.0))
             
             form_rating = self._calculate_current_form(team, home_matches, away_matches)
             corner_stats = self._calculate_current_corner_stats(team, home_matches, away_matches)
@@ -282,7 +285,7 @@ class CurrentSeasonPredictor:
         
         for _, match in home_matches.iterrows():
             all_matches.append({
-                'date': match.get('Date', ''),
+                'date': pd.to_datetime(match.get('Date', ''), dayfirst=True, errors='coerce'),
                 'team': team,
                 'is_home': True,
                 'goals_for': match['FTHG'],
@@ -292,7 +295,7 @@ class CurrentSeasonPredictor:
         
         for _, match in away_matches.iterrows():
             all_matches.append({
-                'date': match.get('Date', ''),
+                'date': pd.to_datetime(match.get('Date', ''), dayfirst=True, errors='coerce'),
                 'team': team,
                 'is_home': False,
                 'goals_for': match['FTAG'],
@@ -300,6 +303,7 @@ class CurrentSeasonPredictor:
                 'result': 'A' if match['FTAG'] > match['FTHG'] else 'H' if match['FTAG'] < match['FTHG'] else 'D'
             })
         
+        all_matches = [m for m in all_matches if pd.notnull(m['date'])]
         all_matches.sort(key=lambda x: x['date'], reverse=True)
         last_5 = all_matches[:5]
         
