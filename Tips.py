@@ -67,6 +67,29 @@ def poisson_probability(expected_goals, actual_goals):
     """Calculate Poisson probability for expected goals"""
     return poisson.pmf(actual_goals, expected_goals)
 
+# Predict shots on target
+def predict_shots_on_target(team_attack_strength, team_defense_strength, league_avg_shots, as_home=True):
+    """Predict shots on target based on team strength"""
+    if as_home:
+        expected_shots = league_avg_shots * team_attack_strength
+    else:
+        expected_shots = league_avg_shots * team_attack_strength
+    
+    # Conversion rate: ~30% of shots are on target
+    sot_rate = 0.30
+    expected_sot = expected_shots * sot_rate
+    return max(expected_sot, 0.5)
+
+# Predict corners
+def predict_corners(team_attack_strength, team_defense_strength, league_avg_corners):
+    """Predict corners based on team attacking and defensive strength"""
+    # Corners correlated with attacking play and defensive pressure
+    attacking_factor = team_attack_strength * 0.6
+    defensive_factor = team_defense_strength * 0.4
+    
+    expected_corners = league_avg_corners * (attacking_factor + defensive_factor)
+    return max(expected_corners, 1.0)
+
 # Calculate xG (Expected Goals) - simplified based on shot data
 def calculate_team_xg(df, team, as_home=True):
     """Calculate expected goals for a team"""
@@ -153,11 +176,15 @@ def predict_match(home_team, away_team, team_strength, df, league_avg_goals=2.5)
     
     # Calculate match outcome probabilities using Poisson
     probabilities = {'home_win': 0, 'draw': 0, 'away_win': 0}
+    scorelines = {}
     
     for h_goals in range(0, 8):
         for a_goals in range(0, 8):
             prob = (poisson.pmf(h_goals, expected_home_goals) * 
                    poisson.pmf(a_goals, expected_away_goals))
+            
+            scoreline = f"{h_goals}-{a_goals}"
+            scorelines[scoreline] = prob
             
             if h_goals > a_goals:
                 probabilities['home_win'] += prob
@@ -166,12 +193,33 @@ def predict_match(home_team, away_team, team_strength, df, league_avg_goals=2.5)
             else:
                 probabilities['away_win'] += prob
     
+    # Sort scorelines by probability
+    top_scorelines = dict(sorted(scorelines.items(), key=lambda x: x[1], reverse=True)[:5])
+    
+    # Calculate shots on target
+    league_avg_shots = df['HS'].mean() + df['AS'].mean()
+    home_sot = predict_shots_on_target(home_attack, away_defense, league_avg_shots, as_home=True)
+    away_sot = predict_shots_on_target(away_attack, home_defense, league_avg_shots, as_home=False)
+    
+    # Calculate corners
+    league_avg_corners = (df['Corner'].mean() if 'Corner' in df.columns else 8.5)
+    home_corners = predict_corners(home_attack, away_defense, league_avg_corners)
+    away_corners = predict_corners(away_attack, home_defense, league_avg_corners)
+    total_corners = home_corners + away_corners
+    
     return {
         'home_win': probabilities['home_win'],
         'draw': probabilities['draw'],
         'away_win': probabilities['away_win'],
         'expected_home_goals': expected_home_goals,
-        'expected_away_goals': expected_away_goals
+        'expected_away_goals': expected_away_goals,
+        'top_scorelines': top_scorelines,
+        'home_sot': home_sot,
+        'away_sot': away_sot,
+        'total_sot': home_sot + away_sot,
+        'home_corners': home_corners,
+        'away_corners': away_corners,
+        'total_corners': total_corners
     }
 
 # Load data button
