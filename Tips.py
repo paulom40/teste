@@ -681,6 +681,35 @@ if 'df_2025' in st.session_state:
                         st.metric("Total xG", f"{prediction['home_xg_2025'] + prediction['away_xg_2025']:.2f}")
                     with col3:
                         st.metric(f"{away_team} xG", f"{prediction['away_xg_2025']:.2f}")
+                    
+                    st.markdown("### Corners Prediction")
+                    corner_col1, corner_col2, corner_col3 = st.columns(3)
+                    with corner_col1:
+                        st.metric(f"{home_team} Corners", f"{prediction['home_corners_2025']:.1f}")
+                    with corner_col2:
+                        st.metric("Total Corners", f"{prediction['total_corners_2025']:.1f}")
+                    with corner_col3:
+                        st.metric(f"{away_team} Corners", f"{prediction['away_corners_2025']:.1f}")
+                    
+                    st.markdown("### Shots on Target Prediction")
+                    sot_col1, sot_col2, sot_col3 = st.columns(3)
+                    with sot_col1:
+                        st.metric(f"{home_team} SOT", f"{prediction['home_sot_2025']:.1f}")
+                    with sot_col2:
+                        st.metric("Total SOT", f"{prediction['total_sot_2025']:.1f}")
+                    with sot_col3:
+                        st.metric(f"{away_team} SOT", f"{prediction['away_sot_2025']:.1f}")
+                    
+                    if 'top_scorelines_2025' in prediction:
+                        st.markdown("### Most Likely Scorelines")
+                        scoreline_data = []
+                        for score, prob in prediction['top_scorelines_2025'].items():
+                            scoreline_data.append({
+                                'Score': score,
+                                'Probability': f"{prob*100:.2f}%"
+                            })
+                        scoreline_df = pd.DataFrame(scoreline_data)
+                        st.dataframe(scoreline_df, use_container_width=True, hide_index=True)
     
     with tab3:
         st.subheader("2025/26 Team Statistics")
