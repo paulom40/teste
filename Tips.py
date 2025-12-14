@@ -324,6 +324,7 @@ if 'df_2025' in st.session_state:
                             'Date': datetime.now().strftime("%d/%m/%Y"),
                             'Home': home_team,
                             'Away': away_team,
+                            'Model': 'Poisson',
                             'Home xG': pred['home_xg'],
                             'Away xG': pred['away_xg'],
                             'Home Win %': f"{pred['home_win']*100:.1f}%",
@@ -334,7 +335,7 @@ if 'df_2025' in st.session_state:
                             'Corners': pred['total_corners'],
                         }
                         st.session_state.saved_predictions.append(saved)
-                        st.success("Saved!")
+                        st.success("Saved to Today tab!")
     
     with tab3:
         st.subheader("Team Statistics")
@@ -352,15 +353,76 @@ if 'df_2025' in st.session_state:
                 st.metric("Avg Goals", f"{stats['avg_gf']:.2f}")
     
     with tab4:
-        st.subheader("Today Predictions")
+        st.subheader("Today - All Saved Predictions")
+        
         if 'saved_predictions' in st.session_state and len(st.session_state.saved_predictions) > 0:
             df_saved = pd.DataFrame(st.session_state.saved_predictions)
             st.dataframe(df_saved, use_container_width=True)
             
-            csv = df_saved.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"predictions_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+            st.markdown("---")
+            st.markdown("### Download Options")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                csv = df_saved.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name=f"predictions_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            
+            with col2:
+                try:
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_saved.to_excel(writer, sheet_name='Predictions', index=False)
+                    
+                    excel_data = output.getvalue()
+                    
+                    st.download_button(
+                        label="Download Excel",
+                        data=excel_data,
+                        file_name=f"predictions_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except:
+                    st.warning("Excel export requires openpyxl library")
+            
+            with col3:
+                if st.button("Clear All Predictions"):
+                    st.session_state.saved_predictions = []
+                    st.success("Cleared!")
+                    st.rerun()
+            
+            st.markdown("---")
+            st.markdown("### Summary Statistics")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Predictions", len(df_saved))
+            with col2:
+                models = df_saved['Model'].value_counts() if 'Model' in df_saved.columns else {}
+                st.metric("Unique Models", len(models))
+            with col3:
+                st.metric("Date", datetime.now().strftime("%d/%m/%Y"))
+            
+            if 'Model' in df_saved.columns:
+                st.markdown("### Predictions by Model")
+                model_counts = df_saved['Model'].value_counts()
+                st.bar_chart(model_counts)
+        
         else:
-            st.info("Save predictions from Predictions tab")
+            st.info("No predictions saved yet!")
+            st.markdown("""
+            ### How to Save Predictions:
+            1. Go to **Predictions Tab** - Click "Save Prediction"
+            2. Go to **Bayesian Network Tab** - Click "Save Bayesian Prediction"
+            3. Go to **ELO/xG Ratings Tab** - Click "Save ELO/xG Prediction"
+            4. All predictions appear here automatically
+            5. Download as CSV or Excel
+            """)
     
     with tab5:
         st.subheader("Wisdom of the Crowd")
@@ -457,7 +519,6 @@ if 'df_2025' in st.session_state:
                     Posterior Probability (Away): {away_posterior_prob:.1f}%
                     """)
                     
-                    col1, col2 = st.columns(2)
                     with col1:
                         if st.button("Save Bayesian Prediction"):
                             if 'saved_predictions' not in st.session_state:
@@ -471,9 +532,12 @@ if 'df_2025' in st.session_state:
                                 'Home Win %': f"{home_posterior_prob:.1f}%",
                                 'Draw %': f"{max(draw_posterior_prob, 0):.1f}%",
                                 'Away Win %': f"{away_posterior_prob:.1f}%",
+                                'Prediction': home_team if home_posterior_prob > away_posterior_prob else away_team,
+                                'Confidence': f"{max(home_posterior_prob, away_posterior_prob):.1f}%",
+                                'Corners': 'N/A',
                             }
                             st.session_state.saved_predictions.append(saved)
-                            st.success("Saved!")
+                            st.success("Saved to Today tab!")
                     
                     with col2:
                         st.markdown("**Model Accuracy:** 70-92% (Research validated)")
@@ -594,9 +658,12 @@ if 'df_2025' in st.session_state:
                             'Home Win %': f"{combined_home:.1f}%",
                             'Draw %': f"{combined_draw:.1f}%",
                             'Away Win %': f"{combined_away:.1f}%",
+                            'Prediction': home_team if combined_home > combined_away else away_team,
+                            'Confidence': f"{max(combined_home, combined_away):.1f}%",
+                            'Corners': 'N/A',
                         }
                         st.session_state.saved_predictions.append(saved)
-                        st.success("Saved!")
+                        st.success("Saved to Today tab!")
                     
                     st.markdown("""
                     **Research Notes:**
