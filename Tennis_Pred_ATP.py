@@ -121,10 +121,10 @@ def prepare_features(df, elo_ratings, global_ratings):
             
             # Create feature vector
             features = {
-                'elo_diff': elo_diff,
-                'winner_elo': winner_elo,
-                'loser_elo': loser_elo,
-                'elo_expected': elo_expected,
+                'elo_diff': float(elo_diff),
+                'winner_elo': float(winner_elo),
+                'loser_elo': float(loser_elo),
+                'elo_expected': float(elo_expected),
                 
                 # Surface encoding
                 'is_hard': 1 if surface == 'Hard' else 0,
@@ -146,14 +146,14 @@ def prepare_features(df, elo_ratings, global_ratings):
             
             # Add derived statistics
             if 'w_svpt' in features and features['w_svpt'] > 0:
-                features['winner_1st_serve_pct'] = features['w_1stIn'] / features['w_svpt']
-                features['winner_1st_serve_won_pct'] = features['w_1stWon'] / max(1, features['w_1stIn'])
-                features['winner_2nd_serve_won_pct'] = features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn'])
+                features['winner_1st_serve_pct'] = float(features['w_1stIn'] / features['w_svpt'])
+                features['winner_1st_serve_won_pct'] = float(features['w_1stWon'] / max(1, features['w_1stIn']))
+                features['winner_2nd_serve_won_pct'] = float(features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn']))
             
             if 'l_svpt' in features and features['l_svpt'] > 0:
-                features['loser_1st_serve_pct'] = features['l_1stIn'] / features['l_svpt']
-                features['loser_1st_serve_won_pct'] = features['l_1stWon'] / max(1, features['l_1stIn'])
-                features['loser_2nd_serve_won_pct'] = features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn'])
+                features['loser_1st_serve_pct'] = float(features['l_1stIn'] / features['l_svpt'])
+                features['loser_1st_serve_won_pct'] = float(features['l_1stWon'] / max(1, features['l_1stIn']))
+                features['loser_2nd_serve_won_pct'] = float(features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn']))
             
             features_list.append(features)
             labels.append(1)  # 1 for winner (player A perspective)
@@ -166,11 +166,11 @@ def prepare_features(df, elo_ratings, global_ratings):
             
             # Also add reverse perspective for more data
             features_reverse = features.copy()
-            features_reverse['elo_diff'] = -elo_diff
-            features_reverse['winner_elo'], features_reverse['loser_elo'] = loser_elo, winner_elo
-            features_reverse['elo_expected'] = 1 - elo_expected
-            features_reverse['winner_rank_diff'] = -features['winner_rank_diff']
-            features_reverse['winner_rank'], features_reverse['loser_rank'] = features['loser_rank'], features['winner_rank']
+            features_reverse['elo_diff'] = float(-elo_diff)
+            features_reverse['winner_elo'], features_reverse['loser_elo'] = float(loser_elo), float(winner_elo)
+            features_reverse['elo_expected'] = float(1 - elo_expected)
+            features_reverse['winner_rank_diff'] = float(-features['winner_rank_diff'])
+            features_reverse['winner_rank'], features_reverse['loser_rank'] = float(features['loser_rank']), float(features['winner_rank'])
             
             # Swap statistical features
             stat_swap_pairs = [
@@ -178,7 +178,7 @@ def prepare_features(df, elo_ratings, global_ratings):
                 ('w_1stIn', 'l_1stIn'), ('w_1stWon', 'l_1stWon'), ('w_2ndWon', 'l_2ndWon')
             ]
             for w_feat, l_feat in stat_swap_pairs:
-                features_reverse[w_feat], features_reverse[l_feat] = features[l_feat], features[w_feat]
+                features_reverse[w_feat], features_reverse[l_feat] = float(features[l_feat]), float(features[w_feat])
             
             features_list.append(features_reverse)
             labels.append(0)  # 0 for loser (player A perspective)
@@ -233,14 +233,14 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     winner_elo = elo_ratings.get(player_a_id, {}).get(surface, global_ratings.get(player_a_id, 1500))
     loser_elo = elo_ratings.get(player_b_id, {}).get(surface, global_ratings.get(player_b_id, 1500))
     
-    elo_diff = winner_elo - loser_elo
-    elo_prob = 1 / (1 + math.pow(10, (-elo_diff) / 400))
+    elo_diff = float(winner_elo - loser_elo)
+    elo_prob = float(1 / (1 + math.pow(10, (-elo_diff) / 400)))
     
     # Prepare features for XGBoost
     features = {
         'elo_diff': elo_diff,
-        'winner_elo': winner_elo,
-        'loser_elo': loser_elo,
+        'winner_elo': float(winner_elo),
+        'loser_elo': float(loser_elo),
         'elo_expected': elo_prob,
         'is_hard': 1 if surface == 'Hard' else 0,
         'is_clay': 1 if surface == 'Clay' else 0,
@@ -255,21 +255,23 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     }
     
     if match_stats:
-        default_stats.update(match_stats)
+        # Convert all values to float
+        for key, value in match_stats.items():
+            default_stats[key] = float(value)
     
     for key, value in default_stats.items():
-        features[key] = value
+        features[key] = float(value)
     
     # Calculate derived stats
     if features['w_svpt'] > 0:
-        features['winner_1st_serve_pct'] = features['w_1stIn'] / features['w_svpt']
-        features['winner_1st_serve_won_pct'] = features['w_1stWon'] / max(1, features['w_1stIn'])
-        features['winner_2nd_serve_won_pct'] = features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn'])
+        features['winner_1st_serve_pct'] = float(features['w_1stIn'] / features['w_svpt'])
+        features['winner_1st_serve_won_pct'] = float(features['w_1stWon'] / max(1, features['w_1stIn']))
+        features['winner_2nd_serve_won_pct'] = float(features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn']))
     
     if features['l_svpt'] > 0:
-        features['loser_1st_serve_pct'] = features['l_1stIn'] / features['l_svpt']
-        features['loser_1st_serve_won_pct'] = features['l_1stWon'] / max(1, features['l_1stIn'])
-        features['loser_2nd_serve_won_pct'] = features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn'])
+        features['loser_1st_serve_pct'] = float(features['l_1stIn'] / features['l_svpt'])
+        features['loser_1st_serve_won_pct'] = float(features['l_1stWon'] / max(1, features['l_1stIn']))
+        features['loser_2nd_serve_won_pct'] = float(features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn']))
     
     # Create feature DataFrame
     features_df = pd.DataFrame([features])
@@ -277,19 +279,19 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     # Ensure all training columns are present
     for col in feature_columns:
         if col not in features_df.columns:
-            features_df[col] = 0
+            features_df[col] = 0.0
     
     features_df = features_df[feature_columns]
     
     # Get XGBoost prediction
     if xgb_model is not None:
-        xgb_prob = xgb_model.predict_proba(features_df)[0, 1]
+        xgb_prob = float(xgb_model.predict_proba(features_df)[0, 1])
         
         # Weighted combination (adjust weights based on model confidence)
         elo_weight = 0.3  # Weight for ELO prediction
         xgb_weight = 0.7  # Weight for XGBoost prediction
         
-        final_prob = (elo_weight * elo_prob + xgb_weight * xgb_prob)
+        final_prob = float(elo_weight * elo_prob + xgb_weight * xgb_prob)
     else:
         xgb_prob = None
         final_prob = elo_prob
@@ -475,6 +477,9 @@ elif app_mode == "🎯 Match Prediction":
             use_xgb = st.checkbox("Use XGBoost prediction", value=st.session_state.xgb_model is not None)
             show_details = st.checkbox("Show detailed breakdown", value=True)
             
+            # Initialize prediction result
+            prediction_result = None
+            
             if st.button("Run Prediction", type="primary", use_container_width=True):
                 # Prepare match statistics
                 match_stats = {
@@ -493,7 +498,7 @@ elif app_mode == "🎯 Match Prediction":
                 }
                 
                 # Make prediction
-                prediction = hybrid_prediction(
+                prediction_result = hybrid_prediction(
                     player_a, player_b, surface,
                     st.session_state.elo_ratings,
                     st.session_state.global_elo,
@@ -501,68 +506,72 @@ elif app_mode == "🎯 Match Prediction":
                     st.session_state.feature_columns,
                     match_stats
                 )
+        
+        # Display results (outside the button click to avoid empty progress bars)
+        if prediction_result:
+            player_a_name = st.session_state.player_names.get(player_a, player_a)
+            player_b_name = st.session_state.player_names.get(player_b, player_b)
+            
+            st.subheader(f"Prediction: {player_a_name} vs {player_b_name}")
+            st.markdown(f"**Surface:** {surface}")
+            
+            # Show probabilities
+            col_prob_a, col_prob_b = st.columns(2)
+            
+            with col_prob_a:
+                prob_a = float(prediction_result['final_probability'])
+                st.metric(
+                    label=player_a_name,
+                    value=f"{prob_a:.1%}",
+                    delta=f"Win Probability"
+                )
+                st.progress(min(1.0, max(0.0, prob_a)))  # Ensure between 0 and 1
+            
+            with col_prob_b:
+                prob_b = float(1 - prob_a)
+                st.metric(
+                    label=player_b_name,
+                    value=f"{prob_b:.1%}",
+                    delta=f"Win Probability"
+                )
+                st.progress(min(1.0, max(0.0, prob_b)))  # Ensure between 0 and 1
+            
+            # Detailed breakdown
+            if show_details:
+                st.subheader("Prediction Breakdown")
                 
-                # Display results
-                player_a_name = st.session_state.player_names.get(player_a, player_a)
-                player_b_name = st.session_state.player_names.get(player_b, player_b)
+                if prediction_result['xgb_probability'] is not None:
+                    cols = st.columns(3)
+                    with cols[0]:
+                        st.metric("ELO Probability", f"{float(prediction_result['elo_probability']):.1%}")
+                    with cols[1]:
+                        st.metric("XGBoost Probability", f"{float(prediction_result['xgb_probability']):.1%}")
+                    with cols[2]:
+                        st.metric("Final Probability", f"{float(prediction_result['final_probability']):.1%}")
                 
-                st.subheader(f"Prediction: {player_a_name} vs {player_b_name}")
-                st.markdown(f"**Surface:** {surface}")
+                # ELO ratings
+                st.markdown("**ELO Ratings**")
+                elo_cols = st.columns(2)
+                with elo_cols[0]:
+                    st.write(f"{player_a_name}: {float(prediction_result['player_a_elo']):.0f}")
+                with elo_cols[1]:
+                    st.write(f"{player_b_name}: {float(prediction_result['player_b_elo']):.0f}")
                 
-                # Show probabilities
-                col_prob_a, col_prob_b = st.columns(2)
-                
-                with col_prob_a:
-                    prob_a = prediction['final_probability']
-                    st.metric(
-                        label=player_a_name,
-                        value=f"{prob_a:.1%}",
-                        delta=f"Win Probability"
-                    )
-                    st.progress(prob_a)
-                
-                with col_prob_b:
-                    prob_b = 1 - prob_a
-                    st.metric(
-                        label=player_b_name,
-                        value=f"{prob_b:.1%}",
-                        delta=f"Win Probability"
-                    )
-                    st.progress(prob_b)
-                
-                # Detailed breakdown
-                if show_details:
-                    st.subheader("Prediction Breakdown")
-                    
-                    if prediction['xgb_probability'] is not None:
-                        cols = st.columns(3)
-                        with cols[0]:
-                            st.metric("ELO Probability", f"{prediction['elo_probability']:.1%}")
-                        with cols[1]:
-                            st.metric("XGBoost Probability", f"{prediction['xgb_probability']:.1%}")
-                        with cols[2]:
-                            st.metric("Final Probability", f"{prediction['final_probability']:.1%}")
-                    
-                    # ELO ratings
-                    st.markdown("**ELO Ratings**")
-                    elo_cols = st.columns(2)
-                    with elo_cols[0]:
-                        st.write(f"{player_a_name}: {prediction['player_a_elo']:.0f}")
-                    with elo_cols[1]:
-                        st.write(f"{player_b_name}: {prediction['player_b_elo']:.0f}")
-                    
-                    # Prediction verdict
-                    st.subheader("Verdict")
-                    if prob_a > 0.65:
-                        st.success(f"🎯 **Strong favorite:** {player_a_name} is predicted to win on {surface}!")
-                    elif prob_a > 0.55:
-                        st.info(f"⚖️ **Slight favorite:** {player_a_name} is predicted to win on {surface}!")
-                    elif prob_b > 0.65:
-                        st.success(f"🎯 **Strong favorite:** {player_b_name} is predicted to win on {surface}!")
-                    elif prob_b > 0.55:
-                        st.info(f"⚖️ **Slight favorite:** {player_b_name} is predicted to win on {surface}!")
-                    else:
-                        st.warning("🤔 **Too close to call!** Consider match statistics carefully.")
+                # Prediction verdict
+                st.subheader("Verdict")
+                if prob_a > 0.65:
+                    st.success(f"🎯 **Strong favorite:** {player_a_name} is predicted to win on {surface}!")
+                elif prob_a > 0.55:
+                    st.info(f"⚖️ **Slight favorite:** {player_a_name} is predicted to win on {surface}!")
+                elif prob_b > 0.65:
+                    st.success(f"🎯 **Strong favorite:** {player_b_name} is predicted to win on {surface}!")
+                elif prob_b > 0.55:
+                    st.info(f"⚖️ **Slight favorite:** {player_b_name} is predicted to win on {surface}!")
+                else:
+                    st.warning("🤔 **Too close to call!** Consider match statistics carefully.")
+        else:
+            # Show placeholder when no prediction has been made
+            st.info("👈 Select players and click 'Run Prediction' to see results")
 
 elif app_mode == "🤖 Model Analysis":
     st.header("Model Performance Analysis")
@@ -654,7 +663,7 @@ elif app_mode == "📈 Player Rankings":
             rankings_data.append({
                 'Player ID': player_id,
                 'Player Name': player_name,
-                'Rating': rating
+                'Rating': float(rating)
             })
         
         rankings_df = pd.DataFrame(rankings_data)
@@ -674,12 +683,12 @@ elif app_mode == "📈 Player Rankings":
         for player_id, ratings in st.session_state.elo_ratings.items():
             if len(ratings) >= 2:  # At least 2 surfaces
                 surfaces = list(ratings.keys())
-                surface_ratings = [ratings[s] for s in surfaces]
+                surface_ratings = [float(ratings[s]) for s in surfaces]
                 
                 if surface_ratings:
                     max_rating = max(surface_ratings)
                     min_rating = min(surface_ratings)
-                    specialization_score = max_rating - min_rating
+                    specialization_score = float(max_rating - min_rating)
                     
                     best_surface = surfaces[surface_ratings.index(max_rating)]
                     worst_surface = surfaces[surface_ratings.index(min_rating)]
