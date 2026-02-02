@@ -1,488 +1,714 @@
 import streamlit as st
 import pandas as pd
-import math
 import numpy as np
+import math
+import warnings
 from collections import defaultdict
+warnings.filterwarnings('ignore')
+
+# Try to import XGBoost, show instructions if not available
+try:
+    import xgboost as xgb
+    from xgboost import XGBClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
 
 # Set page config
 st.set_page_config(
-    page_title="Tennis ELO Rating Calculator",
+    page_title="Tennis Prediction System",
     page_icon="🎾",
     layout="wide"
 )
 
-# Title
-st.title("🎾 Surface-Aware Tennis ELO Rating Calculator")
-st.markdown("Calculate ELO ratings for tennis players with separate ratings for each surface type")
-
 # Initialize session state
 if 'elo_ratings' not in st.session_state:
-    st.session_state.elo_ratings = {}  # Now will be dict of dicts: {player_id: {surface: rating}}
+    st.session_state.elo_ratings = {}
 if 'player_names' not in st.session_state:
     st.session_state.player_names = {}
 if 'global_elo' not in st.session_state:
-    st.session_state.global_elo = {}  # Global rating for players without surface-specific data
+    st.session_state.global_elo = {}
+if 'xgb_model' not in st.session_state:
+    st.session_state.xgb_model = None
+if 'label_encoders' not in st.session_state:
+    st.session_state.label_encoders = {}
+if 'feature_columns' not in st.session_state:
+    st.session_state.feature_columns = []
+if 'match_data' not in st.session_state:
+    st.session_state.match_data = None
 
 # Function to compute surface-aware ELO ratings
 def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
-    # Sort by tourney_date and match_num for chronological order
+    # Sort chronologically
     if 'tourney_date' in df.columns and 'match_num' in df.columns:
         df = df.sort_values(by=['tourney_date', 'match_num']).reset_index(drop=True)
     
     # Get all unique player ids
     players = set(df['winner_id'].unique()).union(set(df['loser_id'].unique()))
     
-    # Store player names if available
+    # Store player names
     if 'winner_name' in df.columns and 'loser_name' in df.columns:
         for _, row in df.iterrows():
             st.session_state.player_names[row['winner_id']] = row['winner_name']
             st.session_state.player_names[row['loser_id']] = row['loser_name']
     
-    # Initialize ELO ratings structure
-    # Each player has a dict: {'Hard': rating, 'Clay': rating, 'Grass': rating, 'Carpet': rating, 'Global': rating}
+    # Initialize ELO structure
     elo_ratings = {}
     global_ratings = {}
-    
-    # Standard surfaces in tennis
     surfaces = ['Hard', 'Clay', 'Grass', 'Carpet']
     
     for player in players:
         elo_ratings[player] = {}
         for surface in surfaces:
             elo_ratings[player][surface] = initial_elo
-        # Also track a global rating for fallback
         global_ratings[player] = initial_elo
     
-    # Function to calculate expected score
-    def expected_score(rating_a, rating_b):
-        return 1 / (1 + math.pow(10, (rating_b - rating_a) / 400))
-    
-    # Process each match
+    # Process matches
     for index, row in df.iterrows():
         winner = row['winner_id']
         loser = row['loser_id']
         
-        # Get surface, default to Hard if not specified
+        # Get surface
         surface = row.get('surface', 'Hard')
         if pd.isna(surface) or surface not in surfaces:
             surface = 'Hard'
         
-        # Get ratings for this surface (use global if no surface-specific rating yet)
+        # Get ratings
         rating_w = elo_ratings[winner].get(surface, global_ratings[winner])
         rating_l = elo_ratings[loser].get(surface, global_ratings[loser])
         
-        # Expected scores
-        exp_w = expected_score(rating_w, rating_l)
-        exp_l = expected_score(rating_l, rating_w)
+        # Update ELO
+        exp_w = 1 / (1 + math.pow(10, (rating_l - rating_w) / 400))
+        exp_l = 1 - exp_w
         
-        # Update surface-specific ratings
         elo_ratings[winner][surface] = rating_w + k_factor * (1 - exp_w)
         elo_ratings[loser][surface] = rating_l + k_factor * (0 - exp_l)
         
-        # Also update global ratings
         global_ratings[winner] = global_ratings[winner] + k_factor * (1 - exp_w)
         global_ratings[loser] = global_ratings[loser] + k_factor * (0 - exp_l)
     
     return elo_ratings, global_ratings
 
-# Function to predict a match on a specific surface
-def predict_surface_match(player_a_id, player_b_id, surface, elo_ratings, global_ratings):
-    if player_a_id not in elo_ratings or player_b_id not in elo_ratings:
-        return None, None, "One or both players not found."
+# Function to prepare features for XGBoost
+def prepare_features(df, elo_ratings, global_ratings):
+    """Prepare match data with ELO features for machine learning"""
+    features_list = []
+    labels = []
+    match_info = []
     
-    # Get ratings for the specified surface, fall back to global rating
-    if surface in elo_ratings[player_a_id]:
-        rating_a = elo_ratings[player_a_id][surface]
-    else:
-        rating_a = global_ratings.get(player_a_id, 1500)
+    # Define statistical features to use
+    stat_features = [
+        'w_ace', 'w_df', 'w_svpt', 'w_1stIn', 'w_1stWon', 'w_2ndWon',
+        'l_ace', 'l_df', 'l_svpt', 'l_1stIn', 'l_1stWon', 'l_2ndWon'
+    ]
     
-    if surface in elo_ratings[player_b_id]:
-        rating_b = elo_ratings[player_b_id][surface]
-    else:
-        rating_b = global_ratings.get(player_b_id, 1500)
+    for idx, row in df.iterrows():
+        try:
+            winner_id = str(row['winner_id'])
+            loser_id = str(row['loser_id'])
+            surface = str(row.get('surface', 'Hard'))
+            
+            # Get ELO ratings
+            winner_elo = elo_ratings.get(winner_id, {}).get(surface, global_ratings.get(winner_id, 1500))
+            loser_elo = elo_ratings.get(loser_id, {}).get(surface, global_ratings.get(loser_id, 1500))
+            
+            # Calculate ELO difference
+            elo_diff = winner_elo - loser_elo
+            elo_expected = 1 / (1 + math.pow(10, (-elo_diff) / 400))
+            
+            # Create feature vector
+            features = {
+                'elo_diff': elo_diff,
+                'winner_elo': winner_elo,
+                'loser_elo': loser_elo,
+                'elo_expected': elo_expected,
+                
+                # Surface encoding
+                'is_hard': 1 if surface == 'Hard' else 0,
+                'is_clay': 1 if surface == 'Clay' else 0,
+                'is_grass': 1 if surface == 'Grass' else 0,
+                
+                # Player rankings if available
+                'winner_rank_diff': float(row.get('winner_rank', 100)) - float(row.get('loser_rank', 100)),
+                'winner_rank': float(row.get('winner_rank', 100)),
+                'loser_rank': float(row.get('loser_rank', 100)),
+            }
+            
+            # Add statistical features if available
+            for feat in stat_features:
+                if feat in row and pd.notna(row[feat]):
+                    features[feat] = float(row[feat])
+                else:
+                    features[feat] = 0.0
+            
+            # Add derived statistics
+            if 'w_svpt' in features and features['w_svpt'] > 0:
+                features['winner_1st_serve_pct'] = features['w_1stIn'] / features['w_svpt']
+                features['winner_1st_serve_won_pct'] = features['w_1stWon'] / max(1, features['w_1stIn'])
+                features['winner_2nd_serve_won_pct'] = features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn'])
+            
+            if 'l_svpt' in features and features['l_svpt'] > 0:
+                features['loser_1st_serve_pct'] = features['l_1stIn'] / features['l_svpt']
+                features['loser_1st_serve_won_pct'] = features['l_1stWon'] / max(1, features['l_1stIn'])
+                features['loser_2nd_serve_won_pct'] = features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn'])
+            
+            features_list.append(features)
+            labels.append(1)  # 1 for winner (player A perspective)
+            match_info.append({
+                'winner_id': winner_id,
+                'loser_id': loser_id,
+                'surface': surface,
+                'match_idx': idx
+            })
+            
+            # Also add reverse perspective for more data
+            features_reverse = features.copy()
+            features_reverse['elo_diff'] = -elo_diff
+            features_reverse['winner_elo'], features_reverse['loser_elo'] = loser_elo, winner_elo
+            features_reverse['elo_expected'] = 1 - elo_expected
+            features_reverse['winner_rank_diff'] = -features['winner_rank_diff']
+            features_reverse['winner_rank'], features_reverse['loser_rank'] = features['loser_rank'], features['winner_rank']
+            
+            # Swap statistical features
+            stat_swap_pairs = [
+                ('w_ace', 'l_ace'), ('w_df', 'l_df'), ('w_svpt', 'l_svpt'),
+                ('w_1stIn', 'l_1stIn'), ('w_1stWon', 'l_1stWon'), ('w_2ndWon', 'l_2ndWon')
+            ]
+            for w_feat, l_feat in stat_swap_pairs:
+                features_reverse[w_feat], features_reverse[l_feat] = features[l_feat], features[w_feat]
+            
+            features_list.append(features_reverse)
+            labels.append(0)  # 0 for loser (player A perspective)
+            
+        except Exception as e:
+            continue
     
-    prob_a = 1 / (1 + math.pow(10, (rating_b - rating_a) / 400))
-    prob_b = 1 - prob_a
-    
-    # Get player names if available
-    player_a_name = st.session_state.player_names.get(player_a_id, player_a_id)
-    player_b_name = st.session_state.player_names.get(player_b_id, player_b_id)
-    
-    return prob_a, prob_b, player_a_name, player_b_name, rating_a, rating_b
+    features_df = pd.DataFrame(features_list)
+    return features_df, np.array(labels), match_info
 
-# Function to get player's surface specialization
-def get_surface_specialization(player_id, elo_ratings, global_ratings):
-    if player_id not in elo_ratings:
-        return "No data available"
+# Train XGBoost model
+def train_xgboost_model(features_df, labels, params=None):
+    """Train XGBoost classifier on match features"""
+    if params is None:
+        params = {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 100,
+            'objective': 'binary:logistic',
+            'eval_metric': 'logloss',
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'random_state': 42
+        }
     
-    player_ratings = elo_ratings[player_id]
-    surfaces = ['Hard', 'Clay', 'Grass', 'Carpet']
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        features_df, labels, test_size=0.2, random_state=42, stratify=labels
+    )
     
-    # Filter surfaces with data
-    available_surfaces = [s for s in surfaces if s in player_ratings]
+    # Train model
+    model = XGBClassifier(**params)
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_train, y_train), (X_test, y_test)],
+        verbose=False
+    )
     
-    if not available_surfaces:
-        return "No surface data"
+    # Evaluate
+    y_pred = model.predict(X_test)
+    y_pred_proba = model.predict_proba(X_test)[:, 1]
     
-    # Find best and worst surfaces
-    best_surface = max(available_surfaces, key=lambda s: player_ratings[s])
-    worst_surface = min(available_surfaces, key=lambda s: player_ratings[s])
+    accuracy = accuracy_score(y_test, y_pred)
     
-    # Calculate specialization strength
-    best_rating = player_ratings[best_surface]
-    worst_rating = player_ratings[worst_surface]
-    
-    if best_rating - worst_rating > 100:
-        strength = "Strong specialist"
-    elif best_rating - worst_rating > 50:
-        strength = "Moderate specialist"
-    else:
-        strength = "Balanced player"
-    
-    return f"{strength}: Best on {best_surface} ({best_rating:.0f}), Worst on {worst_surface} ({worst_rating:.0f})"
+    return model, accuracy, (X_test, y_test, y_pred, y_pred_proba), features_df.columns.tolist()
 
-# Sidebar for navigation
+# Hybrid prediction function
+def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_ratings, xgb_model, feature_columns, match_stats=None):
+    """Make prediction using both ELO and XGBoost"""
+    
+    # Get ELO-based prediction
+    winner_elo = elo_ratings.get(player_a_id, {}).get(surface, global_ratings.get(player_a_id, 1500))
+    loser_elo = elo_ratings.get(player_b_id, {}).get(surface, global_ratings.get(player_b_id, 1500))
+    
+    elo_diff = winner_elo - loser_elo
+    elo_prob = 1 / (1 + math.pow(10, (-elo_diff) / 400))
+    
+    # Prepare features for XGBoost
+    features = {
+        'elo_diff': elo_diff,
+        'winner_elo': winner_elo,
+        'loser_elo': loser_elo,
+        'elo_expected': elo_prob,
+        'is_hard': 1 if surface == 'Hard' else 0,
+        'is_clay': 1 if surface == 'Clay' else 0,
+        'is_grass': 1 if surface == 'Grass' else 0,
+    }
+    
+    # Add default match statistics if not provided
+    default_stats = {
+        'w_ace': 5, 'w_df': 2, 'w_svpt': 60, 'w_1stIn': 36, 'w_1stWon': 24, 'w_2ndWon': 12,
+        'l_ace': 5, 'l_df': 2, 'l_svpt': 60, 'l_1stIn': 36, 'l_1stWon': 24, 'l_2ndWon': 12,
+        'winner_rank': 50, 'loser_rank': 50, 'winner_rank_diff': 0
+    }
+    
+    if match_stats:
+        default_stats.update(match_stats)
+    
+    for key, value in default_stats.items():
+        features[key] = value
+    
+    # Calculate derived stats
+    if features['w_svpt'] > 0:
+        features['winner_1st_serve_pct'] = features['w_1stIn'] / features['w_svpt']
+        features['winner_1st_serve_won_pct'] = features['w_1stWon'] / max(1, features['w_1stIn'])
+        features['winner_2nd_serve_won_pct'] = features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn'])
+    
+    if features['l_svpt'] > 0:
+        features['loser_1st_serve_pct'] = features['l_1stIn'] / features['l_svpt']
+        features['loser_1st_serve_won_pct'] = features['l_1stWon'] / max(1, features['l_1stIn'])
+        features['loser_2nd_serve_won_pct'] = features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn'])
+    
+    # Create feature DataFrame
+    features_df = pd.DataFrame([features])
+    
+    # Ensure all training columns are present
+    for col in feature_columns:
+        if col not in features_df.columns:
+            features_df[col] = 0
+    
+    features_df = features_df[feature_columns]
+    
+    # Get XGBoost prediction
+    if xgb_model is not None:
+        xgb_prob = xgb_model.predict_proba(features_df)[0, 1]
+        
+        # Weighted combination (adjust weights based on model confidence)
+        elo_weight = 0.3  # Weight for ELO prediction
+        xgb_weight = 0.7  # Weight for XGBoost prediction
+        
+        final_prob = (elo_weight * elo_prob + xgb_weight * xgb_prob)
+    else:
+        xgb_prob = None
+        final_prob = elo_prob
+    
+    return {
+        'elo_probability': elo_prob,
+        'xgb_probability': xgb_prob,
+        'final_probability': final_prob,
+        'player_a_elo': winner_elo,
+        'player_b_elo': loser_elo,
+        'elo_difference': elo_diff
+    }
+
+# Streamlit App Interface
+st.title("🎾 Tennis Prediction System: ELO + XGBoost Hybrid")
+st.markdown("Combining traditional ELO ratings with machine learning for better predictions")
+
+# Sidebar navigation
 st.sidebar.title("Navigation")
 app_mode = st.sidebar.radio(
     "Choose a section:",
-    ["📊 Upload & Calculate ELO", "🎯 Match Prediction", "👤 Player Analysis", "📈 View All Ratings"]
+    ["📊 Data & Model Training", "🎯 Match Prediction", "🤖 Model Analysis", "📈 Player Rankings"]
 )
 
-# Main content area
-if app_mode == "📊 Upload & Calculate ELO":
-    st.header("Upload Match Data and Calculate Surface-Aware ELO Ratings")
+# Check XGBoost availability
+if not XGB_AVAILABLE and app_mode in ["🤖 Model Analysis", "🎯 Match Prediction"]:
+    st.error("""
+    **XGBoost not installed!**
+    
+    Please install XGBoost to use machine learning features:
+    ```
+    pip install xgboost scikit-learn
+    ```
+    """)
+
+# Main app logic
+if app_mode == "📊 Data & Model Training":
+    st.header("Data Upload & Model Training")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # File upload
         uploaded_file = st.file_uploader(
-            "Upload CSV file with match data",
+            "Upload ATP Match Data CSV",
             type=['csv'],
-            help="CSV should contain columns: winner_id, loser_id, surface (and optionally tourney_date, match_num, winner_name, loser_name)"
+            help="Upload match data with player IDs, surface, and match statistics"
         )
     
     with col2:
-        # ELO parameters
-        st.subheader("ELO Parameters")
-        initial_elo = st.number_input("Initial ELO", min_value=1000, max_value=2000, value=1500)
-        k_factor = st.number_input("K-factor", min_value=10, max_value=50, value=32)
-        surface_k_factor = st.number_input("Surface K-factor", min_value=10, max_value=50, value=24,
-                                          help="K-factor for surface-specific adjustments")
+        st.subheader("Model Parameters")
+        
+        elo_k = st.slider("ELO K-factor", 10, 50, 32)
+        initial_elo = st.slider("Initial ELO", 1200, 1800, 1500)
+        
+        if XGB_AVAILABLE:
+            use_xgb = st.checkbox("Train XGBoost Model", value=True)
+            xgb_depth = st.slider("XGBoost Max Depth", 3, 10, 6)
+            xgb_estimators = st.slider("Number of Trees", 50, 200, 100)
+        else:
+            use_xgb = False
     
     if uploaded_file is not None:
         try:
-            # Read the CSV file
             df = pd.read_csv(uploaded_file)
+            st.session_state.match_data = df
             
-            # Display preview
             st.subheader("Data Preview")
             st.dataframe(df.head(), use_container_width=True)
             
-            # Show required columns
             required_cols = ['winner_id', 'loser_id']
             if all(col in df.columns for col in required_cols):
-                st.success("✅ Required columns found!")
+                st.success(f"✅ Data loaded: {len(df)} matches")
                 
-                # Check for surface column
-                if 'surface' not in df.columns:
-                    st.warning("⚠️ No 'surface' column found. All matches will be treated as Hard court.")
-                    df['surface'] = 'Hard'
-                else:
-                    st.success("✅ Surface column found!")
-                    # Show surface distribution
-                    surface_counts = df['surface'].value_counts()
-                    st.write("Surface distribution:")
-                    st.dataframe(surface_counts)
-                
-                # Calculate ELO button
-                if st.button("Calculate Surface-Aware ELO Ratings", type="primary"):
-                    with st.spinner("Calculating surface-specific ELO ratings..."):
-                        elo_ratings, global_ratings = compute_surface_elo_from_csv(df, k_factor, initial_elo)
+                # Calculate ELO ratings
+                if st.button("Calculate ELO Ratings & Train Models", type="primary"):
+                    with st.spinner("Calculating ELO ratings..."):
+                        elo_ratings, global_ratings = compute_surface_elo_from_csv(
+                            df, k_factor=elo_k, initial_elo=initial_elo
+                        )
                         st.session_state.elo_ratings = elo_ratings
                         st.session_state.global_elo = global_ratings
                     
-                    st.success(f"✅ Calculated ELO ratings for {len(elo_ratings)} players across surfaces!")
+                    st.success(f"✅ ELO calculated for {len(elo_ratings)} players")
                     
-                    # Show top players by surface
-                    st.subheader("Top Players by Surface")
+                    # Show top players
+                    top_players = sorted(
+                        [(pid, st.session_state.global_elo.get(pid, 1500)) 
+                         for pid in elo_ratings.keys()],
+                        key=lambda x: x[1], reverse=True
+                    )[:10]
                     
-                    surfaces_to_show = ['Hard', 'Clay', 'Grass']
-                    cols = st.columns(len(surfaces_to_show))
+                    st.subheader("Top 10 Players (Global ELO)")
+                    top_df = pd.DataFrame(top_players, columns=['Player ID', 'ELO Rating'])
+                    top_df['Player Name'] = top_df['Player ID'].map(st.session_state.player_names)
+                    st.dataframe(top_df)
                     
-                    for idx, surface in enumerate(surfaces_to_show):
-                        with cols[idx]:
-                            st.markdown(f"**{surface} Courts**")
-                            # Get top 5 players for this surface
-                            surface_ratings = []
-                            for player, ratings in elo_ratings.items():
-                                if surface in ratings:
-                                    surface_ratings.append((player, ratings[surface]))
+                    # Train XGBoost model
+                    if XGB_AVAILABLE and use_xgb:
+                        with st.spinner("Training XGBoost model..."):
+                            # Prepare features
+                            features_df, labels, match_info = prepare_features(
+                                df, elo_ratings, global_ratings
+                            )
                             
-                            if surface_ratings:
-                                surface_ratings.sort(key=lambda x: x[1], reverse=True)
-                                for i, (player_id, rating) in enumerate(surface_ratings[:5]):
-                                    player_name = st.session_state.player_names.get(player_id, player_id)
-                                    st.write(f"{i+1}. {player_name}: {rating:.0f}")
-                            else:
-                                st.write("No data")
-                    
+                            # Train model
+                            xgb_params = {
+                                'max_depth': xgb_depth,
+                                'n_estimators': xgb_estimators,
+                                'learning_rate': 0.1,
+                                'objective': 'binary:logistic',
+                                'random_state': 42
+                            }
+                            
+                            model, accuracy, eval_data, feature_cols = train_xgboost_model(
+                                features_df, labels, xgb_params
+                            )
+                            
+                            st.session_state.xgb_model = model
+                            st.session_state.feature_columns = feature_cols
+                            
+                            st.success(f"✅ XGBoost trained! Accuracy: {accuracy:.2%}")
+                            
+                            # Show feature importance
+                            st.subheader("Top Feature Importances")
+                            importance_df = pd.DataFrame({
+                                'feature': feature_cols,
+                                'importance': model.feature_importances_
+                            }).sort_values('importance', ascending=False).head(15)
+                            
+                            st.bar_chart(importance_df.set_index('feature')['importance'])
+                            
             else:
-                st.error(f"Missing required columns. CSV must contain: {required_cols}")
+                st.error(f"Missing required columns: {required_cols}")
                 
         except Exception as e:
-            st.error(f"Error reading file: {e}")
+            st.error(f"Error: {str(e)}")
 
 elif app_mode == "🎯 Match Prediction":
-    st.header("Surface-Specific Match Prediction")
+    st.header("Hybrid Match Prediction")
     
     if not st.session_state.elo_ratings:
-        st.warning("Please upload data and calculate ELO ratings first in the 'Upload & Calculate ELO' section.")
+        st.warning("Please upload data and train models first in the 'Data & Model Training' section.")
     else:
-        col1, col2, col3 = st.columns([1, 1, 1])
+        col1, col2 = st.columns(2)
         
         with col1:
-            # Surface selection
-            surface = st.selectbox(
-                "Select Court Surface",
-                options=['Hard', 'Clay', 'Grass', 'Carpet'],
-                help="Choose the surface for this match prediction"
+            # Player and surface selection
+            surface = st.selectbox("Court Surface", ['Hard', 'Clay', 'Grass', 'Carpet'])
+            
+            player_options = list(st.session_state.elo_ratings.keys())
+            player_a = st.selectbox(
+                "Player A",
+                options=player_options,
+                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
             )
             
-            # Player A selection
-            player_options = list(st.session_state.elo_ratings.keys())
-            player_a_id = st.selectbox(
-                "Select Player A",
-                options=player_options,
-                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})" if st.session_state.player_names.get(x) else x
-            )
+            # Match statistics (optional)
+            st.subheader("Match Statistics (Optional)")
+            col_a_stats, col_b_stats = st.columns(2)
+            
+            with col_a_stats:
+                st.markdown("**Player A Stats**")
+                a_aces = st.number_input("Aces (A)", min_value=0, max_value=30, value=5, key='a_aces')
+                a_dfs = st.number_input("Double Faults (A)", min_value=0, max_value=10, value=2, key='a_dfs')
+                a_1st_serve = st.slider("1st Serve % (A)", 40, 80, 60, key='a_1st')
+            
+            with col_b_stats:
+                st.markdown("**Player B Stats**")
+                b_aces = st.number_input("Aces (B)", min_value=0, max_value=30, value=5, key='b_aces')
+                b_dfs = st.number_input("Double Faults (B)", min_value=0, max_value=10, value=2, key='b_dfs')
+                b_1st_serve = st.slider("1st Serve % (B)", 40, 80, 60, key='b_1st')
         
         with col2:
-            # Player B selection
-            player_b_options = [p for p in player_options if p != player_a_id]
-            player_b_id = st.selectbox(
-                "Select Player B",
+            player_b_options = [p for p in player_options if p != player_a]
+            player_b = st.selectbox(
+                "Player B",
                 options=player_b_options,
-                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})" if st.session_state.player_names.get(x) else x
+                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
             )
             
-            # Show surface specialization
-            if player_a_id and player_b_id:
-                st.markdown("**Surface Specialization**")
-                specialization_a = get_surface_specialization(player_a_id, st.session_state.elo_ratings, st.session_state.global_elo)
-                specialization_b = get_surface_specialization(player_b_id, st.session_state.elo_ratings, st.session_state.global_elo)
+            # Additional options
+            st.subheader("Prediction Options")
+            use_xgb = st.checkbox("Use XGBoost prediction", value=st.session_state.xgb_model is not None)
+            show_details = st.checkbox("Show detailed breakdown", value=True)
+            
+            if st.button("Run Prediction", type="primary", use_container_width=True):
+                # Prepare match statistics
+                match_stats = {
+                    'w_ace': a_aces,
+                    'w_df': a_dfs,
+                    'l_ace': b_aces,
+                    'l_df': b_dfs,
+                    'w_svpt': 60,
+                    'l_svpt': 60,
+                    'w_1stIn': int(60 * a_1st_serve / 100),
+                    'l_1stIn': int(60 * b_1st_serve / 100),
+                    'w_1stWon': int(60 * a_1st_serve / 100 * 0.7),
+                    'l_1stWon': int(60 * b_1st_serve / 100 * 0.7),
+                    'w_2ndWon': 12,
+                    'l_2ndWon': 12
+                }
                 
-                st.write(f"**Player A:** {specialization_a}")
-                st.write(f"**Player B:** {specialization_b}")
-        
-        with col3:
-            # Prediction button
-            if st.button("Predict Match", type="primary", use_container_width=True):
                 # Make prediction
-                prob_a, prob_b, player_a_name, player_b_name, rating_a, rating_b = predict_surface_match(
-                    player_a_id, player_b_id, surface, st.session_state.elo_ratings, st.session_state.global_elo
+                prediction = hybrid_prediction(
+                    player_a, player_b, surface,
+                    st.session_state.elo_ratings,
+                    st.session_state.global_elo,
+                    st.session_state.xgb_model if use_xgb else None,
+                    st.session_state.feature_columns,
+                    match_stats
                 )
                 
-                if prob_a is not None:
-                    # Display ratings
-                    st.subheader("Surface Ratings")
-                    col_a, col_b = st.columns(2)
+                # Display results
+                player_a_name = st.session_state.player_names.get(player_a, player_a)
+                player_b_name = st.session_state.player_names.get(player_b, player_b)
+                
+                st.subheader(f"Prediction: {player_a_name} vs {player_b_name}")
+                st.markdown(f"**Surface:** {surface}")
+                
+                # Show probabilities
+                col_prob_a, col_prob_b = st.columns(2)
+                
+                with col_prob_a:
+                    prob_a = prediction['final_probability']
+                    st.metric(
+                        label=player_a_name,
+                        value=f"{prob_a:.1%}",
+                        delta=f"Win Probability"
+                    )
+                    st.progress(prob_a)
+                
+                with col_prob_b:
+                    prob_b = 1 - prob_a
+                    st.metric(
+                        label=player_b_name,
+                        value=f"{prob_b:.1%}",
+                        delta=f"Win Probability"
+                    )
+                    st.progress(prob_b)
+                
+                # Detailed breakdown
+                if show_details:
+                    st.subheader("Prediction Breakdown")
                     
-                    with col_a:
-                        st.metric(
-                            label=f"{player_a_name}",
-                            value=f"{rating_a:.0f}",
-                            delta=f"{surface} Rating"
-                        )
+                    if prediction['xgb_probability'] is not None:
+                        cols = st.columns(3)
+                        with cols[0]:
+                            st.metric("ELO Probability", f"{prediction['elo_probability']:.1%}")
+                        with cols[1]:
+                            st.metric("XGBoost Probability", f"{prediction['xgb_probability']:.1%}")
+                        with cols[2]:
+                            st.metric("Final Probability", f"{prediction['final_probability']:.1%}")
                     
-                    with col_b:
-                        st.metric(
-                            label=f"{player_b_name}",
-                            value=f"{rating_b:.0f}",
-                            delta=f"{surface} Rating"
-                        )
-                    
-                    # Display probabilities
-                    st.subheader("Win Probabilities")
-                    col_proba, col_probb = st.columns(2)
-                    
-                    with col_proba:
-                        st.progress(prob_a)
-                        st.markdown(f"### {prob_a*100:.1f}%")
-                        st.caption(f"**{player_a_name}**")
-                    
-                    with col_probb:
-                        st.progress(prob_b)
-                        st.markdown(f"### {prob_b*100:.1f}%")
-                        st.caption(f"**{player_b_name}**")
+                    # ELO ratings
+                    st.markdown("**ELO Ratings**")
+                    elo_cols = st.columns(2)
+                    with elo_cols[0]:
+                        st.write(f"{player_a_name}: {prediction['player_a_elo']:.0f}")
+                    with elo_cols[1]:
+                        st.write(f"{player_b_name}: {prediction['player_b_elo']:.0f}")
                     
                     # Prediction verdict
-                    st.subheader("Prediction Verdict")
-                    if prob_a > 0.7:
-                        st.success(f"🎯 **Strong favorite on {surface}:** {player_a_name} is predicted to win!")
+                    st.subheader("Verdict")
+                    if prob_a > 0.65:
+                        st.success(f"🎯 **Strong favorite:** {player_a_name} is predicted to win on {surface}!")
                     elif prob_a > 0.55:
-                        st.info(f"⚖️ **Favorite on {surface}:** {player_a_name} is predicted to win!")
-                    elif prob_b > 0.7:
-                        st.success(f"🎯 **Strong favorite on {surface}:** {player_b_name} is predicted to win!")
+                        st.info(f"⚖️ **Slight favorite:** {player_a_name} is predicted to win on {surface}!")
+                    elif prob_b > 0.65:
+                        st.success(f"🎯 **Strong favorite:** {player_b_name} is predicted to win on {surface}!")
                     elif prob_b > 0.55:
-                        st.info(f"⚖️ **Favorite on {surface}:** {player_b_name} is predicted to win!")
+                        st.info(f"⚖️ **Slight favorite:** {player_b_name} is predicted to win on {surface}!")
                     else:
-                        st.warning(f"🤔 **Too close to call on {surface}!**")
+                        st.warning("🤔 **Too close to call!** Consider match statistics carefully.")
 
-elif app_mode == "👤 Player Analysis":
-    st.header("Player Surface Analysis")
+elif app_mode == "🤖 Model Analysis":
+    st.header("Model Performance Analysis")
     
-    if not st.session_state.elo_ratings:
-        st.warning("Please upload data and calculate ELO ratings first in the 'Upload & Calculate ELO' section.")
+    if st.session_state.xgb_model is None:
+        st.warning("No XGBoost model trained yet. Please train a model in the 'Data & Model Training' section.")
     else:
-        # Player selection
-        player_options = list(st.session_state.elo_ratings.keys())
-        selected_player = st.selectbox(
-            "Select Player",
-            options=player_options,
-            format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})" if st.session_state.player_names.get(x) else x
+        st.success("✅ XGBoost model is ready!")
+        
+        # Model information
+        st.subheader("Model Configuration")
+        st.json({
+            "n_estimators": st.session_state.xgb_model.n_estimators,
+            "max_depth": st.session_state.xgb_model.max_depth,
+            "learning_rate": st.session_state.xgb_model.learning_rate,
+            "n_features": len(st.session_state.feature_columns)
+        })
+        
+        # Feature importance visualization
+        st.subheader("Feature Importance")
+        
+        importance_type = st.selectbox(
+            "Importance Type",
+            ["weight", "gain", "cover", "total_gain", "total_cover"]
         )
         
-        if selected_player:
-            # Get player ratings
-            player_ratings = st.session_state.elo_ratings[selected_player]
-            player_name = st.session_state.player_names.get(selected_player, selected_player)
+        # Get feature importance
+        importance_dict = st.session_state.xgb_model.get_booster().get_score(importance_type=importance_type)
+        
+        if importance_dict:
+            importance_df = pd.DataFrame(
+                list(importance_dict.items()),
+                columns=['Feature', 'Importance']
+            ).sort_values('Importance', ascending=False)
             
-            # Display player info
-            st.subheader(f"Surface Ratings for {player_name}")
+            # Display top 20 features
+            top_features = importance_df.head(20)
             
-            # Create surface rating chart
-            surfaces = ['Hard', 'Clay', 'Grass', 'Carpet']
-            ratings = []
-            labels = []
+            col_chart, col_table = st.columns([2, 1])
             
-            for surface in surfaces:
-                if surface in player_ratings:
-                    ratings.append(player_ratings[surface])
-                    labels.append(f"{surface}\n{player_ratings[surface]:.0f}")
+            with col_chart:
+                st.bar_chart(top_features.set_index('Feature'))
             
-            if ratings:
-                # Create a simple bar chart using Streamlit
-                chart_data = pd.DataFrame({
-                    'Surface': labels,
-                    'ELO Rating': ratings
-                })
-                
-                st.bar_chart(chart_data.set_index('Surface'))
-                
-                # Display specialization
-                specialization = get_surface_specialization(selected_player, st.session_state.elo_ratings, st.session_state.global_elo)
-                st.info(f"**Surface Specialization:** {specialization}")
-                
-                # Detailed ratings table
-                st.subheader("Detailed Ratings")
-                ratings_table = []
-                for surface in surfaces:
-                    if surface in player_ratings:
-                        ratings_table.append({
-                            'Surface': surface,
-                            'ELO Rating': f"{player_ratings[surface]:.0f}",
-                            'Difference from Global': f"{player_ratings[surface] - st.session_state.global_elo.get(selected_player, 1500):+.0f}"
-                        })
-                
-                if ratings_table:
-                    st.table(pd.DataFrame(ratings_table))
-            else:
-                st.warning("No surface-specific ratings available for this player.")
+            with col_table:
+                st.dataframe(top_features)
+        
+        # Model explanation
+        st.subheader("How the Hybrid Model Works")
+        st.markdown("""
+        The hybrid model combines two prediction methods:
+        
+        1. **ELO Rating System (30% weight)**
+           - Traditional rating system based on match outcomes
+           - Surface-specific ratings
+           - Simple and interpretable
+        
+        2. **XGBoost Classifier (70% weight)**
+           - Machine learning model using match statistics
+           - Considers: serve percentages, aces, double faults
+           - Learns complex patterns from historical data
+        
+        **Final Prediction = 0.3 × ELO_Probability + 0.7 × XGBoost_Probability**
+        """)
 
-elif app_mode == "📈 View All Ratings":
-    st.header("All Player ELO Ratings by Surface")
+elif app_mode == "📈 Player Rankings":
+    st.header("Player Rankings & Analysis")
     
     if not st.session_state.elo_ratings:
-        st.warning("Please upload data and calculate ELO ratings first in the 'Upload & Calculate ELO' section.")
+        st.warning("Please upload data first in the 'Data & Model Training' section.")
     else:
-        # Surface selection for viewing
+        # Surface selection
         selected_surface = st.selectbox(
-            "Filter by Surface",
-            options=['All', 'Hard', 'Clay', 'Grass', 'Carpet', 'Global']
+            "Select Surface for Rankings",
+            ['Global', 'Hard', 'Clay', 'Grass', 'Carpet']
         )
         
-        # Create dataframe with all ratings
-        data = []
-        for player_id, ratings in st.session_state.elo_ratings.items():
+        # Prepare rankings data
+        rankings_data = []
+        
+        for player_id in st.session_state.elo_ratings.keys():
             player_name = st.session_state.player_names.get(player_id, player_id)
             
-            if selected_surface == 'All':
-                # Show all surfaces
-                for surface, rating in ratings.items():
-                    data.append({
-                        'Player ID': player_id,
-                        'Player Name': player_name,
-                        'Surface': surface,
-                        'ELO Rating': rating
-                    })
-            elif selected_surface == 'Global':
-                # Show global ratings
-                data.append({
-                    'Player ID': player_id,
-                    'Player Name': player_name,
-                    'Surface': 'Global',
-                    'ELO Rating': st.session_state.global_elo.get(player_id, 1500)
-                })
-            elif selected_surface in ratings:
-                # Show specific surface
-                data.append({
-                    'Player ID': player_id,
-                    'Player Name': player_name,
-                    'Surface': selected_surface,
-                    'ELO Rating': ratings[selected_surface]
-                })
+            if selected_surface == 'Global':
+                rating = st.session_state.global_elo.get(player_id, 1500)
+            else:
+                rating = st.session_state.elo_ratings[player_id].get(selected_surface, 
+                                                                   st.session_state.global_elo.get(player_id, 1500))
+            
+            rankings_data.append({
+                'Player ID': player_id,
+                'Player Name': player_name,
+                'Rating': rating
+            })
         
-        if data:
-            ratings_df = pd.DataFrame(data)
-            
-            if selected_surface != 'All':
-                # Sort by rating for single surface view
-                ratings_df = ratings_df.sort_values('ELO Rating', ascending=False).reset_index(drop=True)
-                ratings_df.insert(0, 'Rank', range(1, len(ratings_df) + 1))
-            
-            # Display
-            st.dataframe(ratings_df, use_container_width=True)
-            
-            # Download button
-            csv = ratings_df.to_csv(index=False)
-            st.download_button(
-                label=f"Download {selected_surface} Ratings as CSV",
-                data=csv,
-                file_name=f"elo_ratings_{selected_surface.lower()}.csv",
-                mime="text/csv"
-            )
-            
-            # Statistics
-            if selected_surface != 'All':
-                st.subheader(f"{selected_surface} Court Statistics")
-                col1, col2, col3, col4 = st.columns(4)
+        rankings_df = pd.DataFrame(rankings_data)
+        rankings_df = rankings_df.sort_values('Rating', ascending=False).reset_index(drop=True)
+        rankings_df.insert(0, 'Rank', range(1, len(rankings_df) + 1))
+        
+        # Display rankings
+        st.subheader(f"{selected_surface} Court Rankings")
+        st.dataframe(rankings_df.head(20), use_container_width=True)
+        
+        # Surface specialization analysis
+        st.subheader("Surface Specialization Analysis")
+        
+        # Find players with biggest surface differences
+        specialization_data = []
+        
+        for player_id, ratings in st.session_state.elo_ratings.items():
+            if len(ratings) >= 2:  # At least 2 surfaces
+                surfaces = list(ratings.keys())
+                surface_ratings = [ratings[s] for s in surfaces]
                 
-                with col1:
-                    st.metric("Total Players", len(ratings_df))
-                
-                with col2:
-                    st.metric("Highest ELO", f"{ratings_df['ELO Rating'].max():.0f}")
-                
-                with col3:
-                    st.metric("Lowest ELO", f"{ratings_df['ELO Rating'].min():.0f}")
-                
-                with col4:
-                    st.metric("Average ELO", f"{ratings_df['ELO Rating'].mean():.0f}")
-        else:
-            st.info(f"No ratings available for {selected_surface} surface.")
+                if surface_ratings:
+                    max_rating = max(surface_ratings)
+                    min_rating = min(surface_ratings)
+                    specialization_score = max_rating - min_rating
+                    
+                    best_surface = surfaces[surface_ratings.index(max_rating)]
+                    worst_surface = surfaces[surface_ratings.index(min_rating)]
+                    
+                    specialization_data.append({
+                        'Player': st.session_state.player_names.get(player_id, player_id),
+                        'Specialization Score': specialization_score,
+                        'Best Surface': best_surface,
+                        'Worst Surface': worst_surface,
+                        'Rating Range': f"{min_rating:.0f}-{max_rating:.0f}"
+                    })
+        
+        if specialization_data:
+            spec_df = pd.DataFrame(specialization_data)
+            spec_df = spec_df.sort_values('Specialization Score', ascending=False).head(10)
+            
+            st.write("Top Surface Specialists (biggest rating differences):")
+            st.dataframe(spec_df)
 
 # Footer
 st.markdown("---")
 st.markdown(
     """
-    **How Surface-Aware ELO Works:**
-    1. Players have **separate ratings for each surface type** (Hard, Clay, Grass, Carpet)
-    2. Matches only affect the rating for that specific surface
-    3. Players also maintain a **global rating** as a fallback
-    4. The system identifies **surface specialists** vs **all-round players**
+    **Hybrid Prediction System Features:**
+    - **Surface-Aware ELO Ratings**: Separate ratings for each court type
+    - **XGBoost Machine Learning**: Uses match statistics for predictions
+    - **Weighted Hybrid Predictions**: Combines ELO and ML predictions
+    - **Feature Importance Analysis**: Understand what drives predictions
     
-    **Required CSV columns:** `winner_id`, `loser_id`, `surface`
-    **Recommended columns:** `tourney_date`, `match_num`, `winner_name`, `loser_name`
+    **Install required packages:** `pip install xgboost scikit-learn pandas numpy streamlit`
     """
 )
