@@ -49,14 +49,16 @@ def create_player_ids(df):
     
     # Collect all unique players
     if 'Player_1' in df.columns and 'Player_2' in df.columns:
-        players.update(df['Player_1'].unique())
-        players.update(df['Player_2'].unique())
+        players.update(df['Player_1'].dropna().unique())
+        players.update(df['Player_2'].dropna().unique())
     
     # Create ID mapping
     for idx, player_name in enumerate(sorted(players)):
+        if pd.isna(player_name):
+            continue
         player_id = f"P{idx:04d}"
-        player_ids[player_name] = player_id
-        st.session_state.player_names[player_id] = player_name
+        player_ids[str(player_name).strip()] = player_id
+        st.session_state.player_names[player_id] = str(player_name).strip()
     
     return player_ids
 
@@ -68,14 +70,14 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
     
     # Sort chronologically
     if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.sort_values(by=['Date']).reset_index(drop=True)
     
     # Map player names to IDs
-    df['winner_id'] = df['Winner'].map(st.session_state.player_ids)
+    df['winner_id'] = df['Winner'].apply(lambda x: st.session_state.player_ids.get(str(x).strip()) if pd.notna(x) else None)
     df['loser_id'] = df.apply(lambda row: st.session_state.player_ids.get(
-        row['Player_1'] if row['Player_1'] != row['Winner'] else row['Player_2']
-    ), axis=1)
+        str(row['Player_1']).strip() if str(row['Player_1']).strip() != str(row['Winner']).strip() else str(row['Player_2']).strip()
+    ) if pd.notna(row['Player_1']) and pd.notna(row['Winner']) else None, axis=1)
     
     # Get all unique player ids
     players = set(df['winner_id'].dropna().unique()).union(set(df['loser_id'].dropna().unique()))
@@ -103,7 +105,7 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
             continue
         
         # Get surface
-        surface = str(row.get('Surface', 'Hard'))
+        surface = str(row.get('Surface', 'Hard')).strip()
         if pd.isna(surface) or surface not in surfaces:
             surface = 'Hard'
         
@@ -233,7 +235,7 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
             if isinstance(score, str) and '-' in score:
                 sets = score.split()
                 # Check if it's a best of 3 match
-                if 'Best of' in str(match) or len(sets) <= 3:  # Assuming best of 3
+                if len(sets) <= 3:  # Assuming best of 3
                     if len(sets) == 2:  # Won in straight sets
                         straight_set_wins += 1
                     elif len(sets) == 3:  # Went to 3 sets
@@ -272,20 +274,20 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
         df = df.sort_values('Date').reset_index(drop=True)
     
     # Map player names to IDs
-    df['winner_id'] = df['Winner'].map(st.session_state.player_ids)
+    df['winner_id'] = df['Winner'].apply(lambda x: st.session_state.player_ids.get(str(x).strip()) if pd.notna(x) else None)
     df['loser_id'] = df.apply(lambda row: st.session_state.player_ids.get(
-        row['Player_1'] if row['Player_1'] != row['Winner'] else row['Player_2']
-    ), axis=1)
+        str(row['Player_1']).strip() if str(row['Player_1']).strip() != str(row['Winner']).strip() else str(row['Player_2']).strip()
+    ) if pd.notna(row['Player_1']) and pd.notna(row['Winner']) else None, axis=1)
     
     for idx, row in df.iterrows():
         try:
-            winner_id = str(row['winner_id'])
-            loser_id = str(row['loser_id'])
+            winner_id = row['winner_id']
+            loser_id = row['loser_id']
             
             if pd.isna(winner_id) or pd.isna(loser_id):
                 continue
                 
-            surface = str(row.get('Surface', 'Hard'))
+            surface = str(row.get('Surface', 'Hard')).strip()
             
             # Get current ELO ratings
             winner_elo = elo_ratings.get(winner_id, {}).get(surface, global_ratings.get(winner_id, 1500))
@@ -301,11 +303,23 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
             
             # Get rankings (handle missing values)
             try:
-                winner_rank = float(row.get('Rank_1', 100)) if row['Player_1'] == row['Winner'] else float(row.get('Rank_2', 100))
-                loser_rank = float(row.get('Rank_2', 100)) if row['Player_2'] != row['Winner'] else float(row.get('Rank_1', 100))
+                winner_rank = float(row.get('Rank_1', 100)) if str(row['Player_1']).strip() == str(row['Winner']).strip() else float(row.get('Rank_2', 100))
+                loser_rank = float(row.get('Rank_2', 100)) if str(row['Player_2']).strip() != str(row['Winner']).strip() else float(row.get('Rank_1', 100))
             except:
                 winner_rank = 100.0
                 loser_rank = 100.0
+            
+            # Get Best of value
+            try:
+                best_of = int(row.get('Best of', 3))
+            except:
+                best_of = 3
+            
+            # Get Round information
+            round_info = str(row.get('Round', '1st Round'))
+            is_final = 1 if 'Final' in round_info else 0
+            is_semifinal = 1 if 'Semifinal' in round_info else 0
+            is_quarterfinal = 1 if 'Quarterfinal' in round_info else 0
             
             # Create feature vector with form data
             features = {
@@ -319,6 +333,7 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'is_hard': 1 if surface == 'Hard' else 0,
                 'is_clay': 1 if surface == 'Clay' else 0,
                 'is_grass': 1 if surface == 'Grass' else 0,
+                'is_carpet': 1 if surface == 'Carpet' else 0,
                 
                 # Player rankings
                 'winner_rank': winner_rank,
@@ -347,22 +362,17 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'momentum_diff': float(winner_form['form_momentum'] - loser_form['form_momentum']),
                 'opp_strength_diff': float(winner_form['avg_opponent_elo'] - loser_form['avg_opponent_elo']),
                 
-                # Tournament series (encoded)
-                'is_grand_slam': 1 if row.get('Series', '') == 'Grand Slam' else 0,
-                'is_masters': 1 if 'Masters' in str(row.get('Series', '')) else 0,
-                'is_international': 1 if row.get('Series', '') == 'International' else 0,
+                # Match format and round
+                'best_of': float(best_of),
+                'is_final': is_final,
+                'is_semifinal': is_semifinal,
+                'is_quarterfinal': is_quarterfinal,
             }
             
-            # Add Best of feature
-            try:
-                features['best_of'] = float(row.get('Best of', 3))
-            except:
-                features['best_of'] = 3.0
-            
-            # Add match statistics if available (from odds or points)
+            # Add odds if available
             if 'Odd_1' in row and pd.notna(row['Odd_1']) and row['Odd_1'] != -1:
-                features['winner_odds'] = float(row['Odd_1']) if row['Player_1'] == row['Winner'] else float(row.get('Odd_2', 2.0))
-                features['loser_odds'] = float(row['Odd_2']) if row['Player_2'] != row['Winner'] else float(row.get('Odd_1', 2.0))
+                features['winner_odds'] = float(row['Odd_1']) if str(row['Player_1']).strip() == str(row['Winner']).strip() else float(row.get('Odd_2', 2.0))
+                features['loser_odds'] = float(row['Odd_2']) if str(row['Player_2']).strip() != str(row['Winner']).strip() else float(row.get('Odd_1', 2.0))
             else:
                 features['winner_odds'] = 2.0
                 features['loser_odds'] = 2.0
@@ -474,6 +484,7 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
         'is_hard': 1 if surface == 'Hard' else 0,
         'is_clay': 1 if surface == 'Clay' else 0,
         'is_grass': 1 if surface == 'Grass' else 0,
+        'is_carpet': 1 if surface == 'Carpet' else 0,
         
         # Player rankings (using average)
         'winner_rank': 50.0,
@@ -502,11 +513,11 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
         'momentum_diff': float(player_a_form['form_momentum'] - player_b_form['form_momentum']),
         'opp_strength_diff': float(player_a_form['avg_opponent_elo'] - player_b_form['avg_opponent_elo']),
         
-        # Tournament features (using defaults)
-        'is_grand_slam': 0,
-        'is_masters': 0,
-        'is_international': 1,
+        # Match format (using defaults)
         'best_of': 3.0,
+        'is_final': 0,
+        'is_semifinal': 0,
+        'is_quarterfinal': 0,
         
         # Odds (using defaults)
         'winner_odds': 2.0,
@@ -617,16 +628,33 @@ if app_mode == "📊 Data & Model Training":
             
             with col_info1:
                 st.write(f"**Total Matches:** {len(df)}")
-                st.write(f"**Total Tournaments:** {df['Tournament'].nunique()}")
-                st.write(f"**Date Range:** {df['Date'].min()} to {df['Date'].max()}")
+                st.write(f"**Total Tournaments:** {df['Tournament'].nunique() if 'Tournament' in df.columns else 'N/A'}")
+                if 'Date' in df.columns:
+                    st.write(f"**Date Range:** {df['Date'].min()} to {df['Date'].max()}")
+                else:
+                    st.write("**Date Range:** N/A")
             
             with col_info2:
-                st.write(f"**Unique Players:** {len(set(df['Player_1'].unique()) | set(df['Player_2'].unique()))}")
-                st.write(f"**Surfaces:** {', '.join(df['Surface'].unique())}")
-                st.write(f"**Series Types:** {', '.join(df['Series'].unique())}")
+                if 'Player_1' in df.columns and 'Player_2' in df.columns:
+                    unique_players = len(set(df['Player_1'].dropna().unique()) | set(df['Player_2'].dropna().unique()))
+                    st.write(f"**Unique Players:** {unique_players}")
+                else:
+                    st.write("**Unique Players:** N/A")
+                
+                if 'Surface' in df.columns:
+                    surfaces = df['Surface'].unique()
+                    st.write(f"**Surfaces:** {', '.join(map(str, surfaces))}")
+                else:
+                    st.write("**Surfaces:** N/A")
+                
+                if 'Round' in df.columns:
+                    rounds = df['Round'].unique()[:5]  # Show first 5 unique rounds
+                    st.write(f"**Rounds:** {', '.join(map(str, rounds))}...")
+                else:
+                    st.write("**Rounds:** N/A")
             
             # Check required columns
-            required_cols = ['Tournament', 'Date', 'Player_1', 'Player_2', 'Winner', 'Surface']
+            required_cols = ['Player_1', 'Player_2', 'Winner', 'Surface']
             missing_cols = [col for col in required_cols if col not in df.columns]
             
             if missing_cols:
@@ -654,10 +682,13 @@ if app_mode == "📊 Data & Model Training":
                     )[:10]
                     
                     st.subheader("Top 10 Players (Global ELO)")
-                    top_df = pd.DataFrame(top_players, columns=['Player ID', 'ELO Rating'])
-                    top_df['Player Name'] = top_df['Player ID'].map(st.session_state.player_names)
-                    top_df = top_df[['Player Name', 'ELO Rating', 'Player ID']]
-                    st.dataframe(top_df, use_container_width=True)
+                    if top_players:
+                        top_df = pd.DataFrame(top_players, columns=['Player ID', 'ELO Rating'])
+                        top_df['Player Name'] = top_df['Player ID'].map(st.session_state.player_names)
+                        top_df = top_df[['Player Name', 'ELO Rating', 'Player ID']]
+                        st.dataframe(top_df, use_container_width=True)
+                    else:
+                        st.warning("No players found in ELO ratings")
                     
                     # Train XGBoost model with form features
                     if XGB_AVAILABLE and use_xgb and st.session_state.elo_ratings:
@@ -667,7 +698,7 @@ if app_mode == "📊 Data & Model Training":
                                 df, elo_ratings, global_ratings, st.session_state.player_form_history
                             )
                             
-                            if len(features_df) > 0:
+                            if len(features_df) > 0 and len(labels) > 0:
                                 # Train model
                                 xgb_params = {
                                     'max_depth': xgb_depth,
@@ -703,10 +734,9 @@ if app_mode == "📊 Data & Model Training":
                                 st.warning("Could not prepare features for training. Check data quality.")
                 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
-            import traceback
-            st.error(traceback.format_exc())
+            st.error(f"Error loading data: {str(e)}")
 
+# Rest of the code remains the same as before...
 elif app_mode == "🎯 Match Prediction":
     st.header("Match Prediction with Form Analysis")
     
@@ -1109,10 +1139,10 @@ st.markdown(
     4. More accurate predictions for current matchups
     
     **Dataset Features Used:**
-    - Tournament, Date, Series
-    - Player names and rankings
+    - Tournament, Date, Round
+    - Player names and rankings (Rank_1, Rank_2)
     - Surface type (Hard, Clay, Grass, Carpet)
     - Match scores and results
-    - Round information
+    - Best of format
     """
 )
