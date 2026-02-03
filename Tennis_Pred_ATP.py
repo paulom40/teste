@@ -11,8 +11,7 @@ try:
     import xgboost as xgb
     from xgboost import XGBClassifier
     from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import LabelEncoder
-    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+    from sklearn.metrics import accuracy_score
     XGB_AVAILABLE = True
 except ImportError:
     XGB_AVAILABLE = False
@@ -33,8 +32,6 @@ if 'global_elo' not in st.session_state:
     st.session_state.global_elo = {}
 if 'xgb_model' not in st.session_state:
     st.session_state.xgb_model = None
-if 'label_encoders' not in st.session_state:
-    st.session_state.label_encoders = {}
 if 'feature_columns' not in st.session_state:
     st.session_state.feature_columns = []
 if 'match_data' not in st.session_state:
@@ -99,7 +96,7 @@ def prepare_features(df, elo_ratings, global_ratings):
     labels = []
     match_info = []
     
-    # Define statistical features to use
+    # Define statistical features to use (from the CSV data)
     stat_features = [
         'w_ace', 'w_df', 'w_svpt', 'w_1stIn', 'w_1stWon', 'w_2ndWon',
         'l_ace', 'l_df', 'l_svpt', 'l_1stIn', 'l_1stWon', 'l_2ndWon'
@@ -132,25 +129,28 @@ def prepare_features(df, elo_ratings, global_ratings):
                 'is_grass': 1 if surface == 'Grass' else 0,
                 
                 # Player rankings if available
-                'winner_rank_diff': float(row.get('winner_rank', 100)) - float(row.get('loser_rank', 100)),
                 'winner_rank': float(row.get('winner_rank', 100)),
                 'loser_rank': float(row.get('loser_rank', 100)),
             }
             
-            # Add statistical features if available
+            # Add statistical features from CSV if available
             for feat in stat_features:
                 if feat in row and pd.notna(row[feat]):
                     features[feat] = float(row[feat])
                 else:
-                    features[feat] = 0.0
+                    # Use average values as defaults
+                    if feat.startswith('w_'):
+                        features[feat] = 5.0 if 'ace' in feat else 2.0 if 'df' in feat else 60.0 if 'svpt' in feat else 30.0
+                    else:
+                        features[feat] = 5.0 if 'ace' in feat else 2.0 if 'df' in feat else 60.0 if 'svpt' in feat else 30.0
             
             # Add derived statistics
-            if 'w_svpt' in features and features['w_svpt'] > 0:
+            if features['w_svpt'] > 0:
                 features['winner_1st_serve_pct'] = float(features['w_1stIn'] / features['w_svpt'])
                 features['winner_1st_serve_won_pct'] = float(features['w_1stWon'] / max(1, features['w_1stIn']))
                 features['winner_2nd_serve_won_pct'] = float(features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn']))
             
-            if 'l_svpt' in features and features['l_svpt'] > 0:
+            if features['l_svpt'] > 0:
                 features['loser_1st_serve_pct'] = float(features['l_1stIn'] / features['l_svpt'])
                 features['loser_1st_serve_won_pct'] = float(features['l_1stWon'] / max(1, features['l_1stIn']))
                 features['loser_2nd_serve_won_pct'] = float(features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn']))
@@ -169,7 +169,6 @@ def prepare_features(df, elo_ratings, global_ratings):
             features_reverse['elo_diff'] = float(-elo_diff)
             features_reverse['winner_elo'], features_reverse['loser_elo'] = float(loser_elo), float(winner_elo)
             features_reverse['elo_expected'] = float(1 - elo_expected)
-            features_reverse['winner_rank_diff'] = float(-features['winner_rank_diff'])
             features_reverse['winner_rank'], features_reverse['loser_rank'] = float(features['loser_rank']), float(features['winner_rank'])
             
             # Swap statistical features
@@ -219,14 +218,12 @@ def train_xgboost_model(features_df, labels, params=None):
     
     # Evaluate
     y_pred = model.predict(X_test)
-    y_pred_proba = model.predict_proba(X_test)[:, 1]
-    
     accuracy = accuracy_score(y_test, y_pred)
     
-    return model, accuracy, (X_test, y_test, y_pred, y_pred_proba), features_df.columns.tolist()
+    return model, accuracy, features_df.columns.tolist()
 
-# Hybrid prediction function
-def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_ratings, xgb_model, feature_columns, match_stats=None):
+# Hybrid prediction function (simplified - no match statistics input)
+def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_ratings, xgb_model, feature_columns):
     """Make prediction using both ELO and XGBoost"""
     
     # Get ELO-based prediction
@@ -236,7 +233,7 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     elo_diff = float(winner_elo - loser_elo)
     elo_prob = float(1 / (1 + math.pow(10, (-elo_diff) / 400)))
     
-    # Prepare features for XGBoost
+    # Prepare features for XGBoost using historical averages
     features = {
         'elo_diff': elo_diff,
         'winner_elo': float(winner_elo),
@@ -245,33 +242,20 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
         'is_hard': 1 if surface == 'Hard' else 0,
         'is_clay': 1 if surface == 'Clay' else 0,
         'is_grass': 1 if surface == 'Grass' else 0,
+        
+        # Use average statistics from historical data
+        'w_ace': 5.0, 'w_df': 2.0, 'w_svpt': 60.0, 'w_1stIn': 36.0, 'w_1stWon': 24.0, 'w_2ndWon': 12.0,
+        'l_ace': 5.0, 'l_df': 2.0, 'l_svpt': 60.0, 'l_1stIn': 36.0, 'l_1stWon': 24.0, 'l_2ndWon': 12.0,
+        'winner_rank': 50.0, 'loser_rank': 50.0,
+        
+        # Derived statistics
+        'winner_1st_serve_pct': 0.6,
+        'winner_1st_serve_won_pct': 0.7,
+        'winner_2nd_serve_won_pct': 0.5,
+        'loser_1st_serve_pct': 0.6,
+        'loser_1st_serve_won_pct': 0.7,
+        'loser_2nd_serve_won_pct': 0.5,
     }
-    
-    # Add default match statistics if not provided
-    default_stats = {
-        'w_ace': 5, 'w_df': 2, 'w_svpt': 60, 'w_1stIn': 36, 'w_1stWon': 24, 'w_2ndWon': 12,
-        'l_ace': 5, 'l_df': 2, 'l_svpt': 60, 'l_1stIn': 36, 'l_1stWon': 24, 'l_2ndWon': 12,
-        'winner_rank': 50, 'loser_rank': 50, 'winner_rank_diff': 0
-    }
-    
-    if match_stats:
-        # Convert all values to float
-        for key, value in match_stats.items():
-            default_stats[key] = float(value)
-    
-    for key, value in default_stats.items():
-        features[key] = float(value)
-    
-    # Calculate derived stats
-    if features['w_svpt'] > 0:
-        features['winner_1st_serve_pct'] = float(features['w_1stIn'] / features['w_svpt'])
-        features['winner_1st_serve_won_pct'] = float(features['w_1stWon'] / max(1, features['w_1stIn']))
-        features['winner_2nd_serve_won_pct'] = float(features['w_2ndWon'] / max(1, features['w_svpt'] - features['w_1stIn']))
-    
-    if features['l_svpt'] > 0:
-        features['loser_1st_serve_pct'] = float(features['l_1stIn'] / features['l_svpt'])
-        features['loser_1st_serve_won_pct'] = float(features['l_1stWon'] / max(1, features['l_1stIn']))
-        features['loser_2nd_serve_won_pct'] = float(features['l_2ndWon'] / max(1, features['l_svpt'] - features['l_1stIn']))
     
     # Create feature DataFrame
     features_df = pd.DataFrame([features])
@@ -287,9 +271,9 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     if xgb_model is not None:
         xgb_prob = float(xgb_model.predict_proba(features_df)[0, 1])
         
-        # Weighted combination (adjust weights based on model confidence)
-        elo_weight = 0.3  # Weight for ELO prediction
-        xgb_weight = 0.7  # Weight for XGBoost prediction
+        # Weighted combination
+        elo_weight = 0.3
+        xgb_weight = 0.7
         
         final_prob = float(elo_weight * elo_prob + xgb_weight * xgb_prob)
     else:
@@ -306,8 +290,8 @@ def hybrid_prediction(player_a_id, player_b_id, surface, elo_ratings, global_rat
     }
 
 # Streamlit App Interface
-st.title("🎾 Tennis Prediction System: ELO + XGBoost Hybrid")
-st.markdown("Combining traditional ELO ratings with machine learning for better predictions")
+st.title("🎾 Tennis Prediction System: ELO + XGBoost")
+st.markdown("Combining traditional ELO ratings with machine learning for match predictions")
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
@@ -405,7 +389,7 @@ if app_mode == "📊 Data & Model Training":
                                 'random_state': 42
                             }
                             
-                            model, accuracy, eval_data, feature_cols = train_xgboost_model(
+                            model, accuracy, feature_cols = train_xgboost_model(
                                 features_df, labels, xgb_params
                             )
                             
@@ -430,7 +414,7 @@ if app_mode == "📊 Data & Model Training":
             st.error(f"Error: {str(e)}")
 
 elif app_mode == "🎯 Match Prediction":
-    st.header("Hybrid Match Prediction")
+    st.header("Match Prediction")
     
     if not st.session_state.elo_ratings:
         st.warning("Please upload data and train models first in the 'Data & Model Training' section.")
@@ -438,33 +422,19 @@ elif app_mode == "🎯 Match Prediction":
         col1, col2 = st.columns(2)
         
         with col1:
-            # Player and surface selection
+            # Surface selection
             surface = st.selectbox("Court Surface", ['Hard', 'Clay', 'Grass', 'Carpet'])
             
+            # Player A selection
             player_options = list(st.session_state.elo_ratings.keys())
             player_a = st.selectbox(
                 "Player A",
                 options=player_options,
                 format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
             )
-            
-            # Match statistics (optional)
-            st.subheader("Match Statistics (Optional)")
-            col_a_stats, col_b_stats = st.columns(2)
-            
-            with col_a_stats:
-                st.markdown("**Player A Stats**")
-                a_aces = st.number_input("Aces (A)", min_value=0, max_value=30, value=5, key='a_aces')
-                a_dfs = st.number_input("Double Faults (A)", min_value=0, max_value=10, value=2, key='a_dfs')
-                a_1st_serve = st.slider("1st Serve % (A)", 40, 80, 60, key='a_1st')
-            
-            with col_b_stats:
-                st.markdown("**Player B Stats**")
-                b_aces = st.number_input("Aces (B)", min_value=0, max_value=30, value=5, key='b_aces')
-                b_dfs = st.number_input("Double Faults (B)", min_value=0, max_value=10, value=2, key='b_dfs')
-                b_1st_serve = st.slider("1st Serve % (B)", 40, 80, 60, key='b_1st')
         
         with col2:
+            # Player B selection
             player_b_options = [p for p in player_options if p != player_a]
             player_b = st.selectbox(
                 "Player B",
@@ -472,45 +442,31 @@ elif app_mode == "🎯 Match Prediction":
                 format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
             )
             
-            # Additional options
+            # Prediction options
             st.subheader("Prediction Options")
-            use_xgb = st.checkbox("Use XGBoost prediction", value=st.session_state.xgb_model is not None)
+            use_xgb = st.checkbox("Use XGBoost (if trained)", 
+                                 value=st.session_state.xgb_model is not None,
+                                 help="Use machine learning model for more accurate predictions")
             show_details = st.checkbox("Show detailed breakdown", value=True)
             
-            # Initialize prediction result
-            prediction_result = None
-            
+            # Prediction button
             if st.button("Run Prediction", type="primary", use_container_width=True):
-                # Prepare match statistics
-                match_stats = {
-                    'w_ace': a_aces,
-                    'w_df': a_dfs,
-                    'l_ace': b_aces,
-                    'l_df': b_dfs,
-                    'w_svpt': 60,
-                    'l_svpt': 60,
-                    'w_1stIn': int(60 * a_1st_serve / 100),
-                    'l_1stIn': int(60 * b_1st_serve / 100),
-                    'w_1stWon': int(60 * a_1st_serve / 100 * 0.7),
-                    'l_1stWon': int(60 * b_1st_serve / 100 * 0.7),
-                    'w_2ndWon': 12,
-                    'l_2ndWon': 12
-                }
-                
-                # Make prediction
-                prediction_result = hybrid_prediction(
+                # Store prediction in session state
+                st.session_state.prediction_result = hybrid_prediction(
                     player_a, player_b, surface,
                     st.session_state.elo_ratings,
                     st.session_state.global_elo,
                     st.session_state.xgb_model if use_xgb else None,
-                    st.session_state.feature_columns,
-                    match_stats
+                    st.session_state.feature_columns
                 )
+                st.session_state.last_prediction_players = (player_a, player_b, surface)
         
-        # Display results (outside the button click to avoid empty progress bars)
-        if prediction_result:
+        # Display results if prediction exists
+        if hasattr(st.session_state, 'prediction_result') and st.session_state.prediction_result:
             player_a_name = st.session_state.player_names.get(player_a, player_a)
             player_b_name = st.session_state.player_names.get(player_b, player_b)
+            
+            prediction = st.session_state.prediction_result
             
             st.subheader(f"Prediction: {player_a_name} vs {player_b_name}")
             st.markdown(f"**Surface:** {surface}")
@@ -519,13 +475,13 @@ elif app_mode == "🎯 Match Prediction":
             col_prob_a, col_prob_b = st.columns(2)
             
             with col_prob_a:
-                prob_a = float(prediction_result['final_probability'])
+                prob_a = float(prediction['final_probability'])
                 st.metric(
                     label=player_a_name,
                     value=f"{prob_a:.1%}",
                     delta=f"Win Probability"
                 )
-                st.progress(min(1.0, max(0.0, prob_a)))  # Ensure between 0 and 1
+                st.progress(min(1.0, max(0.0, prob_a)))
             
             with col_prob_b:
                 prob_b = float(1 - prob_a)
@@ -534,43 +490,49 @@ elif app_mode == "🎯 Match Prediction":
                     value=f"{prob_b:.1%}",
                     delta=f"Win Probability"
                 )
-                st.progress(min(1.0, max(0.0, prob_b)))  # Ensure between 0 and 1
+                st.progress(min(1.0, max(0.0, prob_b)))
             
             # Detailed breakdown
             if show_details:
                 st.subheader("Prediction Breakdown")
                 
-                if prediction_result['xgb_probability'] is not None:
+                if prediction['xgb_probability'] is not None:
                     cols = st.columns(3)
                     with cols[0]:
-                        st.metric("ELO Probability", f"{float(prediction_result['elo_probability']):.1%}")
+                        st.metric("ELO Probability", f"{float(prediction['elo_probability']):.1%}")
                     with cols[1]:
-                        st.metric("XGBoost Probability", f"{float(prediction_result['xgb_probability']):.1%}")
+                        st.metric("XGBoost Probability", f"{float(prediction['xgb_probability']):.1%}")
                     with cols[2]:
-                        st.metric("Final Probability", f"{float(prediction_result['final_probability']):.1%}")
+                        st.metric("Final Probability", f"{float(prediction['final_probability']):.1%}")
+                else:
+                    st.info("Using ELO-only prediction (XGBoost not available or not selected)")
                 
                 # ELO ratings
                 st.markdown("**ELO Ratings**")
                 elo_cols = st.columns(2)
                 with elo_cols[0]:
-                    st.write(f"{player_a_name}: {float(prediction_result['player_a_elo']):.0f}")
+                    st.write(f"{player_a_name}: {float(prediction['player_a_elo']):.0f}")
                 with elo_cols[1]:
-                    st.write(f"{player_b_name}: {float(prediction_result['player_b_elo']):.0f}")
+                    st.write(f"{player_b_name}: {float(prediction['player_b_elo']):.0f}")
+                    st.write(f"ELO Difference: {float(prediction['elo_difference']):.0f}")
                 
                 # Prediction verdict
                 st.subheader("Verdict")
-                if prob_a > 0.65:
+                if prob_a > 0.70:
                     st.success(f"🎯 **Strong favorite:** {player_a_name} is predicted to win on {surface}!")
+                elif prob_a > 0.60:
+                    st.info(f"⚖️ **Moderate favorite:** {player_a_name} is predicted to win on {surface}!")
                 elif prob_a > 0.55:
-                    st.info(f"⚖️ **Slight favorite:** {player_a_name} is predicted to win on {surface}!")
-                elif prob_b > 0.65:
+                    st.info(f"📈 **Slight favorite:** {player_a_name} is predicted to win on {surface}!")
+                elif prob_b > 0.70:
                     st.success(f"🎯 **Strong favorite:** {player_b_name} is predicted to win on {surface}!")
+                elif prob_b > 0.60:
+                    st.info(f"⚖️ **Moderate favorite:** {player_b_name} is predicted to win on {surface}!")
                 elif prob_b > 0.55:
-                    st.info(f"⚖️ **Slight favorite:** {player_b_name} is predicted to win on {surface}!")
+                    st.info(f"📈 **Slight favorite:** {player_b_name} is predicted to win on {surface}!")
                 else:
-                    st.warning("🤔 **Too close to call!** Consider match statistics carefully.")
+                    st.warning("🤔 **Too close to call!** This could go either way.")
         else:
-            # Show placeholder when no prediction has been made
             st.info("👈 Select players and click 'Run Prediction' to see results")
 
 elif app_mode == "🤖 Model Analysis":
@@ -590,16 +552,10 @@ elif app_mode == "🤖 Model Analysis":
             "n_features": len(st.session_state.feature_columns)
         })
         
-        # Feature importance visualization
+        # Feature importance
         st.subheader("Feature Importance")
         
-        importance_type = st.selectbox(
-            "Importance Type",
-            ["weight", "gain", "cover", "total_gain", "total_cover"]
-        )
-        
-        # Get feature importance
-        importance_dict = st.session_state.xgb_model.get_booster().get_score(importance_type=importance_type)
+        importance_dict = st.session_state.xgb_model.get_booster().get_score(importance_type="weight")
         
         if importance_dict:
             importance_df = pd.DataFrame(
@@ -607,8 +563,8 @@ elif app_mode == "🤖 Model Analysis":
                 columns=['Feature', 'Importance']
             ).sort_values('Importance', ascending=False)
             
-            # Display top 20 features
-            top_features = importance_df.head(20)
+            # Display top 15 features
+            top_features = importance_df.head(15)
             
             col_chart, col_table = st.columns([2, 1])
             
@@ -619,21 +575,23 @@ elif app_mode == "🤖 Model Analysis":
                 st.dataframe(top_features)
         
         # Model explanation
-        st.subheader("How the Hybrid Model Works")
+        st.subheader("How the Model Works")
         st.markdown("""
-        The hybrid model combines two prediction methods:
+        **Hybrid Prediction System:**
         
-        1. **ELO Rating System (30% weight)**
+        1. **ELO Rating System** (30% weight)
            - Traditional rating system based on match outcomes
-           - Surface-specific ratings
+           - Surface-specific ratings (Hard, Clay, Grass, Carpet)
            - Simple and interpretable
         
-        2. **XGBoost Classifier (70% weight)**
-           - Machine learning model using match statistics
-           - Considers: serve percentages, aces, double faults
+        2. **XGBoost Classifier** (70% weight)
+           - Machine learning model trained on historical match data
+           - Uses features from the uploaded CSV (aces, double faults, serve percentages, etc.)
            - Learns complex patterns from historical data
         
         **Final Prediction = 0.3 × ELO_Probability + 0.7 × XGBoost_Probability**
+        
+        The system automatically extracts features from your match data to train the XGBoost model.
         """)
 
 elif app_mode == "📈 Player Rankings":
@@ -647,6 +605,9 @@ elif app_mode == "📈 Player Rankings":
             "Select Surface for Rankings",
             ['Global', 'Hard', 'Clay', 'Grass', 'Carpet']
         )
+        
+        # Number of players to show
+        num_players = st.slider("Number of players to display", 10, 50, 20)
         
         # Prepare rankings data
         rankings_data = []
@@ -672,52 +633,62 @@ elif app_mode == "📈 Player Rankings":
         
         # Display rankings
         st.subheader(f"{selected_surface} Court Rankings")
-        st.dataframe(rankings_df.head(20), use_container_width=True)
+        st.dataframe(rankings_df.head(num_players), use_container_width=True)
+        
+        # Download option
+        csv = rankings_df.to_csv(index=False)
+        st.download_button(
+            label=f"Download {selected_surface} Rankings as CSV",
+            data=csv,
+            file_name=f"tennis_rankings_{selected_surface.lower()}.csv",
+            mime="text/csv"
+        )
         
         # Surface specialization analysis
-        st.subheader("Surface Specialization Analysis")
-        
-        # Find players with biggest surface differences
-        specialization_data = []
-        
-        for player_id, ratings in st.session_state.elo_ratings.items():
-            if len(ratings) >= 2:  # At least 2 surfaces
-                surfaces = list(ratings.keys())
-                surface_ratings = [float(ratings[s]) for s in surfaces]
-                
-                if surface_ratings:
-                    max_rating = max(surface_ratings)
-                    min_rating = min(surface_ratings)
-                    specialization_score = float(max_rating - min_rating)
-                    
-                    best_surface = surfaces[surface_ratings.index(max_rating)]
-                    worst_surface = surfaces[surface_ratings.index(min_rating)]
-                    
-                    specialization_data.append({
-                        'Player': st.session_state.player_names.get(player_id, player_id),
-                        'Specialization Score': specialization_score,
-                        'Best Surface': best_surface,
-                        'Worst Surface': worst_surface,
-                        'Rating Range': f"{min_rating:.0f}-{max_rating:.0f}"
-                    })
-        
-        if specialization_data:
-            spec_df = pd.DataFrame(specialization_data)
-            spec_df = spec_df.sort_values('Specialization Score', ascending=False).head(10)
+        if selected_surface == 'Global':
+            st.subheader("Surface Specialists")
             
-            st.write("Top Surface Specialists (biggest rating differences):")
-            st.dataframe(spec_df)
+            specialization_data = []
+            
+            for player_id, ratings in st.session_state.elo_ratings.items():
+                if len(ratings) >= 2:
+                    surface_ratings = [float(ratings[s]) for s in ratings.keys()]
+                    
+                    if surface_ratings:
+                        max_rating = max(surface_ratings)
+                        min_rating = min(surface_ratings)
+                        diff = max_rating - min_rating
+                        
+                        if diff > 50:  # Only show players with significant differences
+                            best_surface = [s for s, r in ratings.items() if float(r) == max_rating][0]
+                            worst_surface = [s for s, r in ratings.items() if float(r) == min_rating][0]
+                            
+                            specialization_data.append({
+                                'Player': st.session_state.player_names.get(player_id, player_id),
+                                'Specialization Score': float(diff),
+                                'Best Surface': best_surface,
+                                'Worst Surface': worst_surface,
+                                'Best Rating': max_rating,
+                                'Worst Rating': min_rating
+                            })
+            
+            if specialization_data:
+                spec_df = pd.DataFrame(specialization_data)
+                spec_df = spec_df.sort_values('Specialization Score', ascending=False).head(10)
+                
+                st.dataframe(spec_df)
 
 # Footer
 st.markdown("---")
 st.markdown(
     """
-    **Hybrid Prediction System Features:**
+    **Tennis Prediction System Features:**
     - **Surface-Aware ELO Ratings**: Separate ratings for each court type
-    - **XGBoost Machine Learning**: Uses match statistics for predictions
-    - **Weighted Hybrid Predictions**: Combines ELO and ML predictions
-    - **Feature Importance Analysis**: Understand what drives predictions
+    - **XGBoost Machine Learning**: Trained on historical match statistics
+    - **Hybrid Predictions**: Combines ELO and ML for better accuracy
+    - **Player Rankings**: View rankings by surface
     
-    **Install required packages:** `pip install xgboost scikit-learn pandas numpy streamlit`
+    **Required CSV columns:** `winner_id`, `loser_id`, `surface`
+    **Recommended columns:** Player statistics for better ML predictions
     """
 )
