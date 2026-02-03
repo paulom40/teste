@@ -791,18 +791,26 @@ def main():
                 
                 elo_df = pd.DataFrame(elo_data)
                 st.bar_chart(elo_df.set_index('Surface'))
+        else:
+            st.info("Upload data and train model first")
     
     with tabs[3]:
         st.header("Model Information")
         
         if st.session_state.model_metrics:
             st.subheader("Model Metrics")
-            st.json(st.session_state.model_metrics)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.json({k: v for k, v in st.session_state.model_metrics.items() if k != 'confusion_matrix'})
+        else:
+            st.info("Train a model first to see metrics")
         
-        if st.session_state.feature_importance is not None:
+        if st.session_state.feature_importance is not None and isinstance(st.session_state.feature_importance, pd.DataFrame):
             st.subheader("Top 15 Important Features")
             top_15 = st.session_state.feature_importance.head(15)
             st.bar_chart(top_15.set_index('feature')['importance'])
+        else:
+            st.info("Train a model to see feature importance")
 
 if __name__ == "__main__":
     main()
