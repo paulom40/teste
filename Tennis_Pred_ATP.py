@@ -41,6 +41,9 @@ if 'player_form_history' not in st.session_state:
 if 'player_ids' not in st.session_state:
     st.session_state.player_ids = {}  # Map player names to IDs
 
+# Constants
+RECENT_MATCHES_COUNT = 20  # Changed from 5 to 20 matches
+
 # Function to create player IDs from names
 def create_player_ids(df):
     """Create unique IDs for players based on their names"""
@@ -85,7 +88,7 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
     # Initialize structures
     elo_ratings = {}
     global_ratings = {}
-    form_history = defaultdict(lambda: defaultdict(deque))  # player_id -> surface -> deque of last 5 matches
+    form_history = defaultdict(lambda: defaultdict(deque))  # player_id -> surface -> deque of last 20 matches
     
     surfaces = ['Hard', 'Clay', 'Grass', 'Carpet']
     
@@ -152,18 +155,18 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
             'elo_change': k_factor * (0 - exp_l)
         }
         
-        # Add to form history (keep last 5 matches per surface)
+        # Add to form history (keep last 20 matches per surface)
         if winner not in form_history:
             form_history[winner] = defaultdict(deque)
         if loser not in form_history:
             form_history[loser] = defaultdict(deque)
         
         form_history[winner][surface].append(winner_result)
-        if len(form_history[winner][surface]) > 5:
+        if len(form_history[winner][surface]) > RECENT_MATCHES_COUNT:
             form_history[winner][surface].popleft()
         
         form_history[loser][surface].append(loser_result)
-        if len(form_history[loser][surface]) > 5:
+        if len(form_history[loser][surface]) > RECENT_MATCHES_COUNT:
             form_history[loser][surface].popleft()
     
     st.session_state.player_form_history = form_history
@@ -171,7 +174,7 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
 
 # Function to calculate form features from recent matches
 def calculate_form_features(player_id, surface, form_history, current_elo):
-    """Calculate form features from last 5 matches on same surface"""
+    """Calculate form features from last 20 matches on same surface"""
     if player_id not in form_history or surface not in form_history[player_id]:
         return {
             'recent_wins': 0,
@@ -182,7 +185,8 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
             'avg_elo_change': 0,
             'straight_set_wins': 0,
             'lost_sets': 0,
-            'recent_opponent_rank_avg': 100
+            'recent_opponent_rank_avg': 100,
+            'form_streak': 0
         }
     
     recent_matches = list(form_history[player_id][surface])
@@ -196,7 +200,8 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
             'avg_elo_change': 0,
             'straight_set_wins': 0,
             'lost_sets': 0,
-            'recent_opponent_rank_avg': 100
+            'recent_opponent_rank_avg': 100,
+            'form_streak': 0
         }
     
     wins = sum(1 for match in recent_matches if match['won'])
@@ -213,12 +218,25 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
     
     avg_opponent_elo = np.mean(opponent_elos) if opponent_elos else current_elo
     
-    # Calculate form momentum (recent performance trend)
-    if len(recent_matches) >= 3:
-        recent_wins = [1 if match['won'] else 0 for match in recent_matches[-3:]]
-        form_momentum = sum(recent_wins) / 3
+    # Calculate form momentum (recent performance trend - last 10 matches)
+    if len(recent_matches) >= 10:
+        recent_wins = [1 if match['won'] else 0 for match in recent_matches[-10:]]
+        form_momentum = sum(recent_wins) / 10
     else:
         form_momentum = win_percentage
+    
+    # Calculate current win/loss streak
+    streak = 0
+    for match in reversed(recent_matches):
+        if match['won']:
+            streak += 1
+        else:
+            break
+    for match in reversed(recent_matches):
+        if not match['won']:
+            streak -= 1
+        else:
+            break
     
     # Average ELO change
     elo_changes = [match['elo_change'] for match in recent_matches]
@@ -260,7 +278,8 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
         'avg_elo_change': avg_elo_change,
         'straight_set_wins': straight_set_wins,
         'lost_sets': lost_sets,
-        'recent_opponent_rank_avg': avg_opponent_elo  # Using ELO as proxy for rank
+        'recent_opponent_rank_avg': avg_opponent_elo,  # Using ELO as proxy for rank
+        'form_streak': streak
     }
 
 # Enhanced feature preparation with form data for new CSV format
@@ -347,6 +366,7 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'winner_avg_elo_change': float(winner_form['avg_elo_change']),
                 'winner_straight_set_wins': float(winner_form['straight_set_wins']),
                 'winner_lost_sets': float(winner_form['lost_sets']),
+                'winner_form_streak': float(winner_form['form_streak']),
                 
                 # Loser form features
                 'loser_recent_wins': float(loser_form['recent_wins']),
@@ -356,11 +376,13 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'loser_avg_elo_change': float(loser_form['avg_elo_change']),
                 'loser_straight_set_wins': float(loser_form['straight_set_wins']),
                 'loser_lost_sets': float(loser_form['lost_sets']),
+                'loser_form_streak': float(loser_form['form_streak']),
                 
                 # Form differentials
                 'form_diff': float(winner_form['win_percentage'] - loser_form['win_percentage']),
                 'momentum_diff': float(winner_form['form_momentum'] - loser_form['form_momentum']),
                 'opp_strength_diff': float(winner_form['avg_opponent_elo'] - loser_form['avg_opponent_elo']),
+                'streak_diff': float(winner_form['form_streak'] - loser_form['form_streak']),
                 
                 # Match format and round
                 'best_of': float(best_of),
@@ -399,7 +421,8 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 ('winner_avg_opp_elo', 'loser_avg_opp_elo'),
                 ('winner_avg_elo_change', 'loser_avg_elo_change'),
                 ('winner_straight_set_wins', 'loser_straight_set_wins'),
-                ('winner_lost_sets', 'loser_lost_sets')
+                ('winner_lost_sets', 'loser_lost_sets'),
+                ('winner_form_streak', 'loser_form_streak')
             ]
             
             for w_feat, l_feat in form_swap_pairs:
@@ -409,6 +432,7 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
             features_reverse['form_diff'] = -features['form_diff']
             features_reverse['momentum_diff'] = -features['momentum_diff']
             features_reverse['opp_strength_diff'] = -features['opp_strength_diff']
+            features_reverse['streak_diff'] = -features['streak_diff']
             
             # Swap odds
             features_reverse['winner_odds'], features_reverse['loser_odds'] = features['loser_odds'], features['winner_odds']
@@ -498,6 +522,7 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
         'winner_avg_elo_change': float(player_a_form['avg_elo_change']),
         'winner_straight_set_wins': float(player_a_form['straight_set_wins']),
         'winner_lost_sets': float(player_a_form['lost_sets']),
+        'winner_form_streak': float(player_a_form['form_streak']),
         
         # Player B form features (as loser)
         'loser_recent_wins': float(player_b_form['recent_wins']),
@@ -507,11 +532,13 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
         'loser_avg_elo_change': float(player_b_form['avg_elo_change']),
         'loser_straight_set_wins': float(player_b_form['straight_set_wins']),
         'loser_lost_sets': float(player_b_form['lost_sets']),
+        'loser_form_streak': float(player_b_form['form_streak']),
         
         # Form differentials
         'form_diff': float(player_a_form['win_percentage'] - player_b_form['win_percentage']),
         'momentum_diff': float(player_a_form['form_momentum'] - player_b_form['form_momentum']),
         'opp_strength_diff': float(player_a_form['avg_opponent_elo'] - player_b_form['avg_opponent_elo']),
+        'streak_diff': float(player_a_form['form_streak'] - player_b_form['form_streak']),
         
         # Match format (using defaults)
         'best_of': 3.0,
@@ -565,7 +592,7 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
 
 # Streamlit App Interface
 st.title("🎾 Tennis Prediction System with Form Analysis")
-st.markdown("ELO ratings + XGBoost + Recent Form Analysis (last 5 matches on same surface)")
+st.markdown(f"ELO ratings + XGBoost + Recent Form Analysis (last {RECENT_MATCHES_COUNT} matches on same surface)")
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
@@ -672,7 +699,7 @@ if app_mode == "📊 Data & Model Training":
                         st.session_state.global_elo = global_ratings
                     
                     st.success(f"✅ ELO calculated for {len(elo_ratings)} players")
-                    st.info(f"📊 Form history tracked for {len(st.session_state.player_form_history)} players")
+                    st.info(f"📊 Form history tracked for {len(st.session_state.player_form_history)} players (last {RECENT_MATCHES_COUNT} matches per surface)")
                     
                     # Show top players
                     top_players = sorted(
@@ -727,7 +754,7 @@ if app_mode == "📊 Data & Model Training":
                                 st.bar_chart(importance_df.set_index('feature')['importance'])
                                 
                                 # Show which form features are most important
-                                form_features = [f for f in importance_df['feature'] if 'recent' in f or 'form' in f or 'win_pct' in f or 'momentum' in f]
+                                form_features = [f for f in importance_df['feature'] if 'recent' in f or 'form' in f or 'win_pct' in f or 'momentum' in f or 'streak' in f]
                                 if form_features:
                                     st.info(f"**Key form features in model:** {', '.join(form_features[:5])}")
                             else:
@@ -736,7 +763,6 @@ if app_mode == "📊 Data & Model Training":
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
 
-# Rest of the code remains the same as before...
 elif app_mode == "🎯 Match Prediction":
     st.header("Match Prediction with Form Analysis")
     
@@ -827,54 +853,67 @@ elif app_mode == "🎯 Match Prediction":
             
             # Form analysis section
             if show_form_details:
-                st.subheader("📊 Recent Form Analysis (Last 5 matches on same surface)")
+                st.subheader(f"📊 Recent Form Analysis (Last {RECENT_MATCHES_COUNT} matches on same surface)")
                 
                 form_cols = st.columns(2)
                 
                 with form_cols[0]:
                     st.markdown(f"**{player_a_name} Form:**")
                     form_a = prediction['player_a_form']
-                    st.write(f"Recent Wins: {form_a['recent_wins']}/5")
+                    st.write(f"Recent Wins: {form_a['recent_wins']}/{form_a['recent_matches']}")
                     st.write(f"Win %: {form_a['win_percentage']:.1%}")
-                    st.write(f"Form Momentum: {form_a['form_momentum']:.1%}")
+                    st.write(f"Current Streak: {'W' if form_a['form_streak'] > 0 else 'L'}{abs(form_a['form_streak'])}")
+                    st.write(f"Recent Form (last 10): {form_a['form_momentum']:.1%}")
                     st.write(f"Avg Opponent ELO: {form_a['avg_opponent_elo']:.0f}")
                     st.write(f"Straight Set Wins: {form_a['straight_set_wins']}")
+                    st.write(f"Avg ELO Change: {form_a['avg_elo_change']:+.1f}")
                     
                     # Form indicator
                     if form_a['win_percentage'] >= 0.7:
                         st.success("🔥 Excellent Form")
-                    elif form_a['win_percentage'] >= 0.5:
+                    elif form_a['win_percentage'] >= 0.55:
                         st.info("📈 Good Form")
+                    elif form_a['win_percentage'] >= 0.45:
+                        st.warning("⚖️ Average Form")
                     else:
-                        st.warning("⚠️ Needs Improvement")
+                        st.error("⚠️ Poor Form")
                 
                 with form_cols[1]:
                     st.markdown(f"**{player_b_name} Form:**")
                     form_b = prediction['player_b_form']
-                    st.write(f"Recent Wins: {form_b['recent_wins']}/5")
+                    st.write(f"Recent Wins: {form_b['recent_wins']}/{form_b['recent_matches']}")
                     st.write(f"Win %: {form_b['win_percentage']:.1%}")
-                    st.write(f"Form Momentum: {form_b['form_momentum']:.1%}")
+                    st.write(f"Current Streak: {'W' if form_b['form_streak'] > 0 else 'L'}{abs(form_b['form_streak'])}")
+                    st.write(f"Recent Form (last 10): {form_b['form_momentum']:.1%}")
                     st.write(f"Avg Opponent ELO: {form_b['avg_opponent_elo']:.0f}")
                     st.write(f"Straight Set Wins: {form_b['straight_set_wins']}")
+                    st.write(f"Avg ELO Change: {form_b['avg_elo_change']:+.1f}")
                     
                     # Form indicator
                     if form_b['win_percentage'] >= 0.7:
                         st.success("🔥 Excellent Form")
-                    elif form_b['win_percentage'] >= 0.5:
+                    elif form_b['win_percentage'] >= 0.55:
                         st.info("📈 Good Form")
+                    elif form_b['win_percentage'] >= 0.45:
+                        st.warning("⚖️ Average Form")
                     else:
-                        st.warning("⚠️ Needs Improvement")
+                        st.error("⚠️ Poor Form")
                 
                 # Form comparison
                 st.subheader("Form Comparison")
                 form_diff = form_a['win_percentage'] - form_b['win_percentage']
+                streak_diff = form_a['form_streak'] - form_b['form_streak']
                 
-                if abs(form_diff) > 0.3:
+                if abs(form_diff) > 0.25:
                     st.success(f"**Significant form advantage:** {player_a_name if form_diff > 0 else player_b_name}")
                 elif abs(form_diff) > 0.15:
                     st.info(f"**Moderate form advantage:** {player_a_name if form_diff > 0 else player_b_name}")
                 else:
                     st.info("**Form is relatively even**")
+                
+                # Streak analysis
+                if abs(streak_diff) >= 5:
+                    st.info(f"**Strong momentum:** {player_a_name if streak_diff > 0 else player_b_name} is on a {abs(streak_diff)}-match {'winning' if streak_diff > 0 else 'losing'} streak")
             
             # Prediction breakdown
             st.subheader("Prediction Breakdown")
@@ -964,14 +1003,30 @@ elif app_mode == "📈 Player Analysis":
                         wins = sum(1 for match in matches if match['won'])
                         win_pct = wins / len(matches)
                         
+                        # Calculate current streak
+                        streak = 0
+                        for match in reversed(matches):
+                            if match['won']:
+                                streak += 1
+                            else:
+                                break
+                        for match in reversed(matches):
+                            if not match['won']:
+                                streak -= 1
+                            else:
+                                break
+                        
                         # Display form summary
-                        col1, col2, col3 = st.columns(3)
+                        col1, col2, col3, col4 = st.columns(4)
                         with col1:
                             st.metric("Matches", len(matches))
                         with col2:
                             st.metric("Wins", wins)
                         with col3:
                             st.metric("Win %", f"{win_pct:.1%}")
+                        with col4:
+                            streak_label = f"{'W' if streak > 0 else 'L'}{abs(streak)}"
+                            st.metric("Current Streak", streak_label)
                         
                         # Recent matches table
                         match_data = []
@@ -1038,7 +1093,8 @@ elif app_mode == "🤖 Model Insights":
             "n_estimators": st.session_state.xgb_model.n_estimators,
             "max_depth": st.session_state.xgb_model.max_depth,
             "learning_rate": st.session_state.xgb_model.learning_rate,
-            "n_features": len(st.session_state.feature_columns)
+            "n_features": len(st.session_state.feature_columns),
+            "recent_matches_analyzed": RECENT_MATCHES_COUNT
         })
         
         # Feature importance
@@ -1058,7 +1114,7 @@ elif app_mode == "🤖 Model Insights":
             other_features = []
             
             for feature in importance_df['Feature']:
-                if 'recent' in feature or 'form' in feature or 'win_pct' in feature or 'momentum' in feature:
+                if 'recent' in feature or 'form' in feature or 'win_pct' in feature or 'momentum' in feature or 'streak' in feature:
                     form_features.append(feature)
                 elif 'elo' in feature.lower():
                     elo_features.append(feature)
@@ -1094,25 +1150,27 @@ elif app_mode == "🤖 Model Insights":
         
         # How form analysis works
         st.subheader("How Form Analysis Works")
-        st.markdown("""
+        st.markdown(f"""
         **Recent Form Tracking System:**
         
-        1. **Last 5 Matches on Same Surface**
+        1. **Last {RECENT_MATCHES_COUNT} Matches on Same Surface**
            - Tracks each player's performance on the specific surface
            - Only considers matches on the same surface as the upcoming match
         
         2. **Form Metrics Calculated:**
            - **Win Percentage**: Success rate in recent matches
-           - **Form Momentum**: Performance trend (last 3 matches)
+           - **Current Streak**: Consecutive wins/losses
+           - **Form Momentum**: Performance trend (last 10 matches)
            - **Opponent Strength**: Average ELO of recent opponents
            - **Set Performance**: Straight set wins vs matches with lost sets
            - **ELO Momentum**: Average ELO change in recent matches
         
         3. **How It Improves Predictions:**
            - Identifies players in "hot streaks" or poor form
-           - Accounts for surface-specific momentum
+           - Accounts for surface-specific momentum over longer period
            - Considers quality of recent opponents
            - Captures recent performance better than overall ELO alone
+           - More stable with larger sample size ({RECENT_MATCHES_COUNT} matches)
         
         **Model Weighting:**
         - ELO Probability: 25%
@@ -1124,19 +1182,21 @@ elif app_mode == "🤖 Model Insights":
 # Footer
 st.markdown("---")
 st.markdown(
-    """
+    f"""
     **Enhanced Prediction System Features:**
-    - **Form Analysis**: Last 5 matches on same surface
+    - **Form Analysis**: Last {RECENT_MATCHES_COUNT} matches on same surface
     - **Surface-Specific Tracking**: Separate form for each surface
-    - **Momentum Calculation**: Performance trends
+    - **Momentum Calculation**: Performance trends over longer period
     - **Opponent Quality**: Strength of recent opponents
+    - **Streak Analysis**: Current win/loss streaks
     - **Hybrid Model**: Combines ELO, form, and match statistics
     
     **Key Benefits:**
-    1. Better accounts for recent player performance
-    2. Surface-specific form tracking
-    3. Identifies players in good/bad form
-    4. More accurate predictions for current matchups
+    1. Better accounts for recent player performance with larger sample
+    2. Surface-specific form tracking over meaningful period
+    3. Identifies players in good/bad form more reliably
+    4. More stable predictions with larger match history
+    5. Better momentum detection with streak analysis
     
     **Dataset Features Used:**
     - Tournament, Date, Round
@@ -1144,5 +1204,6 @@ st.markdown(
     - Surface type (Hard, Clay, Grass, Carpet)
     - Match scores and results
     - Best of format
+    - Odds data (when available)
     """
 )
