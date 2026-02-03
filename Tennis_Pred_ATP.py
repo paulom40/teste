@@ -385,7 +385,7 @@ def calculate_enhanced_form_features(player_id, surface, form_history, match_his
 # ===========================
 
 def create_enhanced_features(df, elo_ratings, global_ratings, form_history, match_history):
-    """Create comprehensive features"""
+    """Create comprehensive features - creates both winner and loser perspectives"""
     features_list = []
     labels = []
     
@@ -473,8 +473,42 @@ def create_enhanced_features(df, elo_ratings, global_ratings, form_history, matc
                 'is_final': 1 if 'Final' in str(row.get('Round', '')) else 0,
             }
             
+            # Add winner perspective (label=1)
             features_list.append(features)
             labels.append(1)
+            
+            # Add loser perspective (label=0) - swap features
+            loser_features = features.copy()
+            loser_features['elo_diff'] = -features['elo_diff']
+            loser_features['winner_elo'] = features['loser_elo']
+            loser_features['loser_elo'] = features['winner_elo']
+            loser_features['elo_ratio'] = 1 / features['elo_ratio'] if features['elo_ratio'] > 0 else 1.0
+            
+            # Swap form features
+            form_swap_pairs = [
+                ('winner_win_pct', 'loser_win_pct'),
+                ('winner_weighted_pct', 'loser_weighted_pct'),
+                ('winner_form_momentum', 'loser_form_momentum'),
+                ('winner_streak', 'loser_streak'),
+                ('winner_avg_opp_elo', 'loser_avg_opp_elo'),
+                ('winner_similarity', 'loser_similarity'),
+                ('winner_consistency', 'loser_consistency'),
+                ('winner_fatigue', 'loser_fatigue'),
+            ]
+            for w_feat, l_feat in form_swap_pairs:
+                loser_features[w_feat] = features[l_feat]
+                loser_features[l_feat] = features[w_feat]
+            
+            loser_features['form_diff'] = -features['form_diff']
+            loser_features['momentum_diff'] = -features['momentum_diff']
+            loser_features['consistency_diff'] = -features['consistency_diff']
+            loser_features['rank_diff'] = -features['rank_diff']
+            loser_features['winner_rank'] = features['loser_rank']
+            loser_features['loser_rank'] = features['winner_rank']
+            loser_features['h2h_ratio'] = 1 - features['h2h_ratio'] if features['h2h_ratio'] != 0.5 else 0.5
+            
+            features_list.append(loser_features)
+            labels.append(0)
             
         except Exception as e:
             continue
@@ -488,6 +522,11 @@ def create_enhanced_features(df, elo_ratings, global_ratings, form_history, matc
 
 def train_ensemble_model(features_df, labels):
     """Train ensemble model"""
+    
+    # Check if we have both classes
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2:
+        raise ValueError(f"Training data must have both classes (0 and 1), got only: {unique_labels}")
     
     X_train, X_test, y_train, y_test = train_test_split(
         features_df, labels, test_size=0.2, random_state=42, stratify=labels
@@ -509,7 +548,8 @@ def train_ensemble_model(features_df, labels):
             subsample=0.8,
             colsample_bytree=0.8,
             random_state=42,
-            n_jobs=-1
+            n_jobs=-1,
+            eval_metric='logloss'
         )
     
     models['rf'] = RandomForestClassifier(
@@ -535,8 +575,15 @@ def train_ensemble_model(features_df, labels):
     
     trained_models = {}
     for name, model in models.items():
-        model.fit(X_train_scaled, y_train)
-        trained_models[name] = model
+        try:
+            model.fit(X_train_scaled, y_train)
+            trained_models[name] = model
+        except Exception as e:
+            st.warning(f"Failed to train {name}: {str(e)}")
+            continue
+    
+    if not trained_models:
+        raise ValueError("Could not train any models")
     
     ensemble = VotingClassifier(
         estimators=[(name, model) for name, model in trained_models.items()],
@@ -550,11 +597,11 @@ def train_ensemble_model(features_df, labels):
     y_pred_proba = calibrated_ensemble.predict_proba(X_test_scaled)[:, 1]
     
     metrics = {
-        'accuracy': accuracy_score(y_test, y_pred),
-        'precision': precision_score(y_test, y_pred),
-        'recall': recall_score(y_test, y_pred),
-        'f1': f1_score(y_test, y_pred),
-        'roc_auc': roc_auc_score(y_test, y_pred_proba),
+        'accuracy': float(accuracy_score(y_test, y_pred)),
+        'precision': float(precision_score(y_test, y_pred, zero_division=0)),
+        'recall': float(recall_score(y_test, y_pred, zero_division=0)),
+        'f1': float(f1_score(y_test, y_pred, zero_division=0)),
+        'roc_auc': float(roc_auc_score(y_test, y_pred_proba)),
         'confusion_matrix': confusion_matrix(y_test, y_pred).tolist()
     }
     
@@ -671,41 +718,50 @@ def main():
                     st.success("✅ Data valid")
                     
                     if st.button("🚀 Train Models", type="primary"):
-                        with st.spinner("Computing ELO ratings and features..."):
-                            elo_ratings, global_ratings = compute_advanced_elo_from_csv(
-                                df, k_factor_base=elo_k, initial_elo=initial_elo
-                            )
-                            st.session_state.elo_ratings = elo_ratings
-                            st.session_state.global_elo = global_ratings
-                            
-                            features_df, labels = create_enhanced_features(
-                                df, elo_ratings, global_ratings, 
-                                st.session_state.player_form_history,
-                                st.session_state.match_history
-                            )
-                            
-                            if len(features_df) > 0:
-                                with st.spinner("Training ensemble..."):
-                                    model, metrics, feature_cols = train_ensemble_model(features_df, labels)
-                                    st.session_state.ensemble_model = model
-                                    st.session_state.feature_columns = feature_cols
-                                    st.session_state.model_metrics = metrics
+                        try:
+                            with st.spinner("Computing ELO ratings and features..."):
+                                elo_ratings, global_ratings = compute_advanced_elo_from_csv(
+                                    df, k_factor_base=elo_k, initial_elo=initial_elo
+                                )
+                                st.session_state.elo_ratings = elo_ratings
+                                st.session_state.global_elo = global_ratings
                                 
-                                st.success("✅ Models trained!")
+                                features_df, labels = create_enhanced_features(
+                                    df, elo_ratings, global_ratings, 
+                                    st.session_state.player_form_history,
+                                    st.session_state.match_history
+                                )
                                 
-                                col1, col2, col3, col4, col5 = st.columns(5)
-                                col1.metric("Accuracy", f"{metrics['accuracy']:.2%}")
-                                col2.metric("Precision", f"{metrics['precision']:.2%}")
-                                col3.metric("Recall", f"{metrics['recall']:.2%}")
-                                col4.metric("F1", f"{metrics['f1']:.2%}")
-                                col5.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                                st.write(f"Created {len(features_df)} training samples")
+                                st.write(f"Class distribution - Win: {sum(labels)}, Loss: {len(labels) - sum(labels)}")
                                 
-                                st.subheader("Confusion Matrix")
-                                cm = metrics['confusion_matrix']
-                                cm_df = pd.DataFrame(cm, 
-                                                   columns=['Loss', 'Win'],
-                                                   index=['Actual Loss', 'Actual Win'])
-                                st.dataframe(cm_df)
+                                if len(features_df) > 0 and len(np.unique(labels)) > 1:
+                                    with st.spinner("Training ensemble..."):
+                                        model, metrics, feature_cols = train_ensemble_model(features_df, labels)
+                                        st.session_state.ensemble_model = model
+                                        st.session_state.feature_columns = feature_cols
+                                        st.session_state.model_metrics = metrics
+                                    
+                                    st.success("✅ Models trained!")
+                                    
+                                    col1, col2, col3, col4, col5 = st.columns(5)
+                                    col1.metric("Accuracy", f"{metrics['accuracy']:.2%}")
+                                    col2.metric("Precision", f"{metrics['precision']:.2%}")
+                                    col3.metric("Recall", f"{metrics['recall']:.2%}")
+                                    col4.metric("F1", f"{metrics['f1']:.2%}")
+                                    col5.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                                    
+                                    st.subheader("Confusion Matrix")
+                                    cm = metrics['confusion_matrix']
+                                    cm_df = pd.DataFrame(cm, 
+                                                       columns=['Loss', 'Win'],
+                                                       index=['Actual Loss', 'Actual Win'])
+                                    st.dataframe(cm_df)
+                                else:
+                                    st.error("Could not create valid training data with both classes")
+                        
+                        except Exception as e:
+                            st.error(f"Training error: {str(e)}")
             
             except Exception as e:
                 st.error(f"Error: {str(e)}")
@@ -714,7 +770,7 @@ def main():
         st.header("Match Prediction")
         
         if not st.session_state.ensemble_model:
-            st.warning("Train model first!")
+            st.warning("⚠️ Train model first!")
         else:
             col1, col2, col3 = st.columns(3)
             
@@ -754,7 +810,7 @@ def main():
                             go.Bar(x=[player1, player2], y=[p1_win_prob, p2_win_prob],
                                    marker=dict(color=['#1f77b4', '#ff7f0e']))
                         ])
-                        fig.update_layout(title="Win Probability", yaxis_title="Probability")
+                        fig.update_layout(title="Win Probability", yaxis_title="Probability", height=400)
                         st.plotly_chart(fig, use_container_width=True)
     
     with tabs[2]:
