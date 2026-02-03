@@ -38,21 +38,47 @@ if 'match_data' not in st.session_state:
     st.session_state.match_data = None
 if 'player_form_history' not in st.session_state:
     st.session_state.player_form_history = {}  # Store recent match history
+if 'player_ids' not in st.session_state:
+    st.session_state.player_ids = {}  # Map player names to IDs
 
-# Function to compute surface-aware ELO ratings and track form
+# Function to create player IDs from names
+def create_player_ids(df):
+    """Create unique IDs for players based on their names"""
+    players = set()
+    player_ids = {}
+    
+    # Collect all unique players
+    if 'Player_1' in df.columns and 'Player_2' in df.columns:
+        players.update(df['Player_1'].unique())
+        players.update(df['Player_2'].unique())
+    
+    # Create ID mapping
+    for idx, player_name in enumerate(sorted(players)):
+        player_id = f"P{idx:04d}"
+        player_ids[player_name] = player_id
+        st.session_state.player_names[player_id] = player_name
+    
+    return player_ids
+
+# Function to compute surface-aware ELO ratings and track form for new CSV format
 def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
+    # Create player IDs if not already created
+    if not st.session_state.player_ids:
+        st.session_state.player_ids = create_player_ids(df)
+    
     # Sort chronologically
-    if 'tourney_date' in df.columns and 'match_num' in df.columns:
-        df = df.sort_values(by=['tourney_date', 'match_num']).reset_index(drop=True)
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values(by=['Date']).reset_index(drop=True)
+    
+    # Map player names to IDs
+    df['winner_id'] = df['Winner'].map(st.session_state.player_ids)
+    df['loser_id'] = df.apply(lambda row: st.session_state.player_ids.get(
+        row['Player_1'] if row['Player_1'] != row['Winner'] else row['Player_2']
+    ), axis=1)
     
     # Get all unique player ids
-    players = set(df['winner_id'].unique()).union(set(df['loser_id'].unique()))
-    
-    # Store player names
-    if 'winner_name' in df.columns and 'loser_name' in df.columns:
-        for _, row in df.iterrows():
-            st.session_state.player_names[row['winner_id']] = row['winner_name']
-            st.session_state.player_names[row['loser_id']] = row['loser_name']
+    players = set(df['winner_id'].dropna().unique()).union(set(df['loser_id'].dropna().unique()))
     
     # Initialize structures
     elo_ratings = {}
@@ -62,59 +88,74 @@ def compute_surface_elo_from_csv(df, k_factor=32, initial_elo=1500):
     surfaces = ['Hard', 'Clay', 'Grass', 'Carpet']
     
     for player in players:
-        elo_ratings[player] = {}
-        for surface in surfaces:
-            elo_ratings[player][surface] = initial_elo
-        global_ratings[player] = initial_elo
+        if player:  # Skip None values
+            elo_ratings[player] = {}
+            for surface in surfaces:
+                elo_ratings[player][surface] = initial_elo
+            global_ratings[player] = initial_elo
     
     # Process matches chronologically
     for index, row in df.iterrows():
-        winner = str(row['winner_id'])
-        loser = str(row['loser_id'])
+        winner = row['winner_id']
+        loser = row['loser_id']
+        
+        if pd.isna(winner) or pd.isna(loser):
+            continue
         
         # Get surface
-        surface = str(row.get('surface', 'Hard'))
+        surface = str(row.get('Surface', 'Hard'))
         if pd.isna(surface) or surface not in surfaces:
             surface = 'Hard'
         
         # Get current ratings
-        rating_w = elo_ratings[winner].get(surface, global_ratings[winner])
-        rating_l = elo_ratings[loser].get(surface, global_ratings[loser])
+        rating_w = elo_ratings.get(winner, {}).get(surface, global_ratings.get(winner, initial_elo))
+        rating_l = elo_ratings.get(loser, {}).get(surface, global_ratings.get(loser, initial_elo))
         
         # Update ELO
         exp_w = 1 / (1 + math.pow(10, (rating_l - rating_w) / 400))
         exp_l = 1 - exp_w
         
+        # Initialize if not present
+        if winner not in elo_ratings:
+            elo_ratings[winner] = {}
+        if loser not in elo_ratings:
+            elo_ratings[loser] = {}
+        
         elo_ratings[winner][surface] = rating_w + k_factor * (1 - exp_w)
         elo_ratings[loser][surface] = rating_l + k_factor * (0 - exp_l)
         
-        global_ratings[winner] = global_ratings[winner] + k_factor * (1 - exp_w)
-        global_ratings[loser] = global_ratings[loser] + k_factor * (0 - exp_l)
+        global_ratings[winner] = global_ratings.get(winner, initial_elo) + k_factor * (1 - exp_w)
+        global_ratings[loser] = global_ratings.get(loser, initial_elo) + k_factor * (0 - exp_l)
         
         # Track form (recent matches)
         winner_result = {
-            'date': row.get('tourney_date', 0),
+            'date': row.get('Date', 0),
             'opponent': loser,
             'surface': surface,
             'won': True,
-            'score': row.get('score', ''),
+            'score': row.get('Score', ''),
             'winner_elo_before': rating_w,
             'loser_elo_before': rating_l,
             'elo_change': k_factor * (1 - exp_w)
         }
         
         loser_result = {
-            'date': row.get('tourney_date', 0),
+            'date': row.get('Date', 0),
             'opponent': winner,
             'surface': surface,
             'won': False,
-            'score': row.get('score', ''),
+            'score': row.get('Score', ''),
             'winner_elo_before': rating_w,
             'loser_elo_before': rating_l,
             'elo_change': k_factor * (0 - exp_l)
         }
         
         # Add to form history (keep last 5 matches per surface)
+        if winner not in form_history:
+            form_history[winner] = defaultdict(deque)
+        if loser not in form_history:
+            form_history[loser] = defaultdict(deque)
+        
         form_history[winner][surface].append(winner_result)
         if len(form_history[winner][surface]) > 5:
             form_history[winner][surface].popleft()
@@ -191,10 +232,22 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
             # Simple check for straight set win (no sets lost by winner)
             if isinstance(score, str) and '-' in score:
                 sets = score.split()
-                if len(sets) == 2:  # Best of 3, won in straight sets
-                    straight_set_wins += 1
-                elif len(sets) == 3:  # Best of 3, went to 3 sets
-                    lost_sets += 1
+                # Check if it's a best of 3 match
+                if 'Best of' in str(match) or len(sets) <= 3:  # Assuming best of 3
+                    if len(sets) == 2:  # Won in straight sets
+                        straight_set_wins += 1
+                    elif len(sets) == 3:  # Went to 3 sets
+                        # Check if winner lost any sets
+                        winner_sets = 0
+                        for set_score in sets:
+                            try:
+                                w, l = map(int, set_score.split('-'))
+                                if w > l:
+                                    winner_sets += 1
+                            except:
+                                pass
+                        if winner_sets == 2:  # Won 2-1
+                            lost_sets += 1
     
     return {
         'recent_wins': wins,
@@ -208,21 +261,31 @@ def calculate_form_features(player_id, surface, form_history, current_elo):
         'recent_opponent_rank_avg': avg_opponent_elo  # Using ELO as proxy for rank
     }
 
-# Enhanced feature preparation with form data
+# Enhanced feature preparation with form data for new CSV format
 def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
     """Prepare match data with ELO and form features"""
     features_list = []
     labels = []
     
     # Sort by date to ensure chronological order
-    if 'tourney_date' in df.columns:
-        df = df.sort_values('tourney_date').reset_index(drop=True)
+    if 'Date' in df.columns:
+        df = df.sort_values('Date').reset_index(drop=True)
+    
+    # Map player names to IDs
+    df['winner_id'] = df['Winner'].map(st.session_state.player_ids)
+    df['loser_id'] = df.apply(lambda row: st.session_state.player_ids.get(
+        row['Player_1'] if row['Player_1'] != row['Winner'] else row['Player_2']
+    ), axis=1)
     
     for idx, row in df.iterrows():
         try:
             winner_id = str(row['winner_id'])
             loser_id = str(row['loser_id'])
-            surface = str(row.get('surface', 'Hard'))
+            
+            if pd.isna(winner_id) or pd.isna(loser_id):
+                continue
+                
+            surface = str(row.get('Surface', 'Hard'))
             
             # Get current ELO ratings
             winner_elo = elo_ratings.get(winner_id, {}).get(surface, global_ratings.get(winner_id, 1500))
@@ -235,6 +298,14 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
             # Calculate ELO difference and probability
             elo_diff = winner_elo - loser_elo
             elo_expected = 1 / (1 + math.pow(10, (-elo_diff) / 400))
+            
+            # Get rankings (handle missing values)
+            try:
+                winner_rank = float(row.get('Rank_1', 100)) if row['Player_1'] == row['Winner'] else float(row.get('Rank_2', 100))
+                loser_rank = float(row.get('Rank_2', 100)) if row['Player_2'] != row['Winner'] else float(row.get('Rank_1', 100))
+            except:
+                winner_rank = 100.0
+                loser_rank = 100.0
             
             # Create feature vector with form data
             features = {
@@ -250,8 +321,8 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'is_grass': 1 if surface == 'Grass' else 0,
                 
                 # Player rankings
-                'winner_rank': float(row.get('winner_rank', 100)),
-                'loser_rank': float(row.get('loser_rank', 100)),
+                'winner_rank': winner_rank,
+                'loser_rank': loser_rank,
                 
                 # Winner form features
                 'winner_recent_wins': float(winner_form['recent_wins']),
@@ -275,15 +346,26 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
                 'form_diff': float(winner_form['win_percentage'] - loser_form['win_percentage']),
                 'momentum_diff': float(winner_form['form_momentum'] - loser_form['form_momentum']),
                 'opp_strength_diff': float(winner_form['avg_opponent_elo'] - loser_form['avg_opponent_elo']),
+                
+                # Tournament series (encoded)
+                'is_grand_slam': 1 if row.get('Series', '') == 'Grand Slam' else 0,
+                'is_masters': 1 if 'Masters' in str(row.get('Series', '')) else 0,
+                'is_international': 1 if row.get('Series', '') == 'International' else 0,
             }
             
-            # Add match statistics if available
-            stat_features = ['w_ace', 'w_df', 'l_ace', 'l_df']
-            for feat in stat_features:
-                if feat in row and pd.notna(row[feat]):
-                    features[feat] = float(row[feat])
-                else:
-                    features[feat] = 0.0
+            # Add Best of feature
+            try:
+                features['best_of'] = float(row.get('Best of', 3))
+            except:
+                features['best_of'] = 3.0
+            
+            # Add match statistics if available (from odds or points)
+            if 'Odd_1' in row and pd.notna(row['Odd_1']) and row['Odd_1'] != -1:
+                features['winner_odds'] = float(row['Odd_1']) if row['Player_1'] == row['Winner'] else float(row.get('Odd_2', 2.0))
+                features['loser_odds'] = float(row['Odd_2']) if row['Player_2'] != row['Winner'] else float(row.get('Odd_1', 2.0))
+            else:
+                features['winner_odds'] = 2.0
+                features['loser_odds'] = 2.0
             
             features_list.append(features)
             labels.append(1)  # Winner perspective
@@ -318,9 +400,8 @@ def prepare_features_with_form(df, elo_ratings, global_ratings, form_history):
             features_reverse['momentum_diff'] = -features['momentum_diff']
             features_reverse['opp_strength_diff'] = -features['opp_strength_diff']
             
-            # Swap match statistics
-            features_reverse['w_ace'], features_reverse['l_ace'] = features['l_ace'], features['w_ace']
-            features_reverse['w_df'], features_reverse['l_df'] = features['l_df'], features['w_df']
+            # Swap odds
+            features_reverse['winner_odds'], features_reverse['loser_odds'] = features['loser_odds'], features['winner_odds']
             
             features_list.append(features_reverse)
             labels.append(0)  # Loser perspective
@@ -421,29 +502,41 @@ def hybrid_prediction_with_form(player_a_id, player_b_id, surface, elo_ratings, 
         'momentum_diff': float(player_a_form['form_momentum'] - player_b_form['form_momentum']),
         'opp_strength_diff': float(player_a_form['avg_opponent_elo'] - player_b_form['avg_opponent_elo']),
         
-        # Match statistics (using averages)
-        'w_ace': 5.0, 'w_df': 2.0, 'l_ace': 5.0, 'l_df': 2.0
+        # Tournament features (using defaults)
+        'is_grand_slam': 0,
+        'is_masters': 0,
+        'is_international': 1,
+        'best_of': 3.0,
+        
+        # Odds (using defaults)
+        'winner_odds': 2.0,
+        'loser_odds': 2.0
     }
     
     # Create feature DataFrame
     features_df = pd.DataFrame([features])
     
     # Ensure all training columns are present
-    for col in feature_columns:
-        if col not in features_df.columns:
-            features_df[col] = 0.0
-    
-    features_df = features_df[feature_columns]
+    if feature_columns:
+        for col in feature_columns:
+            if col not in features_df.columns:
+                features_df[col] = 0.0
+        
+        features_df = features_df[feature_columns]
     
     # Get XGBoost prediction
-    if xgb_model is not None:
-        xgb_prob = float(xgb_model.predict_proba(features_df)[0, 1])
-        
-        # Weighted combination with emphasis on form
-        elo_weight = 0.25
-        xgb_weight = 0.75  # Higher weight for model with form features
-        
-        final_prob = float(elo_weight * elo_prob + xgb_weight * xgb_prob)
+    if xgb_model is not None and not features_df.empty:
+        try:
+            xgb_prob = float(xgb_model.predict_proba(features_df)[0, 1])
+            
+            # Weighted combination with emphasis on form
+            elo_weight = 0.25
+            xgb_weight = 0.75  # Higher weight for model with form features
+            
+            final_prob = float(elo_weight * elo_prob + xgb_weight * xgb_prob)
+        except:
+            xgb_prob = None
+            final_prob = elo_prob
     else:
         xgb_prob = None
         final_prob = elo_prob
@@ -491,7 +584,7 @@ if app_mode == "📊 Data & Model Training":
         uploaded_file = st.file_uploader(
             "Upload ATP Match Data CSV",
             type=['csv'],
-            help="Upload match data with player IDs, surface, and match statistics"
+            help="Upload match data with Tournament, Date, Player_1, Player_2, Winner, Surface, etc."
         )
     
     with col2:
@@ -510,14 +603,36 @@ if app_mode == "📊 Data & Model Training":
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
+            
+            # Clean and prepare data
             st.session_state.match_data = df
             
+            # Show data info
             st.subheader("Data Preview")
             st.dataframe(df.head(), use_container_width=True)
             
-            required_cols = ['winner_id', 'loser_id']
-            if all(col in df.columns for col in required_cols):
-                st.success(f"✅ Data loaded: {len(df)} matches")
+            # Show column information
+            st.subheader("Data Information")
+            col_info1, col_info2 = st.columns(2)
+            
+            with col_info1:
+                st.write(f"**Total Matches:** {len(df)}")
+                st.write(f"**Total Tournaments:** {df['Tournament'].nunique()}")
+                st.write(f"**Date Range:** {df['Date'].min()} to {df['Date'].max()}")
+            
+            with col_info2:
+                st.write(f"**Unique Players:** {len(set(df['Player_1'].unique()) | set(df['Player_2'].unique()))}")
+                st.write(f"**Surfaces:** {', '.join(df['Surface'].unique())}")
+                st.write(f"**Series Types:** {', '.join(df['Series'].unique())}")
+            
+            # Check required columns
+            required_cols = ['Tournament', 'Date', 'Player_1', 'Player_2', 'Winner', 'Surface']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                st.error(f"Missing required columns: {missing_cols}")
+            else:
+                st.success(f"✅ Data loaded successfully: {len(df)} matches")
                 
                 # Calculate ELO ratings and track form
                 if st.button("Calculate ELO Ratings & Train Models", type="primary"):
@@ -534,60 +649,63 @@ if app_mode == "📊 Data & Model Training":
                     # Show top players
                     top_players = sorted(
                         [(pid, st.session_state.global_elo.get(pid, 1500)) 
-                         for pid in elo_ratings.keys()],
+                         for pid in elo_ratings.keys() if pid],
                         key=lambda x: x[1], reverse=True
                     )[:10]
                     
                     st.subheader("Top 10 Players (Global ELO)")
                     top_df = pd.DataFrame(top_players, columns=['Player ID', 'ELO Rating'])
                     top_df['Player Name'] = top_df['Player ID'].map(st.session_state.player_names)
-                    st.dataframe(top_df)
+                    top_df = top_df[['Player Name', 'ELO Rating', 'Player ID']]
+                    st.dataframe(top_df, use_container_width=True)
                     
                     # Train XGBoost model with form features
-                    if XGB_AVAILABLE and use_xgb:
+                    if XGB_AVAILABLE and use_xgb and st.session_state.elo_ratings:
                         with st.spinner("Training XGBoost model with form features..."):
                             # Prepare features with form data
                             features_df, labels = prepare_features_with_form(
                                 df, elo_ratings, global_ratings, st.session_state.player_form_history
                             )
                             
-                            # Train model
-                            xgb_params = {
-                                'max_depth': xgb_depth,
-                                'n_estimators': xgb_estimators,
-                                'learning_rate': 0.1,
-                                'objective': 'binary:logistic',
-                                'random_state': 42
-                            }
-                            
-                            model, accuracy, feature_cols = train_xgboost_model_with_form(
-                                features_df, labels, xgb_params
-                            )
-                            
-                            st.session_state.xgb_model = model
-                            st.session_state.feature_columns = feature_cols
-                            
-                            st.success(f"✅ XGBoost trained with form features! Accuracy: {accuracy:.2%}")
-                            
-                            # Show feature importance
-                            st.subheader("Top Feature Importances")
-                            importance_df = pd.DataFrame({
-                                'feature': feature_cols,
-                                'importance': model.feature_importances_
-                            }).sort_values('importance', ascending=False).head(15)
-                            
-                            st.bar_chart(importance_df.set_index('feature')['importance'])
-                            
-                            # Show which form features are most important
-                            form_features = [f for f in importance_df['feature'] if 'recent' in f or 'form' in f or 'win_pct' in f]
-                            if form_features:
-                                st.info(f"**Key form features in model:** {', '.join(form_features[:5])}")
-                            
-            else:
-                st.error(f"Missing required columns: {required_cols}")
+                            if len(features_df) > 0:
+                                # Train model
+                                xgb_params = {
+                                    'max_depth': xgb_depth,
+                                    'n_estimators': xgb_estimators,
+                                    'learning_rate': 0.1,
+                                    'objective': 'binary:logistic',
+                                    'random_state': 42
+                                }
+                                
+                                model, accuracy, feature_cols = train_xgboost_model_with_form(
+                                    features_df, labels, xgb_params
+                                )
+                                
+                                st.session_state.xgb_model = model
+                                st.session_state.feature_columns = feature_cols
+                                
+                                st.success(f"✅ XGBoost trained with form features! Accuracy: {accuracy:.2%}")
+                                
+                                # Show feature importance
+                                st.subheader("Top Feature Importances")
+                                importance_df = pd.DataFrame({
+                                    'feature': feature_cols,
+                                    'importance': model.feature_importances_
+                                }).sort_values('importance', ascending=False).head(15)
+                                
+                                st.bar_chart(importance_df.set_index('feature')['importance'])
+                                
+                                # Show which form features are most important
+                                form_features = [f for f in importance_df['feature'] if 'recent' in f or 'form' in f or 'win_pct' in f or 'momentum' in f]
+                                if form_features:
+                                    st.info(f"**Key form features in model:** {', '.join(form_features[:5])}")
+                            else:
+                                st.warning("Could not prepare features for training. Check data quality.")
                 
         except Exception as e:
             st.error(f"Error: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
 
 elif app_mode == "🎯 Match Prediction":
     st.header("Match Prediction with Form Analysis")
@@ -602,21 +720,30 @@ elif app_mode == "🎯 Match Prediction":
             surface = st.selectbox("Court Surface", ['Hard', 'Clay', 'Grass', 'Carpet'])
             
             # Player A selection
-            player_options = list(st.session_state.elo_ratings.keys())
-            player_a = st.selectbox(
+            player_options = [(pid, name) for pid, name in st.session_state.player_names.items() 
+                            if pid in st.session_state.elo_ratings]
+            
+            player_a_tuple = st.selectbox(
                 "Player A",
                 options=player_options,
-                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
+                format_func=lambda x: x[1],
+                key="player_a_select"
             )
+            if player_a_tuple:
+                player_a = player_a_tuple[0]
         
         with col2:
             # Player B selection
-            player_b_options = [p for p in player_options if p != player_a]
-            player_b = st.selectbox(
+            player_b_options = [(pid, name) for pid, name in player_options if pid != player_a]
+            
+            player_b_tuple = st.selectbox(
                 "Player B",
                 options=player_b_options,
-                format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
+                format_func=lambda x: x[1],
+                key="player_b_select"
             )
+            if player_b_tuple:
+                player_b = player_b_tuple[0]
             
             # Prediction options
             st.subheader("Prediction Options")
@@ -768,21 +895,24 @@ elif app_mode == "📈 Player Analysis":
         st.warning("Please upload data first in the 'Data & Model Training' section.")
     else:
         # Player selection
-        player_options = list(st.session_state.elo_ratings.keys())
-        selected_player = st.selectbox(
+        player_options = [(pid, name) for pid, name in st.session_state.player_names.items() 
+                         if pid in st.session_state.elo_ratings]
+        
+        selected_tuple = st.selectbox(
             "Select Player",
             options=player_options,
-            format_func=lambda x: f"{st.session_state.player_names.get(x, x)} ({x})"
+            format_func=lambda x: x[1]
         )
         
-        # Surface selection
-        selected_surface = st.selectbox(
-            "Select Surface",
-            ['All', 'Hard', 'Clay', 'Grass', 'Carpet']
-        )
-        
-        if selected_player:
-            player_name = st.session_state.player_names.get(selected_player, selected_player)
+        if selected_tuple:
+            selected_player = selected_tuple[0]
+            player_name = selected_tuple[1]
+            
+            # Surface selection
+            selected_surface = st.selectbox(
+                "Select Surface",
+                ['All', 'Hard', 'Clay', 'Grass', 'Carpet']
+            )
             
             # Get player's form history
             if selected_player in st.session_state.player_form_history:
@@ -977,5 +1107,12 @@ st.markdown(
     2. Surface-specific form tracking
     3. Identifies players in good/bad form
     4. More accurate predictions for current matchups
+    
+    **Dataset Features Used:**
+    - Tournament, Date, Series
+    - Player names and rankings
+    - Surface type (Hard, Clay, Grass, Carpet)
+    - Match scores and results
+    - Round information
     """
 )
