@@ -47,6 +47,8 @@ if 'feature_importance' not in st.session_state:
     st.session_state.feature_importance = None
 if 'all_feature_columns' not in st.session_state:
     st.session_state.all_feature_columns = []
+if 'surface_performance' not in st.session_state:
+    st.session_state.surface_performance = {}
 
 RECENT_MATCHES_COUNT = 30
 SURFACE_TYPES = ['Hard', 'Clay', 'Grass', 'Carpet']
@@ -126,7 +128,6 @@ def compute_elo(df, k_factor=32, initial_elo=1500):
         rating_w = elo_ratings.get(winner, {}).get(surface, initial_elo)
         rating_l = elo_ratings.get(loser, {}).get(surface, initial_elo)
         
-        # Match importance
         try:
             round_info = str(row.get('Round', '')).lower()
             if 'final' in round_info:
@@ -199,21 +200,18 @@ def calc_form(player_id, surface, form_history, match_history):
     if not recent:
         return get_default_form()
     
-    # Recency weights
     weights = np.array([math.exp(-i / 10) for i in range(len(recent) - 1, -1, -1)])
     weights = weights / weights.sum()
     
     wins = sum(1 for m in recent if m['won'])
     total = len(recent)
     
-    # Momentum
     if total >= 5:
         recent5_wins = sum(1 for m in recent[-5:] if m['won'])
         momentum = recent5_wins / 5
     else:
         momentum = wins / total if total > 0 else 0.5
     
-    # Streak
     streak = 0
     for m in reversed(recent):
         if m['won']:
@@ -227,16 +225,13 @@ def calc_form(player_id, surface, form_history, match_history):
             else:
                 break
     
-    # Opponent strength
     opp_elos = [m['l_elo'] if m['won'] else m['w_elo'] for m in recent]
     opp_elo = np.average(opp_elos, weights=weights) if opp_elos else 1500
     
-    # Top 10 win %
     top10_wins = sum(1 for m in recent if m['won'] and (m['l_elo'] > 1750 if m['won'] else m['w_elo'] > 1750))
     top10_total = sum(1 for m in recent if (m['l_elo'] > 1750 if m['won'] else m['w_elo'] > 1750))
     top10_pct = top10_wins / top10_total if top10_total > 0 else 0.5
     
-    # Consistency
     perf_scores = []
     for m in recent:
         opp = m['l_elo'] if m['won'] else m['w_elo']
@@ -244,7 +239,6 @@ def calc_form(player_id, surface, form_history, match_history):
         perf_scores.append((1 - expected) if m['won'] else (0 - expected))
     consistency = 1 - min(np.std(perf_scores), 1.0) if perf_scores else 0.5
     
-    # Fatigue
     recent_30 = sum(1 for m in match_history.get(player_id, [])
                    if isinstance(m.get('date'), datetime) and
                    (datetime.now() - m['date']).days <= 30)
@@ -326,7 +320,6 @@ def create_features(df, elo_ratings, global_ratings, form_history, match_history
             features_list.append(features)
             labels.append(1)
             
-            # Loser perspective
             l_features = features.copy()
             l_features['elo_diff'] = -features['elo_diff']
             l_features['elo_ratio'] = 1 / features['elo_ratio'] if features['elo_ratio'] > 0 else 1.0
@@ -354,7 +347,7 @@ def create_features(df, elo_ratings, global_ratings, form_history, match_history
 # ===========================
 
 def train_model(features_df, labels):
-    """Train model without XGBoost"""
+    """Train model"""
     
     if len(np.unique(labels)) < 2:
         raise ValueError("Need both classes")
@@ -409,22 +402,25 @@ def train_model(features_df, labels):
     return calibrated, metrics
 
 # ===========================
-# PREDICTION
+# PREDICTION WITH DETAILS
 # ===========================
 
-def predict_match(p1_id, p2_id, surface, elo_ratings, global_ratings, form_history, match_history):
-    """Predict match"""
+def predict_match_with_details(p1_id, p2_id, surface, elo_ratings, global_ratings, form_history, match_history):
+    """Predict match and return detailed breakdown"""
     
     if not st.session_state.ensemble_model:
-        return None
+        return None, None
     
+    # Get ELO ratings
     p1_elo = elo_ratings.get(p1_id, {}).get(surface, global_ratings.get(p1_id, 1500))
     p2_elo = elo_ratings.get(p2_id, {}).get(surface, global_ratings.get(p2_id, 1500))
     
+    # Get form
     p1_form = calc_form(p1_id, surface, form_history, match_history)
     p2_form = calc_form(p2_id, surface, form_history, match_history)
     
     elo_diff = p1_elo - p2_elo
+    elo_expected = 1 / (1 + math.pow(10, (-elo_diff) / 400))
     
     features_dict = {
         'elo_diff': float(elo_diff),
@@ -455,7 +451,17 @@ def predict_match(p1_id, p2_id, surface, elo_ratings, global_ratings, form_histo
     
     prediction = st.session_state.ensemble_model.predict_proba(features_scaled)[0][1]
     
-    return prediction
+    # Prepare detailed info
+    details = {
+        'p1_elo': p1_elo,
+        'p2_elo': p2_elo,
+        'elo_diff': elo_diff,
+        'elo_expected': elo_expected,
+        'p1_form': p1_form,
+        'p2_form': p2_form,
+    }
+    
+    return prediction, details
 
 # ===========================
 # UI
@@ -463,7 +469,7 @@ def predict_match(p1_id, p2_id, surface, elo_ratings, global_ratings, form_histo
 
 def main():
     st.title("🎾 Tennis Prediction System")
-    st.markdown("**Advanced ELO + Ensemble ML**")
+    st.markdown("**Advanced ELO + Ensemble ML + Detailed Analytics**")
     
     tabs = st.tabs(["📊 Train", "🎯 Predict", "📈 Analytics", "🤖 Info"])
     
@@ -474,6 +480,7 @@ def main():
         with col1:
             file = st.file_uploader("Upload CSV", type=['csv'])
         with col2:
+            st.subheader("Settings")
             k = st.slider("K-factor", 20, 50, 32)
             init_elo = st.slider("Init ELO", 1400, 1600, 1500)
         
@@ -482,13 +489,13 @@ def main():
             st.session_state.match_data = df
             
             st.dataframe(df.head(), width='stretch')
-            st.write(f"Matches: {len(df)}")
+            st.write(f"Total Matches: {len(df)}")
             
             if all(col in df.columns for col in ['Player_1', 'Player_2', 'Winner', 'Surface']):
-                st.success("✅ Valid")
+                st.success("✅ Valid data format")
                 
-                if st.button("🚀 Train", type="primary"):
-                    with st.spinner("Training..."):
+                if st.button("🚀 Train Model", type="primary"):
+                    with st.spinner("Computing ELO and training..."):
                         elos, g_elos = compute_elo(df, k_factor=k, initial_elo=init_elo)
                         st.session_state.elo_ratings = elos
                         st.session_state.global_elo = g_elos
@@ -499,70 +506,264 @@ def main():
                             st.session_state.match_history
                         )
                         
-                        st.info(f"Samples: {len(features_df)} | Wins: {sum(labels)}")
+                        st.info(f"📊 Created {len(features_df)} training samples")
+                        st.write(f"✓ Wins: {sum(labels)} | Losses: {len(labels) - sum(labels)}")
                         
                         if len(np.unique(labels)) > 1:
                             model, metrics = train_model(features_df, labels)
                             st.session_state.ensemble_model = model
                             st.session_state.model_metrics = metrics
                             
-                            st.success("✅ Done!")
+                            st.success("✅ Model trained successfully!")
+                            
                             col1, col2, col3, col4, col5 = st.columns(5)
-                            col1.metric("Acc", f"{metrics['accuracy']:.1%}")
-                            col2.metric("Prec", f"{metrics['precision']:.1%}")
-                            col3.metric("Rec", f"{metrics['recall']:.1%}")
-                            col4.metric("F1", f"{metrics['f1']:.1%}")
-                            col5.metric("AUC", f"{metrics['roc_auc']:.3f}")
+                            col1.metric("Accuracy", f"{metrics['accuracy']:.1%}")
+                            col2.metric("Precision", f"{metrics['precision']:.1%}")
+                            col3.metric("Recall", f"{metrics['recall']:.1%}")
+                            col4.metric("F1 Score", f"{metrics['f1']:.1%}")
+                            col5.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
     
     with tabs[1]:
-        st.header("Prediction")
+        st.header("🎯 Match Prediction")
         
         if not st.session_state.ensemble_model:
-            st.warning("Train first!")
+            st.warning("⚠️ Please train the model first in the 'Train' tab")
         else:
+            st.markdown("### Select Players and Surface")
             col1, col2, col3 = st.columns(3)
             players = list(st.session_state.player_names.values())
             
             with col1:
-                p1 = st.selectbox("Player 1", players)
+                p1 = st.selectbox("Player 1", players, key="p1_select")
             with col2:
-                p2 = st.selectbox("Player 2", [p for p in players if p != p1])
+                p2 = st.selectbox("Player 2", [p for p in players if p != p1], key="p2_select")
             with col3:
-                surf = st.selectbox("Surface", SURFACE_TYPES)
+                surf = st.selectbox("Court Surface", SURFACE_TYPES, key="surf_select")
             
-            if st.button("Predict", type="primary"):
+            if st.button("🔮 Calculate Prediction", type="primary", use_container_width=True):
                 p1_id = st.session_state.player_ids.get(p1)
                 p2_id = st.session_state.player_ids.get(p2)
                 
                 if p1_id and p2_id:
-                    prob = predict_match(p1_id, p2_id, surf,
-                                        st.session_state.elo_ratings,
-                                        st.session_state.global_elo,
-                                        st.session_state.player_form_history,
-                                        st.session_state.match_history)
+                    prob, details = predict_match_with_details(
+                        p1_id, p2_id, surf,
+                        st.session_state.elo_ratings,
+                        st.session_state.global_elo,
+                        st.session_state.player_form_history,
+                        st.session_state.match_history
+                    )
                     
-                    st.metric(f"{p1} Win %", f"{prob:.1%}")
-                    st.metric(f"{p2} Win %", f"{1-prob:.1%}")
-                    
-                    fig = go.Figure([go.Bar(x=[p1, p2], y=[prob, 1-prob])])
-                    st.plotly_chart(fig, use_container_width=True)
+                    if prob is not None:
+                        st.markdown("---")
+                        st.markdown("### 📊 PREDICTION RESULTS")
+                        
+                        # Main prediction display
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric(
+                                f"🎾 {p1} Win Probability",
+                                f"{prob * 100:.1f}%",
+                                delta=f"{(prob - 0.5) * 100:.1f}% vs 50-50",
+                                delta_color="normal"
+                            )
+                        with col2:
+                            st.metric(
+                                f"🎾 {p2} Win Probability",
+                                f"{(1 - prob) * 100:.1f}%",
+                                delta=f"{((1 - prob) - 0.5) * 100:.1f}% vs 50-50",
+                                delta_color="normal"
+                            )
+                        
+                        # Visualization
+                        st.markdown("### Visual Comparison")
+                        fig = go.Figure(data=[
+                            go.Bar(
+                                x=[p1, p2],
+                                y=[prob * 100, (1 - prob) * 100],
+                                marker=dict(color=['#2E86AB', '#A23B72']),
+                                text=[f"{prob * 100:.1f}%", f"{(1 - prob) * 100:.1f}%"],
+                                textposition='outside',
+                                hovertemplate='<b>%{x}</b><br>Win Probability: %{y:.1f}%<extra></extra>'
+                            )
+                        ])
+                        fig.update_layout(
+                            title="Match Prediction Probability",
+                            yaxis_title="Win Probability (%)",
+                            xaxis_title="Player",
+                            showlegend=False,
+                            hovermode='x unified',
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.markdown("---")
+                        st.markdown("### 📈 HOW THE PREDICTION IS CALCULATED")
+                        
+                        with st.expander("📌 Click to see detailed breakdown and feature values"):
+                            st.markdown("#### **Prediction Formula**")
+                            st.write("""
+                            The prediction combines multiple factors using an **Ensemble Model** with:
+                            - **Random Forest** (200 trees)
+                            - **Gradient Boosting** (150 trees)
+                            - **Logistic Regression**
+                            
+                            Each model votes on the outcome, and the average probability is calibrated for accuracy.
+                            """)
+                            
+                            st.markdown("#### **Key Factors Contributing to This Prediction:**")
+                            
+                            # ELO Section
+                            with st.container(border=True):
+                                st.markdown("##### 🏆 ELO Rating System")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
+                                with col2:
+                                    st.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
+                                with col3:
+                                    st.metric("ELO Difference", f"{details['elo_diff']:.0f}")
+                                
+                                st.write(f"**ELO Expected Win Probability (based on ratings only):** {details['elo_expected'] * 100:.1f}%")
+                                st.write("*ELO is adjusted by surface performance and tournament importance*")
+                            
+                            # Player 1 Form
+                            st.markdown(f"#### 📊 {p1}'s Current Form (Last 30 matches on {surf})")
+                            col1, col2, col3, col4 = st.columns(4)
+                            p1_f = details['p1_form']
+                            with col1:
+                                st.metric("Win Rate", f"{p1_f['win_pct'] * 100:.1f}%")
+                            with col2:
+                                st.metric("Recent Momentum", f"{p1_f['momentum'] * 100:.1f}%")
+                            with col3:
+                                st.metric("Consistency", f"{p1_f['consistency'] * 100:.1f}%")
+                            with col4:
+                                st.metric("Current Streak", f"{int(p1_f['streak'])} matches")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("vs Top 10", f"{p1_f['top10_win_pct'] * 100:.1f}%")
+                            with col2:
+                                st.metric("On this Surface", f"{p1_f['surface_win_pct'] * 100:.1f}%")
+                            with col3:
+                                st.metric("Avg Opp ELO", f"{p1_f['opp_elo']:.0f}")
+                            with col4:
+                                st.metric("Fatigue Index", f"{int(p1_f['fatigue'])} matches/30d")
+                            
+                            # Player 2 Form
+                            st.markdown(f"#### 📊 {p2}'s Current Form (Last 30 matches on {surf})")
+                            col1, col2, col3, col4 = st.columns(4)
+                            p2_f = details['p2_form']
+                            with col1:
+                                st.metric("Win Rate", f"{p2_f['win_pct'] * 100:.1f}%")
+                            with col2:
+                                st.metric("Recent Momentum", f"{p2_f['momentum'] * 100:.1f}%")
+                            with col3:
+                                st.metric("Consistency", f"{p2_f['consistency'] * 100:.1f}%")
+                            with col4:
+                                st.metric("Current Streak", f"{int(p2_f['streak'])} matches")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("vs Top 10", f"{p2_f['top10_win_pct'] * 100:.1f}%")
+                            with col2:
+                                st.metric("On this Surface", f"{p2_f['surface_win_pct'] * 100:.1f}%")
+                            with col3:
+                                st.metric("Avg Opp ELO", f"{p2_f['opp_elo']:.0f}")
+                            with col4:
+                                st.metric("Fatigue Index", f"{int(p2_f['fatigue'])} matches/30d")
+                            
+                            # Key Differences
+                            st.markdown("#### ⚖️ Head-to-Head Comparison")
+                            comparison_data = {
+                                'Metric': ['Win Rate', 'Momentum', 'Consistency', 'vs Top 10', 'Surface Specialty'],
+                                f'{p1}': [
+                                    f"{p1_f['win_pct'] * 100:.1f}%",
+                                    f"{p1_f['momentum'] * 100:.1f}%",
+                                    f"{p1_f['consistency'] * 100:.1f}%",
+                                    f"{p1_f['top10_win_pct'] * 100:.1f}%",
+                                    f"{p1_f['surface_win_pct'] * 100:.1f}%"
+                                ],
+                                f'{p2}': [
+                                    f"{p2_f['win_pct'] * 100:.1f}%",
+                                    f"{p2_f['momentum'] * 100:.1f}%",
+                                    f"{p2_f['consistency'] * 100:.1f}%",
+                                    f"{p2_f['top10_win_pct'] * 100:.1f}%",
+                                    f"{p2_f['surface_win_pct'] * 100:.1f}%"
+                                ]
+                            }
+                            comparison_df = pd.DataFrame(comparison_data)
+                            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("---")
+                        st.markdown("### 💡 Model Confidence")
+                        confidence = max(prob, 1 - prob)
+                        st.progress(confidence, text=f"Confidence: {confidence * 100:.1f}%")
+                        
+                        if confidence > 0.65:
+                            st.success("✅ High Confidence Prediction")
+                        elif confidence > 0.55:
+                            st.info("ℹ️ Moderate Confidence - Close Match Expected")
+                        else:
+                            st.warning("⚠️ Low Confidence - Very Competitive Match")
     
     with tabs[2]:
-        st.header("Analytics")
+        st.header("📈 Player Analytics")
         if st.session_state.match_data is not None:
-            player = st.selectbox("Player", list(st.session_state.player_names.values()))
+            player = st.selectbox("Select Player", list(st.session_state.player_names.values()), key="analytics_player")
             if player:
                 pid = st.session_state.player_ids.get(player)
                 matches = st.session_state.match_history.get(pid, [])
                 wins = sum(1 for m in matches if m['won'])
-                st.metric("Matches", len(matches))
-                st.metric("Wins", wins)
-                st.metric("Win %", f"{wins/len(matches)*100:.1f}%" if matches else "N/A")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Matches", len(matches))
+                col2.metric("Wins", wins)
+                col3.metric("Losses", len(matches) - wins)
+                col4.metric("Win Rate", f"{wins/len(matches)*100:.1f}%" if matches else "N/A")
+                
+                if pid in st.session_state.elo_ratings:
+                    st.subheader("ELO Rating by Surface")
+                    elo_data = []
+                    for surface in SURFACE_TYPES:
+                        elo = st.session_state.elo_ratings.get(pid, {}).get(surface, 1500)
+                        elo_data.append({'Surface': surface, 'ELO': elo})
+                    
+                    elo_df = pd.DataFrame(elo_data)
+                    st.bar_chart(elo_df.set_index('Surface')['ELO'])
+        else:
+            st.info("Train model first to see analytics")
     
     with tabs[3]:
-        st.header("Model")
+        st.header("🤖 Model Information")
         if st.session_state.model_metrics:
-            st.json(st.session_state.model_metrics)
+            st.subheader("Model Performance Metrics")
+            metrics_col = st.columns(5)
+            m = st.session_state.model_metrics
+            metrics_col[0].metric("Accuracy", f"{m['accuracy']:.1%}")
+            metrics_col[1].metric("Precision", f"{m['precision']:.1%}")
+            metrics_col[2].metric("Recall", f"{m['recall']:.1%}")
+            metrics_col[3].metric("F1 Score", f"{m['f1']:.1%}")
+            metrics_col[4].metric("ROC-AUC", f"{m['roc_auc']:.3f}")
+            
+            st.markdown("### How the Model Works")
+            st.info("""
+            **Ensemble Approach:** The prediction combines 3 different machine learning models:
+            - **Random Forest:** Captures non-linear patterns in player performance
+            - **Gradient Boosting:** Focuses on difficult-to-predict cases
+            - **Logistic Regression:** Provides baseline probability calibration
+            
+            **Features Used (20 total):**
+            - ELO ratings (surface-specific and global)
+            - Recent form (win %, momentum, consistency)
+            - Head-to-head records
+            - Performance vs top players
+            - Surface specialization
+            - Fatigue level
+            
+            **Calibration:** Sigmoid calibration ensures probabilities are reliable for decision-making.
+            """)
+        else:
+            st.warning("Train a model to see detailed information")
 
 if __name__ == "__main__":
     main()
