@@ -126,6 +126,7 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
         surface = row['Surface'] if row['Surface'] in SURFACE_TYPES else 'Hard'
         tourney_level = row['Tournament_Level']
         
+        # Skip if winner is not one of the players
         if winner not in [p1, p2]:
             continue
         
@@ -814,95 +815,139 @@ def main():
             top_k = st.slider("Top Player K-factor", 10, 30, 20, help="Lower = more stable for top players")
         
         if file:
-            df = pd.read_csv(file)
-            st.session_state.match_data = df
-            
-            with st.expander("📋 Data Preview"):
-                st.dataframe(df.head(10), width='stretch')
-                st.write(f"**Total matches:** {len(df)}")
-                st.write(f"**Valid matches (with clear winner):** {len(df[df['Winner'].isin([df['Player_1'], df['Player_2']])])}")
-            
-            required = ['Player_1', 'Player_2', 'Winner', 'Surface']
-            if all(col in df.columns for col in required):
-                st.success("✅ Valid CSV format detected")
+            try:
+                df = pd.read_csv(file)
+                st.session_state.match_data = df
                 
-                # Check for valid winners
-                valid_matches = df[df['Winner'].isin([df['Player_1'], df['Player_2']])]
-                if len(valid_matches) < 100:
-                    st.warning(f"⚠️ Only {len(valid_matches)} valid matches found. Need at least 100 for good training.")
+                with st.expander("📋 Data Preview"):
+                    st.dataframe(df.head(10), width='stretch')
+                    st.write(f"**Total matches:** {len(df)}")
+                    
+                    # Show column names to help debug
+                    st.write("**Columns in dataset:**")
+                    st.write(list(df.columns))
                 
-                optional_cols = ['Tournament_Level', 'Player_1_Sets', 'Player_2_Sets']
-                optional_present = [col for col in optional_cols if col in df.columns]
-                if optional_present:
-                    st.info(f"✅ Optional columns found: {', '.join(optional_present)}")
+                required = ['Player_1', 'Player_2', 'Winner', 'Surface']
+                missing_cols = [col for col in required if col not in df.columns]
                 
-                if st.button("🚀 Train Advanced Model", type="primary"):
-                    with st.spinner("🔄 Computing advanced ELO ratings..."):
-                        progress_bar = st.progress(0)
-                        
-                        try:
-                            elos, g_elos, valid = compute_elo(df, k_factor_base=k, k_factor_top=top_k)
-                            st.session_state.elo_ratings = elos
-                            st.session_state.global_elo = g_elos
+                if missing_cols:
+                    st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+                    st.info(f"Your CSV should contain columns: {', '.join(required)}")
+                else:
+                    st.success("✅ All required columns found!")
+                    
+                    # Clean the data
+                    df_clean = df.copy()
+                    df_clean['Player_1'] = df_clean['Player_1'].astype(str).str.strip()
+                    df_clean['Player_2'] = df_clean['Player_2'].astype(str).str.strip()
+                    df_clean['Winner'] = df_clean['Winner'].astype(str).str.strip()
+                    df_clean['Surface'] = df_clean['Surface'].astype(str).str.strip()
+                    
+                    # Check for valid winners - FIXED LOGIC
+                    # Create a mask that checks if Winner equals Player_1 or Player_2 for each row
+                    valid_mask = (df_clean['Winner'] == df_clean['Player_1']) | (df_clean['Winner'] == df_clean['Player_2'])
+                    valid_matches = df_clean[valid_mask]
+                    
+                    # Count invalid matches
+                    invalid_matches = df_clean[~valid_mask]
+                    
+                    st.write(f"**Valid matches (with clear winner):** {len(valid_matches)}")
+                    st.write(f"**Invalid matches (winner not one of the players):** {len(invalid_matches)}")
+                    
+                    if len(invalid_matches) > 0:
+                        with st.expander("⚠️ View invalid matches"):
+                            st.dataframe(invalid_matches.head(10), width='stretch')
+                            st.write("These rows will be skipped during training.")
+                    
+                    if len(valid_matches) < 100:
+                        st.warning(f"⚠️ Only {len(valid_matches)} valid matches found. Need at least 100 for good training.")
+                    else:
+                        st.success(f"✅ {len(valid_matches)} valid matches found - good for training!")
+                    
+                    optional_cols = ['Tournament_Level', 'Player_1_Sets', 'Player_2_Sets', 'Date']
+                    optional_present = [col for col in optional_cols if col in df.columns]
+                    if optional_present:
+                        st.info(f"✅ Optional columns found: {', '.join(optional_present)}")
+                    
+                    if st.button("🚀 Train Advanced Model", type="primary"):
+                        with st.spinner("🔄 Computing advanced ELO ratings..."):
+                            progress_bar = st.progress(0)
                             
-                            progress_bar.progress(30)
-                            st.success(f"✅ ELO computed for {len(st.session_state.player_ids)} players from {valid} matches")
-                            
-                            with st.spinner("🔄 Creating advanced features..."):
-                                features_df, labels = create_advanced_features(
-                                    df, elos, g_elos,
-                                    st.session_state.player_form_history,
-                                    st.session_state.match_history
-                                )
+                            try:
+                                # Use the cleaned dataframe
+                                elos, g_elos, valid = compute_elo(df_clean, k_factor_base=k, k_factor_top=top_k)
+                                st.session_state.elo_ratings = elos
+                                st.session_state.global_elo = g_elos
                                 
-                                progress_bar.progress(60)
-                                st.success(f"✅ Created {len(features_df)} training samples with {features_df.shape[1]} features")
-                                st.write(f"Class distribution: {np.bincount(labels)} (0: loss, 1: win)")
+                                progress_bar.progress(30)
+                                st.success(f"✅ ELO computed for {len(st.session_state.player_ids)} players from {valid} valid matches")
                                 
-                                if len(features_df) > 100 and len(np.unique(labels)) >= 2:
-                                    with st.spinner("🔄 Training ensemble model..."):
-                                        model, metrics = train_advanced_model(features_df, labels)
-                                        st.session_state.ensemble_model = model
-                                        st.session_state.model_metrics = metrics
-                                        
-                                        progress_bar.progress(100)
+                                with st.spinner("🔄 Creating advanced features..."):
+                                    features_df, labels = create_advanced_features(
+                                        df_clean, elos, g_elos,
+                                        st.session_state.player_form_history,
+                                        st.session_state.match_history
+                                    )
                                     
-                                    st.success("✅ Advanced model trained successfully!")
+                                    progress_bar.progress(60)
+                                    st.success(f"✅ Created {len(features_df)} training samples with {features_df.shape[1]} features")
                                     
-                                    # Display metrics
-                                    st.subheader("📊 Model Performance")
-                                    cols = st.columns(5)
-                                    cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
-                                    cols[1].metric("Precision", f"{metrics['precision']:.1%}")
-                                    cols[2].metric("Recall", f"{metrics['recall']:.1%}")
-                                    cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")
-                                    cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                                    if len(features_df) > 0:
+                                        # Show class distribution
+                                        unique_labels, counts = np.unique(labels, return_counts=True)
+                                        st.write(f"**Class distribution:**")
+                                        for label, count in zip(unique_labels, counts):
+                                            st.write(f"  Class {label} ({'Win' if label == 1 else 'Loss'}): {count} samples ({count/len(labels)*100:.1f}%)")
                                     
-                                    # Display CV scores
-                                    with st.expander("📈 Cross-Validation Scores"):
-                                        for model_name, score in metrics.get('cv_scores', {}).items():
-                                            st.write(f"{model_name.upper()}: {score:.3f}")
-                                    
-                                    # Feature importance
-                                    if st.session_state.feature_importance:
-                                        with st.expander("🔍 Top 20 Feature Importance"):
-                                            imp_df = pd.DataFrame(
-                                                list(st.session_state.feature_importance.items()),
-                                                columns=['Feature', 'Importance']
-                                            ).sort_values('Importance', ascending=False).head(20)
+                                    if len(features_df) > 100 and len(np.unique(labels)) >= 2:
+                                        with st.spinner("🔄 Training ensemble model..."):
+                                            model, metrics = train_advanced_model(features_df, labels)
+                                            st.session_state.ensemble_model = model
+                                            st.session_state.model_metrics = metrics
                                             
-                                            fig = px.bar(imp_df, x='Importance', y='Feature', 
-                                                        orientation='h', title='Feature Importance')
-                                            st.plotly_chart(fig, use_container_width=True)
-                                else:
-                                    st.error(f"❌ Not enough training data or class imbalance. Need at least 100 samples with both classes. Current: {len(features_df)} samples, classes: {np.unique(labels)}")
-                            
-                        except Exception as e:
-                            st.error(f"❌ Error during training: {str(e)}")
-                            import traceback
-                            st.text(traceback.format_exc())
-            else:
-                st.error("❌ CSV must contain columns: Player_1, Player_2, Winner, Surface")
+                                            progress_bar.progress(100)
+                                        
+                                        st.success("✅ Advanced model trained successfully!")
+                                        
+                                        # Display metrics
+                                        st.subheader("📊 Model Performance")
+                                        cols = st.columns(5)
+                                        cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
+                                        cols[1].metric("Precision", f"{metrics['precision']:.1%}")
+                                        cols[2].metric("Recall", f"{metrics['recall']:.1%}")
+                                        cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")
+                                        cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                                        
+                                        # Display CV scores
+                                        with st.expander("📈 Cross-Validation Scores"):
+                                            for model_name, score in metrics.get('cv_scores', {}).items():
+                                                st.write(f"{model_name.upper()}: {score:.3f}")
+                                        
+                                        # Feature importance
+                                        if st.session_state.feature_importance:
+                                            with st.expander("🔍 Top 20 Feature Importance"):
+                                                imp_df = pd.DataFrame(
+                                                    list(st.session_state.feature_importance.items()),
+                                                    columns=['Feature', 'Importance']
+                                                ).sort_values('Importance', ascending=False).head(20)
+                                                
+                                                fig = px.bar(imp_df, x='Importance', y='Feature', 
+                                                            orientation='h', title='Feature Importance')
+                                                st.plotly_chart(fig, use_container_width=True)
+                                    else:
+                                        if len(features_df) <= 100:
+                                            st.error(f"❌ Not enough training samples. Need at least 100, but only got {len(features_df)}.")
+                                        if len(np.unique(labels)) < 2:
+                                            st.error(f"❌ Class imbalance: Only found {len(np.unique(labels))} class(es). Need both win and loss examples.")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Error during training: {str(e)}")
+                                import traceback
+                                st.text(traceback.format_exc())
+                                
+            except Exception as e:
+                st.error(f"❌ Error reading CSV file: {str(e)}")
+                st.info("Please make sure you're uploading a valid CSV file with the correct format.")
     
     with tabs[1]:
         st.header("🎯 Match Prediction")
