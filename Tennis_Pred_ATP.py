@@ -818,7 +818,7 @@ def main():
             st.session_state.match_data = df
             
             with st.expander("📋 Data Preview"):
-                st.dataframe(df.head(10), use_container_width=True)
+                st.dataframe(df.head(10), width='stretch')
                 st.write(f"**Total matches:** {len(df)}")
                 st.write(f"**Valid matches (with clear winner):** {len(df[df['Winner'].isin([df['Player_1'], df['Player_2']])])}")
             
@@ -836,7 +836,7 @@ def main():
                 if optional_present:
                     st.info(f"✅ Optional columns found: {', '.join(optional_present)}")
                 
-                if st.button("🚀 Train Advanced Model", type="primary", use_container_width=True):
+                if st.button("🚀 Train Advanced Model", type="primary"):
                     with st.spinner("🔄 Computing advanced ELO ratings..."):
                         progress_bar = st.progress(0)
                         
@@ -925,7 +925,7 @@ def main():
                 with col4:
                     tourney_level = st.selectbox("Tournament", TOURNEY_LEVELS, key='tourney_select')
                 
-                if st.button("🔮 Predict Match Outcome", type="primary", use_container_width=True):
+                if st.button("🔮 Predict Match Outcome", type="primary"):
                     p1_id = st.session_state.player_ids.get(p1)
                     p2_id = st.session_state.player_ids.get(p2)
                     
@@ -1107,7 +1107,7 @@ def main():
                                             color='Win %', color_continuous_scale='RdYlGn')
                                 st.plotly_chart(fig, use_container_width=True)
                             with col2:
-                                st.dataframe(surf_df, use_container_width=True)
+                                st.dataframe(surf_df, width='stretch')
                         
                         # ELO progression
                         st.subheader("ELO Rating Progression")
