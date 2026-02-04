@@ -93,14 +93,16 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
     st.session_state.player_ids = player_ids
     st.session_state.player_names = {v: k for k, v in player_ids.items()}
     
-    # Initialize structures
+    # Initialize structures with correct defaultdict usage
     elo_ratings = {pid: {s: initial_elo for s in SURFACE_TYPES} for pid in player_ids.values()}
     global_ratings = {pid: initial_elo for pid in player_ids.values()}
     form_history = defaultdict(lambda: defaultdict(deque))
     match_history = defaultdict(list)
     surface_perf = defaultdict(lambda: defaultdict(list))
-    h2h_stats = defaultdict(lambda: defaultdict({'wins': 0, 'matches': 0, 'sets_won': 0, 'sets_lost': 0}))
-    tourney_performance = defaultdict(lambda: defaultdict({'wins': 0, 'matches': 0}))
+    
+    # Fix: Properly initialize h2h_stats with nested defaultdict
+    h2h_stats = {}
+    tourney_performance = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'matches': 0}))
     
     # Set bonus for tournament level
     tourney_bonus = {
@@ -126,40 +128,7 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
         df = df.sort_values('Date')
     
     valid_count = 0
-    # First pass: collect basic statistics
-    for idx, row in df.iterrows():
-        p1 = row['Player_1']
-        p2 = row['Player_2']
-        winner = row['Winner']
-        surface = row['Surface'] if row['Surface'] in SURFACE_TYPES else 'Hard'
-        tourney_level = row['Tournament_Level']
-        
-        if winner not in [p1, p2]:
-            continue
-            
-        w_id = player_ids[winner]
-        loser = p2 if winner == p1 else p1
-        l_id = player_ids[loser]
-        
-        # Update H2H stats
-        key = tuple(sorted([p1, p2]))
-        if winner == p1:
-            h2h_stats[key]['wins'] += 1
-            if has_set_data:
-                h2h_stats[key]['sets_won'] += row.get('Player_1_Sets', 2)
-                h2h_stats[key]['sets_lost'] += row.get('Player_2_Sets', 1)
-        else:
-            if has_set_data:
-                h2h_stats[key]['sets_won'] += row.get('Player_2_Sets', 2)
-                h2h_stats[key]['sets_lost'] += row.get('Player_1_Sets', 1)
-        h2h_stats[key]['matches'] += 1
-        
-        # Update tournament performance
-        tourney_performance[w_id][tourney_level]['wins'] += 1
-        tourney_performance[w_id][tourney_level]['matches'] += 1
-        tourney_performance[l_id][tourney_level]['matches'] += 1
     
-    # Second pass: compute ELO with H2H knowledge
     for idx, row in df.iterrows():
         p1 = row['Player_1']
         p2 = row['Player_2']
@@ -173,15 +142,16 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
         valid_count += 1
         
         winner_id = player_ids[winner]
-        loser_id = player_ids[p2 if winner == p1 else p1]
+        loser = p2 if winner == p1 else p1
+        loser_id = player_ids[loser]
         
         # Get current ratings
         rating_w = elo_ratings[winner_id][surface]
         rating_l = elo_ratings[loser_id][surface]
         
         # Dynamic K-factor based on player reliability and tournament importance
-        w_matches = len([m for m in match_history.get(winner_id, []) if m['surface'] == surface])
-        l_matches = len([m for m in match_history.get(loser_id, []) if m['surface'] == surface])
+        w_matches = len([m for m in match_history.get(winner_id, []) if m.get('surface') == surface])
+        l_matches = len([m for m in match_history.get(loser_id, []) if m.get('surface') == surface])
         
         # More stable K-factor for established players
         k_w = max(k_factor_top, k_factor_base / (1 + w_matches / 100))
@@ -190,15 +160,36 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
         # Tournament importance multiplier
         t_bonus = tourney_bonus.get(tourney_level, 1.0)
         
-        # H2H adjustment
+        # H2H adjustment - initialize if not exists
         h2h_key = tuple(sorted([p1, p2]))
+        if h2h_key not in h2h_stats:
+            h2h_stats[h2h_key] = {'wins': 0, 'matches': 0, 'sets_won': 0, 'sets_lost': 0}
+        
+        # Update H2H stats
         h2h_info = h2h_stats[h2h_key]
+        if winner == p1:
+            h2h_info['wins'] += 1
+            if has_set_data:
+                h2h_info['sets_won'] += row.get('Player_1_Sets', 2)
+                h2h_info['sets_lost'] += row.get('Player_2_Sets', 1)
+        else:
+            # When p2 wins, we need to track who won the H2H
+            # For simplicity, we'll just count matches
+            if has_set_data:
+                h2h_info['sets_won'] += row.get('Player_2_Sets', 2)
+                h2h_info['sets_lost'] += row.get('Player_1_Sets', 1)
+        h2h_info['matches'] += 1
+        
+        # H2H factor calculation
         if h2h_info['matches'] > 0:
+            # Determine which player has the advantage
             if winner == p1:
                 h2h_advantage = (h2h_info['wins'] / h2h_info['matches']) - 0.5
             else:
-                h2h_advantage = (1 - (h2h_info['wins'] / h2h_info['matches'])) - 0.5
-            h2h_factor = 1 + (h2h_advantage * 0.2)  # 10% adjustment max
+                # If p2 won, p1's H2H win rate is (matches - wins)/matches
+                p1_wins = h2h_info['matches'] - h2h_info['wins']
+                h2h_advantage = (p1_wins / h2h_info['matches']) - 0.5
+            h2h_factor = 1 + (h2h_advantage * 0.2)  # 20% adjustment max
         else:
             h2h_factor = 1.0
         
@@ -230,13 +221,18 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
         # Global rating (weighted average of surface ratings)
         surface_weights = {'Hard': 0.35, 'Clay': 0.30, 'Grass': 0.20, 'Carpet': 0.15}
         global_ratings[winner_id] = sum(
-            elo_ratings[winner_id][s] * surface_weights.get(s, 0.1) 
+            elo_ratings[winner_id].get(s, initial_elo) * surface_weights.get(s, 0.1) 
             for s in SURFACE_TYPES
         )
         global_ratings[loser_id] = sum(
-            elo_ratings[loser_id][s] * surface_weights.get(s, 0.1) 
+            elo_ratings[loser_id].get(s, initial_elo) * surface_weights.get(s, 0.1) 
             for s in SURFACE_TYPES
         )
+        
+        # Update tournament performance
+        tourney_performance[winner_id][tourney_level]['wins'] += 1
+        tourney_performance[winner_id][tourney_level]['matches'] += 1
+        tourney_performance[loser_id][tourney_level]['matches'] += 1
         
         # Store match record with detailed info
         match_record = {
@@ -289,49 +285,49 @@ def compute_elo(df, k_factor_base=32, k_factor_top=20, initial_elo=1500):
 
 def calc_form(player_id, surface, form_history, match_history, current_elo, lookback_days=365):
     """Enhanced form calculation with multiple time windows"""
-    if player_id not in form_history or surface not in form_history[player_id]:
+    if player_id not in form_history:
         return get_default_form()
     
     now = datetime.now()
     recent_matches = [
         m for m in match_history.get(player_id, [])
-        if (now - m['date']).days <= lookback_days and m['surface'] == surface
+        if (now - m['date']).days <= lookback_days and m.get('surface') == surface
     ]
     
     if not recent_matches:
         return get_default_form()
     
     # Basic stats
-    wins = sum(1 for m in recent_matches if m['won'])
+    wins = sum(1 for m in recent_matches if m.get('won', False))
     total = len(recent_matches)
     
     # Multiple time windows
-    recent_5 = [m for m in recent_matches[-5:]]
-    recent_10 = [m for m in recent_matches[-10:]]
-    recent_20 = [m for m in recent_matches[-20:]]
+    recent_5 = recent_matches[-5:] if len(recent_matches) >= 5 else recent_matches
+    recent_10 = recent_matches[-10:] if len(recent_matches) >= 10 else recent_matches
+    recent_20 = recent_matches[-20:] if len(recent_matches) >= 20 else recent_matches
     
     # Win percentages for different windows
-    win_pct_5 = sum(1 for m in recent_5 if m['won']) / max(len(recent_5), 1)
-    win_pct_10 = sum(1 for m in recent_10 if m['won']) / max(len(recent_10), 1)
-    win_pct_20 = sum(1 for m in recent_20 if m['won']) / max(len(recent_20), 1)
+    win_pct_5 = sum(1 for m in recent_5 if m.get('won', False)) / max(len(recent_5), 1)
+    win_pct_10 = sum(1 for m in recent_10 if m.get('won', False)) / max(len(recent_10), 1)
+    win_pct_20 = sum(1 for m in recent_20 if m.get('won', False)) / max(len(recent_20), 1)
     
     # Momentum (weighted recent form)
     momentum = 0
     weights = [0.3, 0.25, 0.2, 0.15, 0.1]  # Last 5 matches weighted
     for i, m in enumerate(recent_matches[-5:]):
         if i < len(weights):
-            momentum += (1 if m['won'] else 0) * weights[i]
+            momentum += (1 if m.get('won', False) else 0) * weights[i]
     
     # Streak calculation
     streak = 0
     for m in reversed(recent_matches):
-        if m['won']:
+        if m.get('won', False):
             streak += 1
         else:
             break
     if streak == 0:
         for m in reversed(recent_matches):
-            if not m['won']:
+            if not m.get('won', False):
                 streak -= 1
             else:
                 break
@@ -339,27 +335,42 @@ def calc_form(player_id, surface, form_history, match_history, current_elo, look
     # Opponent quality
     opp_elos = []
     for m in recent_matches:
-        opp_elo = m['l_elo'] if m['won'] else m['w_elo']
+        if m.get('won', False):
+            opp_elo = m.get('l_elo', 1500)
+        else:
+            opp_elo = m.get('w_elo', 1500)
         opp_elos.append(opp_elo)
     avg_opp_elo = np.mean(opp_elos) if opp_elos else 1500
     
     # Performance against top players
-    top10_wins = sum(1 for m in recent_matches if m['won'] and (m['l_elo'] if m['won'] else m['w_elo']) > 1800)
-    top10_matches = sum(1 for m in recent_matches if (m['l_elo'] if m['won'] else m['w_elo']) > 1800)
+    top10_wins = 0
+    top10_matches = 0
+    for m in recent_matches:
+        if m.get('won', False):
+            opp_elo = m.get('l_elo', 1500)
+        else:
+            opp_elo = m.get('w_elo', 1500)
+        
+        if opp_elo > 1800:
+            top10_matches += 1
+            if m.get('won', False):
+                top10_wins += 1
+    
     top10_pct = top10_wins / max(top10_matches, 1)
     
     # Consistency (performance vs expectation)
     performances = []
     for m in recent_matches:
-        player_elo = m['w_elo'] if m['won'] else m['l_elo']
-        opp_elo = m['l_elo'] if m['won'] else m['w_elo']
+        player_elo = m.get('w_elo', 1500) if m.get('won', False) else m.get('l_elo', 1500)
+        opp_elo = m.get('l_elo', 1500) if m.get('won', False) else m.get('w_elo', 1500)
         expected = 1 / (1 + math.pow(10, (opp_elo - player_elo) / 400))
-        actual = 1 if m['won'] else 0
+        actual = 1 if m.get('won', False) else 0
         performances.append(actual - expected)
-    consistency = 1 - np.std(performances) if performances else 0.5
+    
+    consistency = 1 - np.std(performances) if performances and len(performances) > 1 else 0.5
     
     # Surface performance
-    surf_results = [m['won'] for m in recent_matches if m['surface'] == surface]
+    surf_results = [m.get('won', False) for m in recent_matches if m.get('surface') == surface]
     surface_pct = sum(surf_results) / max(len(surf_results), 1)
     
     # Fatigue (matches in last 30 days)
@@ -367,17 +378,14 @@ def calc_form(player_id, surface, form_history, match_history, current_elo, look
                  if (now - m['date']).days <= 30)
     
     # Set performance
-    sets_won = sum(m['sets_won'] for m in recent_matches)
-    sets_total = sum(m['sets_won'] + m['sets_lost'] for m in recent_matches)
+    sets_won = sum(m.get('sets_won', 0) for m in recent_matches)
+    sets_total = sum(m.get('sets_won', 0) + m.get('sets_lost', 0) for m in recent_matches)
     sets_pct = sets_won / max(sets_total, 1)
     
     # Clutch performance (close matches)
-    close_matches = [m for m in recent_matches if abs(m['sets_won'] - m['sets_lost']) <= 1]
-    clutch_wins = sum(1 for m in close_matches if m['won'])
+    close_matches = [m for m in recent_matches if abs(m.get('sets_won', 0) - m.get('sets_lost', 0)) <= 1]
+    clutch_wins = sum(1 for m in close_matches if m.get('won', False))
     clutch_pct = clutch_wins / max(len(close_matches), 1)
-    
-    # Games won percentage (if available)
-    # Note: You would need to add games data to your dataset
     
     return {
         'wins': wins,
@@ -395,7 +403,7 @@ def calc_form(player_id, surface, form_history, match_history, current_elo, look
         'recent_5': win_pct_5,
         'recent_10': win_pct_10,
         'recent_20': win_pct_20,
-        'performance_std': np.std(performances) if performances else 0
+        'performance_std': np.std(performances) if performances and len(performances) > 1 else 0
     }
 
 def create_advanced_features(df, elo_ratings, global_ratings, form_history, match_history):
@@ -519,9 +527,6 @@ def create_advanced_features(df, elo_ratings, global_ratings, form_history, matc
             }
         else:
             # Winner is Player 2, we'll create symmetric features
-            
-            # For loser perspective, we need to swap all comparisons
-            # This ensures consistent feature naming where p1 is always the reference
             features = {
                 # Basic ELO features (reversed)
                 'elo_diff': float(l_elo - w_elo),
@@ -590,9 +595,6 @@ def create_advanced_features(df, elo_ratings, global_ratings, form_history, matc
         
         features_list.append(features)
         labels.append(1)  # Winner perspective always gets label 1
-        
-        # Note: We don't create loser perspective anymore since our features are symmetric
-        # The model learns from winner-as-p1 perspective only
     
     return pd.DataFrame(features_list), np.array(labels)
 
@@ -620,39 +622,10 @@ def train_advanced_model(features_df, labels):
     X_test_scaled = scaler.transform(X_test)
     st.session_state.scaler = scaler
     
-    # Define base models with tuned hyperparameters
+    # Define base models
     models = {
-        'xgb': XGBClassifier(
-            n_estimators=300,
-            max_depth=7,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            n_jobs=-1,
-            use_label_encoder=False,
-            eval_metric='logloss'
-        ),
-        'lgbm': LGBMClassifier(
-            n_estimators=300,
-            max_depth=6,
-            learning_rate=0.05,
-            num_leaves=31,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            n_jobs=-1
-        ),
-        'catboost': CatBoostClassifier(
-            iterations=300,
-            depth=6,
-            learning_rate=0.05,
-            random_seed=42,
-            verbose=0,
-            thread_count=-1
-        ),
         'rf': RandomForestClassifier(
-            n_estimators=300,
+            n_estimators=200,
             max_depth=10,
             min_samples_split=5,
             min_samples_leaf=2,
@@ -666,8 +639,33 @@ def train_advanced_model(features_df, labels):
             learning_rate=0.05,
             subsample=0.8,
             random_state=42
+        ),
+        'ada': AdaBoostClassifier(
+            n_estimators=100,
+            random_state=42
+        ),
+        'lr': LogisticRegression(
+            C=0.5,
+            random_state=42,
+            max_iter=1000,
+            n_jobs=-1,
+            class_weight='balanced'
         )
     }
+    
+    # Try to add XGBoost if available
+    try:
+        models['xgb'] = XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.05,
+            random_state=42,
+            n_jobs=-1,
+            use_label_encoder=False,
+            eval_metric='logloss'
+        )
+    except:
+        pass
     
     # Train individual models
     trained_models = {}
@@ -692,34 +690,17 @@ def train_advanced_model(features_df, labels):
     if not trained_models:
         raise ValueError("Could not train any models")
     
-    # Create stacking ensemble
-    estimators = list(trained_models.items())
-    
-    # Meta-learner
-    meta_learner = LogisticRegression(
-        C=0.5,
-        random_state=42,
-        max_iter=1000,
-        n_jobs=-1,
-        class_weight='balanced'
-    )
-    
-    # Stacking classifier
-    stack_model = StackingClassifier(
-        estimators=estimators,
-        final_estimator=meta_learner,
-        cv=5,
-        stack_method='predict_proba',
+    # Create voting ensemble
+    ensemble = VotingClassifier(
+        estimators=list(trained_models.items()),
+        voting='soft',
         n_jobs=-1
     )
     
-    # Train stacking model
-    stack_model.fit(X_train_scaled, y_train)
-    
     # Calibrate the ensemble
     calibrated_model = CalibratedClassifierCV(
-        stack_model,
-        method='isotonic',
+        ensemble,
+        method='sigmoid',
         cv=3,
         n_jobs=-1
     )
@@ -743,8 +724,8 @@ def train_advanced_model(features_df, labels):
     }
     
     # Feature importance from best model
-    if 'xgb' in trained_models:
-        importances = trained_models['xgb'].feature_importances_
+    if 'rf' in trained_models:
+        importances = trained_models['rf'].feature_importances_
         feature_importance = dict(zip(features_df.columns, importances))
         st.session_state.feature_importance = feature_importance
     
@@ -766,103 +747,146 @@ def predict_match_advanced(p1_id, p2_id, surface, elo_ratings, global_ratings, f
     p2_form = calc_form(p2_id, surface, form_history, match_history, p2_elo)
     
     # H2H stats
-    p1_name = st.session_state.player_names[p1_id]
-    p2_name = st.session_state.player_names[p2_id]
+    p1_name = st.session_state.player_names.get(p1_id, "Player 1")
+    p2_name = st.session_state.player_names.get(p2_id, "Player 2")
     h2h_key = tuple(sorted([p1_name, p2_name]))
     h2h_info = st.session_state.h2h_stats.get(h2h_key, {'wins': 0, 'matches': 0, 'sets_won': 0, 'sets_lost': 0})
     h2h_matches = h2h_info['matches']
     
     # Determine H2H win percentage for p1
     if h2h_matches > 0:
-        # Need to check actual H2H wins for p1
-        # This is simplified - you might need to adjust based on your H2H storage
-        h2h_pct_p1 = h2h_info['wins'] / h2h_matches if p1_name == list(h2h_key)[0] else 1 - (h2h_info['wins'] / h2h_matches)
+        # Determine if p1 is the first player in the sorted tuple
+        first_player = h2h_key[0]
+        if p1_name == first_player:
+            h2h_pct_p1 = h2h_info['wins'] / h2h_matches
+        else:
+            h2h_pct_p1 = 1 - (h2h_info['wins'] / h2h_matches)
     else:
         h2h_pct_p1 = 0.5
     
-    # Create features for prediction (p1 perspective)
-    features_dict = {
-        'elo_diff': float(p1_elo - p2_elo),
-        'elo_ratio': float(p1_elo / max(p2_elo, 1)),
-        'global_elo_diff': float(p1_global - p2_global),
-        'surface_elo_diff': float(p1_elo - p2_elo),
-        'surface_elo_ratio': float(p1_elo / max(p2_elo, 1)),
+    # Get expected features from session state or use all available
+    expected_features = st.session_state.get('selected_features', [])
+    if not expected_features:
+        # Create a default feature set based on available data
+        features_dict = {
+            'elo_diff': float(p1_elo - p2_elo),
+            'elo_ratio': float(p1_elo / max(p2_elo, 1)),
+            'global_elo_diff': float(p1_global - p2_global),
+            'surface_elo_diff': float(p1_elo - p2_elo),
+            
+            'win_pct_diff': float(p1_form['win_pct'] - p2_form['win_pct']),
+            'momentum_diff': float(p1_form['momentum'] - p2_form['momentum']),
+            'streak_diff': float(p1_form['streak'] - p2_form['streak']),
+            
+            'p1_win_pct': float(p1_form['win_pct']),
+            'p1_momentum': float(p1_form['momentum']),
+            'p1_streak': float(p1_form['streak']),
+            
+            'p2_win_pct': float(p2_form['win_pct']),
+            'p2_momentum': float(p2_form['momentum']),
+            'p2_streak': float(p2_form['streak']),
+            
+            'h2h_win_pct': float(h2h_pct_p1),
+            'h2h_matches': float(h2h_matches),
+            
+            'is_hard': 1 if surface == 'Hard' else 0,
+            'is_clay': 1 if surface == 'Clay' else 0,
+            'is_grass': 1 if surface == 'Grass' else 0,
+        }
+        expected_features = list(features_dict.keys())
+    else:
+        # Create features dictionary with all expected features
+        features_dict = {}
+        # Add all possible features
+        all_possible_features = {
+            'elo_diff': float(p1_elo - p2_elo),
+            'elo_ratio': float(p1_elo / max(p2_elo, 1)),
+            'global_elo_diff': float(p1_global - p2_global),
+            'surface_elo_diff': float(p1_elo - p2_elo),
+            'surface_elo_ratio': float(p1_elo / max(p2_elo, 1)),
+            
+            'win_pct_diff': float(p1_form['win_pct'] - p2_form['win_pct']),
+            'momentum_diff': float(p1_form['momentum'] - p2_form['momentum']),
+            'streak_diff': float(p1_form['streak'] - p2_form['streak']),
+            'consistency_diff': float(p1_form['consistency'] - p2_form['consistency']),
+            'fatigue_diff': float(p1_form['fatigue'] - p2_form['fatigue']),
+            'top10_pct_diff': float(p1_form['top10_pct'] - p2_form['top10_pct']),
+            'surface_pct_diff': float(p1_form['surface_pct'] - p2_form['surface_pct']),
+            
+            'recent_5_diff': float(p1_form['recent_5'] - p2_form['recent_5']),
+            'recent_10_diff': float(p1_form['recent_10'] - p2_form['recent_10']),
+            'recent_20_diff': float(p1_form['recent_20'] - p2_form['recent_20']),
+            
+            'p1_win_pct': float(p1_form['win_pct']),
+            'p1_momentum': float(p1_form['momentum']),
+            'p1_streak': float(p1_form['streak']),
+            'p1_consistency': float(p1_form['consistency']),
+            'p1_fatigue': float(p1_form['fatigue']),
+            'p1_top10_pct': float(p1_form['top10_pct']),
+            'p1_surface_pct': float(p1_form['surface_pct']),
+            'p1_clutch': float(p1_form['clutch_performance']),
+            'p1_sets_pct': float(p1_form['sets_won_pct']),
+            
+            'p2_win_pct': float(p2_form['win_pct']),
+            'p2_momentum': float(p2_form['momentum']),
+            'p2_streak': float(p2_form['streak']),
+            'p2_consistency': float(p2_form['consistency']),
+            'p2_fatigue': float(p2_form['fatigue']),
+            'p2_top10_pct': float(p2_form['top10_pct']),
+            'p2_surface_pct': float(p2_form['surface_pct']),
+            'p2_clutch': float(p2_form['clutch_performance']),
+            'p2_sets_pct': float(p2_form['sets_won_pct']),
+            
+            'h2h_win_pct': float(h2h_pct_p1),
+            'h2h_matches': float(h2h_matches),
+            'h2h_sets_ratio': float(h2h_info['sets_won'] / max(h2h_info['sets_lost'], 1)) if p1_name == h2h_key[0] else float(h2h_info['sets_lost'] / max(h2h_info['sets_won'], 1)),
+            
+            'is_hard': 1 if surface == 'Hard' else 0,
+            'is_clay': 1 if surface == 'Clay' else 0,
+            'is_grass': 1 if surface == 'Grass' else 0,
+            
+            'elo_form_interaction': float((p1_elo - p2_elo) * (p1_form['win_pct'] - p2_form['win_pct'])),
+            'momentum_elo_interaction': float((p1_form['momentum'] - p2_form['momentum']) * (p1_elo - p2_elo)),
+            'surface_form_interaction': float(p1_form['surface_pct'] * (1 if surface == 'Hard' else 0.5)),
+            
+            'experience_diff': float(len(match_history.get(p1_id, [])) - len(match_history.get(p2_id, []))),
+            'upset_potential': float(1 if p2_elo > p1_elo else 0),
+            'form_consistency': float(min(p1_form['consistency'], p2_form['consistency'])),
+        }
         
-        'win_pct_diff': float(p1_form['win_pct'] - p2_form['win_pct']),
-        'momentum_diff': float(p1_form['momentum'] - p2_form['momentum']),
-        'streak_diff': float(p1_form['streak'] - p2_form['streak']),
-        'consistency_diff': float(p1_form['consistency'] - p2_form['consistency']),
-        'fatigue_diff': float(p1_form['fatigue'] - p2_form['fatigue']),
-        'top10_pct_diff': float(p1_form['top10_pct'] - p2_form['top10_pct']),
-        'surface_pct_diff': float(p1_form['surface_pct'] - p2_form['surface_pct']),
-        
-        'recent_5_diff': float(p1_form['recent_5'] - p2_form['recent_5']),
-        'recent_10_diff': float(p1_form['recent_10'] - p2_form['recent_10']),
-        'recent_20_diff': float(p1_form['recent_20'] - p2_form['recent_20']),
-        
-        'p1_win_pct': float(p1_form['win_pct']),
-        'p1_momentum': float(p1_form['momentum']),
-        'p1_streak': float(p1_form['streak']),
-        'p1_consistency': float(p1_form['consistency']),
-        'p1_fatigue': float(p1_form['fatigue']),
-        'p1_top10_pct': float(p1_form['top10_pct']),
-        'p1_surface_pct': float(p1_form['surface_pct']),
-        'p1_clutch': float(p1_form['clutch_performance']),
-        'p1_sets_pct': float(p1_form['sets_won_pct']),
-        
-        'p2_win_pct': float(p2_form['win_pct']),
-        'p2_momentum': float(p2_form['momentum']),
-        'p2_streak': float(p2_form['streak']),
-        'p2_consistency': float(p2_form['consistency']),
-        'p2_fatigue': float(p2_form['fatigue']),
-        'p2_top10_pct': float(p2_form['top10_pct']),
-        'p2_surface_pct': float(p2_form['surface_pct']),
-        'p2_clutch': float(p2_form['clutch_performance']),
-        'p2_sets_pct': float(p2_form['sets_won_pct']),
-        
-        'h2h_win_pct': float(h2h_pct_p1),
-        'h2h_matches': float(h2h_matches),
-        'h2h_sets_ratio': float(h2h_info['sets_won'] / max(h2h_info['sets_lost'], 1)) if p1_name == list(h2h_key)[0] else float(h2h_info['sets_lost'] / max(h2h_info['sets_won'], 1)),
-        
-        'is_hard': 1 if surface == 'Hard' else 0,
-        'is_clay': 1 if surface == 'Clay' else 0,
-        'is_grass': 1 if surface == 'Grass' else 0,
-        
-        'elo_form_interaction': float((p1_elo - p2_elo) * (p1_form['win_pct'] - p2_form['win_pct'])),
-        'momentum_elo_interaction': float((p1_form['momentum'] - p2_form['momentum']) * (p1_elo - p2_elo)),
-        'surface_form_interaction': float(p1_form['surface_pct'] * (1 if surface == 'Hard' else 0.5)),
-        
-        'experience_diff': float(len(match_history.get(p1_id, [])) - len(match_history.get(p2_id, []))),
-        'upset_potential': float(1 if p2_elo > p1_elo else 0),
-        'form_consistency': float(min(p1_form['consistency'], p2_form['consistency'])),
-    }
+        # Only include features that are in expected_features
+        features_dict = {k: v for k, v in all_possible_features.items() if k in expected_features}
     
-    # Create DataFrame with all expected columns
-    expected_features = st.session_state.get('selected_features', list(features_dict.keys()))
-    features_df = pd.DataFrame({feat: [features_dict.get(feat, 0)] for feat in expected_features})
+    # Create DataFrame
+    features_df = pd.DataFrame([features_dict])
+    
+    # Ensure all expected features are present
+    for feat in expected_features:
+        if feat not in features_df.columns:
+            features_df[feat] = 0
     
     # Scale and predict
-    features_scaled = st.session_state.scaler.transform(features_df)
-    prediction_proba = st.session_state.ensemble_model.predict_proba(features_scaled)[0][1]
-    
-    # Calculate confidence based on feature extremity
-    confidence = 1 - abs(prediction_proba - 0.5) * 2  # Higher confidence for predictions away from 0.5
-    
-    return prediction_proba, confidence, {
-        'p1_elo': p1_elo,
-        'p2_elo': p2_elo,
-        'p1_form': p1_form,
-        'p2_form': p2_form,
-        'h2h': h2h_info
-    }
-
-# ===========================
-# UI
-# ===========================
+    try:
+        features_scaled = st.session_state.scaler.transform(features_df)
+        prediction_proba = st.session_state.ensemble_model.predict_proba(features_scaled)[0][1]
+        
+        # Calculate confidence based on feature extremity
+        confidence = 1 - abs(prediction_proba - 0.5) * 2
+        
+        return prediction_proba, confidence, {
+            'p1_elo': p1_elo,
+            'p2_elo': p2_elo,
+            'p1_form': p1_form,
+            'p2_form': p2_form,
+            'h2h': h2h_info
+        }
+    except Exception as e:
+        st.error(f"Prediction error: {str(e)}")
+        return None
 
 def main():
     st.title("🎾 Advanced Tennis Prediction System")
-    st.markdown("**Enhanced ELO + 40+ Features + 5-Model Stacking Ensemble**")
+    st.markdown("**Enhanced ELO + 40+ Features + Ensemble Model**")
     
     tabs = st.tabs(["📊 Train", "🎯 Predict", "📈 Analytics", "🔍 Insights", "🤖 Info"])
     
@@ -898,60 +922,67 @@ def main():
                     with st.spinner("🔄 Computing advanced ELO ratings..."):
                         progress_bar = st.progress(0)
                         
-                        elos, g_elos, valid = compute_elo(df, k_factor_base=k, k_factor_top=top_k)
-                        st.session_state.elo_ratings = elos
-                        st.session_state.global_elo = g_elos
-                        
-                        progress_bar.progress(30)
-                        st.success(f"✅ ELO computed for {len(st.session_state.player_ids)} players from {valid} matches")
-                    
-                    with st.spinner("🔄 Creating advanced features..."):
-                        features_df, labels = create_advanced_features(
-                            df, elos, g_elos,
-                            st.session_state.player_form_history,
-                            st.session_state.match_history
-                        )
-                        
-                        progress_bar.progress(60)
-                        st.success(f"✅ Created {len(features_df)} training samples with {features_df.shape[1]} features")
-                        
-                        if len(features_df) > 100:
-                            with st.spinner("🔄 Training stacking ensemble (this may take a minute)..."):
-                                model, metrics, X_test, y_test, y_proba = train_advanced_model(features_df, labels)
-                                st.session_state.ensemble_model = model
-                                st.session_state.model_metrics = metrics
+                        try:
+                            elos, g_elos, valid = compute_elo(df, k_factor_base=k, k_factor_top=top_k)
+                            st.session_state.elo_ratings = elos
+                            st.session_state.global_elo = g_elos
+                            
+                            progress_bar.progress(30)
+                            st.success(f"✅ ELO computed for {len(st.session_state.player_ids)} players from {valid} matches")
+                            
+                            with st.spinner("🔄 Creating advanced features..."):
+                                features_df, labels = create_advanced_features(
+                                    df, elos, g_elos,
+                                    st.session_state.player_form_history,
+                                    st.session_state.match_history
+                                )
                                 
-                                progress_bar.progress(100)
-                            
-                            st.success("✅ Advanced model trained successfully!")
-                            
-                            # Display metrics
-                            st.subheader("📊 Model Performance")
-                            cols = st.columns(5)
-                            cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
-                            cols[1].metric("Precision", f"{metrics['precision']:.1%}")
-                            cols[2].metric("Recall", f"{metrics['recall']:.1%}")
-                            cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")
-                            cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
-                            
-                            # Display CV scores
-                            with st.expander("📈 Cross-Validation Scores"):
-                                for model_name, score in metrics.get('cv_scores', {}).items():
-                                    st.write(f"{model_name.upper()}: {score:.3f}")
-                            
-                            # Feature importance
-                            if st.session_state.feature_importance:
-                                with st.expander("🔍 Top 20 Feature Importance"):
-                                    imp_df = pd.DataFrame(
-                                        list(st.session_state.feature_importance.items()),
-                                        columns=['Feature', 'Importance']
-                                    ).sort_values('Importance', ascending=False).head(20)
+                                progress_bar.progress(60)
+                                st.success(f"✅ Created {len(features_df)} training samples with {features_df.shape[1]} features")
+                                
+                                if len(features_df) > 100:
+                                    with st.spinner("🔄 Training ensemble model (this may take a minute)..."):
+                                        model, metrics, X_test, y_test, y_proba = train_advanced_model(features_df, labels)
+                                        st.session_state.ensemble_model = model
+                                        st.session_state.model_metrics = metrics
+                                        
+                                        progress_bar.progress(100)
                                     
-                                    fig = px.bar(imp_df, x='Importance', y='Feature', 
-                                                orientation='h', title='Feature Importance')
-                                    st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.error("❌ Not enough training data. Need at least 100 valid matches.")
+                                    st.success("✅ Advanced model trained successfully!")
+                                    
+                                    # Display metrics
+                                    st.subheader("📊 Model Performance")
+                                    cols = st.columns(5)
+                                    cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
+                                    cols[1].metric("Precision", f"{metrics['precision']:.1%}")
+                                    cols[2].metric("Recall", f"{metrics['recall']:.1%}")
+                                    cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")
+                                    cols[4].metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                                    
+                                    # Display CV scores
+                                    with st.expander("📈 Cross-Validation Scores"):
+                                        for model_name, score in metrics.get('cv_scores', {}).items():
+                                            st.write(f"{model_name.upper()}: {score:.3f}")
+                                    
+                                    # Feature importance
+                                    if st.session_state.feature_importance:
+                                        with st.expander("🔍 Top 20 Feature Importance"):
+                                            imp_df = pd.DataFrame(
+                                                list(st.session_state.feature_importance.items()),
+                                                columns=['Feature', 'Importance']
+                                            ).sort_values('Importance', ascending=False).head(20)
+                                            
+                                            fig = px.bar(imp_df, x='Importance', y='Feature', 
+                                                        orientation='h', title='Feature Importance')
+                                            st.plotly_chart(fig, use_container_width=True)
+                                else:
+                                    st.error("❌ Not enough training data. Need at least 100 valid matches.")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error during training: {str(e)}")
+                            st.info("Please check your CSV format and ensure it has the required columns: Player_1, Player_2, Winner, Surface")
+            else:
+                st.error("❌ CSV must contain columns: Player_1, Player_2, Winner, Surface")
     
     with tabs[1]:
         st.header("🎯 Match Prediction")
@@ -962,202 +993,217 @@ def main():
             col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
             players = list(st.session_state.player_names.values())
             
-            with col1:
-                p1 = st.selectbox("Player 1", players, key='p1_select')
-            with col2:
-                p2 = st.selectbox("Player 2", [p for p in players if p != p1], key='p2_select')
-            with col3:
-                surf = st.selectbox("Surface", SURFACE_TYPES, key='surface_select')
-            with col4:
-                tourney_level = st.selectbox("Tournament", TOURNEY_LEVELS, key='tourney_select')
-            
-            if st.button("🔮 Predict Match Outcome", type="primary", use_container_width=True):
-                p1_id = st.session_state.player_ids.get(p1)
-                p2_id = st.session_state.player_ids.get(p2)
+            if players:
+                with col1:
+                    p1 = st.selectbox("Player 1", players, key='p1_select')
+                with col2:
+                    # Filter out p1 from the list
+                    other_players = [p for p in players if p != p1]
+                    p2 = st.selectbox("Player 2", other_players, key='p2_select')
+                with col3:
+                    surf = st.selectbox("Surface", SURFACE_TYPES, key='surface_select')
+                with col4:
+                    tourney_level = st.selectbox("Tournament", TOURNEY_LEVELS, key='tourney_select')
                 
-                if p1_id and p2_id:
-                    with st.spinner("Calculating prediction..."):
-                        result = predict_match_advanced(
-                            p1_id, p2_id, surf,
-                            st.session_state.elo_ratings,
-                            st.session_state.global_elo,
-                            st.session_state.player_form_history,
-                            st.session_state.match_history
-                        )
+                if st.button("🔮 Predict Match Outcome", type="primary", use_container_width=True):
+                    p1_id = st.session_state.player_ids.get(p1)
+                    p2_id = st.session_state.player_ids.get(p2)
                     
-                    if result:
-                        prob, confidence, details = result
+                    if p1_id and p2_id:
+                        with st.spinner("Calculating prediction..."):
+                            result = predict_match_advanced(
+                                p1_id, p2_id, surf,
+                                st.session_state.elo_ratings,
+                                st.session_state.global_elo,
+                                st.session_state.player_form_history,
+                                st.session_state.match_history
+                            )
                         
-                        # Display prediction
-                        col1, col2, col3 = st.columns([2, 1, 1])
-                        with col1:
-                            st.subheader("Prediction Result")
+                        if result:
+                            prob, confidence, details = result
                             
-                            # Gauge chart
-                            fig = go.Figure(go.Indicator(
-                                mode="gauge+number",
-                                value=prob * 100,
-                                title={'text': f"{p1} Win Probability"},
-                                domain={'x': [0, 1], 'y': [0, 1]},
-                                gauge={
-                                    'axis': {'range': [0, 100]},
-                                    'bar': {'color': "green" if prob > 0.5 else "red"},
-                                    'steps': [
-                                        {'range': [0, 50], 'color': "lightgray"},
-                                        {'range': [50, 100], 'color': "lightgreen"}
-                                    ],
-                                    'threshold': {
-                                        'line': {'color': "red", 'width': 4},
-                                        'thickness': 0.75,
-                                        'value': 50
+                            # Display prediction
+                            col1, col2, col3 = st.columns([2, 1, 1])
+                            with col1:
+                                st.subheader("Prediction Result")
+                                
+                                # Gauge chart
+                                fig = go.Figure(go.Indicator(
+                                    mode="gauge+number",
+                                    value=prob * 100,
+                                    title={'text': f"{p1} Win Probability"},
+                                    domain={'x': [0, 1], 'y': [0, 1]},
+                                    gauge={
+                                        'axis': {'range': [0, 100]},
+                                        'bar': {'color': "green" if prob > 0.5 else "red"},
+                                        'steps': [
+                                            {'range': [0, 50], 'color': "lightgray"},
+                                            {'range': [50, 100], 'color': "lightgreen"}
+                                        ],
+                                        'threshold': {
+                                            'line': {'color': "red", 'width': 4},
+                                            'thickness': 0.75,
+                                            'value': 50
+                                        }
                                     }
-                                }
-                            ))
-                            fig.update_layout(height=300)
-                            st.plotly_chart(fig, use_container_width=True)
-                        
-                        with col2:
-                            st.metric("Confidence", f"{confidence:.0%}")
-                            st.metric(f"{p2} Win %", f"{(1-prob)*100:.1f}%")
-                        
-                        with col3:
-                            # Recommendation
-                            if prob > 0.7:
-                                st.success("✅ Strong Favorite")
-                                st.metric("Recommendation", "Bet with Confidence")
-                            elif prob > 0.6:
-                                st.info("📈 Moderate Favorite")
-                                st.metric("Recommendation", "Cautious Bet")
-                            elif prob > 0.4:
-                                st.warning("⚖️ Close Match")
-                                st.metric("Recommendation", "Avoid Betting")
-                            else:
-                                st.error("📉 Underdog")
-                                st.metric("Recommendation", "Value Bet")
-                        
-                        # Detailed breakdown
-                        with st.expander("📊 Detailed Analysis"):
-                            st.subheader("Player Comparison")
+                                ))
+                                fig.update_layout(height=300)
+                                st.plotly_chart(fig, use_container_width=True)
                             
-                            # ELO Comparison
-                            st.write("**📈 ELO Ratings:**")
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
                             with col2:
-                                diff = details['p1_elo'] - details['p2_elo']
-                                st.metric("Difference", f"{diff:+.0f}", 
-                                         delta="Advantage" if diff > 0 else "Disadvantage")
+                                st.metric("Confidence", f"{confidence:.0%}")
+                                st.metric(f"{p2} Win %", f"{(1-prob)*100:.1f}%")
+                            
                             with col3:
-                                st.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
+                                # Recommendation
+                                if prob > 0.7:
+                                    st.success("✅ Strong Favorite")
+                                    st.metric("Recommendation", "Bet with Confidence")
+                                elif prob > 0.6:
+                                    st.info("📈 Moderate Favorite")
+                                    st.metric("Recommendation", "Cautious Bet")
+                                elif prob > 0.4:
+                                    st.warning("⚖️ Close Match")
+                                    st.metric("Recommendation", "Avoid Betting")
+                                else:
+                                    st.error("📉 Underdog")
+                                    st.metric("Recommendation", "Value Bet")
                             
-                            # Form Comparison
-                            st.write("**📊 Form Analysis:**")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**{p1}**")
-                                f1 = details['p1_form']
+                            # Detailed breakdown
+                            with st.expander("📊 Detailed Analysis"):
+                                st.subheader("Player Comparison")
                                 
-                                # Create form metrics
-                                form_cols = st.columns(3)
-                                form_cols[0].metric("Win %", f"{f1['win_pct']*100:.0f}%")
-                                form_cols[1].metric("Streak", f"{f1['streak']:+d}")
-                                form_cols[2].metric("Fatigue", f"{f1['fatigue']:.1f}")
-                                
-                                st.metric("Recent Form (Last 5)", f"{f1['recent_5']*100:.0f}%")
-                                st.metric("Consistency", f"{f1['consistency']*100:.0f}%")
-                                st.metric("Clutch Performance", f"{f1['clutch_performance']*100:.0f}%")
-                            
-                            with col2:
-                                st.write(f"**{p2}**")
-                                f2 = details['p2_form']
-                                
-                                form_cols = st.columns(3)
-                                form_cols[0].metric("Win %", f"{f2['win_pct']*100:.0f}%")
-                                form_cols[1].metric("Streak", f"{f2['streak']:+d}")
-                                form_cols[2].metric("Fatigue", f"{f2['fatigue']:.1f}")
-                                
-                                st.metric("Recent Form (Last 5)", f"{f2['recent_5']*100:.0f}%")
-                                st.metric("Consistency", f"{f2['consistency']*100:.0f}%")
-                                st.metric("Clutch Performance", f"{f2['clutch_performance']*100:.0f}%")
-                            
-                            # H2H History
-                            h2h = details['h2h']
-                            if h2h['matches'] > 0:
-                                st.write("**🤝 Head-to-Head:**")
+                                # ELO Comparison
+                                st.write("**📈 ELO Ratings:**")
                                 col1, col2, col3 = st.columns(3)
-                                col1.metric("Total Matches", h2h['matches'])
-                                col2.metric(f"{p1} Wins", h2h['wins'])
-                                col3.metric(f"{p2} Wins", h2h['matches'] - h2h['wins'])
+                                with col1:
+                                    st.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
+                                with col2:
+                                    diff = details['p1_elo'] - details['p2_elo']
+                                    st.metric("Difference", f"{diff:+.0f}", 
+                                             delta="Advantage" if diff > 0 else "Disadvantage")
+                                with col3:
+                                    st.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
                                 
-                                if h2h['sets_won'] > 0 and h2h['sets_lost'] > 0:
-                                    st.metric("Sets Ratio", f"{h2h['sets_won']}:{h2h['sets_lost']}")
+                                # Form Comparison
+                                st.write("**📊 Form Analysis:**")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"**{p1}**")
+                                    f1 = details['p1_form']
+                                    
+                                    # Create form metrics
+                                    form_cols = st.columns(3)
+                                    form_cols[0].metric("Win %", f"{f1['win_pct']*100:.0f}%")
+                                    form_cols[1].metric("Streak", f"{f1['streak']:+d}")
+                                    form_cols[2].metric("Fatigue", f"{f1['fatigue']:.1f}")
+                                    
+                                    st.metric("Recent Form (Last 5)", f"{f1['recent_5']*100:.0f}%")
+                                    st.metric("Consistency", f"{f1['consistency']*100:.0f}%")
+                                    st.metric("Clutch Performance", f"{f1['clutch_performance']*100:.0f}%")
+                                
+                                with col2:
+                                    st.write(f"**{p2}**")
+                                    f2 = details['p2_form']
+                                    
+                                    form_cols = st.columns(3)
+                                    form_cols[0].metric("Win %", f"{f2['win_pct']*100:.0f}%")
+                                    form_cols[1].metric("Streak", f"{f2['streak']:+d}")
+                                    form_cols[2].metric("Fatigue", f"{f2['fatigue']:.1f}")
+                                    
+                                    st.metric("Recent Form (Last 5)", f"{f2['recent_5']*100:.0f}%")
+                                    st.metric("Consistency", f"{f2['consistency']*100:.0f}%")
+                                    st.metric("Clutch Performance", f"{f2['clutch_performance']*100:.0f}%")
+                                
+                                # H2H History
+                                h2h = details['h2h']
+                                if h2h['matches'] > 0:
+                                    st.write("**🤝 Head-to-Head:**")
+                                    col1, col2, col3 = st.columns(3)
+                                    col1.metric("Total Matches", h2h['matches'])
+                                    
+                                    # Determine p1's H2H wins
+                                    p1_h2h_wins = h2h['wins'] if p1 == h2h_key[0] else (h2h['matches'] - h2h['wins'])
+                                    col2.metric(f"{p1} Wins", p1_h2h_wins)
+                                    col3.metric(f"{p2} Wins", h2h['matches'] - p1_h2h_wins)
+                                    
+                                    if h2h['sets_won'] > 0 and h2h['sets_lost'] > 0:
+                                        st.metric("Sets Ratio", f"{h2h['sets_won']}:{h2h['sets_lost']}")
+            else:
+                st.info("Please train the model first to see player list")
     
     with tabs[2]:
         st.header("📈 Player Analytics")
-        if st.session_state.player_ids:
-            player = st.selectbox("Select Player", list(st.session_state.player_names.values()), key='stats_player')
-            if player:
-                pid = st.session_state.player_ids.get(player)
-                matches = st.session_state.match_history.get(pid, [])
-                
-                if matches:
-                    wins = sum(1 for x in matches if x['won'])
-                    total = len(matches)
+        if st.session_state.player_ids and st.session_state.player_names:
+            players = list(st.session_state.player_names.values())
+            if players:
+                player = st.selectbox("Select Player", players, key='stats_player')
+                if player:
+                    pid = st.session_state.player_ids.get(player)
+                    matches = st.session_state.match_history.get(pid, [])
                     
-                    # Basic stats
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Total Matches", total)
-                    col2.metric("Wins", wins)
-                    col3.metric("Losses", total - wins)
-                    col4.metric("Win %", f"{wins/total*100:.1f}%" if total > 0 else "N/A")
-                    
-                    # Surface performance
-                    st.subheader("Surface Performance")
-                    surface_stats = {}
-                    for match in matches:
-                        surface = match['surface']
-                        if surface not in surface_stats:
-                            surface_stats[surface] = {'wins': 0, 'total': 0}
-                        surface_stats[surface]['total'] += 1
-                        if match['won']:
-                            surface_stats[surface]['wins'] += 1
-                    
-                    if surface_stats:
-                        surf_df = pd.DataFrame([
-                            {
-                                'Surface': surf,
-                                'Win %': (stats['wins'] / stats['total']) * 100,
-                                'Matches': stats['total']
-                            }
-                            for surf, stats in surface_stats.items()
-                        ])
+                    if matches:
+                        wins = sum(1 for x in matches if x.get('won', False))
+                        total = len(matches)
                         
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            fig = px.bar(surf_df, x='Surface', y='Win %', 
-                                        title='Win Percentage by Surface',
-                                        color='Win %', color_continuous_scale='RdYlGn')
-                            st.plotly_chart(fig, use_container_width=True)
-                        with col2:
-                            st.dataframe(surf_df, use_container_width=True)
-                    
-                    # ELO progression
-                    st.subheader("ELO Rating Progression")
-                    if len(matches) > 5:
-                        dates = []
-                        elos = []
-                        for match in matches[-50:]:  # Last 50 matches
-                            dates.append(match['date'])
-                            elos.append(match['w_elo'] if match['won'] else match['l_elo'])
+                        # Basic stats
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Total Matches", total)
+                        col2.metric("Wins", wins)
+                        col3.metric("Losses", total - wins)
+                        col4.metric("Win %", f"{wins/total*100:.1f}%" if total > 0 else "N/A")
                         
-                        elo_df = pd.DataFrame({'Date': dates, 'ELO': elos})
-                        elo_df = elo_df.sort_values('Date')
+                        # Surface performance
+                        st.subheader("Surface Performance")
+                        surface_stats = {}
+                        for match in matches:
+                            surface = match.get('surface', 'Hard')
+                            if surface not in surface_stats:
+                                surface_stats[surface] = {'wins': 0, 'total': 0}
+                            surface_stats[surface]['total'] += 1
+                            if match.get('won', False):
+                                surface_stats[surface]['wins'] += 1
                         
-                        fig = px.line(elo_df, x='Date', y='ELO', 
-                                     title='ELO Rating Over Time',
-                                     markers=True)
-                        st.plotly_chart(fig, use_container_width=True)
+                        if surface_stats:
+                            surf_df = pd.DataFrame([
+                                {
+                                    'Surface': surf,
+                                    'Win %': (stats['wins'] / stats['total']) * 100,
+                                    'Matches': stats['total']
+                                }
+                                for surf, stats in surface_stats.items()
+                            ])
+                            
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                fig = px.bar(surf_df, x='Surface', y='Win %', 
+                                            title='Win Percentage by Surface',
+                                            color='Win %', color_continuous_scale='RdYlGn')
+                                st.plotly_chart(fig, use_container_width=True)
+                            with col2:
+                                st.dataframe(surf_df, use_container_width=True)
+                        
+                        # ELO progression
+                        st.subheader("ELO Rating Progression")
+                        if len(matches) > 5:
+                            dates = []
+                            elos = []
+                            for match in matches[-50:]:  # Last 50 matches
+                                dates.append(match['date'])
+                                elos.append(match.get('w_elo', 1500) if match.get('won', False) else match.get('l_elo', 1500))
+                            
+                            if dates and elos:
+                                elo_df = pd.DataFrame({'Date': dates, 'ELO': elos})
+                                elo_df = elo_df.sort_values('Date')
+                                
+                                fig = px.line(elo_df, x='Date', y='ELO', 
+                                             title='ELO Rating Over Time',
+                                             markers=True)
+                                st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info(f"No match history found for {player}")
+            else:
+                st.info("Please train the model first to see player list")
     
     with tabs[3]:
         st.header("🔍 Model Insights")
@@ -1201,6 +1247,8 @@ def main():
                             color='CV AUC Score',
                             color_continuous_scale='blues')
                 st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Train a model to see insights")
     
     with tabs[4]:
         st.header("🤖 System Information")
@@ -1208,58 +1256,51 @@ def main():
         st.markdown("""
         ## Advanced Tennis Prediction System
         
-        ### 🔧 Key Improvements
+        ### 🔧 Key Features
         
         **1. Enhanced ELO System:**
         - Dynamic K-factor based on player experience
-        - Tournament importance weighting (Grand Slam = 1.5x, Futures = 0.6x)
+        - Tournament importance weighting
         - H2H history adjustments
-        - Set/game margin adjustments (if data available)
+        - Set margin adjustments
         
-        **2. Advanced Features (40+):**
+        **2. Advanced Features (30+):**
         - Multiple time windows for form (5/10/20 matches)
         - Clutch performance metrics
-        - Set/game winning percentages
         - Head-to-head history
         - Surface-specific performance
-        - Tournament level performance
-        - Interaction features (ELO × Form, etc.)
+        - Interaction features
         
-        **3. Stacking Ensemble:**
-        - XGBoost (300 trees, depth 7)
-        - LightGBM (300 trees, depth 6)
-        - CatBoost (300 iterations)
-        - Random Forest (300 trees)
-        - Gradient Boosting (200 trees)
-        - Logistic Regression meta-learner
+        **3. Ensemble Model:**
+        - Random Forest
+        - Gradient Boosting
+        - AdaBoost
+        - Logistic Regression
+        - XGBoost (if available)
+        - Voting ensemble with calibration
         
         **4. Model Validation:**
         - 5-fold stratified cross-validation
-        - Feature selection (Top 30 features)
-        - Isotonic calibration for probability calibration
-        - Confidence interval estimation
+        - Feature selection
+        - Probability calibration
         
         ### 📊 Expected Performance
-        - **Target Accuracy:** 70-75%
-        - **ROC-AUC:** 0.75-0.80
-        - **Precision/Recall:** Balanced approach
+        - **Target Accuracy:** 65-75%
+        - **ROC-AUC:** 0.70-0.80
         
         ### 📁 Required CSV Format
         Minimum columns:
         - `Player_1`, `Player_2`, `Winner`, `Surface`, `Date`
         
         Optional columns for better accuracy:
-        - `Tournament_Level` (Grand Slam, Masters 1000, etc.)
+        - `Tournament_Level`
         - `Player_1_Sets`, `Player_2_Sets`
-        - `Player_1_Games`, `Player_2_Games`
-        - `Round` (Final, Semifinal, etc.)
         
         ### ⚡ Tips for Best Results
-        1. Use at least 500-1000 matches for training
-        2. Include recent matches (last 2-3 years)
-        3. Ensure accurate player name spelling
-        4. Include tournament level if available
-        5. Regular retraining with new data
+        1. Use at least 500 matches for training
+        2. Include recent matches
+        3. Ensure accurate player names
+        4. Include surface information
         """)
         
         if st.session_state.model_metrics:
@@ -1273,6 +1314,10 @@ if __name__ == "__main__":
         st.error("""
         ❌ Required packages not installed. Please install:
         ```
-        pip install scikit-learn xgboost lightgbm catboost plotly
+        pip install scikit-learn xgboost plotly
+        ```
+        For basic functionality without XGBoost:
+        ```
+        pip install scikit-learn plotly
         ```
         """)
