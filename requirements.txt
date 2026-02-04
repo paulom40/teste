@@ -13,3 +13,5 @@ matplotlib
 xlsxwriter
 xgboost
 scikit-learn
+lightgbm
+catboost
