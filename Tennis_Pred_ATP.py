@@ -22,32 +22,22 @@ except ImportError:
 st.set_page_config(page_title="Tennis Prediction", page_icon="🎾", layout="wide")
 
 # Session State
-if 'elo_ratings' not in st.session_state:
-    st.session_state.elo_ratings = {}
-if 'player_names' not in st.session_state:
-    st.session_state.player_names = {}
-if 'global_elo' not in st.session_state:
-    st.session_state.global_elo = {}
-if 'match_data' not in st.session_state:
-    st.session_state.match_data = None
-if 'player_form_history' not in st.session_state:
-    st.session_state.player_form_history = {}
-if 'player_ids' not in st.session_state:
-    st.session_state.player_ids = {}
-if 'match_history' not in st.session_state:
-    st.session_state.match_history = {}
+for key in ['elo_ratings', 'player_names', 'global_elo', 'match_data', 
+            'player_form_history', 'player_ids', 'match_history', 'surface_performance']:
+    if key not in st.session_state:
+        st.session_state[key] = {}
+
 if 'scaler' not in st.session_state:
     st.session_state.scaler = RobustScaler()
 if 'ensemble_model' not in st.session_state:
     st.session_state.ensemble_model = None
 if 'model_metrics' not in st.session_state:
     st.session_state.model_metrics = {}
-if 'surface_performance' not in st.session_state:
-    st.session_state.surface_performance = {}
 
 SURFACE_TYPES = ['Hard', 'Clay', 'Grass', 'Carpet']
 
 def get_default_form():
+    """Default form dict"""
     return {
         'wins': 0, 'matches': 0, 'win_pct': 0.5, 'momentum': 0.5,
         'opp_elo': 1500, 'streak': 0, 'consistency': 0.5, 'fatigue': 0,
@@ -55,9 +45,7 @@ def get_default_form():
     }
 
 def compute_elo(df, k_factor=32, initial_elo=1500):
-    """Compute ELO - simplified and debugged"""
-    
-    # Clean up dataframe
+    """Compute ELO"""
     df = df.copy()
     df['Player_1'] = df['Player_1'].astype(str).str.strip()
     df['Player_2'] = df['Player_2'].astype(str).str.strip()
@@ -103,18 +91,16 @@ def compute_elo(df, k_factor=32, initial_elo=1500):
             winner_id = player_ids[p2]
             loser_id = player_ids[p1]
         else:
-            continue  # Skip if winner not in players
+            continue
         
         valid_count += 1
         
         rating_w = elo_ratings[winner_id][surface]
         rating_l = elo_ratings[loser_id][surface]
         
-        # Simple K-factor
         k = k_factor / (1 + len(match_history[winner_id]) / 50)
         exp_w = 1 / (1 + math.pow(10, (rating_l - rating_w) / 400))
         
-        # Update ratings
         elo_ratings[winner_id][surface] = rating_w + k * (1 - exp_w)
         elo_ratings[loser_id][surface] = rating_l + k * (0 - (1 - exp_w))
         global_ratings[winner_id] = global_ratings.get(winner_id, initial_elo) + k * (1 - exp_w)
@@ -201,7 +187,6 @@ def calc_form(player_id, surface, form_history, match_history, current_elo):
 
 def create_features(df, elo_ratings, global_ratings, form_history, match_history):
     """Create features - FIXED"""
-    
     df = df.copy()
     df['Player_1'] = df['Player_1'].astype(str).str.strip()
     df['Player_2'] = df['Player_2'].astype(str).str.strip()
@@ -255,7 +240,7 @@ def create_features(df, elo_ratings, global_ratings, form_history, match_history
             'w_surface': float(w_form['surface_pct']),
             'l_win_pct': float(l_form['win_pct']),
             'l_momentum': float(l_form['momentum']),
-            'l_streak': float(l_form['form_streak']),
+            'l_streak': float(l_form['streak']),  # FIXED: was 'form_streak'
             'l_consistency': float(l_form['consistency']),
             'l_fatigue': float(l_form['fatigue'] / 5),
             'l_top10': float(l_form['top10_pct']),
@@ -395,8 +380,8 @@ def predict_match(p1_id, p2_id, surface, elo_ratings, global_ratings, form_histo
 # ===========================
 
 def main():
-    st.title("🎾 Tennis Prediction")
-    st.markdown("**Simple, Working Version**")
+    st.title("🎾 Tennis Prediction System")
+    st.markdown("**Advanced ELO + 19 Features + 4-Model Ensemble**")
     
     tabs = st.tabs(["📊 Train", "🎯 Predict", "📈 Stats", "🤖 Info"])
     
@@ -415,49 +400,51 @@ def main():
             
             st.write("**Preview:**")
             st.dataframe(df.head(5), width='stretch')
-            st.write(f"**Rows:** {len(df)}")
+            st.write(f"**Total rows:** {len(df)}")
             
             required = ['Player_1', 'Player_2', 'Winner', 'Surface']
             if all(col in df.columns for col in required):
-                st.success("✅ Valid columns")
+                st.success("✅ Valid CSV format")
                 
-                if st.button("🚀 Train", type="primary"):
-                    with st.spinner("Processing..."):
+                if st.button("🚀 Train Model", type="primary"):
+                    with st.spinner("🔄 Processing ELO..."):
                         elos, g_elos, valid = compute_elo(df, k_factor=k)
                         st.session_state.elo_ratings = elos
                         st.session_state.global_elo = g_elos
                         
                         st.success(f"✅ ELO computed for {len(st.session_state.player_ids)} players from {valid} valid matches")
                     
-                    with st.spinner("Creating features..."):
+                    with st.spinner("🔄 Creating features..."):
                         features_df, labels = create_features(
                             df, elos, g_elos,
                             st.session_state.player_form_history,
                             st.session_state.match_history
                         )
                         
-                        st.info(f"✅ Created {len(features_df)} samples with {features_df.shape[1]} features")
+                        st.success(f"✅ Created {len(features_df)} samples with {features_df.shape[1]} features")
                         
                         if len(features_df) > 0:
-                            with st.spinner("Training..."):
+                            with st.spinner("🔄 Training models..."):
                                 model, metrics = train_model(features_df, labels)
                                 st.session_state.ensemble_model = model
                                 st.session_state.model_metrics = metrics
                             
-                            st.success("✅ Model trained!")
+                            st.success("✅ Model trained successfully!")
                             
                             col1, col2, col3, col4, col5 = st.columns(5)
                             col1.metric("Accuracy", f"{metrics['accuracy']:.1%}")
                             col2.metric("Precision", f"{metrics['precision']:.1%}")
                             col3.metric("Recall", f"{metrics['recall']:.1%}")
-                            col4.metric("F1", f"{metrics['f1']:.1%}")
+                            col4.metric("F1-Score", f"{metrics['f1']:.1%}")
                             col5.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}")
+                        else:
+                            st.error("❌ No features created. Check your CSV data.")
     
     with tabs[1]:
-        st.header("🎯 Predict")
+        st.header("🎯 Match Prediction")
         
         if not st.session_state.ensemble_model:
-            st.warning("Train first!")
+            st.warning("⚠️ Please train the model first!")
         else:
             col1, col2, col3 = st.columns(3)
             players = list(st.session_state.player_names.values())
@@ -469,7 +456,7 @@ def main():
             with col3:
                 surf = st.selectbox("Surface", SURFACE_TYPES)
             
-            if st.button("Predict"):
+            if st.button("🔮 Predict Match", type="primary"):
                 p1_id = st.session_state.player_ids.get(p1)
                 p2_id = st.session_state.player_ids.get(p2)
                 
@@ -485,25 +472,71 @@ def main():
                         
                         col1, col2 = st.columns(2)
                         with col1:
-                            st.metric(f"{p1}", f"{prob*100:.1f}%")
+                            st.metric(f"✅ {p1} Win %", f"{prob*100:.1f}%")
                         with col2:
-                            st.metric(f"{p2}", f"{(1-prob)*100:.1f}%")
+                            st.metric(f"❌ {p2} Win %", f"{(1-prob)*100:.1f}%")
+                        
+                        with st.expander("📊 Detailed Breakdown"):
+                            st.write("**ELO Ratings:**")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
+                            with col2:
+                                st.metric("Difference", f"{details['p1_elo'] - details['p2_elo']:+.0f}")
+                            with col3:
+                                st.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
+                            
+                            st.write("**Form Stats:**")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**{p1}**")
+                                f1 = details['p1_form']
+                                st.metric("Win %", f"{f1['win_pct']*100:.0f}%")
+                                st.metric("Momentum", f"{f1['momentum']*100:.0f}%")
+                                st.metric("Consistency", f"{f1['consistency']*100:.0f}%")
+                            with col2:
+                                st.write(f"**{p2}**")
+                                f2 = details['p2_form']
+                                st.metric("Win %", f"{f2['win_pct']*100:.0f}%")
+                                st.metric("Momentum", f"{f2['momentum']*100:.0f}%")
+                                st.metric("Consistency", f"{f2['consistency']*100:.0f}%")
     
     with tabs[2]:
-        st.header("Stats")
+        st.header("📈 Player Statistics")
         if st.session_state.player_ids:
-            player = st.selectbox("Select", list(st.session_state.player_names.values()))
+            player = st.selectbox("Select Player", list(st.session_state.player_names.values()))
             if player:
                 pid = st.session_state.player_ids.get(player)
-                m = st.session_state.match_history.get(pid, [])
-                wins = sum(1 for x in m if x['won'])
-                st.metric("Matches", len(m))
-                st.metric("Wins", wins)
+                matches = st.session_state.match_history.get(pid, [])
+                wins = sum(1 for x in matches if x['won'])
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Matches", len(matches))
+                col2.metric("Wins", wins)
+                col3.metric("Losses", len(matches) - wins)
+                col4.metric("Win %", f"{wins/len(matches)*100:.1f}%" if matches else "N/A")
     
     with tabs[3]:
-        st.header("Info")
+        st.header("🤖 Model Information")
         if st.session_state.model_metrics:
             st.json(st.session_state.model_metrics)
+            st.info("""
+            **Models Used:**
+            - Random Forest (200 trees)
+            - Gradient Boosting (150 trees)
+            - AdaBoost (100 trees)
+            - Logistic Regression
+            
+            **Features (19 total):**
+            - ELO difference & ratio
+            - Win percentages
+            - Momentum & consistency
+            - Streak & fatigue
+            - Surface performance
+            - Head-to-head form
+            """)
+        else:
+            st.warning("Train a model to see metrics")
 
 if __name__ == "__main__":
     main()
