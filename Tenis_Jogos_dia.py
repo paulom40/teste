@@ -5,42 +5,47 @@ from datetime import date
 
 st.set_page_config(page_title="Jogos de Tênis do Dia", layout="centered")
 st.title("🎾 Jogos de Tênis do Dia (ATP & WTA)")
+st.write("Fonte: SofaScore")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "X-Requested-With": "XMLHttpRequest"
+    "User-Agent": "Mozilla/5.0"
 }
 
 def obter_jogos_do_dia():
-    hoje = date.today().strftime("%Y%m%d")
+    hoje = date.today().strftime("%Y-%m-%d")
 
     url = (
-        "https://www.flashscore.com/x/feed/"
-        f"f_2_{hoje}_1_en_1"
+        "https://api.sofascore.com/api/v1/sport/tennis/"
+        f"scheduled-events/{hoje}"
     )
 
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.raise_for_status()
 
-    linhas = r.text.split("\n")
+    data = r.json()
     jogos = []
 
-    for linha in linhas:
-        if linha.startswith("~"):
-            partes = linha.split("¬")
+    for event in data.get("events", []):
+        tournament = event.get("tournament", {})
+        category = tournament.get("category", {})
 
-            dados = {p.split("÷")[0]: p.split("÷")[1]
-                     for p in partes if "÷" in p}
+        # Filtrar apenas ATP e WTA
+        tour = category.get("name", "")
+        if tour not in ["ATP", "WTA"]:
+            continue
 
-            if "AD" in dados and "AE" in dados:
-                jogos.append({
-                    "data": date.today().isoformat(),
-                    "jogador1": dados.get("AD"),
-                    "jogador2": dados.get("AE"),
-                    "horario": dados.get("HH", ""),
-                    "torneio": dados.get("CT", ""),
-                    "tour": "ATP/WTA"
-                })
+        home = event.get("homeTeam", {}).get("name")
+        away = event.get("awayTeam", {}).get("name")
+        start = event.get("startTimestamp")
+
+        jogos.append({
+            "data": hoje,
+            "tour": tour,
+            "torneio": tournament.get("name"),
+            "jogador1": home,
+            "jogador2": away,
+            "horario": pd.to_datetime(start, unit="s").strftime("%H:%M")
+        })
 
     return pd.DataFrame(jogos)
 
@@ -50,7 +55,7 @@ if st.button("🔄 Carregar jogos do dia"):
             df = obter_jogos_do_dia()
 
             if df.empty:
-                st.warning("Nenhum jogo encontrado para hoje.")
+                st.warning("Nenhum jogo ATP/WTA encontrado para hoje.")
             else:
                 st.success(f"{len(df)} jogos encontrados")
                 st.dataframe(df, use_container_width=True)
