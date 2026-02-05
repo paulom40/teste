@@ -1,40 +1,46 @@
 import streamlit as st
 import requests
 import pandas as pd
-from bs4 import BeautifulSoup
 from datetime import date
 
 st.set_page_config(page_title="Jogos de Tênis do Dia", layout="centered")
-
 st.title("🎾 Jogos de Tênis do Dia (ATP & WTA)")
-st.write("Fonte: Flashscore")
 
-URL = "https://www.flashscore.com/tennis/"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0",
+    "X-Requested-With": "XMLHttpRequest"
 }
 
 def obter_jogos_do_dia():
-    response = requests.get(URL, headers=HEADERS, timeout=15)
-    response.raise_for_status()
+    hoje = date.today().strftime("%Y%m%d")
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    url = (
+        "https://www.flashscore.com/x/feed/"
+        f"f_2_{hoje}_1_en_1"
+    )
+
+    r = requests.get(url, headers=HEADERS, timeout=15)
+    r.raise_for_status()
+
+    linhas = r.text.split("\n")
     jogos = []
 
-    for match in soup.select("div.event__match"):
-        players = match.select("div.event__participant")
-        time_el = match.select_one("div.event__time")
+    for linha in linhas:
+        if linha.startswith("~"):
+            partes = linha.split("¬")
 
-        if len(players) != 2 or not time_el:
-            continue
+            dados = {p.split("÷")[0]: p.split("÷")[1]
+                     for p in partes if "÷" in p}
 
-        jogos.append({
-            "data": date.today().isoformat(),
-            "tour": "ATP/WTA",
-            "jogador1": players[0].text.strip(),
-            "jogador2": players[1].text.strip(),
-            "horario": time_el.text.strip()
-        })
+            if "AD" in dados and "AE" in dados:
+                jogos.append({
+                    "data": date.today().isoformat(),
+                    "jogador1": dados.get("AD"),
+                    "jogador2": dados.get("AE"),
+                    "horario": dados.get("HH", ""),
+                    "torneio": dados.get("CT", ""),
+                    "tour": "ATP/WTA"
+                })
 
     return pd.DataFrame(jogos)
 
@@ -51,11 +57,11 @@ if st.button("🔄 Carregar jogos do dia"):
 
                 csv = df.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    label="⬇️ Baixar CSV",
-                    data=csv,
-                    file_name=f"jogos_tenis_{date.today()}.csv",
-                    mime="text/csv"
+                    "⬇️ Baixar CSV",
+                    csv,
+                    f"jogos_tenis_{date.today()}.csv",
+                    "text/csv"
                 )
 
         except Exception as e:
-            st.error(f"Erro ao obter jogos: {e}")
+            st.error(f"Erro: {e}")
