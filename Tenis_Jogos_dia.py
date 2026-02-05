@@ -6,8 +6,13 @@ from datetime import date
 API_KEY = "SUA_API_KEY"
 
 HEADERS = {
-    "X-RapidAPI-Key": bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44,
+    API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
+
+HEADERS = {
+    "X-RapidAPI-Key": API_KEY,
     "X-RapidAPI-Host": "api-tennis.p.rapidapi.com"
+}
+
 }
 
 st.title("🎾 Jogos de Tênis do Dia (ATP & WTA)")
