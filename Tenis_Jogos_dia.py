@@ -8,16 +8,16 @@ st.title("🎾 Jogos de Tênis do Dia (ATP & WTA)")
 st.write("Fonte: SofaScore")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com"
 }
 
 def obter_jogos_do_dia():
     hoje = date.today().strftime("%Y-%m-%d")
-
-    url = (
-        "https://api.sofascore.com/api/v1/sport/tennis/"
-        f"scheduled-events/{hoje}"
-    )
+    url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{hoje}"
 
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.raise_for_status()
@@ -29,22 +29,19 @@ def obter_jogos_do_dia():
         tournament = event.get("tournament", {})
         category = tournament.get("category", {})
 
-        # Filtrar apenas ATP e WTA
-        tour = category.get("name", "")
+        tour = category.get("name")
         if tour not in ["ATP", "WTA"]:
             continue
-
-        home = event.get("homeTeam", {}).get("name")
-        away = event.get("awayTeam", {}).get("name")
-        start = event.get("startTimestamp")
 
         jogos.append({
             "data": hoje,
             "tour": tour,
             "torneio": tournament.get("name"),
-            "jogador1": home,
-            "jogador2": away,
-            "horario": pd.to_datetime(start, unit="s").strftime("%H:%M")
+            "jogador1": event["homeTeam"]["name"],
+            "jogador2": event["awayTeam"]["name"],
+            "horario": pd.to_datetime(
+                event["startTimestamp"], unit="s"
+            ).strftime("%H:%M")
         })
 
     return pd.DataFrame(jogos)
