@@ -1062,7 +1062,7 @@ def main():
                             })
                         
                         df_results = pd.DataFrame(recent_results)
-                        st.dataframe(df_results, use_container_width=True)
+                        st.dataframe(df_results, width='stretch')
                     else:
                         st.write("No recent matches")
                 
@@ -1130,7 +1130,7 @@ def main():
                     cm_df = pd.DataFrame(cm, 
                                         index=['Actual Loss', 'Actual Win'],
                                         columns=['Predicted Loss', 'Predicted Win'])
-                    st.dataframe(cm_df.style.background_gradient(cmap='Blues'), use_container_width=True)
+                    st.dataframe(cm_df.style.background_gradient(cmap='Blues'), width='stretch')
             else:
                 st.info("Train the model to see performance metrics")
         
@@ -1139,7 +1139,7 @@ def main():
             
             if st.session_state.match_data is not None:
                 st.subheader("Match Data Preview")
-                st.dataframe(st.session_state.match_data.head(20), use_container_width=True)
+                st.dataframe(st.session_state.match_data.head(20), width='stretch')
                 
                 st.subheader("Dataset Statistics")
                 st.write(f"**Total Matches**: {len(st.session_state.match_data)}")
@@ -1163,7 +1163,7 @@ def main():
                 
                 if player_stats:
                     stats_df = pd.DataFrame(player_stats)
-                    st.dataframe(stats_df.sort_values('ELO', ascending=False), use_container_width=True)
+                    st.dataframe(stats_df.sort_values('ELO', ascending=False), width='stretch')
     
     else:
         # Welcome screen
@@ -1201,7 +1201,7 @@ def main():
             'Score': ['6-4 6-3', '6-2 6-3 6-1', '7-6 6-4', '6-3 7-5']
         }
         
-        st.dataframe(pd.DataFrame(example_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(example_data), width='stretch')
 
 if __name__ == "__main__":
     main()
