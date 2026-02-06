@@ -752,32 +752,30 @@ def predict_advanced_match(p1_id, p2_id, surface):
     
     features_df = pd.DataFrame([features])
     
-            # Scale and predict
-        try:
-            features_scaled = st.session_state.scaler.transform(features_df)
-            prediction_proba = st.session_state.ensemble_model.predict_proba(features_scaled)[0]
-            p1_win_prob = float(prediction_proba[1])
-            p2_win_prob = float(prediction_proba[0])
-            
-            # Calculate expected score (sets)
-            expected_score = 3 * p1_win_prob
-            
-            return {
-                'p1_win_prob': p1_win_prob,
-                'p2_win_prob': p2_win_prob,
-                'expected_score': expected_score,
-                'features': features,
-                'p1_elo': p1_elo,
-                'p2_elo': p2_elo,
-                'p1_form': p1_form,
-                'p2_form': p2_form,
-                'h2h': h2h_info
-            }
-        except Exception as e:
-            st.error(f"Prediction error: {e}")
-            return None
-    
-    return None
+    # Scale and predict
+    try:
+        features_scaled = st.session_state.scaler.transform(features_df)
+        prediction_proba = st.session_state.ensemble_model.predict_proba(features_scaled)[0]
+        p1_win_prob = float(prediction_proba[1])
+        p2_win_prob = float(prediction_proba[0])
+        
+        # Calculate expected score (sets)
+        expected_score = 3 * p1_win_prob
+        
+        return {
+            'p1_win_prob': p1_win_prob,
+            'p2_win_prob': p2_win_prob,
+            'expected_score': expected_score,
+            'features': features,
+            'p1_elo': p1_elo,
+            'p2_elo': p2_elo,
+            'p1_form': p1_form,
+            'p2_form': p2_form,
+            'h2h': h2h_info
+        }
+    except Exception as e:
+        st.error(f"Prediction error: {e}")
+        return None
 
 def display_match_prediction(p1_name, p2_name, surface):
     """Display match prediction with detailed analysis"""
