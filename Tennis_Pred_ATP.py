@@ -38,6 +38,8 @@ if 'scaler' not in st.session_state:
     st.session_state.scaler = RobustScaler()
 if 'model_trained' not in st.session_state:
     st.session_state.model_trained = False
+if 'match_data' not in st.session_state:
+    st.session_state.match_data = None
 
 SURFACE_TYPES = ['Hard', 'Clay', 'Grass', 'Carpet']
 
@@ -45,7 +47,8 @@ def get_default_form():
     """Default form dict"""
     return {
         'wins': 0, 'matches': 0, 'win_pct': 0.5, 'momentum': 0.5,
-        'opp_elo': 1500, 'streak': 0, 'consistency': 0.5, 'fatigue': 0
+        'opp_elo': 1500, 'streak': 0, 'consistency': 0.5, 'fatigue': 0,
+        'sets_played_avg': 3.0, 'games_played_avg': 22.0  # Added averages
     }
 
 def compute_elo_simple(df, k_factor=32, initial_elo=1500):
@@ -80,6 +83,19 @@ def compute_elo_simple(df, k_factor=32, initial_elo=1500):
         winner = row['Winner']
         surface = row['Surface'] if 'Surface' in row and row['Surface'] in SURFACE_TYPES else 'Hard'
         
+        # Try to get set/game information
+        try:
+            if 'Player_1_Sets' in df.columns and 'Player_2_Sets' in df.columns:
+                sets_played = row.get('Player_1_Sets', 0) + row.get('Player_2_Sets', 0)
+                # Estimate games (assuming average 6 games per set)
+                games_played = sets_played * 6
+            else:
+                sets_played = 3  # Default
+                games_played = 18  # Default
+        except:
+            sets_played = 3
+            games_played = 18
+        
         if winner not in [p1, p2]:
             continue
             
@@ -108,14 +124,18 @@ def compute_elo_simple(df, k_factor=32, initial_elo=1500):
             'surface': surface,
             'opponent': loser_id,
             'won': True,
-            'elo': rating_w
+            'elo': rating_w,
+            'sets_played': sets_played,
+            'games_played': games_played
         })
         match_history[loser_id].append({
             'date': pd.Timestamp.now(),
             'surface': surface,
             'opponent': winner_id,
             'won': False,
-            'elo': rating_l
+            'elo': rating_l,
+            'sets_played': sets_played,
+            'games_played': games_played
         })
     
     st.session_state.elo_ratings = elo_ratings
@@ -159,6 +179,14 @@ def calc_form_simple(player_id, surface, match_history, lookback=20):
     opp_elos = [m.get('elo', 1500) for m in recent_matches]
     avg_opp_elo = np.mean(opp_elos) if opp_elos else 1500
     
+    # Average sets and games played
+    avg_sets = np.mean([m.get('sets_played', 3) for m in recent_matches])
+    avg_games = np.mean([m.get('games_played', 18) for m in recent_matches])
+    
+    # Estimate fatigue (matches in last 30 days)
+    now = pd.Timestamp.now()
+    fatigue = sum(1 for m in matches if (now - m.get('date', now)).days <= 30)
+    
     return {
         'wins': wins,
         'matches': total,
@@ -166,8 +194,10 @@ def calc_form_simple(player_id, surface, match_history, lookback=20):
         'momentum': momentum,
         'opp_elo': avg_opp_elo,
         'streak': streak,
-        'consistency': 0.5,  # Simplified
-        'fatigue': 0
+        'consistency': 0.5,
+        'fatigue': min(fatigue / 10, 1),  # Normalized
+        'sets_played_avg': avg_sets,
+        'games_played_avg': avg_games
     }
 
 def create_features_simple(df):
@@ -207,6 +237,7 @@ def create_features_simple(df):
             'win_pct_diff': p1_form['win_pct'] - p2_form['win_pct'],
             'momentum_diff': p1_form['momentum'] - p2_form['momentum'],
             'streak_diff': p1_form['streak'] - p2_form['streak'],
+            'fatigue_diff': p1_form['fatigue'] - p2_form['fatigue'],
             'is_hard': 1 if surface == 'Hard' else 0,
             'is_clay': 1 if surface == 'Clay' else 0,
             'is_grass': 1 if surface == 'Grass' else 0,
@@ -278,6 +309,7 @@ def predict_match_simple(p1_id, p2_id, surface):
         'win_pct_diff': p1_form['win_pct'] - p2_form['win_pct'],
         'momentum_diff': p1_form['momentum'] - p2_form['momentum'],
         'streak_diff': p1_form['streak'] - p2_form['streak'],
+        'fatigue_diff': p1_form['fatigue'] - p2_form['fatigue'],
         'is_hard': 1 if surface == 'Hard' else 0,
         'is_clay': 1 if surface == 'Clay' else 0,
         'is_grass': 1 if surface == 'Grass' else 0,
@@ -300,6 +332,127 @@ def predict_match_simple(p1_id, p2_id, surface):
         st.error(f"Prediction error: {str(e)}")
         return None
 
+def analyze_match(p1, p2, surface, prob, details):
+    """Generate detailed match analysis"""
+    # Determine favorite
+    favorite = p1 if prob > 0.5 else p2
+    underdog = p2 if prob > 0.5 else p1
+    favorite_prob = prob if prob > 0.5 else 1 - prob
+    
+    # Calculate expected total games
+    avg_games_p1 = details['p1_form']['games_played_avg']
+    avg_games_p2 = details['p2_form']['games_played_avg']
+    expected_games = (avg_games_p1 + avg_games_p2) / 2
+    
+    # Adjust based on probability difference (closer matches tend to have more games)
+    closeness_factor = 1 - abs(prob - 0.5) * 2  # 1 for even match, 0 for very one-sided
+    expected_games_adjusted = expected_games * (1 + closeness_factor * 0.2)
+    
+    # Calculate expected sets
+    avg_sets_p1 = details['p1_form']['sets_played_avg']
+    avg_sets_p2 = details['p2_form']['sets_played_avg']
+    expected_sets = (avg_sets_p1 + avg_sets_p2) / 2
+    
+    # Key factors analysis
+    key_factors = []
+    
+    # ELO difference
+    elo_diff = abs(details['p1_elo'] - details['p2_elo'])
+    if elo_diff > 100:
+        key_factors.append(f"Significant ELO difference ({elo_diff:.0f} points)")
+    elif elo_diff > 50:
+        key_factors.append(f"Moderate ELO difference ({elo_diff:.0f} points)")
+    else:
+        key_factors.append(f"Close ELO ratings ({elo_diff:.0f} points difference)")
+    
+    # Form difference
+    form_diff = abs(details['p1_form']['win_pct'] - details['p2_form']['win_pct'])
+    if form_diff > 0.3:
+        key_factors.append("Large form gap between players")
+    elif form_diff > 0.15:
+        key_factors.append("Noticeable form difference")
+    
+    # Streak
+    if details['p1_form']['streak'] > 2 or details['p2_form']['streak'] > 2:
+        key_factors.append("One player is on a winning streak")
+    elif details['p1_form']['streak'] < -2 or details['p2_form']['streak'] < -2:
+        key_factors.append("One player is on a losing streak")
+    
+    # Fatigue
+    fatigue_diff = abs(details['p1_form']['fatigue'] - details['p2_form']['fatigue'])
+    if fatigue_diff > 0.3:
+        key_factors.append("Significant fatigue difference between players")
+    
+    # Surface preference
+    surface_factor = ""
+    if surface == 'Clay':
+        surface_factor = "Clay specialist advantage"
+    elif surface == 'Grass':
+        surface_factor = "Grass court specialist advantage"
+    elif surface == 'Hard':
+        surface_factor = "Hard court specialist advantage"
+    
+    if surface_factor:
+        key_factors.append(surface_factor)
+    
+    # Generate confidence level
+    if favorite_prob > 0.7:
+        confidence = "High confidence"
+        match_type = "One-sided match"
+    elif favorite_prob > 0.6:
+        confidence = "Moderate confidence"
+        match_type = "Clear favorite"
+    elif favorite_prob > 0.55:
+        confidence = "Low confidence"
+        match_type = "Slight favorite"
+    else:
+        confidence = "Very low confidence"
+        match_type = "Toss-up match"
+    
+    # Prediction summary
+    summary = f"""
+    ### 🎯 Match Prediction Summary
+    
+    **{favorite}** is favored to win with **{favorite_prob*100:.1f}%** probability
+    
+    #### 📊 Expected Match Characteristics:
+    - **Match Type**: {match_type}
+    - **Confidence Level**: {confidence}
+    - **Expected Total Sets**: {expected_sets:.1f}
+    - **Expected Total Games**: {expected_games_adjusted:.1f}
+    
+    #### 🔑 Key Factors:
+    """
+    
+    for factor in key_factors:
+        summary += f"- {factor}\n"
+    
+    # Betting recommendation
+    summary += "\n#### 💡 Recommendation:"
+    if favorite_prob > 0.65:
+        summary += f"\nConsider betting on **{favorite}** - strong favorite"
+    elif favorite_prob > 0.55:
+        summary += f"\nCautious bet on **{favorite}** - slight edge"
+    else:
+        summary += "\nAvoid betting - match too close to call"
+    
+    # Underdog chance
+    underdog_chance = 1 - favorite_prob
+    if underdog_chance > 0.4:
+        summary += f"\n\n⚠️ **{underdog}** has a {underdog_chance*100:.1f}% chance of an upset"
+    
+    return summary, {
+        'favorite': favorite,
+        'favorite_prob': favorite_prob,
+        'underdog': underdog,
+        'underdog_prob': underdog_chance,
+        'expected_sets': expected_sets,
+        'expected_games': expected_games_adjusted,
+        'match_type': match_type,
+        'confidence': confidence,
+        'key_factors': key_factors
+    }
+
 def main():
     st.title("🎾 Tennis Prediction System")
     st.markdown("Simple ELO-based prediction model")
@@ -318,6 +471,7 @@ def main():
         if file is not None:
             try:
                 df = pd.read_csv(file)
+                st.session_state.match_data = df
                 
                 # Show data preview
                 with st.expander("Data Preview"):
@@ -368,10 +522,10 @@ def main():
                             # Show metrics
                             st.subheader("Model Performance")
                             cols = st.columns(4)
-                            cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")
-                            cols[1].metric("Precision", f"{metrics['precision']:.1%}")
-                            cols[2].metric("Recall", f"{metrics['recall']:.1%}")
-                            cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")
+                            cols[0].metric("Accuracy", f"{metrics['accuracy']:.1f%}")
+                            cols[1].metric("Precision", f"{metrics['precision']:.1f%}")
+                            cols[2].metric("Recall", f"{metrics['recall']:.1f%}")
+                            cols[3].metric("F1-Score", f"{metrics['f1']:.1f%}")
                             
             except Exception as e:
                 st.error(f"Error: {str(e)}")
@@ -399,7 +553,7 @@ def main():
             with col3:
                 surface = st.selectbox("Surface", SURFACE_TYPES)
             
-            if st.button("Predict", type="primary"):
+            if st.button("Predict Match Outcome", type="primary"):
                 p1_id = st.session_state.player_ids.get(p1)
                 p2_id = st.session_state.player_ids.get(p2)
                 
@@ -409,34 +563,117 @@ def main():
                     if result:
                         prob, details = result
                         
-                        st.subheader("Prediction Result")
+                        # Generate analysis
+                        summary, analysis_details = analyze_match(p1, p2, surface, prob, details)
                         
-                        col1, col2 = st.columns(2)
+                        # Display main prediction
+                        st.subheader("🎯 Match Prediction")
+                        
+                        col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric(f"{p1} Win %", f"{prob*100:.1f}%")
                         with col2:
                             st.metric(f"{p2} Win %", f"{(1-prob)*100:.1f}%")
+                        with col3:
+                            st.metric("Expected Games", f"{analysis_details['expected_games']:.1f}")
                         
-                        with st.expander("Details"):
-                            st.write("**ELO Ratings:**")
-                            col1, col2 = st.columns(2)
-                            col1.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
-                            col2.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
+                        # Display the summary
+                        st.markdown(summary)
+                        
+                        # Detailed breakdown in expander
+                        with st.expander("📊 Detailed Match Analysis"):
                             
-                            st.write("**Form Stats:**")
-                            col1, col2 = st.columns(2)
+                            # Head-to-head comparison
+                            st.write("### 🤝 Player Comparison")
+                            
+                            col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.write(f"**{p1}**")
-                                f1 = details['p1_form']
-                                st.write(f"Win %: {f1['win_pct']*100:.0f}%")
-                                st.write(f"Momentum: {f1['momentum']*100:.0f}%")
-                                st.write(f"Streak: {f1['streak']:+d}")
+                                st.write(f"**{analysis_details['favorite']}**")
+                                st.metric("Favorite Probability", f"{analysis_details['favorite_prob']*100:.1f}%")
+                                if analysis_details['favorite'] == p1:
+                                    st.metric("ELO Rating", f"{details['p1_elo']:.0f}")
+                                    st.metric("Current Form", f"{details['p1_form']['win_pct']*100:.0f}%")
+                                else:
+                                    st.metric("ELO Rating", f"{details['p2_elo']:.0f}")
+                                    st.metric("Current Form", f"{details['p2_form']['win_pct']*100:.0f}%")
+                            
                             with col2:
-                                st.write(f"**{p2}**")
-                                f2 = details['p2_form']
-                                st.write(f"Win %: {f2['win_pct']*100:.0f}%")
-                                st.write(f"Momentum: {f2['momentum']*100:.0f}%")
-                                st.write(f"Streak: {f2['streak']:+d}")
+                                st.write("**Match Details**")
+                                st.metric("Confidence Level", analysis_details['confidence'])
+                                st.metric("Match Type", analysis_details['match_type'])
+                                st.metric("Expected Sets", f"{analysis_details['expected_sets']:.1f}")
+                            
+                            with col3:
+                                st.write(f"**{analysis_details['underdog']}**")
+                                st.metric("Upset Probability", f"{analysis_details['underdog_prob']*100:.1f}%")
+                                if analysis_details['underdog'] == p1:
+                                    st.metric("ELO Rating", f"{details['p1_elo']:.0f}")
+                                    st.metric("Current Form", f"{details['p1_form']['win_pct']*100:.0f}%")
+                                else:
+                                    st.metric("ELO Rating", f"{details['p2_elo']:.0f}")
+                                    st.metric("Current Form", f"{details['p2_form']['win_pct']*100:.0f}%")
+                            
+                            # Form comparison table
+                            st.write("### 📈 Form Statistics")
+                            
+                            form_data = {
+                                'Metric': ['Win Percentage', 'Momentum (Last 5)', 'Current Streak', 
+                                         'Fatigue Level', 'Avg Games per Match', 'Avg Sets per Match'],
+                                p1: [
+                                    f"{details['p1_form']['win_pct']*100:.1f}%",
+                                    f"{details['p1_form']['momentum']*100:.1f}%",
+                                    f"{details['p1_form']['streak']:+d}",
+                                    f"{details['p1_form']['fatigue']*100:.0f}%",
+                                    f"{details['p1_form']['games_played_avg']:.1f}",
+                                    f"{details['p1_form']['sets_played_avg']:.1f}"
+                                ],
+                                p2: [
+                                    f"{details['p2_form']['win_pct']*100:.1f}%",
+                                    f"{details['p2_form']['momentum']*100:.1f}%",
+                                    f"{details['p2_form']['streak']:+d}",
+                                    f"{details['p2_form']['fatigue']*100:.0f}%",
+                                    f"{details['p2_form']['games_played_avg']:.1f}",
+                                    f"{details['p2_form']['sets_played_avg']:.1f}"
+                                ]
+                            }
+                            
+                            form_df = pd.DataFrame(form_data)
+                            st.dataframe(form_df, width='stretch')
+                            
+                            # ELO comparison
+                            st.write("### 📊 ELO Rating Analysis")
+                            elo_diff = details['p1_elo'] - details['p2_elo']
+                            
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric(f"{p1} ELO", f"{details['p1_elo']:.0f}")
+                            col2.metric("Difference", f"{elo_diff:+.0f}", 
+                                      delta="Advantage" if elo_diff > 0 else "Disadvantage")
+                            col3.metric(f"{p2} ELO", f"{details['p2_elo']:.0f}")
+                            
+                            # Surface analysis
+                            st.write("### 🏟️ Surface Analysis")
+                            surface_notes = {
+                                'Hard': "Fast surface favors big servers and aggressive baseline players",
+                                'Clay': "Slow surface favors defensive players and grinders",
+                                'Grass': "Very fast surface favors serve-and-volley players and big servers",
+                                'Carpet': "Fast indoor surface (rarely used nowadays)"
+                            }
+                            
+                            st.info(f"**{surface} Court**: {surface_notes.get(surface, '')}")
+                            
+                            # Fatigue analysis
+                            st.write("### ⚡ Fatigue Analysis")
+                            fatigue_p1 = details['p1_form']['fatigue']
+                            fatigue_p2 = details['p2_form']['fatigue']
+                            
+                            if fatigue_p1 > 0.7 or fatigue_p2 > 0.7:
+                                st.warning("⚠️ High fatigue levels detected - could impact performance")
+                            elif fatigue_p1 > fatigue_p2 + 0.3:
+                                st.info(f"📉 {p1} shows higher fatigue levels than {p2}")
+                            elif fatigue_p2 > fatigue_p1 + 0.3:
+                                st.info(f"📉 {p2} shows higher fatigue levels than {p1}")
+                            else:
+                                st.success("✅ Both players appear to have similar fatigue levels")
     
     with tabs[2]:
         st.header("Player Statistics")
@@ -460,27 +697,55 @@ def main():
                     wins = sum(1 for m in matches if m.get('won', False))
                     total = len(matches)
                     
-                    st.write(f"**Statistics for {player}**")
-                    col1, col2, col3 = st.columns(3)
+                    st.write(f"### 📊 Statistics for {player}")
+                    col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Total Matches", total)
                     col2.metric("Wins", wins)
-                    col3.metric("Win %", f"{wins/total*100:.1f}%" if total > 0 else "N/A")
+                    col3.metric("Losses", total - wins)
+                    col4.metric("Win %", f"{wins/total*100:.1f}%" if total > 0 else "N/A")
                     
                     # Surface breakdown
                     surface_stats = {}
                     for match in matches:
                         surf = match.get('surface', 'Hard')
                         if surf not in surface_stats:
-                            surface_stats[surf] = {'wins': 0, 'total': 0}
+                            surface_stats[surf] = {'wins': 0, 'total': 0, 'games_avg': [], 'sets_avg': []}
                         surface_stats[surf]['total'] += 1
                         if match.get('won', False):
                             surface_stats[surf]['wins'] += 1
+                        surface_stats[surf]['games_avg'].append(match.get('games_played', 18))
+                        surface_stats[surf]['sets_avg'].append(match.get('sets_played', 3))
                     
                     if surface_stats:
-                        st.write("**Performance by Surface:**")
+                        st.write("#### 🏟️ Performance by Surface:")
+                        surface_data = []
                         for surf, stats in surface_stats.items():
                             win_pct = stats['wins'] / stats['total'] * 100
-                            st.write(f"{surf}: {stats['wins']}W - {stats['total']-stats['wins']}L ({win_pct:.1f}%)")
+                            avg_games = np.mean(stats['games_avg']) if stats['games_avg'] else 18
+                            avg_sets = np.mean(stats['sets_avg']) if stats['sets_avg'] else 3
+                            surface_data.append({
+                                'Surface': surf,
+                                'Matches': stats['total'],
+                                'Wins': stats['wins'],
+                                'Losses': stats['total'] - stats['wins'],
+                                'Win %': f"{win_pct:.1f}%",
+                                'Avg Games': f"{avg_games:.1f}",
+                                'Avg Sets': f"{avg_sets:.1f}"
+                            })
+                        
+                        surface_df = pd.DataFrame(surface_data)
+                        st.dataframe(surface_df, width='stretch')
+                        
+                        # ELO by surface
+                        st.write("#### 📈 ELO Ratings by Surface:")
+                        elo_data = []
+                        if pid in st.session_state.elo_ratings:
+                            for surf, elo in st.session_state.elo_ratings[pid].items():
+                                elo_data.append({'Surface': surf, 'ELO Rating': f"{elo:.0f}"})
+                        
+                        if elo_data:
+                            elo_df = pd.DataFrame(elo_data)
+                            st.dataframe(elo_df, width='stretch')
                 else:
                     st.info(f"No match history for {player}")
 
