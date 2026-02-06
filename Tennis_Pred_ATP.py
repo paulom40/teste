@@ -55,10 +55,54 @@ def compute_elo_simple(df, k_factor=32, initial_elo=1500):
     """Simple ELO computation - less memory intensive"""
     df = df.copy()
     
+    # Map column names - your CSV has different column names
+    column_mapping = {
+        'Player_1': 'Player_1',
+        'Player_2': 'Player_2', 
+        'Winner': 'Winner',
+        'Surface': 'Surface'
+    }
+    
+    # Check if we need to rename columns
+    actual_columns = set(df.columns)
+    expected_columns = set(column_mapping.keys())
+    
+    # Try to find the right columns
+    player1_col = None
+    player2_col = None
+    winner_col = None
+    surface_col = None
+    
+    # Look for common column name patterns
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'player' in col_lower and ('1' in col_lower or 'player1' in col_lower):
+            player1_col = col
+        elif 'player' in col_lower and ('2' in col_lower or 'player2' in col_lower):
+            player2_col = col
+        elif 'winner' in col_lower:
+            winner_col = col
+        elif 'surface' in col_lower:
+            surface_col = col
+    
+    # Use found columns or default to expected names
+    if player1_col:
+        df = df.rename(columns={player1_col: 'Player_1'})
+    if player2_col:
+        df = df.rename(columns={player2_col: 'Player_2'})
+    if winner_col:
+        df = df.rename(columns={winner_col: 'Winner'})
+    if surface_col:
+        df = df.rename(columns={surface_col: 'Surface'})
+    
     # Clean data
     for col in ['Player_1', 'Player_2', 'Winner', 'Surface']:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
+        else:
+            st.error(f"Column '{col}' not found in CSV")
+            st.info(f"Available columns: {list(df.columns)}")
+            return 0
     
     # Get unique players
     all_players = set()
@@ -81,20 +125,32 @@ def compute_elo_simple(df, k_factor=32, initial_elo=1500):
         p1 = row['Player_1']
         p2 = row['Player_2']
         winner = row['Winner']
-        surface = row['Surface'] if 'Surface' in row and row['Surface'] in SURFACE_TYPES else 'Hard'
+        surface = row['Surface'] if 'Surface' in row and pd.notna(row['Surface']) and str(row['Surface']).strip() in SURFACE_TYPES else 'Hard'
         
-        # Try to get set/game information
-        try:
-            if 'Player_1_Sets' in df.columns and 'Player_2_Sets' in df.columns:
-                sets_played = row.get('Player_1_Sets', 0) + row.get('Player_2_Sets', 0)
-                # Estimate games (assuming average 6 games per set)
-                games_played = sets_played * 6
-            else:
-                sets_played = 3  # Default
-                games_played = 18  # Default
-        except:
-            sets_played = 3
-            games_played = 18
+        # Try to get set/game information from Score column if available
+        sets_played = 3  # Default
+        games_played = 18  # Default
+        
+        if 'Score' in df.columns and pd.notna(row.get('Score')):
+            try:
+                score_str = str(row['Score'])
+                # Simple parsing of score (e.g., "6-4 6-3" or "6-3 4-6 6-2")
+                sets = score_str.split()
+                sets_played = len(sets)
+                # Estimate total games (sum of all numbers in score)
+                total_games = 0
+                for set_score in sets:
+                    if '-' in set_score:
+                        games = set_score.split('-')
+                        if len(games) == 2:
+                            try:
+                                total_games += int(games[0]) + int(games[1])
+                            except:
+                                total_games += 12  # Default if parsing fails
+                if total_games > 0:
+                    games_played = total_games
+            except:
+                pass
         
         if winner not in [p1, p2]:
             continue
@@ -209,12 +265,12 @@ def create_features_simple(df):
     match_history = st.session_state.match_history
     
     for idx, row in df.iterrows():
-        p1 = row['Player_1']
-        p2 = row['Player_2']
-        winner = row['Winner']
+        p1 = row['Player_1'] if 'Player_1' in row else None
+        p2 = row['Player_2'] if 'Player_2' in row else None
+        winner = row['Winner'] if 'Winner' in row else None
         surface = row['Surface'] if 'Surface' in row and row['Surface'] in SURFACE_TYPES else 'Hard'
         
-        if winner not in [p1, p2]:
+        if not p1 or not p2 or not winner or winner not in [p1, p2]:
             continue
             
         p1_id = player_ids.get(p1)
@@ -477,21 +533,62 @@ def main():
                 with st.expander("Data Preview"):
                     st.dataframe(df.head(), width='stretch')
                     st.write(f"Total rows: {len(df)}")
-                    st.write("Columns:", list(df.columns))
+                    st.write("Columns found:", list(df.columns))
+                    
+                    # Show sample of data to help identify columns
+                    st.write("### Sample of first row:")
+                    for col in df.columns:
+                        st.write(f"**{col}**: {df.iloc[0][col] if col in df.columns else 'N/A'}")
                 
-                # Check required columns
-                required_cols = ['Player_1', 'Player_2', 'Winner']
-                missing_cols = [col for col in required_cols if col not in df.columns]
+                # Check required columns - your CSV has different names
+                st.write("### 🔍 Checking CSV format...")
                 
-                if missing_cols:
-                    st.error(f"Missing columns: {', '.join(missing_cols)}")
+                # Look for player and winner columns
+                player_cols_found = []
+                winner_col_found = None
+                surface_col_found = None
+                
+                for col in df.columns:
+                    col_lower = str(col).lower()
+                    if 'player' in col_lower:
+                        player_cols_found.append(col)
+                    if 'winner' in col_lower:
+                        winner_col_found = col
+                    if 'surface' in col_lower:
+                        surface_col_found = col
+                
+                if len(player_cols_found) >= 2 and winner_col_found:
+                    st.success(f"✅ Found player columns: {player_cols_found}")
+                    st.success(f"✅ Found winner column: {winner_col_found}")
+                    if surface_col_found:
+                        st.success(f"✅ Found surface column: {surface_col_found}")
+                    else:
+                        st.warning("⚠️ No surface column found - will use 'Hard' as default")
+                else:
+                    st.error("❌ Could not find required columns. Your CSV needs columns containing 'Player' and 'Winner' in their names.")
                     return
                 
-                # Check for valid matches
+                # Process the data
                 df_clean = df.copy()
-                for col in required_cols:
-                    df_clean[col] = df_clean[col].astype(str).str.strip()
                 
+                # Rename columns to standard names
+                if len(player_cols_found) >= 2:
+                    df_clean = df_clean.rename(columns={
+                        player_cols_found[0]: 'Player_1',
+                        player_cols_found[1]: 'Player_2',
+                        winner_col_found: 'Winner'
+                    })
+                    if surface_col_found:
+                        df_clean = df_clean.rename(columns={surface_col_found: 'Surface'})
+                    else:
+                        df_clean['Surface'] = 'Hard'
+                
+                # Clean the data
+                for col in ['Player_1', 'Player_2', 'Winner', 'Surface']:
+                    if col in df_clean.columns:
+                        df_clean[col] = df_clean[col].astype(str).str.strip()
+                
+                # Check for valid matches
                 valid_mask = (df_clean['Winner'] == df_clean['Player_1']) | (df_clean['Winner'] == df_clean['Player_2'])
                 valid_matches = df_clean[valid_mask]
                 
@@ -505,13 +602,21 @@ def main():
                     with st.spinner("Training model..."):
                         # Compute ELO
                         valid_count = compute_elo_simple(valid_matches, k_factor=k_factor)
-                        st.success(f"ELO computed for {len(st.session_state.player_ids)} players")
+                        st.success(f"ELO computed for {len(st.session_state.player_ids)} players from {valid_count} valid matches")
                         
                         # Create features
                         features_df, labels = create_features_simple(valid_matches)
                         st.success(f"Created {len(features_df)} training samples")
                         
                         if len(features_df) > 0:
+                            # Show class distribution
+                            unique_labels, counts = np.unique(labels, return_counts=True)
+                            st.write("**Class distribution:**")
+                            for label, count in zip(unique_labels, counts):
+                                label_text = "Win" if label == 1 else "Loss"
+                                percentage = (count/len(labels))*100
+                                st.write(f"  {label_text}: {count} samples ({percentage:.1f}%)")
+                            
                             # Train model
                             model, metrics = train_simple_model(features_df, labels)
                             st.session_state.ensemble_model = model
@@ -519,17 +624,17 @@ def main():
                             
                             st.success("Model trained successfully!")
                             
-                            # Show metrics
+                            # Show metrics - FIXED THE FORMATTING ERROR HERE
                             st.subheader("Model Performance")
                             cols = st.columns(4)
-                            cols[0].metric("Accuracy", f"{metrics['accuracy']:.1f%}")
-                            cols[1].metric("Precision", f"{metrics['precision']:.1f%}")
-                            cols[2].metric("Recall", f"{metrics['recall']:.1f%}")
-                            cols[3].metric("F1-Score", f"{metrics['f1']:.1f%}")
+                            cols[0].metric("Accuracy", f"{metrics['accuracy']:.1%}")  # Fixed: removed extra 'f'
+                            cols[1].metric("Precision", f"{metrics['precision']:.1%}")  # Fixed: removed extra 'f'
+                            cols[2].metric("Recall", f"{metrics['recall']:.1%}")  # Fixed: removed extra 'f'
+                            cols[3].metric("F1-Score", f"{metrics['f1']:.1%}")  # Fixed: removed extra 'f'
                             
             except Exception as e:
                 st.error(f"Error: {str(e)}")
-                st.info("Please make sure your CSV has the correct format with columns: Player_1, Player_2, Winner, Surface")
+                st.info("Please make sure your CSV has the correct format with columns for players and winner")
     
     with tabs[1]:
         st.header("Predict Match")
