@@ -569,7 +569,7 @@ def train_advanced_model(features_df, labels, use_advanced=True):
                 colsample_bytree=0.8,
                 random_state=42,
                 n_jobs=-1,
-                use_label_encoder=False,
+                # Removed deprecated parameter: use_label_encoder=False,
                 eval_metric='logloss'
             ),
             'rf': RandomForestClassifier(
