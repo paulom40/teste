@@ -54,6 +54,10 @@ if 'feature_importance' not in st.session_state:
     st.session_state.feature_importance = {}
 if 'model_metrics' not in st.session_state:
     st.session_state.model_metrics = {}
+if 'selected_features' not in st.session_state:
+    st.session_state.selected_features = None
+if 'feature_selector' not in st.session_state:
+    st.session_state.feature_selector = None
 
 SURFACE_TYPES = ['Hard', 'Clay', 'Grass', 'Carpet']
 
@@ -400,6 +404,81 @@ def calc_advanced_form(player_id, surface, match_history, lookback_days=365):
         'performance_std': np.std(performances) if performances and len(performances) > 1 else 0
     }
 
+def create_all_features(p1, p2, surface, p1_form, p2_form, p1_elo, p2_elo, p1_global, p2_global, h2h_info):
+    """Create all possible features for a match"""
+    # Determine H2H win percentage for p1
+    h2h_key = tuple(sorted([p1, p2]))
+    h2h_matches = h2h_info['matches']
+    first_player = h2h_key[0]
+    
+    if h2h_matches > 0:
+        if p1 == first_player:
+            h2h_pct_p1 = h2h_info['player1_wins'] / h2h_matches
+        else:
+            h2h_pct_p1 = 1 - (h2h_info['player1_wins'] / h2h_matches)
+    else:
+        h2h_pct_p1 = 0.5
+    
+    # Create all possible features
+    features = {
+        # ELO features
+        'elo_diff': p1_elo - p2_elo,
+        'elo_ratio': p1_elo / max(p2_elo, 1),
+        'global_elo_diff': p1_global - p2_global,
+        
+        # Form features
+        'win_pct_diff': p1_form['win_pct'] - p2_form['win_pct'],
+        'momentum_diff': p1_form['momentum'] - p2_form['momentum'],
+        'streak_diff': p1_form['streak'] - p2_form['streak'],
+        'consistency_diff': p1_form['consistency'] - p2_form['consistency'],
+        'fatigue_diff': p1_form['fatigue'] - p2_form['fatigue'],
+        
+        # Recent form
+        'recent_5_diff': p1_form['recent_5'] - p2_form['recent_5'],
+        'recent_10_diff': p1_form['recent_10'] - p2_form['recent_10'],
+        'recent_20_diff': p1_form['recent_20'] - p2_form['recent_20'],
+        
+        # Advanced metrics
+        'clutch_diff': p1_form['clutch_performance'] - p2_form['clutch_performance'],
+        'top10_diff': p1_form['top10_performance'] - p2_form['top10_performance'],
+        'opp_elo_diff': p1_form['opp_elo'] - p2_form['opp_elo'],
+        
+        # Individual features
+        'p1_win_pct': p1_form['win_pct'],
+        'p1_momentum': p1_form['momentum'],
+        'p1_streak': p1_form['streak'],
+        'p1_consistency': p1_form['consistency'],
+        'p1_clutch': p1_form['clutch_performance'],
+        
+        'p2_win_pct': p2_form['win_pct'],
+        'p2_momentum': p2_form['momentum'],
+        'p2_streak': p2_form['streak'],
+        'p2_consistency': p2_form['consistency'],
+        'p2_clutch': p2_form['clutch_performance'],
+        
+        # H2H features
+        'h2h_win_pct': h2h_pct_p1,
+        'h2h_matches': h2h_matches,
+        
+        # Surface features
+        'is_hard': 1 if surface == 'Hard' else 0,
+        'is_clay': 1 if surface == 'Clay' else 0,
+        'is_grass': 1 if surface == 'Grass' else 0,
+        
+        # Interaction features
+        'elo_momentum_interaction': (p1_elo - p2_elo) * (p1_form['momentum'] - p2_form['momentum']),
+        'elo_form_interaction': (p1_elo - p2_elo) * (p1_form['win_pct'] - p2_form['win_pct']),
+        'momentum_streak_interaction': (p1_form['momentum'] - p2_form['momentum']) * (p1_form['streak'] - p2_form['streak']),
+        
+        # Derived features
+        'experience_diff': len(st.session_state.match_history.get(st.session_state.player_ids.get(p1, ''), [])) - 
+                         len(st.session_state.match_history.get(st.session_state.player_ids.get(p2, ''), [])),
+        'upset_potential': 1 if p2_elo > p1_elo else 0,
+        'form_consistency_product': p1_form['consistency'] * p2_form['consistency'],
+    }
+    
+    return features
+
 def create_advanced_features(df):
     """Create advanced feature set for higher accuracy"""
     features_list = []
@@ -437,74 +516,9 @@ def create_advanced_features(df):
         # H2H stats
         h2h_key = tuple(sorted([p1, p2]))
         h2h_info = h2h_stats.get(h2h_key, {'player1_wins': 0, 'matches': 0})
-        h2h_matches = h2h_info['matches']
         
-        # Determine H2H win percentage for p1
-        first_player = h2h_key[0]
-        if h2h_matches > 0:
-            if p1 == first_player:
-                h2h_pct_p1 = h2h_info['player1_wins'] / h2h_matches
-            else:
-                h2h_pct_p1 = 1 - (h2h_info['player1_wins'] / h2h_matches)
-        else:
-            h2h_pct_p1 = 0.5
-        
-        # Create advanced features
-        features = {
-            # ELO features
-            'elo_diff': p1_elo - p2_elo,
-            'elo_ratio': p1_elo / max(p2_elo, 1),
-            'global_elo_diff': p1_global - p2_global,
-            
-            # Form features
-            'win_pct_diff': p1_form['win_pct'] - p2_form['win_pct'],
-            'momentum_diff': p1_form['momentum'] - p2_form['momentum'],
-            'streak_diff': p1_form['streak'] - p2_form['streak'],
-            'consistency_diff': p1_form['consistency'] - p2_form['consistency'],
-            'fatigue_diff': p1_form['fatigue'] - p2_form['fatigue'],
-            
-            # Recent form
-            'recent_5_diff': p1_form['recent_5'] - p2_form['recent_5'],
-            'recent_10_diff': p1_form['recent_10'] - p2_form['recent_10'],
-            'recent_20_diff': p1_form['recent_20'] - p2_form['recent_20'],
-            
-            # Advanced metrics
-            'clutch_diff': p1_form['clutch_performance'] - p2_form['clutch_performance'],
-            'top10_diff': p1_form['top10_performance'] - p2_form['top10_performance'],
-            'opp_elo_diff': p1_form['opp_elo'] - p2_form['opp_elo'],
-            
-            # Individual features
-            'p1_win_pct': p1_form['win_pct'],
-            'p1_momentum': p1_form['momentum'],
-            'p1_streak': p1_form['streak'],
-            'p1_consistency': p1_form['consistency'],
-            'p1_clutch': p1_form['clutch_performance'],
-            
-            'p2_win_pct': p2_form['win_pct'],
-            'p2_momentum': p2_form['momentum'],
-            'p2_streak': p2_form['streak'],
-            'p2_consistency': p2_form['consistency'],
-            'p2_clutch': p2_form['clutch_performance'],
-            
-            # H2H features
-            'h2h_win_pct': h2h_pct_p1,
-            'h2h_matches': h2h_matches,
-            
-            # Surface features
-            'is_hard': 1 if surface == 'Hard' else 0,
-            'is_clay': 1 if surface == 'Clay' else 0,
-            'is_grass': 1 if surface == 'Grass' else 0,
-            
-            # Interaction features (important for accuracy)
-            'elo_momentum_interaction': (p1_elo - p2_elo) * (p1_form['momentum'] - p2_form['momentum']),
-            'elo_form_interaction': (p1_elo - p2_elo) * (p1_form['win_pct'] - p2_form['win_pct']),
-            'momentum_streak_interaction': (p1_form['momentum'] - p2_form['momentum']) * (p1_form['streak'] - p2_form['streak']),
-            
-            # Derived features
-            'experience_diff': len(match_history.get(p1_id, [])) - len(match_history.get(p2_id, [])),
-            'upset_potential': 1 if p2_elo > p1_elo else 0,
-            'form_consistency_product': p1_form['consistency'] * p2_form['consistency'],
-        }
+        # Create features
+        features = create_all_features(p1, p2, surface, p1_form, p2_form, p1_elo, p2_elo, p1_global, p2_global, h2h_info)
         
         features_list.append(features)
         labels.append(1 if winner == p1 else 0)
@@ -516,12 +530,22 @@ def train_advanced_model(features_df, labels, use_advanced=True):
     if len(np.unique(labels)) < 2:
         raise ValueError("Need both win and loss examples")
     
+    # Store all feature names before selection
+    all_feature_names = features_df.columns.tolist()
+    
     # Feature selection
     if len(features_df.columns) > 30 and use_advanced:
         selector = SelectKBest(f_classif, k=min(30, len(features_df.columns)))
         X_selected = selector.fit_transform(features_df, labels)
-        selected_features = features_df.columns[selector.get_support()]
+        selected_features = features_df.columns[selector.get_support()].tolist()
+        st.session_state.selected_features = selected_features
+        st.session_state.feature_selector = selector
+        
+        # Keep only selected features
         features_df = pd.DataFrame(X_selected, columns=selected_features)
+    else:
+        st.session_state.selected_features = all_feature_names
+        st.session_state.feature_selector = None
     
     # Split data with stratification
     X_train, X_test, y_train, y_test = train_test_split(
@@ -657,22 +681,27 @@ def train_advanced_model(features_df, labels, use_advanced=True):
     }
     
     # Feature importance
-    if 'rf' in trained_models if use_advanced else True:
-        if use_advanced and 'rf' in trained_models:
-            importances = trained_models['rf'].feature_importances_
-        else:
-            importances = calibrated_model.base_estimator.feature_importances_ if hasattr(calibrated_model.base_estimator, 'feature_importances_') else None
-        
-        if importances is not None:
-            feature_importance = dict(zip(features_df.columns, importances))
-            st.session_state.feature_importance = feature_importance
+    if use_advanced and 'rf' in trained_models:
+        importances = trained_models['rf'].feature_importances_
+    else:
+        importances = calibrated_model.base_estimator.feature_importances_ if hasattr(calibrated_model.base_estimator, 'feature_importances_') else None
+    
+    if importances is not None:
+        feature_importance = dict(zip(features_df.columns, importances))
+        st.session_state.feature_importance = feature_importance
     
     st.session_state.model_metrics = metrics
     return calibrated_model, metrics
 
-def predict_advanced_match(p1_id, p2_id, surface):
+def predict_advanced_match(p1_name, p2_name, surface):
     """Advanced prediction"""
     if not st.session_state.ensemble_model:
+        return None
+    
+    p1_id = st.session_state.player_ids.get(p1_name)
+    p2_id = st.session_state.player_ids.get(p2_name)
+    
+    if not p1_id or not p2_id:
         return None
     
     # Get ratings
@@ -686,71 +715,27 @@ def predict_advanced_match(p1_id, p2_id, surface):
     p2_form = calc_advanced_form(p2_id, surface, st.session_state.match_history)
     
     # H2H stats
-    p1_name = st.session_state.player_names.get(p1_id, "Player 1")
-    p2_name = st.session_state.player_names.get(p2_id, "Player 2")
     h2h_key = tuple(sorted([p1_name, p2_name]))
     h2h_info = st.session_state.h2h_stats.get(h2h_key, {'player1_wins': 0, 'matches': 0})
-    h2h_matches = h2h_info['matches']
     
-    # Determine H2H win percentage for p1
-    first_player = h2h_key[0]
-    if h2h_matches > 0:
-        if p1_name == first_player:
-            h2h_pct_p1 = h2h_info['player1_wins'] / h2h_matches
-        else:
-            h2h_pct_p1 = 1 - (h2h_info['player1_wins'] / h2h_matches)
+    # Create all features
+    all_features = create_all_features(p1_name, p2_name, surface, p1_form, p2_form, 
+                                      p1_elo, p2_elo, p1_global, p2_global, h2h_info)
+    
+    # Create DataFrame with all features
+    all_features_df = pd.DataFrame([all_features])
+    
+    # Apply feature selection if used during training
+    if st.session_state.selected_features is not None:
+        # Ensure we only use the features that were selected during training
+        features_df = all_features_df[st.session_state.selected_features]
     else:
-        h2h_pct_p1 = 0.5
+        features_df = all_features_df
     
-    # Create features
-    features = {
-        'elo_diff': p1_elo - p2_elo,
-        'elo_ratio': p1_elo / max(p2_elo, 1),
-        'global_elo_diff': p1_global - p2_global,
-        
-        'win_pct_diff': p1_form['win_pct'] - p2_form['win_pct'],
-        'momentum_diff': p1_form['momentum'] - p2_form['momentum'],
-        'streak_diff': p1_form['streak'] - p2_form['streak'],
-        'consistency_diff': p1_form['consistency'] - p2_form['consistency'],
-        'fatigue_diff': p1_form['fatigue'] - p2_form['fatigue'],
-        
-        'recent_5_diff': p1_form['recent_5'] - p2_form['recent_5'],
-        'recent_10_diff': p1_form['recent_10'] - p2_form['recent_10'],
-        'recent_20_diff': p1_form['recent_20'] - p2_form['recent_20'],
-        
-        'clutch_diff': p1_form['clutch_performance'] - p2_form['clutch_performance'],
-        'top10_diff': p1_form['top10_performance'] - p2_form['top10_performance'],
-        'opp_elo_diff': p1_form['opp_elo'] - p2_form['opp_elo'],
-        
-        'p1_win_pct': p1_form['win_pct'],
-        'p1_momentum': p1_form['momentum'],
-        'p1_streak': p1_form['streak'],
-        'p1_consistency': p1_form['consistency'],
-        'p1_clutch': p1_form['clutch_performance'],
-        
-        'p2_win_pct': p2_form['win_pct'],
-        'p2_momentum': p2_form['momentum'],
-        'p2_streak': p2_form['streak'],
-        'p2_consistency': p2_form['consistency'],
-        'p2_clutch': p2_form['clutch_performance'],
-        
-        'h2h_win_pct': h2h_pct_p1,
-        'h2h_matches': h2h_matches,
-        
-        'is_hard': 1 if surface == 'Hard' else 0,
-        'is_clay': 1 if surface == 'Clay' else 0,
-        'is_grass': 1 if surface == 'Grass' else 0,
-        
-        'elo_momentum_interaction': (p1_elo - p2_elo) * (p1_form['momentum'] - p2_form['momentum']),
-        'elo_form_interaction': (p1_elo - p2_elo) * (p1_form['win_pct'] - p2_form['win_pct']),
-        'momentum_streak_interaction': (p1_form['momentum'] - p2_form['momentum']) * (p1_form['streak'] - p2_form['streak']),
-        
-        'experience_diff': len(st.session_state.match_history.get(p1_id, [])) - len(st.session_state.match_history.get(p2_id, [])),
-        'upset_potential': 1 if p2_elo > p1_elo else 0,
-        'form_consistency_product': p1_form['consistency'] * p2_form['consistency'],
-    }
-    
-    features_df = pd.DataFrame([features])
+    # Ensure all expected features are present (fill missing with 0)
+    for feature in st.session_state.selected_features if st.session_state.selected_features else features_df.columns:
+        if feature not in features_df.columns:
+            features_df[feature] = 0
     
     # Scale and predict
     try:
@@ -766,7 +751,7 @@ def predict_advanced_match(p1_id, p2_id, surface):
             'p1_win_prob': p1_win_prob,
             'p2_win_prob': p2_win_prob,
             'expected_score': expected_score,
-            'features': features,
+            'features': all_features,
             'p1_elo': p1_elo,
             'p2_elo': p2_elo,
             'p1_form': p1_form,
@@ -783,10 +768,7 @@ def display_match_prediction(p1_name, p2_name, surface):
         st.error("One or both players not found in dataset")
         return
     
-    p1_id = st.session_state.player_ids[p1_name]
-    p2_id = st.session_state.player_ids[p2_name]
-    
-    prediction = predict_advanced_match(p1_id, p2_id, surface)
+    prediction = predict_advanced_match(p1_name, p2_name, surface)
     
     if not prediction:
         st.error("Could not generate prediction")
@@ -953,6 +935,10 @@ def main():
                         st.success(f"Model trained successfully!")
                         st.write(f"**Test Accuracy**: {metrics['accuracy']*100:.1f}%")
                         st.write(f"**ROC AUC**: {metrics['roc_auc']:.3f}")
+                        
+                        # Show selected features count
+                        if st.session_state.selected_features:
+                            st.write(f"**Features used**: {len(st.session_state.selected_features)}")
                     else:
                         st.error("Could not create features from data")
                 except Exception as e:
@@ -1127,6 +1113,15 @@ def main():
                                         columns=['Feature', 'Importance'])
                     fi_df = fi_df.sort_values('Importance', ascending=False).head(10)
                     st.bar_chart(fi_df.set_index('Feature'))
+                
+                # Show selected features
+                if st.session_state.selected_features:
+                    st.subheader(f"Selected Features ({len(st.session_state.selected_features)})")
+                    with st.expander("View all features"):
+                        for i, feature in enumerate(st.session_state.selected_features[:50]):
+                            st.write(f"{i+1}. {feature}")
+                        if len(st.session_state.selected_features) > 50:
+                            st.write(f"... and {len(st.session_state.selected_features) - 50} more")
                 
                 # Confusion matrix
                 st.subheader("Confusion Matrix")
