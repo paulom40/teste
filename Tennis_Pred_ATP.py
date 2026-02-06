@@ -1013,7 +1013,7 @@ def main():
                                     }
                                 ))
                                 fig.update_layout(height=300)
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig)
                             
                             with col2:
                                 st.metric("Confidence", f"{confidence:.0%}")
@@ -1150,7 +1150,7 @@ def main():
                                 fig = px.bar(surf_df, x='Surface', y='Win %', 
                                             title='Win Percentage by Surface',
                                             color='Win %', color_continuous_scale='RdYlGn')
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig)
                             with col2:
                                 st.dataframe(surf_df, width='stretch')
                         
@@ -1170,7 +1170,7 @@ def main():
                                 fig = px.line(elo_df, x='Date', y='ELO', 
                                              title='ELO Rating Over Time',
                                              markers=True)
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig)
                     else:
                         st.info(f"No match history found for {player}")
             else:
@@ -1188,7 +1188,7 @@ def main():
                               y=['Loss', 'Win'],
                               title="Confusion Matrix",
                               text_auto=True)
-            st.plotly_chart(cm_fig, use_container_width=True)
+            st.plotly_chart(cm_fig)
             
             # Feature Importance
             if st.session_state.feature_importance:
@@ -1203,7 +1203,7 @@ def main():
                             title='Top 15 Most Important Features',
                             color='Importance',
                             color_continuous_scale='viridis')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
             
             # Model Comparison
             st.subheader("Model Performance Comparison")
@@ -1217,7 +1217,7 @@ def main():
                             title='Cross-Validation AUC Scores by Model',
                             color='CV AUC Score',
                             color_continuous_scale='blues')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
         else:
             st.info("Train a model to see insights")
     
