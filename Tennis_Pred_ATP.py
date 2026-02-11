@@ -569,7 +569,6 @@ def train_advanced_model(features_df, labels, use_advanced=True):
                 colsample_bytree=0.8,
                 random_state=42,
                 n_jobs=-1,
-                # Removed deprecated parameter: use_label_encoder=False,
                 eval_metric='logloss'
             ),
             'rf': RandomForestClassifier(
@@ -882,6 +881,211 @@ def display_match_prediction(p1_name, p2_name, surface):
                  f"{prediction['p2_form']['opp_elo']:.0f}",
                  delta_color="off")
 
+def predict_elo_only(p1_name, p2_name, surface):
+    """Simple ELO-only prediction"""
+    p1_id = st.session_state.player_ids.get(p1_name)
+    p2_id = st.session_state.player_ids.get(p2_name)
+    
+    if not p1_id or not p2_id:
+        return None
+    
+    # Get ELO ratings
+    p1_elo = st.session_state.elo_ratings.get(p1_id, {}).get(surface, 1500)
+    p2_elo = st.session_state.elo_ratings.get(p2_id, {}).get(surface, 1500)
+    
+    # Get global ELO for reference
+    p1_global = st.session_state.global_elo.get(p1_id, 1500)
+    p2_global = st.session_state.global_elo.get(p2_id, 1500)
+    
+    # Calculate win probability using ELO formula
+    expected_p1 = 1 / (1 + math.pow(10, (p2_elo - p1_elo) / 400))
+    expected_p2 = 1 / (1 + math.pow(10, (p1_elo - p2_elo) / 400))
+    
+    # Calculate expected games based on ELO difference
+    # Higher ELO difference = more dominant win
+    
+    # Expected games in a best-of-3 match (average ~22 games)
+    # When players are equal (ELO diff = 0), expected games = 22
+    # When ELO diff is large, expected games decreases (dominant win)
+    elo_diff = abs(p1_elo - p2_elo)
+    expected_games = 22 - (elo_diff * 0.015)  # Each 10 ELO points reduces games by 0.15
+    expected_games = max(18, min(26, expected_games))  # Clamp between 18 and 26
+    
+    # Expected sets (3-set match)
+    if expected_p1 > expected_p2:
+        expected_sets = 2 + expected_p1  # Winner gets 2-3 sets, loser gets 0-1
+    else:
+        expected_sets = 2 + expected_p2
+    
+    # Head to head from history
+    h2h_key = tuple(sorted([p1_name, p2_name]))
+    h2h_info = st.session_state.h2h_stats.get(h2h_key, {'player1_wins': 0, 'matches': 0})
+    
+    # Recent form (simplified)
+    p1_form = calc_advanced_form(p1_id, surface, st.session_state.match_history)
+    p2_form = calc_advanced_form(p2_id, surface, st.session_state.match_history)
+    
+    return {
+        'p1_win_prob': expected_p1,
+        'p2_win_prob': expected_p2,
+        'p1_elo': p1_elo,
+        'p2_elo': p2_elo,
+        'p1_global': p1_global,
+        'p2_global': p2_global,
+        'expected_games': expected_games,
+        'expected_sets': expected_sets,
+        'elo_diff': p1_elo - p2_elo,
+        'h2h': h2h_info,
+        'p1_form': p1_form,
+        'p2_form': p2_form,
+        'surface': surface
+    }
+
+def display_elo_prediction(p1_name, p2_name, surface):
+    """Display ELO-only prediction"""
+    if p1_name not in st.session_state.player_ids or p2_name not in st.session_state.player_ids:
+        st.error("One or both players not found in dataset")
+        return
+    
+    prediction = predict_elo_only(p1_name, p2_name, surface)
+    
+    if not prediction:
+        st.error("Could not generate prediction")
+        return
+    
+    # Header with ELO ratings
+    st.markdown("## 🎯 ELO-Based Match Prediction")
+    st.markdown("---")
+    
+    # Main prediction columns
+    col1, col2, col3 = st.columns([2, 1, 2])
+    
+    with col1:
+        st.markdown(f"### {p1_name}")
+        st.markdown(f"#### Surface ELO: **{prediction['p1_elo']:.0f}**")
+        st.markdown(f"Global ELO: {prediction['p1_global']:.0f}")
+        
+        # Win probability gauge
+        st.markdown("##### Win Probability")
+        prob_p1 = prediction['p1_win_prob'] * 100
+        st.progress(prediction['p1_win_prob'])
+        st.markdown(f"### **{prob_p1:.1f}%**")
+        
+        # Recent form
+        st.markdown("##### Recent Form")
+        st.markdown(f"Win %: {prediction['p1_form']['win_pct']*100:.1f}%")
+        st.markdown(f"Streak: {prediction['p1_form']['streak']}")
+    
+    with col2:
+        st.markdown("### VS")
+        st.markdown("---")
+        st.markdown("### ⚡")
+        
+        # ELO difference indicator
+        elo_diff = prediction['elo_diff']
+        if elo_diff > 0:
+            st.markdown(f"**{p1_name}**")
+            st.markdown(f"favored by **{abs(elo_diff):.0f}** ELO points")
+        elif elo_diff < 0:
+            st.markdown(f"**{p2_name}**")
+            st.markdown(f"favored by **{abs(elo_diff):.0f}** ELO points")
+        else:
+            st.markdown("**Perfectly matched!**")
+        
+        st.markdown("---")
+        
+        # Expected match stats
+        st.markdown("##### Expected Match")
+        st.markdown(f"🎾 Games: **{prediction['expected_games']:.1f}**")
+        st.markdown(f"📊 Sets: **{prediction['expected_sets']:.1f}**")
+    
+    with col3:
+        st.markdown(f"### {p2_name}")
+        st.markdown(f"#### Surface ELO: **{prediction['p2_elo']:.0f}**")
+        st.markdown(f"Global ELO: {prediction['p2_global']:.0f}")
+        
+        # Win probability gauge
+        st.markdown("##### Win Probability")
+        prob_p2 = prediction['p2_win_prob'] * 100
+        st.progress(prediction['p2_win_prob'])
+        st.markdown(f"### **{prob_p2:.1f}%**")
+        
+        # Recent form
+        st.markdown("##### Recent Form")
+        st.markdown(f"Win %: {prediction['p2_form']['win_pct']*100:.1f}%")
+        st.markdown(f"Streak: {prediction['p2_form']['streak']}")
+    
+    st.markdown("---")
+    
+    # Detailed analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 📊 Head-to-Head")
+        h2h = prediction['h2h']
+        if h2h['matches'] > 0:
+            p1_wins = h2h['player1_wins'] if p1_name == tuple(sorted([p1_name, p2_name]))[0] else h2h['matches'] - h2h['player1_wins']
+            p2_wins = h2h['matches'] - p1_wins
+            st.markdown(f"**Matches**: {h2h['matches']}")
+            st.markdown(f"**{p1_name}**: {p1_wins} wins ({p1_wins/h2h['matches']*100:.1f}%)")
+            st.markdown(f"**{p2_name}**: {p2_wins} wins ({p2_wins/h2h['matches']*100:.1f}%)")
+        else:
+            st.markdown("*No previous meetings*")
+    
+    with col2:
+        st.markdown("#### 📈 Surface Performance")
+        st.markdown(f"**{surface}**")
+        st.markdown(f"{p1_name}: **{prediction['p1_form']['win_pct']*100:.1f}%** wins")
+        st.markdown(f"{p2_name}: **{prediction['p2_form']['win_pct']*100:.1f}%** wins")
+        
+        # Confidence level
+        confidence = abs(prediction['p1_win_prob'] - 0.5) * 2
+        st.markdown("#### 🎲 Prediction Confidence")
+        st.progress(confidence)
+        st.markdown(f"**{confidence*100:.1f}%**")
+        if confidence > 0.7:
+            st.markdown("*High confidence prediction*")
+        elif confidence > 0.4:
+            st.markdown("*Moderate confidence prediction*")
+        else:
+            st.markdown("*Low confidence - toss-up match*")
+    
+    # ELO rating context
+    st.markdown("---")
+    st.markdown("#### ℹ️ About ELO Ratings")
+    st.markdown(f"""
+    - **Surface ELO**: Rating specific to {surface} courts
+    - **Global ELO**: Weighted average across all surfaces
+    - **ELO Range**: {min(st.session_state.global_elo.values()):.0f} - {max(st.session_state.global_elo.values()):.0f}
+    - **Formula**: P(win) = 1 / (1 + 10^((ELO_opponent - ELO_player)/400))
+    """)
+    
+    # Betting odds suggestion
+    st.markdown("---")
+    st.markdown("#### 💰 Implied Betting Odds")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if prediction['p1_win_prob'] > 0:
+            odds_p1 = (1 / prediction['p1_win_prob']) if prediction['p1_win_prob'] > 0 else 0
+            st.markdown(f"**{p1_name}**")
+            st.markdown(f"Decimal: **{odds_p1:.2f}**")
+            st.markdown(f"American: **{calculate_american_odds(odds_p1)}**")
+    
+    with col2:
+        if prediction['p2_win_prob'] > 0:
+            odds_p2 = (1 / prediction['p2_win_prob']) if prediction['p2_win_prob'] > 0 else 0
+            st.markdown(f"**{p2_name}**")
+            st.markdown(f"Decimal: **{odds_p2:.2f}**")
+            st.markdown(f"American: **{calculate_american_odds(odds_p2)}**")
+
+def calculate_american_odds(decimal_odds):
+    """Convert decimal odds to American format"""
+    if decimal_odds >= 2:
+        return f"+{int((decimal_odds - 1) * 100)}"
+    else:
+        return f"{int(-100 / (decimal_odds - 1))}"
+
 def main():
     """Main Streamlit application"""
     st.title("🎾 Tennis Prediction Pro")
@@ -959,11 +1163,18 @@ def main():
     # Main content area
     if st.session_state.match_data is not None and st.session_state.player_ids:
         
-        # Tab layout
-        tab1, tab2, tab3, tab4 = st.tabs(["Match Prediction", "Player Analysis", "Model Performance", "Data Exploration"])
+        # Tab layout - NOW WITH 5 TABS
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "🤖 ML Prediction", 
+            "📊 ELO Only", 
+            "👤 Player Analysis", 
+            "📈 Model Performance", 
+            "📁 Data Exploration"
+        ])
         
         with tab1:
-            st.header("Match Prediction")
+            st.header("Machine Learning Prediction")
+            st.markdown("Using advanced ensemble model with 30+ features")
             
             col1, col2 = st.columns(2)
             
@@ -972,7 +1183,7 @@ def main():
                 p1_name = st.selectbox(
                     "Select Player 1",
                     options=list(st.session_state.player_ids.keys()),
-                    key="p1_select"
+                    key="p1_select_ml"
                 )
                 
                 if p1_name:
@@ -991,7 +1202,7 @@ def main():
                 p2_name = st.selectbox(
                     "Select Player 2",
                     options=[p for p in st.session_state.player_ids.keys() if p != p1_name],
-                    key="p2_select"
+                    key="p2_select_ml"
                 )
                 
                 if p2_name:
@@ -1006,10 +1217,10 @@ def main():
                             st.caption(f"{surface}: {surface_elos[surface]:.0f}")
             
             # Surface selection
-            surface = st.selectbox("Select Surface", SURFACE_TYPES, index=0)
+            surface = st.selectbox("Select Surface", SURFACE_TYPES, index=0, key="surface_ml")
             
             # Prediction button
-            if st.button("Predict Match", type="primary"):
+            if st.button("Predict with ML Model", type="primary", key="predict_ml"):
                 if p1_name and p2_name:
                     if st.session_state.model_trained:
                         display_match_prediction(p1_name, p2_name, surface)
@@ -1019,6 +1230,60 @@ def main():
                     st.error("Please select both players")
         
         with tab2:
+            st.header("ELO-Only Prediction")
+            st.markdown("Simple predictions using only ELO ratings and basic statistics")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Player 1 selection
+                p1_name = st.selectbox(
+                    "Select Player 1",
+                    options=list(st.session_state.player_ids.keys()),
+                    key="p1_select_elo"
+                )
+                
+                if p1_name:
+                    p1_id = st.session_state.player_ids[p1_name]
+                    p1_elo = st.session_state.global_elo.get(p1_id, 1500)
+                    st.metric("Global ELO", f"{p1_elo:.0f}")
+                    
+                    # Surface-specific ELO
+                    surface_elos = st.session_state.elo_ratings.get(p1_id, {})
+                    for surface in SURFACE_TYPES:
+                        if surface in surface_elos:
+                            st.caption(f"{surface}: {surface_elos[surface]:.0f}")
+            
+            with col2:
+                # Player 2 selection
+                p2_name = st.selectbox(
+                    "Select Player 2",
+                    options=[p for p in st.session_state.player_ids.keys() if p != p1_name],
+                    key="p2_select_elo"
+                )
+                
+                if p2_name:
+                    p2_id = st.session_state.player_ids[p2_name]
+                    p2_elo = st.session_state.global_elo.get(p2_id, 1500)
+                    st.metric("Global ELO", f"{p2_elo:.0f}")
+                    
+                    # Surface-specific ELO
+                    surface_elos = st.session_state.elo_ratings.get(p2_id, {})
+                    for surface in SURFACE_TYPES:
+                        if surface in surface_elos:
+                            st.caption(f"{surface}: {surface_elos[surface]:.0f}")
+            
+            # Surface selection
+            surface = st.selectbox("Select Surface", SURFACE_TYPES, index=0, key="surface_elo")
+            
+            # Prediction button
+            if st.button("Predict with ELO", type="primary", key="predict_elo"):
+                if p1_name and p2_name:
+                    display_elo_prediction(p1_name, p2_name, surface)
+                else:
+                    st.error("Please select both players")
+        
+        with tab3:
             st.header("Player Analysis")
             
             player_name = st.selectbox(
@@ -1080,7 +1345,7 @@ def main():
                         st.metric("Streak", form['streak'])
                         st.metric("Consistency", f"{form['consistency']*100:.0f}%")
         
-        with tab3:
+        with tab4:
             st.header("Model Performance")
             
             if st.session_state.model_metrics:
@@ -1134,7 +1399,7 @@ def main():
             else:
                 st.info("Train the model to see performance metrics")
         
-        with tab4:
+        with tab5:
             st.header("Data Exploration")
             
             if st.session_state.match_data is not None:
@@ -1173,8 +1438,8 @@ def main():
         To get started:
         1. **Upload your match data** (CSV format) in the sidebar
         2. **Process the data** to calculate ELO ratings
-        3. **Train the prediction model**
-        4. **Start predicting matches!**
+        3. **Train the prediction model** (optional for ML predictions)
+        4. **Start predicting matches** using either ML or ELO-only methods!
         
         ### Expected CSV Format:
         Your CSV should contain at minimum:
