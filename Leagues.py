@@ -287,13 +287,14 @@ results = stats['results_df']
 bettable = stats['bettable_df']
 
 # Tab navigation
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Overview",
     "🎯 Predictions",
     "📈 Analysis",
     "🏆 Teams",
     "💰 Profit",
-    "⚙️ Details"
+    "⚙️ Details",
+    "🔮 Next Match"
 ])
 
 # ==================== TAB 1: OVERVIEW ====================
@@ -704,6 +705,265 @@ with tab6:
         st.write("- Features: 6 pressure metrics")
         st.write("- Target: Total goals")
         st.write("- Threshold: 2.5 goals (over/under)")
+
+# ==================== TAB 7: NEXT MATCH ====================
+with tab7:
+    st.header("🔮 Predict Next Match")
+    st.markdown("*Enter match details below to get a prediction*")
+    st.markdown("---")
+    
+    # Input columns
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("👥 Match Information")
+        home_team = st.text_input("Home Team", placeholder="e.g., Liverpool")
+        away_team = st.text_input("Away Team", placeholder="e.g., Manchester United")
+    
+    with col2:
+        st.subheader("💰 Betting Odds")
+        over_odds_input = st.number_input("Over 2.5 Odds", value=1.90, min_value=1.0, max_value=10.0, step=0.01)
+        under_odds_input = st.number_input("Under 2.5 Odds", value=1.95, min_value=1.0, max_value=10.0, step=0.01)
+    
+    st.markdown("---")
+    st.subheader("📊 Home Team Statistics")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        home_shots = st.number_input("Home: Shots", value=15, min_value=0, max_value=50, step=1)
+        home_shots_on_target = st.number_input("Home: Shots on Target", value=5, min_value=0, max_value=50, step=1)
+        home_corners = st.number_input("Home: Corners", value=6, min_value=0, max_value=20, step=1)
+    
+    with col2:
+        home_fouls_against = st.number_input("Home: Fouls Against (Away fouls)", value=12, min_value=0, max_value=50, step=1)
+        away_shots = st.number_input("Away: Shots", value=10, min_value=0, max_value=50, step=1)
+        away_shots_on_target = st.number_input("Away: Shots on Target", value=4, min_value=0, max_value=50, step=1)
+    
+    with col3:
+        away_corners = st.number_input("Away: Corners", value=4, min_value=0, max_value=20, step=1)
+        home_fouls = st.number_input("Away: Fouls Against (Home fouls)", value=10, min_value=0, max_value=50, step=1)
+        st.write("")  # spacer
+    
+    st.markdown("---")
+    st.subheader("🛡️ Defensive Statistics")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Home Team Defense**")
+        home_tackles = st.number_input("Home: Tackles", value=15, min_value=0, max_value=50, step=1)
+        home_interceptions = st.number_input("Home: Interceptions", value=8, min_value=0, max_value=30, step=1)
+        home_yellow = st.number_input("Home: Yellow Cards", value=2, min_value=0, max_value=11, step=1)
+    
+    with col2:
+        st.write("**Away Team Defense**")
+        away_tackles = st.number_input("Away: Tackles", value=12, min_value=0, max_value=50, step=1)
+        away_interceptions = st.number_input("Away: Interceptions", value=6, min_value=0, max_value=30, step=1)
+        away_yellow = st.number_input("Away: Yellow Cards", value=1, min_value=0, max_value=11, step=1)
+    
+    st.markdown("---")
+    
+    # Prediction button
+    if st.button("🔮 Predict Match", use_container_width=True, type="primary"):
+        
+        if not home_team or not away_team:
+            st.error("❌ Please enter both team names")
+        else:
+            # Create match features
+            match_features = {
+                'home_attack': model.calculate_attacking_pressure(
+                    home_shots, home_shots_on_target, home_corners, home_fouls
+                ),
+                'home_defense': model.calculate_defensive_pressure(
+                    away_shots, away_shots_on_target, away_corners, home_yellow
+                ),
+                'away_attack': model.calculate_attacking_pressure(
+                    away_shots, away_shots_on_target, away_corners, home_fouls
+                ),
+                'away_defense': model.calculate_defensive_pressure(
+                    home_shots, home_shots_on_target, home_corners, away_yellow
+                ),
+                'total_attack': 0,
+                'total_defense': 0
+            }
+            
+            match_features['total_attack'] = match_features['home_attack'] + match_features['away_attack']
+            match_features['total_defense'] = match_features['home_defense'] + match_features['away_defense']
+            
+            # Get prediction
+            prediction = model.predict_total_goals(match_features)
+            signal = model.generate_betting_signal(prediction, over_odds_input, under_odds_input)
+            
+            st.markdown("---")
+            st.subheader(f"⚽ {home_team} vs {away_team}")
+            st.markdown("---")
+            
+            # Display prediction
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Predicted Goals",
+                    f"{prediction:.2f}",
+                    delta="Total"
+                )
+            
+            with col2:
+                signal_emoji = "🟢" if signal['signal'] == 'OVER' else "🔴" if signal['signal'] == 'UNDER' else "⚪"
+                st.metric(
+                    "Signal",
+                    f"{signal_emoji} {signal['signal']}",
+                    delta=f"Edge: {signal['edge']:.2f}%"
+                )
+            
+            with col3:
+                st.metric(
+                    "Confidence",
+                    f"{signal['confidence']:.1f}%",
+                    delta="Over 2.5"
+                )
+            
+            with col4:
+                if signal['signal'] == 'OVER':
+                    st.metric(
+                        "Recommendation",
+                        f"OVER @ {over_odds_input:.2f}",
+                        delta=f"+{signal['edge']:.1f}% edge"
+                    )
+                elif signal['signal'] == 'UNDER':
+                    st.metric(
+                        "Recommendation",
+                        f"UNDER @ {under_odds_input:.2f}",
+                        delta=f"+{signal['edge']:.1f}% edge"
+                    )
+                else:
+                    st.metric(
+                        "Recommendation",
+                        "PASS",
+                        delta="No clear edge"
+                    )
+            
+            st.markdown("---")
+            
+            # Detailed breakdown
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📊 Match Analysis")
+                
+                st.write("**Attacking Pressure:**")
+                st.write(f"- {home_team}: {match_features['home_attack']:.2f}")
+                st.write(f"- {away_team}: {match_features['away_attack']:.2f}")
+                st.write(f"- **Total: {match_features['total_attack']:.2f}**")
+                
+                st.write("**Defensive Strength:**")
+                st.write(f"- {home_team}: {match_features['home_defense']:.2f}")
+                st.write(f"- {away_team}: {match_features['away_defense']:.2f}")
+                st.write(f"- **Total: {match_features['total_defense']:.2f}**")
+            
+            with col2:
+                st.subheader("🎯 Probability Analysis")
+                
+                over_pct = signal['prob_over']
+                under_pct = signal['prob_under']
+                
+                # Probability gauge
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=over_pct,
+                    title={'text': "Probability of Over 2.5"},
+                    gauge={
+                        'axis': {'range': [0, 100]},
+                        'bar': {'color': "#09ab3b"},
+                        'steps': [
+                            {'range': [0, 50], 'color': "#f0f0f0"},
+                            {'range': [50, 100], 'color': "#e8f5e9"}
+                        ]
+                    }
+                ))
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.write(f"**Over 2.5:** {over_pct:.1f}%")
+                st.write(f"**Under 2.5:** {under_pct:.1f}%")
+            
+            st.markdown("---")
+            
+            # Decision logic
+            st.subheader("💡 Decision Logic")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.write("**Your Confidence**")
+                st.write(f"{signal['confidence']:.1f}%")
+                if signal['confidence'] > 55:
+                    st.write("✅ Above threshold (55%)")
+                else:
+                    st.write("❌ Below threshold (55%)")
+            
+            with col2:
+                st.write("**Edge Found**")
+                st.write(f"{signal['edge']:.2f}%")
+                if signal['edge'] >= 2:
+                    st.write("✅ Meets minimum (2%)")
+                else:
+                    st.write("❌ Below minimum (2%)")
+            
+            with col3:
+                st.write("**Final Signal**")
+                if signal['signal'] == 'OVER':
+                    st.write("✅ **BET OVER**")
+                    st.write("Probability > Odds")
+                elif signal['signal'] == 'UNDER':
+                    st.write("✅ **BET UNDER**")
+                    st.write("Probability > Odds")
+                else:
+                    st.write("⏸️ **PASS**")
+                    st.write("No edge > 2%")
+            
+            st.markdown("---")
+            
+            # Betting recommendation
+            if signal['signal'] == 'OVER':
+                st.success(f"""
+                ✅ **BET RECOMMENDATION: OVER 2.5 @ {over_odds_input:.2f}**
+                
+                **Why?**
+                - Model predicts {prediction:.2f} goals
+                - Over 2.5 probability: {over_pct:.1f}%
+                - Market probability: {(1/over_odds_input)*100:.1f}%
+                - **Edge: +{signal['edge']:.2f}%**
+                
+                **Risk Level:** Moderate
+                **Expected ROI:** +{signal['edge']:.2f}%
+                """)
+            
+            elif signal['signal'] == 'UNDER':
+                st.success(f"""
+                ✅ **BET RECOMMENDATION: UNDER 2.5 @ {under_odds_input:.2f}**
+                
+                **Why?**
+                - Model predicts {prediction:.2f} goals
+                - Under 2.5 probability: {under_pct:.1f}%
+                - Market probability: {(1/under_odds_input)*100:.1f}%
+                - **Edge: +{signal['edge']:.2f}%**
+                
+                **Risk Level:** Moderate
+                **Expected ROI:** +{signal['edge']:.2f}%
+                """)
+            
+            else:
+                st.warning(f"""
+                ⏸️ **NO CLEAR EDGE - PASS ON THIS MATCH**
+                
+                **Why?**
+                - Confidence: {signal['confidence']:.1f}% (need >55%)
+                - Edge: {signal['edge']:.2f}% (need >2%)
+                
+                The match is close to 2.5 threshold, making it unpredictable.
+                Better opportunities likely exist elsewhere.
+                """)
 
 # Footer
 st.markdown("---")
