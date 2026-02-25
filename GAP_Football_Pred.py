@@ -2,15 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import poisson
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="GAP Football Prediction Model", layout="wide")
 
-st.title("⚽ GAP Football Model Tester")
-st.markdown("""
-This app implements the **Generalised Attacking Performance (GAP)** model by Edward Wheatcroft.
-It calculates 4 separate ratings for each team: **Home Attack, Home Defense, Away Attack, and Away Defense.**
-""")
+st.title("⚽ GAP Football Model & Predictor")
 
 # --- SIDEBAR PARAMETERS ---
 st.sidebar.header("Model Parameters")
@@ -21,106 +18,111 @@ initial_rating = st.sidebar.number_input("Initial Rating (Avg Goals)", 0.5, 3.0,
 
 uploaded_file = st.sidebar.file_uploader("Upload your E0.csv file", type="csv")
 
-# --- CORE MODEL LOGIC ---
+# --- MODEL LOGIC ---
 def process_gap_model(df, l, p1, p2, init):
-    # Initialize ratings: Team Name -> [Ha, Hd, Aa, Ad]
     teams = pd.concat([df['HomeTeam'], df['AwayTeam']]).unique()
-    ratings = {team: [init, init, init, init] for team in teams}
+    ratings = {team: [init, init, init, init] for team in teams} # [Ha, Hd, Aa, Ad]
     
     history = []
-
     for idx, row in df.iterrows():
-        home_team = row['HomeTeam']
-        away_team = row['AwayTeam']
-        sh = row['FTHG'] # Home Goals
-        sa = row['FTAG'] # Away Goals
+        h_team, a_team = row['HomeTeam'], row['AwayTeam']
+        sh, sa = row['FTHG'], row['FTAG']
         
-        # Current Ratings before match
-        r_h = ratings[home_team] # [Ha, Hd, Aa, Ad]
-        r_a = ratings[away_team] # [Ha, Hd, Aa, Ad]
+        r_h, r_a = ratings[h_team], ratings[a_team]
         
-        # Expected Goals
-        exp_h = (r_h[0] + r_a[3]) / 2  # (Home Attack + Away Defense) / 2
-        exp_a = (r_a[2] + r_h[1]) / 2  # (Away Attack + Home Defense) / 2
+        # Expected Goals (The GAP Criteria)
+        exp_h = (r_h[0] + r_a[3]) / 2  
+        exp_a = (r_a[2] + r_h[1]) / 2  
         
-        # Store for analysis
         history.append({
-            'Date': row['Date'],
-            'Home': home_team, 'Away': away_team,
-            'Score': f"{sh}-{sa}",
-            'Exp_H': exp_h, 'Exp_A': exp_a,
-            'Total_Exp': exp_h + exp_a,
+            'Home': h_team, 'Away': a_team, 'Score': f"{sh}-{sa}",
+            'Exp_H': exp_h, 'Exp_A': exp_a, 'Total_Exp': exp_h + exp_a,
             'Actual_Total': sh + sa
         })
         
-        # UPDATES (Based on Eq 1 and 2 from the paper)
-        # Update Home Team (i)
-        perf_h = sh - exp_h
-        perf_d_h = sa - exp_a
+        # Updates
+        ratings[h_team][0] = max(r_h[0] + l * p1 * (sh - exp_h), 0)
+        ratings[h_team][2] = max(r_h[2] + l * (1 - p1) * (sh - exp_h), 0)
+        ratings[h_team][1] = max(r_h[1] + l * p1 * (sa - exp_a), 0)
+        ratings[h_team][3] = max(r_h[3] + l * (1 - p1) * (sa - exp_a), 0)
         
-        ratings[home_team][0] = max(r_h[0] + l * p1 * perf_h, 0)      # New Ha
-        ratings[home_team][2] = max(r_h[2] + l * (1 - p1) * perf_h, 0) # New Aa
-        ratings[home_team][1] = max(r_h[1] + l * p1 * perf_d_h, 0)    # New Hd
-        ratings[home_team][3] = max(r_h[3] + l * (1 - p1) * perf_d_h, 0) # New Ad
-        
-        # Update Away Team (j)
-        perf_a = sa - exp_a
-        perf_d_a = sh - exp_h
-        
-        ratings[away_team][2] = max(r_a[2] + l * p2 * perf_a, 0)      # New Aa
-        ratings[away_team][0] = max(r_a[0] + l * (1 - p2) * perf_a, 0) # New Ha
-        ratings[away_team][3] = max(r_a[3] + l * p2 * perf_d_a, 0)    # New Ad
-        ratings[away_team][1] = max(r_a[1] + l * (1 - p2) * perf_d_a, 0) # New Hd
+        ratings[a_team][2] = max(r_a[2] + l * p2 * (sa - exp_a), 0)
+        ratings[a_team][0] = max(r_a[0] + l * (1 - p2) * (sa - exp_a), 0)
+        ratings[a_team][3] = max(r_a[3] + l * p2 * (sh - exp_h), 0)
+        ratings[a_team][1] = max(r_a[1] + l * (1 - p2) * (sh - exp_h), 0)
 
     return ratings, pd.DataFrame(history)
 
-# --- MAIN APP UI ---
+# --- APP TABS ---
 if uploaded_file:
     data = pd.read_csv(uploaded_file)
     data['Date'] = pd.to_datetime(data['Date'], dayfirst=True)
     data = data.sort_values('Date')
     
-    # Run the model
     final_ratings, match_history = process_gap_model(data, lambda_param, phi1, phi2, initial_rating)
     
-    # Display 1: Final League Strength
-    st.subheader("📊 Current Team Ratings")
-    rating_df = pd.DataFrame.from_dict(final_ratings, orient='index', 
-                                     columns=['Home Attack', 'Home Defense', 'Away Attack', 'Away Defense'])
-    rating_df['Overall Strength'] = rating_df.mean(axis=1)
-    st.dataframe(rating_df.sort_values('Overall Strength', ascending=False).style.background_gradient(cmap='RdYlGn'))
+    tab1, tab2 = st.tabs(["📊 Model Analysis", "🔮 Predictions"])
 
-    # Display 2: Backtest Analysis
-    st.subheader("📈 Backtest: Expected vs Actual Goals")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("Last 10 Matches Predictions")
-        st.table(match_history.tail(10))
-        
-    with col2:
-        # Simple Over/Under 2.5 Accuracy
-        match_history['Pred_Over'] = match_history['Total_Exp'] > 2.5
-        match_history['Actual_Over'] = match_history['Actual_Total'] > 2.5
-        accuracy = (match_history['Pred_Over'] == match_history['Actual_Over']).mean()
-        st.metric("O/U 2.5 Accuracy", f"{accuracy:.2%}")
-        
-        # Chart
-        fig, ax = plt.subplots()
-        ax.scatter(match_history['Total_Exp'], match_history['Actual_Total'], alpha=0.5)
-        ax.set_xlabel("Model Expected Total Goals")
-        ax.set_ylabel("Actual Total Goals")
-        ax.axhline(2.5, color='red', linestyle='--')
-        ax.axvline(2.5, color='red', linestyle='--')
-        st.pyplot(fig)
+    with tab1:
+        st.subheader("Current League Ratings")
+        rating_df = pd.DataFrame.from_dict(final_ratings, orient='index', 
+                                         columns=['Home Attack', 'Home Defense', 'Away Attack', 'Away Defense'])
+        rating_df['Strength'] = rating_df.mean(axis=1)
+        st.dataframe(rating_df.sort_values('Strength', ascending=False).style.background_gradient(cmap='RdYlGn'))
 
-    # Display 3: Team Search
-    st.subheader("🔍 Team Evolution")
-    selected_team = st.selectbox("Select a team to see their history", rating_df.index)
-    # Note: To show history properly, we'd need to store ratings after every match. 
-    # For now, we show their final stats.
-    st.write(f"Final Profile for {selected_team}:")
-    st.bar_chart(rating_df.loc[selected_team, ['Home Attack', 'Home Defense', 'Away Attack', 'Away Defense']])
+    with tab2:
+        st.subheader("Predict a Match")
+        c1, c2 = st.columns(2)
+        with c1:
+            h_select = st.selectbox("Select Home Team", sorted(rating_df.index))
+        with c2:
+            a_select = st.selectbox("Select Away Team", sorted(rating_df.index), index=1)
 
+        if h_select == a_select:
+            st.warning("Please select two different teams.")
+        else:
+            # Get Ratings
+            r_h = final_ratings[h_select]
+            r_a = final_ratings[a_select]
+            
+            # Calculate Poisson Means (Criteria from Article)
+            mu_h = (r_h[0] + r_a[3]) / 2
+            mu_a = (r_a[2] + r_h[1]) / 2
+
+            # Create Poisson Goal Matrix (0-7 goals)
+            max_g = 8
+            goals = np.arange(0, max_g)
+            prob_h = poisson.pmf(goals, mu_h)
+            prob_a = poisson.pmf(goals, mu_a)
+            
+            # Probability Matrix
+            m = np.outer(prob_h, prob_a)
+            
+            p_hw = np.sum(np.tril(m, -1))
+            p_d  = np.sum(np.diag(m))
+            p_aw = np.sum(np.triu(m, 1))
+            
+            # Over/Under 2.5
+            p_under = m[0,0] + m[0,1] + m[0,2] + m[1,0] + m[1,1] + m[2,0]
+            p_over = 1 - p_under
+
+            # Results Display
+            st.info(f"Predicted Goals: **{h_select} {mu_h:.2f} - {mu_a:.2f} {a_select}**")
+            
+            res_col1, res_col2, res_col3 = st.columns(3)
+            res_col1.metric(f"{h_select} Win", f"{p_hw:.1%}")
+            res_col2.metric("Draw", f"{p_d:.1%}")
+            res_col3.metric(f"{a_select} Win", f"{p_aw:.1%}")
+
+            st.write(f"**Over/Under 2.5 Goals:** Over {p_over:.1%} | Under {p_under:.1%}")
+
+            # Heatmap of scores
+            fig, ax = plt.subplots(figsize=(6, 4))
+            im = ax.imshow(m, cmap='Blues')
+            ax.set_xlabel(f"{a_select} Goals")
+            ax.set_ylabel(f"{h_select} Goals")
+            ax.set_title("Score Probability Matrix")
+            plt.colorbar(im)
+            st.pyplot(fig)
 else:
-    st.info("Please upload the E0.csv file to begin.")
+    st.info("Upload CSV in the sidebar to view Ratings and Predictions.")
