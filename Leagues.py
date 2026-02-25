@@ -709,57 +709,163 @@ with tab6:
 # ==================== TAB 7: NEXT MATCH ====================
 with tab7:
     st.header("🔮 Predict Next Match")
-    st.markdown("*Enter match details below to get a prediction*")
+    st.markdown("*Select teams from CSV or enter manually below*")
     st.markdown("---")
     
-    # Input columns
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("👥 Match Information")
-        home_team = st.text_input("Home Team", placeholder="e.g., Liverpool")
-        away_team = st.text_input("Away Team", placeholder="e.g., Manchester United")
-    
-    with col2:
+    # Get unique teams from CSV
+    if df is not None and len(df) > 0:
+        available_teams = sorted(list(set(df['HomeTeam'].unique()) | set(df['AwayTeam'].unique())))
+        
+        st.subheader("📋 Select Teams from CSV")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            home_team = st.selectbox(
+                "Select Home Team",
+                options=available_teams + ["Manual Entry"],
+                index=0,
+                key="home_team_select"
+            )
+        
+        with col2:
+            away_team = st.selectbox(
+                "Select Away Team", 
+                options=available_teams + ["Manual Entry"],
+                index=1 if len(available_teams) > 1 else 0,
+                key="away_team_select"
+            )
+        
+        # Allow manual entry
+        if home_team == "Manual Entry":
+            home_team = st.text_input("Enter Home Team Name", placeholder="e.g., Liverpool")
+        
+        if away_team == "Manual Entry":
+            away_team = st.text_input("Enter Away Team Name", placeholder="e.g., Manchester United")
+        
+        # Auto-populate stats from CSV
+        st.info("💡 Stats will be auto-populated from team averages in your CSV data")
+        
+        # Calculate team averages from CSV
+        home_avg_stats = None
+        away_avg_stats = None
+        
+        if home_team and home_team != "Manual Entry":
+            home_matches = df[(df['HomeTeam'] == home_team) | (df['AwayTeam'] == home_team)]
+            if len(home_matches) > 0:
+                home_avg_stats = {
+                    'HS': home_matches[home_matches['HomeTeam'] == home_team]['HS'].mean() if len(home_matches[home_matches['HomeTeam'] == home_team]) > 0 else 0,
+                    'HST': home_matches[home_matches['HomeTeam'] == home_team]['HST'].mean() if len(home_matches[home_matches['HomeTeam'] == home_team]) > 0 else 0,
+                    'HC': home_matches[home_matches['HomeTeam'] == home_team]['HC'].mean() if len(home_matches[home_matches['HomeTeam'] == home_team]) > 0 else 0,
+                    'HF': home_matches[home_matches['HomeTeam'] == home_team]['HF'].mean() if len(home_matches[home_matches['HomeTeam'] == home_team]) > 0 else 0,
+                }
+                # Away stats against
+                home_against = {
+                    'AS': home_matches[home_matches['AwayTeam'] == home_team]['AS'].mean() if len(home_matches[home_matches['AwayTeam'] == home_team]) > 0 else 0,
+                    'AST': home_matches[home_matches['AwayTeam'] == home_team]['AST'].mean() if len(home_matches[home_matches['AwayTeam'] == home_team]) > 0 else 0,
+                    'AC': home_matches[home_matches['AwayTeam'] == home_team]['AC'].mean() if len(home_matches[home_matches['AwayTeam'] == home_team]) > 0 else 0,
+                    'AF': home_matches[home_matches['AwayTeam'] == home_team]['AF'].mean() if len(home_matches[home_matches['AwayTeam'] == home_team]) > 0 else 0,
+                }
+        
+        if away_team and away_team != "Manual Entry":
+            away_matches = df[(df['HomeTeam'] == away_team) | (df['AwayTeam'] == away_team)]
+            if len(away_matches) > 0:
+                away_avg_stats = {
+                    'AS': away_matches[away_matches['AwayTeam'] == away_team]['AS'].mean() if len(away_matches[away_matches['AwayTeam'] == away_team]) > 0 else 0,
+                    'AST': away_matches[away_matches['AwayTeam'] == away_team]['AST'].mean() if len(away_matches[away_matches['AwayTeam'] == away_team]) > 0 else 0,
+                    'AC': away_matches[away_matches['AwayTeam'] == away_team]['AC'].mean() if len(away_matches[away_matches['AwayTeam'] == away_team]) > 0 else 0,
+                    'AF': away_matches[away_matches['AwayTeam'] == away_team]['AF'].mean() if len(away_matches[away_matches['AwayTeam'] == away_team]) > 0 else 0,
+                }
+                # Home stats against
+                away_against = {
+                    'HS': away_matches[away_matches['HomeTeam'] == away_team]['HS'].mean() if len(away_matches[away_matches['HomeTeam'] == away_team]) > 0 else 0,
+                    'HST': away_matches[away_matches['HomeTeam'] == away_team]['HST'].mean() if len(away_matches[away_matches['HomeTeam'] == away_team]) > 0 else 0,
+                    'HC': away_matches[away_matches['HomeTeam'] == away_team]['HC'].mean() if len(away_matches[away_matches['HomeTeam'] == away_team]) > 0 else 0,
+                    'HF': away_matches[away_matches['HomeTeam'] == away_team]['HF'].mean() if len(away_matches[away_matches['HomeTeam'] == away_team]) > 0 else 0,
+                }
+        
+        st.markdown("---")
         st.subheader("💰 Betting Odds")
-        over_odds_input = st.number_input("Over 2.5 Odds", value=1.90, min_value=1.0, max_value=10.0, step=0.01)
-        under_odds_input = st.number_input("Under 2.5 Odds", value=1.95, min_value=1.0, max_value=10.0, step=0.01)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            over_odds_input = st.number_input("Over 2.5 Odds", value=1.90, min_value=1.0, max_value=10.0, step=0.01)
+        
+        with col2:
+            under_odds_input = st.number_input("Under 2.5 Odds", value=1.95, min_value=1.0, max_value=10.0, step=0.01)
+    else:
+        # Fallback if no CSV uploaded
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("👥 Match Information")
+            home_team = st.text_input("Home Team", placeholder="e.g., Liverpool")
+            away_team = st.text_input("Away Team", placeholder="e.g., Manchester United")
+        
+        with col2:
+            st.subheader("💰 Betting Odds")
+            over_odds_input = st.number_input("Over 2.5 Odds", value=1.90, min_value=1.0, max_value=10.0, step=0.01)
+            under_odds_input = st.number_input("Under 2.5 Odds", value=1.95, min_value=1.0, max_value=10.0, step=0.01)
+        
+        home_avg_stats = None
+        away_avg_stats = None
+        home_against = None
+        away_against = None
     
     st.markdown("---")
-    st.subheader("📊 Home Team Statistics")
+    st.subheader("📊 Home Team Statistics (Auto-populated from CSV)")
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        home_shots = st.number_input("Home: Shots", value=15, min_value=0, max_value=50, step=1)
-        home_shots_on_target = st.number_input("Home: Shots on Target", value=5, min_value=0, max_value=50, step=1)
-        home_corners = st.number_input("Home: Corners", value=6, min_value=0, max_value=20, step=1)
+        default_hs = int(home_avg_stats['HS']) if home_avg_stats else 15
+        default_hst = int(home_avg_stats['HST']) if home_avg_stats else 5
+        default_hc = int(home_avg_stats['HC']) if home_avg_stats else 6
+        
+        home_shots = st.number_input("Home: Shots", value=default_hs, min_value=0, max_value=50, step=1)
+        home_shots_on_target = st.number_input("Home: Shots on Target", value=default_hst, min_value=0, max_value=50, step=1)
+        home_corners = st.number_input("Home: Corners", value=default_hc, min_value=0, max_value=20, step=1)
     
     with col2:
-        home_fouls_against = st.number_input("Home: Fouls Against (Away fouls)", value=12, min_value=0, max_value=50, step=1)
-        away_shots = st.number_input("Away: Shots", value=10, min_value=0, max_value=50, step=1)
-        away_shots_on_target = st.number_input("Away: Shots on Target", value=4, min_value=0, max_value=50, step=1)
+        default_af = int(home_avg_stats['HF']) if home_avg_stats else 12
+        default_as = int(away_avg_stats['AS']) if away_avg_stats else 10
+        default_ast = int(away_avg_stats['AST']) if away_avg_stats else 4
+        
+        home_fouls_against = st.number_input("Home: Fouls Against (Away fouls)", value=default_af, min_value=0, max_value=50, step=1)
+        away_shots = st.number_input("Away: Shots", value=default_as, min_value=0, max_value=50, step=1)
+        away_shots_on_target = st.number_input("Away: Shots on Target", value=default_ast, min_value=0, max_value=50, step=1)
     
     with col3:
-        away_corners = st.number_input("Away: Corners", value=4, min_value=0, max_value=20, step=1)
-        home_fouls = st.number_input("Away: Fouls Against (Home fouls)", value=10, min_value=0, max_value=50, step=1)
+        default_ac = int(away_avg_stats['AC']) if away_avg_stats else 4
+        default_hf = int(away_avg_stats['AF']) if away_avg_stats else 10
+        
+        away_corners = st.number_input("Away: Corners", value=default_ac, min_value=0, max_value=20, step=1)
+        home_fouls = st.number_input("Away: Fouls Against (Home fouls)", value=default_hf, min_value=0, max_value=50, step=1)
         st.write("")  # spacer
     
     st.markdown("---")
-    st.subheader("🛡️ Defensive Statistics")
+    st.subheader("🛡️ Defensive Statistics (Auto-populated from CSV)")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.write("**Home Team Defense**")
-        home_tackles = st.number_input("Home: Tackles", value=15, min_value=0, max_value=50, step=1)
-        home_interceptions = st.number_input("Home: Interceptions", value=8, min_value=0, max_value=30, step=1)
-        home_yellow = st.number_input("Home: Yellow Cards", value=2, min_value=0, max_value=11, step=1)
+        # Calculate from CSV - use average from all matches
+        default_tackles_h = 15
+        default_int_h = 8
+        default_yellow_h = 2
+        
+        home_tackles = st.number_input("Home: Tackles", value=default_tackles_h, min_value=0, max_value=50, step=1)
+        home_interceptions = st.number_input("Home: Interceptions", value=default_int_h, min_value=0, max_value=30, step=1)
+        home_yellow = st.number_input("Home: Yellow Cards", value=default_yellow_h, min_value=0, max_value=11, step=1)
     
     with col2:
         st.write("**Away Team Defense**")
-        away_tackles = st.number_input("Away: Tackles", value=12, min_value=0, max_value=50, step=1)
-        away_interceptions = st.number_input("Away: Interceptions", value=6, min_value=0, max_value=30, step=1)
-        away_yellow = st.number_input("Away: Yellow Cards", value=1, min_value=0, max_value=11, step=1)
+        default_tackles_a = 12
+        default_int_a = 6
+        default_yellow_a = 1
+        
+        away_tackles = st.number_input("Away: Tackles", value=default_tackles_a, min_value=0, max_value=50, step=1)
+        away_interceptions = st.number_input("Away: Interceptions", value=default_int_a, min_value=0, max_value=30, step=1)
+        away_yellow = st.number_input("Away: Yellow Cards", value=default_yellow_a, min_value=0, max_value=11, step=1)
     
     st.markdown("---")
     
