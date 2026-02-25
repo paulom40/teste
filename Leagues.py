@@ -185,7 +185,7 @@ class Over25GoalsAnalyzer:
                     total_prob += poisson.pmf(i, home_exp) * poisson.pmf(j, away_exp)
             total_goals_probs.append(total_prob)
         
-        most_likely_total = np.argmax(total_goals_probs)
+        most_likely_total = np.argmax(total_goals_probs[:8])  # Only consider up to 8 goals
         
         return {
             'over25_prob': round(prob_over25 * 100, 1),
@@ -194,7 +194,7 @@ class Over25GoalsAnalyzer:
             'home_xg': round(home_exp, 2),
             'away_xg': round(away_exp, 2),
             'most_likely_total': most_likely_total,
-            'total_goals_distribution': total_goals_probs[:8],
+            'total_goals_distribution': total_goals_probs[:8],  # Keep only first 8 for simplicity
             'confidence': round(min(prob_over25, prob_under25) * 100, 1)
         }
     
@@ -241,6 +241,9 @@ class Over25GoalsAnalyzer:
         if away_defense.get('overall_conceded', 1.2) < 1.0:
             hybrid_prob *= 0.95
         
+        # Get the total goals distribution from poisson result
+        total_goals_distribution = poisson_result.get('total_goals_distribution', [])
+        
         return {
             'over25_prob': round(min(99, hybrid_prob), 1),
             'poisson_prob': poisson_result['over25_prob'],
@@ -248,7 +251,8 @@ class Over25GoalsAnalyzer:
             'expected_total': poisson_result['expected_total_goals'],
             'home_xg': poisson_result['home_xg'],
             'away_xg': poisson_result['away_xg'],
-            'most_likely_total': poisson_result['most_likely_total']
+            'most_likely_total': poisson_result['most_likely_total'],
+            'total_goals_distribution': total_goals_distribution  # Add this line
         }
 
 # ================================
@@ -534,6 +538,101 @@ class ValueBettingAnalyzer:
             }
         
         return value_analysis
+
+# ================================
+# FIXED VISUALIZATION FUNCTIONS
+# ================================
+def plot_goal_probabilities(dc_prediction, over25_prediction):
+    """Create visualization for goal probabilities"""
+    
+    # Create figure with subplots
+    fig = go.Figure()
+    
+    # Add over/under 2.5 gauge
+    fig.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=over25_prediction['over25_prob'],
+        title={'text': "Over 2.5 Goals Probability"},
+        domain={'x': [0, 0.5], 'y': [0, 1]},
+        gauge={
+            'axis': {'range': [None, 100]},
+            'bar': {'color': "#f59e0b"},
+            'steps': [
+                {'range': [0, 40], 'color': "#ef4444"},
+                {'range': [40, 60], 'color': "#f59e0b"},
+                {'range': [60, 100], 'color': "#10b981"}
+            ],
+            'threshold': {
+                'line': {'color': "black", 'width': 4},
+                'thickness': 0.75,
+                'value': 50
+            }
+        }
+    ))
+    
+    # Add win probabilities pie chart
+    fig.add_trace(go.Pie(
+        labels=['Home Win', 'Draw', 'Away Win'],
+        values=[dc_prediction['home_win_prob'], dc_prediction['draw_prob'], dc_prediction['away_win_prob']],
+        domain=dict(x=[0.6, 1], y=[0.5, 1]),
+        name="Match Outcome",
+        marker_colors=['#3b82f6', '#9ca3af', '#ef4444']
+    ))
+    
+    # Add expected goals bar - FIXED VERSION
+    fig.add_trace(go.Bar(
+        x=['Home xG', 'Away xG'],  # Changed to proper x-axis labels
+        y=[dc_prediction['home_xg'], dc_prediction['away_xg']],  # Values go in y for vertical bars
+        domain=dict(x=[0.6, 1], y=[0, 0.4]),
+        name="xG",
+        marker_color=['#3b82f6', '#ef4444'],
+        text=[f"{dc_prediction['home_xg']}", f"{dc_prediction['away_xg']}"],
+        textposition='auto'
+    ))
+    
+    fig.update_layout(
+        height=400,
+        showlegend=False,
+        title_text="Over 2.5 Goals Analysis",
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    
+    return fig
+
+def plot_total_goals_distribution(over25_prediction):
+    """Plot total goals probability distribution"""
+    
+    totals = list(range(8))
+    
+    # Safely get distribution or create default
+    if 'total_goals_distribution' in over25_prediction:
+        probs = over25_prediction['total_goals_distribution']
+    else:
+        # Create default distribution based on expected total
+        expected_total = over25_prediction.get('expected_total', 2.5)
+        probs = [poisson.pmf(i, expected_total) for i in range(8)]
+    
+    colors = ['#ef4444' if t < 3 else '#10b981' for t in totals]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=[f"{t} Goals" for t in totals],
+            y=probs,
+            marker_color=colors,
+            text=[f"{p*100:.1f}%" for p in probs],
+            textposition='auto',
+        )
+    ])
+    
+    fig.update_layout(
+        title="Total Goals Probability Distribution",
+        xaxis_title="Total Goals",
+        yaxis_title="Probability",
+        height=300,
+        showlegend=False
+    )
+    
+    return fig
 
 # ================================
 # ENHANCED HTML REPORT GENERATOR WITH OVER 2.5 GOALS FOCUS
@@ -1083,95 +1182,6 @@ class HTMLReportGenerator:
         """
         
         return html_content
-
-# ================================
-# VISUALIZATION FUNCTIONS
-# ================================
-def plot_goal_probabilities(dc_prediction, over25_prediction):
-    """Create visualization for goal probabilities"""
-    
-    # Create figure with subplots
-    fig = go.Figure()
-    
-    # Add over/under 2.5 gauge
-    fig.add_trace(go.Indicator(
-        mode = "gauge+number",
-        value = over25_prediction['over25_prob'],
-        title = {'text': "Over 2.5 Goals Probability"},
-        domain = {'x': [0, 0.5], 'y': [0, 1]},
-        gauge = {
-            'axis': {'range': [None, 100]},
-            'bar': {'color': "#f59e0b"},
-            'steps': [
-                {'range': [0, 40], 'color': "#ef4444"},
-                {'range': [40, 60], 'color': "#f59e0b"},
-                {'range': [60, 100], 'color': "#10b981"}
-            ],
-            'threshold': {
-                'line': {'color': "black", 'width': 4},
-                'thickness': 0.75,
-                'value': 50
-            }
-        }
-    ))
-    
-    # Add win probabilities pie chart
-    fig.add_trace(go.Pie(
-        labels=['Home Win', 'Draw', 'Away Win'],
-        values=[dc_prediction['home_win_prob'], dc_prediction['draw_prob'], dc_prediction['away_win_prob']],
-        domain=dict(x=[0.6, 1], y=[0.5, 1]),
-        name="Match Outcome",
-        marker_colors=['#3b82f6', '#9ca3af', '#ef4444']
-    ))
-    
-    # Add expected goals bar
-    fig.add_trace(go.Bar(
-        x=[dc_prediction['home_xg'], dc_prediction['away_xg']],
-        y=['Expected Goals'],
-        orientation='h',
-        domain=dict(x=[0.6, 1], y=[0, 0.4]),
-        name="xG",
-        marker_color=['#3b82f6', '#ef4444'],
-        text=[f"{dc_prediction['home_xg']}", f"{dc_prediction['away_xg']}"],
-        textposition='auto'
-    ))
-    
-    fig.update_layout(
-        height=400,
-        showlegend=False,
-        title_text="Over 2.5 Goals Analysis",
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-    
-    return fig
-
-def plot_total_goals_distribution(over25_prediction):
-    """Plot total goals probability distribution"""
-    
-    totals = list(range(8))
-    probs = over25_prediction.get('total_goals_distribution', [0]*8)
-    
-    colors = ['#ef4444' if t < 3 else '#10b981' for t in totals]
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=[f"{t} Goals" for t in totals],
-            y=probs,
-            marker_color=colors,
-            text=[f"{p*100:.1f}%" for p in probs],
-            textposition='auto',
-        )
-    ])
-    
-    fig.update_layout(
-        title="Total Goals Probability Distribution",
-        xaxis_title="Total Goals",
-        yaxis_title="Probability",
-        height=300,
-        showlegend=False
-    )
-    
-    return fig
 
 # ================================
 # MAIN APPLICATION
