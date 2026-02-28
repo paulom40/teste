@@ -625,108 +625,109 @@ if uploaded_file:
             # ===== TAB 5: OVER/UNDER SYSTEM =====
             if ou_file:
                 with tab5:
-                    ou_data = parse_ou_excel_file(ou_file)
+                    st.subheader("⚽ Over/Under 2.5 Goals System")
                     
-                    if ou_data:
-                        st.subheader("⚽ Over/Under 2.5 Goals System")
+                    # Team Selection (same as Match Predictions)
+                    col_a, col_b = st.columns(2)
+                    h_team_ou = col_a.selectbox("🏠 Home Team", sorted(final_ratings.keys()), key="tab5_h")
+                    a_team_ou = col_b.selectbox("✈️ Away Team", sorted(final_ratings.keys()), index=1, key="tab5_a")
+                    
+                    if h_team_ou == a_team_ou:
+                        st.error("❌ Please select different teams for home and away.")
+                    else:
+                        ou_data = parse_ou_excel_file(ou_file)
                         
-                        # Match Info
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("🏠 Home Team", ou_data['home_team'])
-                        with col2:
-                            st.metric("✈️ Away Team", ou_data['away_team'])
-                        
-                        st.divider()
-                        
-                        # Pressure Metrics
-                        st.subheader("📊 Match Pressure Metrics")
-                        
-                        pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
-                        
-                        with pm_col1:
-                            st.metric(
-                                f"{ou_data['home_team']} Attacking",
-                                f"{ou_data['home_attacking']:.1f}",
-                                help="Home team attacking pressure"
-                            )
-                        with pm_col2:
-                            st.metric(
-                                f"{ou_data['home_team']} Defensive",
-                                f"{ou_data['home_defensive']:.1f}",
-                                help="Home team defensive pressure"
-                            )
-                        with pm_col3:
-                            st.metric(
-                                f"{ou_data['away_team']} Attacking",
-                                f"{ou_data['away_attacking']:.1f}",
-                                help="Away team attacking pressure"
-                            )
-                        with pm_col4:
-                            st.metric(
-                                f"{ou_data['away_team']} Defensive",
-                                f"{ou_data['away_defensive']:.1f}",
-                                help="Away team defensive pressure"
-                            )
-                        
-                        st.metric(
-                            "Total Match Pressure",
-                            f"{ou_data['total_match_pressure']:.2f}",
-                            help="Combined attacking and defensive pressure"
-                        )
-                        
-                        st.divider()
-                        
-                        # System Probabilities
-                        st.subheader("📈 System Probability Schedule")
-                        
-                        if not ou_data['ou_system_data'].empty:
-                            # Format the dataframe for display
-                            system_display = ou_data['ou_system_data'].copy()
-                            system_display['Pressure'] = system_display['Pressure'].astype(int)
-                            system_display['Overs'] = (system_display['Overs'] * 100).round(2).astype(str) + '%'
-                            system_display['Unders'] = (system_display['Unders'] * 100).round(2).astype(str) + '%'
+                        if ou_data:
+                            st.divider()
                             
-                            st.dataframe(system_display, use_container_width=True, hide_index=True)
-                        
-                        st.divider()
-                        
-                        # Final Odds Comparison
-                        st.subheader("💰 Odds Comparison")
-                        
-                        odds_col1, odds_col2, odds_col3 = st.columns(3)
-                        
-                        with odds_col1:
-                            st.markdown("**Our System**")
-                            if ou_data['our_chance_overs']:
-                                st.write(f"🎯 Overs: {ou_data['our_chance_overs']*100:.2f}%")
-                                st.write(f"📊 Odds: {ou_data['our_odds_overs']:.2f}")
-                            if ou_data['our_chance_unders']:
-                                st.write(f"🎯 Unders: {ou_data['our_chance_unders']*100:.2f}%")
-                                st.write(f"📊 Odds: {ou_data['our_odds_unders']:.2f}")
-                        
-                        with odds_col2:
-                            st.markdown("**Market**")
-                            if ou_data['market_odds_overs']:
-                                st.write(f"📊 Overs: {ou_data['market_odds_overs']:.2f}")
-                            if ou_data['market_odds_unders']:
-                                st.write(f"📊 Unders: {ou_data['market_odds_unders']:.2f}")
-                        
-                        with odds_col3:
-                            st.markdown("**Value Assessment**")
-                            if ou_data['our_odds_overs'] and ou_data['market_odds_overs']:
-                                if ou_data['our_odds_overs'] > ou_data['market_odds_overs']:
-                                    st.success("✅ Overs: Value Bet")
-                                else:
-                                    st.warning("⚠️ Overs: No Value")
+                            # Pressure Metrics
+                            st.subheader("📊 Match Pressure Metrics")
                             
-                            if ou_data['our_odds_unders'] and ou_data['market_odds_unders']:
-                                if ou_data['our_odds_unders'] > ou_data['market_odds_unders']:
-                                    st.success("✅ Unders: Value Bet")
-                                else:
-                                    st.warning("⚠️ Unders: No Value")
-                        
-                        st.info("💡 **Value Bet** occurs when our calculated odds exceed market odds, indicating positive expected value.")
+                            pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
+                            
+                            with pm_col1:
+                                st.metric(
+                                    f"{h_team_ou} Attacking",
+                                    f"{ou_data['home_attacking']:.1f}",
+                                    help="Home team attacking pressure"
+                                )
+                            with pm_col2:
+                                st.metric(
+                                    f"{h_team_ou} Defensive",
+                                    f"{ou_data['home_defensive']:.1f}",
+                                    help="Home team defensive pressure"
+                                )
+                            with pm_col3:
+                                st.metric(
+                                    f"{a_team_ou} Attacking",
+                                    f"{ou_data['away_attacking']:.1f}",
+                                    help="Away team attacking pressure"
+                                )
+                            with pm_col4:
+                                st.metric(
+                                    f"{a_team_ou} Defensive",
+                                    f"{ou_data['away_defensive']:.1f}",
+                                    help="Away team defensive pressure"
+                                )
+                            
+                            st.metric(
+                                "Total Match Pressure",
+                                f"{ou_data['total_match_pressure']:.2f}",
+                                help="Combined attacking and defensive pressure"
+                            )
+                            
+                            st.divider()
+                            
+                            # System Probabilities
+                            st.subheader("📈 System Probability Schedule")
+                            
+                            if not ou_data['ou_system_data'].empty:
+                                # Format the dataframe for display
+                                system_display = ou_data['ou_system_data'].copy()
+                                system_display['Pressure'] = system_display['Pressure'].astype(int)
+                                system_display['Overs'] = (system_display['Overs'] * 100).round(2).astype(str) + '%'
+                                system_display['Unders'] = (system_display['Unders'] * 100).round(2).astype(str) + '%'
+                                
+                                st.dataframe(system_display, use_container_width=True, hide_index=True)
+                            
+                            st.divider()
+                            
+                            # Final Odds Comparison
+                            st.subheader("💰 Odds Comparison")
+                            
+                            odds_col1, odds_col2, odds_col3 = st.columns(3)
+                            
+                            with odds_col1:
+                                st.markdown("**Our System**")
+                                if ou_data['our_chance_overs']:
+                                    st.write(f"🎯 Overs: {ou_data['our_chance_overs']*100:.2f}%")
+                                    st.write(f"📊 Odds: {ou_data['our_odds_overs']:.2f}")
+                                if ou_data['our_chance_unders']:
+                                    st.write(f"🎯 Unders: {ou_data['our_chance_unders']*100:.2f}%")
+                                    st.write(f"📊 Odds: {ou_data['our_odds_unders']:.2f}")
+                            
+                            with odds_col2:
+                                st.markdown("**Market**")
+                                if ou_data['market_odds_overs']:
+                                    st.write(f"📊 Overs: {ou_data['market_odds_overs']:.2f}")
+                                if ou_data['market_odds_unders']:
+                                    st.write(f"📊 Unders: {ou_data['market_odds_unders']:.2f}")
+                            
+                            with odds_col3:
+                                st.markdown("**Value Assessment**")
+                                if ou_data['our_odds_overs'] and ou_data['market_odds_overs']:
+                                    if ou_data['our_odds_overs'] > ou_data['market_odds_overs']:
+                                        st.success("✅ Overs: Value Bet")
+                                    else:
+                                        st.warning("⚠️ Overs: No Value")
+                                
+                                if ou_data['our_odds_unders'] and ou_data['market_odds_unders']:
+                                    if ou_data['our_odds_unders'] > ou_data['market_odds_unders']:
+                                        st.success("✅ Unders: Value Bet")
+                                    else:
+                                        st.warning("⚠️ Unders: No Value")
+                            
+                            st.info("💡 **Value Bet** occurs when our calculated odds exceed market odds, indicating positive expected value.")
 
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
