@@ -238,36 +238,48 @@ def parse_ou_excel_file(file):
     try:
         df = pd.read_excel(file, sheet_name='Calculations', header=None)
         
-        # Extract team data
+        # Extract team data (rows 2 and 4, column 1)
         home_team = str(df.iloc[2, 1]).strip() if pd.notna(df.iloc[2, 1]) else "Team A"
         away_team = str(df.iloc[4, 1]).strip() if pd.notna(df.iloc[4, 1]) else "Team B"
         
-        # Extract pressure metrics
+        # Extract pressure metrics (column 4=attacking, column 7=defensive)
         home_attacking = float(df.iloc[2, 4]) if pd.notna(df.iloc[2, 4]) else 0
         home_defensive = float(df.iloc[2, 7]) if pd.notna(df.iloc[2, 7]) else 0
         away_attacking = float(df.iloc[4, 4]) if pd.notna(df.iloc[4, 4]) else 0
         away_defensive = float(df.iloc[4, 7]) if pd.notna(df.iloc[4, 7]) else 0
         
+        # Total match pressure (row 7, column 7)
         total_match_pressure = float(df.iloc[7, 7]) if pd.notna(df.iloc[7, 7]) else 0
         
-        # Extract probability data (rows 10-20)
+        # Extract probability data (rows 11-17, columns 5-7)
+        # Row 10 contains headers: 'Pressure', 'Estimated Overs', 'Estimated Unders'
         ou_system_data = []
-        for i in range(10, 18):
-            pressure = float(df.iloc[i, 5]) if pd.notna(df.iloc[i, 5]) else None
-            overs = float(df.iloc[i, 6]) if pd.notna(df.iloc[i, 6]) else None
-            unders = float(df.iloc[i, 7]) if pd.notna(df.iloc[i, 7]) else None
-            if pressure and overs and unders:
-                ou_system_data.append({
-                    'Pressure': pressure,
-                    'Overs': overs,
-                    'Unders': unders
-                })
+        for i in range(11, 18):
+            pressure = df.iloc[i, 5]
+            overs = df.iloc[i, 6]
+            unders = df.iloc[i, 7]
+            
+            # Convert to float, skip if any are NaN or non-numeric
+            if pd.notna(pressure) and pd.notna(overs) and pd.notna(unders):
+                try:
+                    ou_system_data.append({
+                        'Pressure': int(float(pressure)),
+                        'Overs': float(overs),
+                        'Unders': float(unders)
+                    })
+                except (ValueError, TypeError):
+                    pass
         
-        # Extract final odds
+        # Extract final odds and probabilities
+        # Row 20: Our Estimated Chance - columns 6 & 7
         our_chance_overs = float(df.iloc[20, 6]) if pd.notna(df.iloc[20, 6]) else None
         our_chance_unders = float(df.iloc[20, 7]) if pd.notna(df.iloc[20, 7]) else None
+        
+        # Row 27: Our Odds - columns 6 & 7
         our_odds_overs = float(df.iloc[27, 6]) if pd.notna(df.iloc[27, 6]) else None
         our_odds_unders = float(df.iloc[27, 7]) if pd.notna(df.iloc[27, 7]) else None
+        
+        # Row 28: Market Odds - columns 6 & 7
         market_odds_overs = float(df.iloc[28, 6]) if pd.notna(df.iloc[28, 6]) else None
         market_odds_unders = float(df.iloc[28, 7]) if pd.notna(df.iloc[28, 7]) else None
         
