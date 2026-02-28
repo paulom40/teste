@@ -77,6 +77,7 @@ with st.sidebar.expander("🎚️ Hyperparameters", expanded=True):
     )
 
 uploaded_file = st.sidebar.file_uploader("📊 Upload E0.csv", type="csv")
+ou_file = st.sidebar.file_uploader("📋 Upload Over/Under System (Excel)", type="xlsx")
 
 with st.sidebar.expander("ℹ️ About GAP Model"):
     st.markdown("""
@@ -146,7 +147,7 @@ def process_full_gap_model(df, lg, lc, p1, p2):
         ratings[a][0] = max(r_a[0] + lg * (1-p2) * (ga - exp_ga), 0.1)    # Home Attack
         ratings[a][3] = max(r_a[3] + lg * p2 * (gh - exp_gh), 0.1)        # Away Defence
         ratings[a][1] = max(r_a[1] + lg * (1-p2) * (gh - exp_gh), 0.1)    # Home Defence
-
+        
         # ===== 2. UPDATE CORNERS =====
         exp_ch = (r_h[4] + r_a[7]) / 2
         exp_ca = (r_a[6] + r_h[5]) / 2
@@ -162,19 +163,16 @@ def process_full_gap_model(df, lg, lc, p1, p2):
         ratings[a][4] = max(r_a[4] + lc * (1-p2) * (ca - exp_ca), 0.5)    # Home Corner Attack
         ratings[a][7] = max(r_a[7] + lc * p2 * (ch - exp_ch), 0.5)        # Away Corner Defence
         ratings[a][5] = max(r_a[5] + lc * (1-p2) * (ch - exp_ch), 0.5)    # Home Corner Defence
-
+    
     return ratings
-
 
 def get_fair_odds(prob):
     """Convert probability to decimal odds"""
     return round(1 / prob, 2) if prob > 0 else 0
 
-
 def get_implied_prob(odds):
     """Convert decimal odds to implied probability"""
     return round(1 / odds, 4) if odds > 0 else 0
-
 
 def calculate_1x2_outcomes(mu_gh, mu_ga, max_goals=10):
     """
@@ -191,13 +189,11 @@ def calculate_1x2_outcomes(mu_gh, mu_ga, max_goals=10):
     
     return win, draw, loss, m
 
-
 def calculate_goal_totals(m):
     """Calculate over/under 2.5 goals"""
     p_u25 = m[0,0] + m[0,1] + m[0,2] + m[1,0] + m[1,1] + m[2,0]
     p_o25 = 1 - p_u25
     return p_u25, p_o25
-
 
 def calculate_corner_markets(total_corners_mu):
     """Calculate corner market odds for multiple lines"""
@@ -218,14 +214,12 @@ def calculate_corner_markets(total_corners_mu):
     
     return pd.DataFrame(corner_data)
 
-
 def calculate_btts_markets(m):
     """Calculate Both Teams to Score probabilities"""
     # BTTS Yes = all outcomes except when home=0 or away=0
     p_btts_yes = 1 - np.sum(m[0,:]) - np.sum(m[:,0]) + m[0,0]
     p_btts_no = 1 - p_btts_yes
     return p_btts_yes, p_btts_no
-
 
 def calculate_asian_handicap(m):
     """Calculate Asian Handicap markets"""
@@ -239,6 +233,63 @@ def calculate_asian_handicap(m):
     
     return ah_home_win, ah_away_win, ah_home_push, ah_away_push
 
+def parse_ou_excel_file(file):
+    """Parse the Over/Under system Excel file"""
+    try:
+        df = pd.read_excel(file, sheet_name='Calculations', header=None)
+        
+        # Extract team data
+        home_team = str(df.iloc[2, 1]).strip() if pd.notna(df.iloc[2, 1]) else "Team A"
+        away_team = str(df.iloc[4, 1]).strip() if pd.notna(df.iloc[4, 1]) else "Team B"
+        
+        # Extract pressure metrics
+        home_attacking = float(df.iloc[2, 4]) if pd.notna(df.iloc[2, 4]) else 0
+        home_defensive = float(df.iloc[2, 7]) if pd.notna(df.iloc[2, 7]) else 0
+        away_attacking = float(df.iloc[4, 4]) if pd.notna(df.iloc[4, 4]) else 0
+        away_defensive = float(df.iloc[4, 7]) if pd.notna(df.iloc[4, 7]) else 0
+        
+        total_match_pressure = float(df.iloc[7, 7]) if pd.notna(df.iloc[7, 7]) else 0
+        
+        # Extract probability data (rows 10-20)
+        ou_system_data = []
+        for i in range(10, 18):
+            pressure = float(df.iloc[i, 5]) if pd.notna(df.iloc[i, 5]) else None
+            overs = float(df.iloc[i, 6]) if pd.notna(df.iloc[i, 6]) else None
+            unders = float(df.iloc[i, 7]) if pd.notna(df.iloc[i, 7]) else None
+            if pressure and overs and unders:
+                ou_system_data.append({
+                    'Pressure': pressure,
+                    'Overs': overs,
+                    'Unders': unders
+                })
+        
+        # Extract final odds
+        our_chance_overs = float(df.iloc[20, 6]) if pd.notna(df.iloc[20, 6]) else None
+        our_chance_unders = float(df.iloc[20, 7]) if pd.notna(df.iloc[20, 7]) else None
+        our_odds_overs = float(df.iloc[27, 6]) if pd.notna(df.iloc[27, 6]) else None
+        our_odds_unders = float(df.iloc[27, 7]) if pd.notna(df.iloc[27, 7]) else None
+        market_odds_overs = float(df.iloc[28, 6]) if pd.notna(df.iloc[28, 6]) else None
+        market_odds_unders = float(df.iloc[28, 7]) if pd.notna(df.iloc[28, 7]) else None
+        
+        return {
+            'home_team': home_team,
+            'away_team': away_team,
+            'home_attacking': home_attacking,
+            'home_defensive': home_defensive,
+            'away_attacking': away_attacking,
+            'away_defensive': away_defensive,
+            'total_match_pressure': total_match_pressure,
+            'ou_system_data': pd.DataFrame(ou_system_data),
+            'our_chance_overs': our_chance_overs,
+            'our_chance_unders': our_chance_unders,
+            'our_odds_overs': our_odds_overs,
+            'our_odds_unders': our_odds_unders,
+            'market_odds_overs': market_odds_overs,
+            'market_odds_unders': market_odds_unders
+        }
+    except Exception as e:
+        st.error(f"Error parsing Excel file: {str(e)}")
+        return None
 
 # ============================================================================
 # MAIN APPLICATION LOGIC
@@ -258,13 +309,22 @@ if uploaded_file:
             final_ratings = process_full_gap_model(data, l_goals, l_corners, phi1, phi2)
             
             # Create tabs
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "📊 Team Ratings",
-                "🔮 Match Predictions",
-                "📈 Market Analysis",
-                "📋 Data Overview"
-            ])
-
+            if ou_file:
+                tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                    "📊 Team Ratings",
+                    "🔮 Match Predictions",
+                    "📈 Market Analysis",
+                    "📋 Data Overview",
+                    "⚽ O/U System"
+                ])
+            else:
+                tab1, tab2, tab3, tab4 = st.tabs([
+                    "📊 Team Ratings",
+                    "🔮 Match Predictions",
+                    "📈 Market Analysis",
+                    "📋 Data Overview"
+                ])
+            
             # ===== TAB 1: TEAM RATINGS =====
             with tab1:
                 st.subheader("Final Goal & Corner Strengths")
@@ -292,7 +352,7 @@ if uploaded_file:
                     st.caption("**Corner Ratings:**")
                     st.caption("C_Ha: Home Corner Attack | C_Hd: Home Corner Defence")
                     st.caption("C_Aa: Away Corner Attack | C_Ad: Away Corner Defence")
-
+            
             # ===== TAB 2: MATCH PREDICTIONS =====
             with tab2:
                 st.subheader("🎯 Match Predictor")
@@ -418,7 +478,7 @@ if uploaded_file:
                             st.metric(f"{a_team} AH", f"{get_fair_odds(ah_aw):.2f}", f"{ah_aw*100:.1f}%")
                     
                     st.info("💡 **Fair Odds** = 1 / Probability. If bookmaker odds exceed fair odds, it's a 'Value' bet.")
-
+            
             # ===== TAB 3: MARKET ANALYSIS =====
             with tab3:
                 st.subheader("📊 Distribution Analysis")
@@ -496,7 +556,7 @@ if uploaded_file:
                             'Value': [f'{mu_ch:.3f}', f'{mu_ca:.3f}', f'{mu_ch + mu_ca:.3f}', f'{mu_ch + mu_ca:.3f}']
                         }
                         st.dataframe(pd.DataFrame(stats_data_corners), use_container_width=True, hide_index=True)
-
+            
             # ===== TAB 4: DATA OVERVIEW =====
             with tab4:
                 st.subheader("📋 Data Overview")
@@ -549,6 +609,112 @@ if uploaded_file:
                 
                 team_stats_df = pd.DataFrame(team_stats).sort_values('Goals For', ascending=False)
                 st.dataframe(team_stats_df, use_container_width=True, hide_index=True)
+            
+            # ===== TAB 5: OVER/UNDER SYSTEM =====
+            if ou_file:
+                with tab5:
+                    ou_data = parse_ou_excel_file(ou_file)
+                    
+                    if ou_data:
+                        st.subheader("⚽ Over/Under 2.5 Goals System")
+                        
+                        # Match Info
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("🏠 Home Team", ou_data['home_team'])
+                        with col2:
+                            st.metric("✈️ Away Team", ou_data['away_team'])
+                        
+                        st.divider()
+                        
+                        # Pressure Metrics
+                        st.subheader("📊 Match Pressure Metrics")
+                        
+                        pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
+                        
+                        with pm_col1:
+                            st.metric(
+                                f"{ou_data['home_team']} Attacking",
+                                f"{ou_data['home_attacking']:.1f}",
+                                help="Home team attacking pressure"
+                            )
+                        with pm_col2:
+                            st.metric(
+                                f"{ou_data['home_team']} Defensive",
+                                f"{ou_data['home_defensive']:.1f}",
+                                help="Home team defensive pressure"
+                            )
+                        with pm_col3:
+                            st.metric(
+                                f"{ou_data['away_team']} Attacking",
+                                f"{ou_data['away_attacking']:.1f}",
+                                help="Away team attacking pressure"
+                            )
+                        with pm_col4:
+                            st.metric(
+                                f"{ou_data['away_team']} Defensive",
+                                f"{ou_data['away_defensive']:.1f}",
+                                help="Away team defensive pressure"
+                            )
+                        
+                        st.metric(
+                            "Total Match Pressure",
+                            f"{ou_data['total_match_pressure']:.2f}",
+                            help="Combined attacking and defensive pressure"
+                        )
+                        
+                        st.divider()
+                        
+                        # System Probabilities
+                        st.subheader("📈 System Probability Schedule")
+                        
+                        if not ou_data['ou_system_data'].empty:
+                            # Format the dataframe for display
+                            system_display = ou_data['ou_system_data'].copy()
+                            system_display['Pressure'] = system_display['Pressure'].astype(int)
+                            system_display['Overs'] = (system_display['Overs'] * 100).round(2).astype(str) + '%'
+                            system_display['Unders'] = (system_display['Unders'] * 100).round(2).astype(str) + '%'
+                            
+                            st.dataframe(system_display, use_container_width=True, hide_index=True)
+                        
+                        st.divider()
+                        
+                        # Final Odds Comparison
+                        st.subheader("💰 Odds Comparison")
+                        
+                        odds_col1, odds_col2, odds_col3 = st.columns(3)
+                        
+                        with odds_col1:
+                            st.markdown("**Our System**")
+                            if ou_data['our_chance_overs']:
+                                st.write(f"🎯 Overs: {ou_data['our_chance_overs']*100:.2f}%")
+                                st.write(f"📊 Odds: {ou_data['our_odds_overs']:.2f}")
+                            if ou_data['our_chance_unders']:
+                                st.write(f"🎯 Unders: {ou_data['our_chance_unders']*100:.2f}%")
+                                st.write(f"📊 Odds: {ou_data['our_odds_unders']:.2f}")
+                        
+                        with odds_col2:
+                            st.markdown("**Market**")
+                            if ou_data['market_odds_overs']:
+                                st.write(f"📊 Overs: {ou_data['market_odds_overs']:.2f}")
+                            if ou_data['market_odds_unders']:
+                                st.write(f"📊 Unders: {ou_data['market_odds_unders']:.2f}")
+                        
+                        with odds_col3:
+                            st.markdown("**Value Assessment**")
+                            if ou_data['our_odds_overs'] and ou_data['market_odds_overs']:
+                                if ou_data['our_odds_overs'] > ou_data['market_odds_overs']:
+                                    st.success("✅ Overs: Value Bet")
+                                else:
+                                    st.warning("⚠️ Overs: No Value")
+                            
+                            if ou_data['our_odds_unders'] and ou_data['market_odds_unders']:
+                                if ou_data['our_odds_unders'] > ou_data['market_odds_unders']:
+                                    st.success("✅ Unders: Value Bet")
+                                else:
+                                    st.warning("⚠️ Unders: No Value")
+                        
+                        st.info("💡 **Value Bet** occurs when our calculated odds exceed market odds, indicating positive expected value.")
 
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
@@ -581,6 +747,7 @@ else:
            - Match Predictions
            - Distribution Analysis
            - Data Overview
+           - O/U System (if file uploaded)
         """)
     
     with col2:
