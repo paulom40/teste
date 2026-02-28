@@ -640,34 +640,68 @@ if uploaded_file:
                         if ou_data:
                             st.divider()
                             
-                            # Pressure Metrics
-                            st.subheader("📊 Match Pressure Metrics")
+                            # Display Selected Teams Info
+                            st.subheader(f"🏟️ {h_team_ou} vs {a_team_ou}")
+                            
+                            # Team Metrics from GAP Model
+                            st.subheader("📊 Team Strength Metrics (from GAP Model)")
+                            
+                            rh_ou, ra_ou = final_ratings[h_team_ou], final_ratings[a_team_ou]
+                            
+                            # Home Team Metrics
+                            st.markdown(f"**🏠 {h_team_ou}**")
+                            h_metrics_col1, h_metrics_col2, h_metrics_col3, h_metrics_col4 = st.columns(4)
+                            with h_metrics_col1:
+                                st.metric("Goal Attack", f"{rh_ou[0]:.3f}")
+                            with h_metrics_col2:
+                                st.metric("Goal Defence", f"{rh_ou[1]:.3f}")
+                            with h_metrics_col3:
+                                st.metric("Corner Attack", f"{rh_ou[4]:.3f}")
+                            with h_metrics_col4:
+                                st.metric("Corner Defence", f"{rh_ou[5]:.3f}")
+                            
+                            # Away Team Metrics
+                            st.markdown(f"**✈️ {a_team_ou}**")
+                            a_metrics_col1, a_metrics_col2, a_metrics_col3, a_metrics_col4 = st.columns(4)
+                            with a_metrics_col1:
+                                st.metric("Goal Attack", f"{ra_ou[2]:.3f}")
+                            with a_metrics_col2:
+                                st.metric("Goal Defence", f"{ra_ou[3]:.3f}")
+                            with a_metrics_col3:
+                                st.metric("Corner Attack", f"{ra_ou[6]:.3f}")
+                            with a_metrics_col4:
+                                st.metric("Corner Defence", f"{ra_ou[7]:.3f}")
+                            
+                            st.divider()
+                            
+                            # Pressure Metrics from Excel
+                            st.subheader("📊 Match Pressure Metrics (from Excel System)")
                             
                             pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
                             
                             with pm_col1:
                                 st.metric(
-                                    f"{h_team_ou} Attacking",
+                                    f"{ou_data['home_team']} Attacking",
                                     f"{ou_data['home_attacking']:.1f}",
-                                    help="Home team attacking pressure"
+                                    help="System attacking pressure"
                                 )
                             with pm_col2:
                                 st.metric(
-                                    f"{h_team_ou} Defensive",
+                                    f"{ou_data['home_team']} Defensive",
                                     f"{ou_data['home_defensive']:.1f}",
-                                    help="Home team defensive pressure"
+                                    help="System defensive pressure"
                                 )
                             with pm_col3:
                                 st.metric(
-                                    f"{a_team_ou} Attacking",
+                                    f"{ou_data['away_team']} Attacking",
                                     f"{ou_data['away_attacking']:.1f}",
-                                    help="Away team attacking pressure"
+                                    help="System attacking pressure"
                                 )
                             with pm_col4:
                                 st.metric(
-                                    f"{a_team_ou} Defensive",
+                                    f"{ou_data['away_team']} Defensive",
                                     f"{ou_data['away_defensive']:.1f}",
-                                    help="Away team defensive pressure"
+                                    help="System defensive pressure"
                                 )
                             
                             st.metric(
