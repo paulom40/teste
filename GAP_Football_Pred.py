@@ -726,13 +726,26 @@ if uploaded_file:
                             
                             st.divider()
                             
+                            # Calculate expected goals for selected teams
+                            mu_gh_ou, mu_ga_ou = (rh_ou[0] + ra_ou[3])/2, (ra_ou[2] + rh_ou[1])/2
+                            total_goals_ou = mu_gh_ou + mu_ga_ou
+                            
+                            # Determine if overs or unders based on expected goals
+                            gap_overs_prob = 1 - poisson.cdf(2, total_goals_ou) if total_goals_ou > 0 else 0
+                            gap_unders_prob = poisson.cdf(2, total_goals_ou) if total_goals_ou > 0 else 1
+                            
+                            # GAP Model Odds
+                            gap_overs_odds = get_fair_odds(gap_overs_prob)
+                            gap_unders_odds = get_fair_odds(gap_unders_prob)
+                            
                             # Final Odds Comparison
                             st.subheader("💰 Odds Comparison")
                             
-                            odds_col1, odds_col2, odds_col3 = st.columns(3)
+                            st.markdown("**Excel System (Fixed Data)**")
+                            excel_col1, excel_col2, excel_col3 = st.columns(3)
                             
-                            with odds_col1:
-                                st.markdown("**Our System**")
+                            with excel_col1:
+                                st.markdown(f"**Excel System ({ou_data['home_team']} vs {ou_data['away_team']})**")
                                 if ou_data['our_chance_overs']:
                                     st.write(f"🎯 Overs: {ou_data['our_chance_overs']*100:.2f}%")
                                     st.write(f"📊 Odds: {ou_data['our_odds_overs']:.2f}")
@@ -740,28 +753,42 @@ if uploaded_file:
                                     st.write(f"🎯 Unders: {ou_data['our_chance_unders']*100:.2f}%")
                                     st.write(f"📊 Odds: {ou_data['our_odds_unders']:.2f}")
                             
-                            with odds_col2:
-                                st.markdown("**Market**")
+                            with excel_col2:
+                                st.markdown("**Market Odds**")
                                 if ou_data['market_odds_overs']:
                                     st.write(f"📊 Overs: {ou_data['market_odds_overs']:.2f}")
                                 if ou_data['market_odds_unders']:
                                     st.write(f"📊 Unders: {ou_data['market_odds_unders']:.2f}")
                             
-                            with odds_col3:
-                                st.markdown("**Value Assessment**")
+                            with excel_col3:
+                                st.markdown("**Excel Value**")
                                 if ou_data['our_odds_overs'] and ou_data['market_odds_overs']:
                                     if ou_data['our_odds_overs'] > ou_data['market_odds_overs']:
-                                        st.success("✅ Overs: Value Bet")
+                                        st.success("✅ Overs: Value")
                                     else:
                                         st.warning("⚠️ Overs: No Value")
                                 
                                 if ou_data['our_odds_unders'] and ou_data['market_odds_unders']:
                                     if ou_data['our_odds_unders'] > ou_data['market_odds_unders']:
-                                        st.success("✅ Unders: Value Bet")
+                                        st.success("✅ Unders: Value")
                                     else:
                                         st.warning("⚠️ Unders: No Value")
                             
-                            st.info("💡 **Value Bet** occurs when our calculated odds exceed market odds, indicating positive expected value.")
+                            st.divider()
+                            
+                            st.markdown("**GAP Model Analysis (Selected Teams)**")
+                            gap_col1, gap_col2, gap_col3, gap_col4 = st.columns(4)
+                            
+                            with gap_col1:
+                                st.metric("Expected Goals", f"{total_goals_ou:.2f}")
+                            with gap_col2:
+                                st.metric("Overs Probability", f"{gap_overs_prob*100:.1f}%")
+                            with gap_col3:
+                                st.metric("Overs Fair Odds", f"{gap_overs_odds:.2f}")
+                            with gap_col4:
+                                st.metric("Unders Fair Odds", f"{gap_unders_odds:.2f}")
+                            
+                            st.caption("💡 GAP Model odds are calculated dynamically based on the selected teams' strength ratings.")
 
     except Exception as e:
         st.error(f"❌ Error processing file: {str(e)}")
