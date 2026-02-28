@@ -270,11 +270,7 @@ def parse_ou_excel_file(file):
                 except (ValueError, TypeError):
                     pass
         
-        # Extract final odds and probabilities
-        # Row 20: Our Estimated Chance - columns 6 & 7
-        our_chance_overs = float(df.iloc[20, 6]) if pd.notna(df.iloc[20, 6]) else None
-        our_chance_unders = float(df.iloc[20, 7]) if pd.notna(df.iloc[20, 7]) else None
-        
+        # Extract final odds
         # Row 27: Our Odds - columns 6 & 7
         our_odds_overs = float(df.iloc[27, 6]) if pd.notna(df.iloc[27, 6]) else None
         our_odds_unders = float(df.iloc[27, 7]) if pd.notna(df.iloc[27, 7]) else None
@@ -282,6 +278,12 @@ def parse_ou_excel_file(file):
         # Row 28: Market Odds - columns 6 & 7
         market_odds_overs = float(df.iloc[28, 6]) if pd.notna(df.iloc[28, 6]) else None
         market_odds_unders = float(df.iloc[28, 7]) if pd.notna(df.iloc[28, 7]) else None
+        
+        # Calculate probabilities from odds (1/odds = probability)
+        our_chance_overs = 1/our_odds_overs if our_odds_overs else None
+        our_chance_unders = 1/our_odds_unders if our_odds_unders else None
+        market_chance_overs = 1/market_odds_overs if market_odds_overs else None
+        market_chance_unders = 1/market_odds_unders if market_odds_unders else None
         
         return {
             'home_team': home_team,
@@ -297,7 +299,9 @@ def parse_ou_excel_file(file):
             'our_odds_overs': our_odds_overs,
             'our_odds_unders': our_odds_unders,
             'market_odds_overs': market_odds_overs,
-            'market_odds_unders': market_odds_unders
+            'market_odds_unders': market_odds_unders,
+            'market_chance_overs': market_chance_overs,
+            'market_chance_unders': market_chance_unders
         }
     except Exception as e:
         st.error(f"Error parsing Excel file: {str(e)}")
@@ -754,11 +758,13 @@ if uploaded_file:
                                     st.write(f"📊 Odds: {ou_data['our_odds_unders']:.2f}")
                             
                             with excel_col2:
-                                st.markdown("**Market Odds**")
+                                st.markdown("**Market**")
                                 if ou_data['market_odds_overs']:
-                                    st.write(f"📊 Overs: {ou_data['market_odds_overs']:.2f}")
+                                    st.write(f"🎯 Overs: {ou_data['market_chance_overs']*100:.2f}%")
+                                    st.write(f"📊 Odds: {ou_data['market_odds_overs']:.2f}")
                                 if ou_data['market_odds_unders']:
-                                    st.write(f"📊 Unders: {ou_data['market_odds_unders']:.2f}")
+                                    st.write(f"🎯 Unders: {ou_data['market_chance_unders']*100:.2f}%")
+                                    st.write(f"📊 Odds: {ou_data['market_odds_unders']:.2f}")
                             
                             with excel_col3:
                                 st.markdown("**Excel Value**")
