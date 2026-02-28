@@ -350,7 +350,7 @@ if uploaded_file:
                 
                 st.dataframe(
                     rdf.style.background_gradient(cmap='Blues', axis=0),
-                    use_container_width=True
+                    width='stretch'
                 )
                 
                 col1, col2 = st.columns(2)
@@ -458,7 +458,7 @@ if uploaded_file:
                     )
                     
                     corner_df = calculate_corner_markets(total_corners_mu)
-                    st.dataframe(corner_df, use_container_width=True, hide_index=True)
+                    st.dataframe(corner_df, width='stretch', hide_index=True)
                     
                     st.divider()
                     
@@ -559,7 +559,7 @@ if uploaded_file:
                             'Metric': [f'{h_team_dist} Expected', f'{a_team_dist} Expected', 'Total Expected', 'Variance'],
                             'Value': [f'{mu_gh:.3f}', f'{mu_ga:.3f}', f'{mu_gh + mu_ga:.3f}', f'{mu_gh + mu_ga:.3f}']
                         }
-                        st.dataframe(pd.DataFrame(stats_data_goals), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(stats_data_goals), width='stretch', hide_index=True)
                     
                     with stats_col2:
                         st.markdown("**Corners**")
@@ -567,7 +567,7 @@ if uploaded_file:
                             'Metric': [f'{h_team_dist} Expected', f'{a_team_dist} Expected', 'Total Expected', 'Variance'],
                             'Value': [f'{mu_ch:.3f}', f'{mu_ca:.3f}', f'{mu_ch + mu_ca:.3f}', f'{mu_ch + mu_ca:.3f}']
                         }
-                        st.dataframe(pd.DataFrame(stats_data_corners), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(stats_data_corners), width='stretch', hide_index=True)
             
             # ===== TAB 4: DATA OVERVIEW =====
             with tab4:
@@ -588,7 +588,7 @@ if uploaded_file:
                 st.subheader("Match Data Sample")
                 st.dataframe(
                     data[['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'HC', 'AC']].head(20),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True
                 )
                 
@@ -620,7 +620,7 @@ if uploaded_file:
                         })
                 
                 team_stats_df = pd.DataFrame(team_stats).sort_values('Goals For', ascending=False)
-                st.dataframe(team_stats_df, use_container_width=True, hide_index=True)
+                st.dataframe(team_stats_df, width='stretch', hide_index=True)
             
             # ===== TAB 5: OVER/UNDER SYSTEM =====
             if ou_file:
@@ -722,7 +722,7 @@ if uploaded_file:
                                 system_display['Overs'] = (system_display['Overs'] * 100).round(2).astype(str) + '%'
                                 system_display['Unders'] = (system_display['Unders'] * 100).round(2).astype(str) + '%'
                                 
-                                st.dataframe(system_display, use_container_width=True, hide_index=True)
+                                st.dataframe(system_display, width='stretch', hide_index=True)
                             
                             st.divider()
                             
