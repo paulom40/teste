@@ -10,19 +10,12 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import warnings
 warnings.filterwarnings('ignore')
 
-# ============================================================================
-# PAGE CONFIG
-# ============================================================================
 st.set_page_config(page_title="WTA Predictor", page_icon="🎾", layout="wide")
 
-# ============================================================================
-# MODEL LOADING & TRAINING
-# ============================================================================
 @st.cache_resource
 def load_and_train_model(csv_file):
     """Load CSV and train Random Forest model"""
     
-    # Load
     df = pd.read_csv(csv_file)
     
     # Convert numeric
@@ -112,9 +105,35 @@ def load_and_train_model(csv_file):
         'f1': f1
     }
 
-# ============================================================================
-# PAGE: HOME
-# ============================================================================
+def get_player_stats(df, player_name):
+    """Get player stats from dataframe"""
+    p1_matches = df[df['Player_1'] == player_name]
+    p2_matches = df[df['Player_2'] == player_name]
+    
+    all_matches = pd.concat([p1_matches, p2_matches], ignore_index=True)
+    
+    if len(all_matches) == 0:
+        return None
+    
+    latest_match = all_matches.iloc[-1]
+    
+    if player_name == latest_match.get('Player_1'):
+        return {
+            'rank': latest_match['Rank_1'],
+            'points': latest_match['Pts_1'],
+            'odds': latest_match.get('Odd_1', 1.5),
+            'matches': len(all_matches),
+            'wins': len(all_matches[all_matches['Winner'] == player_name])
+        }
+    else:
+        return {
+            'rank': latest_match['Rank_2'],
+            'points': latest_match['Pts_2'],
+            'odds': latest_match.get('Odd_2', 2.5),
+            'matches': len(all_matches),
+            'wins': len(all_matches[all_matches['Winner'] == player_name])
+        }
+
 def show_home(model_data):
     st.header("Welcome to WTA Match Predictor")
     st.markdown("*Powered by Modern Machine Learning*")
@@ -136,12 +155,12 @@ def show_home(model_data):
     with col1:
         st.subheader("📋 The 6-Factor Framework")
         st.markdown("""
-        1. **Ranking Differential** - Head-to-head ranking advantage
-        2. **Points Differential** - Recent performance metrics  
-        3. **Surface Performance** - Court-specific strengths
-        4. **Tournament Context** - Round and match load
-        5. **Physical Load** - Court type and fatigue
-        6. **Momentum** - Betting odds
+        1. **Ranking Differential**
+        2. **Points Differential**  
+        3. **Surface Performance**
+        4. **Tournament Context**
+        5. **Physical Load**
+        6. **Momentum**
         """)
     
     with col2:
@@ -176,9 +195,6 @@ def show_home(model_data):
         fig = px.pie(values=[p1_wins, p2_wins], names=['P1 Wins', 'P2 Wins'], title="Win Distribution")
         st.plotly_chart(fig, use_container_width=True)
 
-# ============================================================================
-# PAGE: MODEL TRAINING
-# ============================================================================
 def show_training(model_data):
     st.header("📈 Model Training & Performance")
     
@@ -219,30 +235,47 @@ def show_training(model_data):
     st.subheader("All Features")
     st.dataframe(model_data['importance_df'].style.format({'Importance': '{:.4f}'}), use_container_width=True, hide_index=True)
 
-# ============================================================================
-# PAGE: PREDICTIONS
-# ============================================================================
 def show_predictions(model_data):
     st.header("🔮 Match Prediction")
-    st.markdown("Enter player details and match conditions")
+    st.markdown("Select players from dataset and match conditions")
     
     st.markdown("---")
+    
+    # Get unique players from dataset
+    df = model_data['df']
+    all_players = sorted(list(set(df['Player_1'].unique()) | set(df['Player_2'].unique())))
     
     col_a, col_b = st.columns(2)
     
     with col_a:
         st.subheader("👤 Player A")
-        player_a_name = st.text_input("Player A Name", "Player A", placeholder="e.g., Serena")
-        rank_1 = st.slider("Rank", 1, 500, 50, key="rank_a")
-        pts_1 = st.slider("Points", 0, 5000, 1000, key="pts_a")
-        odds_1 = st.number_input("Odds", 1.0, 100.0, 1.8, key="odds_a")
+        player_a_name = st.selectbox("Select Player A", all_players)
+        
+        # Get Player A stats from dataset
+        if player_a_name:
+            stats_a = get_player_stats(df, player_a_name)
+            if stats_a:
+                st.metric("Matches", stats_a['matches'])
+                st.metric("Wins", stats_a['wins'])
+                
+                rank_1 = st.number_input("Rank", value=int(stats_a['rank']), min_value=1, max_value=1000, key="rank_a")
+                pts_1 = st.number_input("Points", value=int(stats_a['points']), min_value=0, max_value=10000, key="pts_a")
+                odds_1 = st.number_input("Odds", value=float(stats_a['odds']), min_value=1.0, max_value=100.0, step=0.1, key="odds_a")
     
     with col_b:
         st.subheader("👤 Player B")
-        player_b_name = st.text_input("Player B Name", "Player B", placeholder="e.g., Venus")
-        rank_2 = st.slider("Rank ", 1, 500, 100, key="rank_b")
-        pts_2 = st.slider("Points ", 0, 5000, 800, key="pts_b")
-        odds_2 = st.number_input("Odds ", 1.0, 100.0, 2.0, key="odds_b")
+        player_b_name = st.selectbox("Select Player B", all_players, index=1 if len(all_players) > 1 else 0)
+        
+        # Get Player B stats from dataset
+        if player_b_name:
+            stats_b = get_player_stats(df, player_b_name)
+            if stats_b:
+                st.metric("Matches ", stats_b['matches'])
+                st.metric("Wins ", stats_b['wins'])
+                
+                rank_2 = st.number_input("Rank ", value=int(stats_b['rank']), min_value=1, max_value=1000, key="rank_b")
+                pts_2 = st.number_input("Points ", value=int(stats_b['points']), min_value=0, max_value=10000, key="pts_b")
+                odds_2 = st.number_input("Odds ", value=float(stats_b['odds']), min_value=1.0, max_value=100.0, step=0.1, key="odds_b")
     
     st.markdown("---")
     
@@ -315,21 +348,18 @@ def show_predictions(model_data):
                 st.success("Very High")
         
         with col3:
-            st.metric("Accuracy", f"{model_data['test_accuracy']:.1%}")
+            st.metric("Model Accuracy", f"{model_data['test_accuracy']:.1%}")
         
         st.markdown("---")
         
         st.subheader("⚖️ Match Info")
-        st.info(f"""
-        **{player_a_name} vs {player_b_name}**
-        • Surface: {surface} • Round: {round_type} • Court: {court}
-        """)
+        st.info(f"**{player_a_name} vs {player_b_name}** | {surface} Court | {round_type} | {court}")
         
         col1, col2 = st.columns(2)
         
         with col1:
             fig = go.Figure([go.Bar(x=[player_a_name, player_b_name], y=[p_a, p_b], marker_color=['#667eea', '#764ba2'], text=[f'{p_a:.1%}', f'{p_b:.1%}'], textposition='auto')])
-            fig.update_layout(title="Probability", yaxis=dict(range=[0, 1]), showlegend=False)
+            fig.update_layout(title="Win Probability", yaxis=dict(range=[0, 1]), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
@@ -374,9 +404,6 @@ def show_predictions(model_data):
         else:
             st.success("**80%+**: Dominant - overwhelming advantage")
 
-# ============================================================================
-# PAGE: ANALYTICS
-# ============================================================================
 def show_analytics(model_data):
     st.header("📊 Analytics")
     
@@ -414,9 +441,6 @@ def show_analytics(model_data):
         round_stats['Win %'] = (round_stats['P1 Wins'] / round_stats['Total'] * 100).round(1)
         st.dataframe(round_stats, use_container_width=True)
 
-# ============================================================================
-# MAIN APP
-# ============================================================================
 def main():
     st.sidebar.title("🎾 WTA Predictor")
     page = st.sidebar.radio("Page", ["🏠 Home", "📈 Training", "🔮 Predict", "📊 Analytics"])
@@ -441,9 +465,9 @@ def main():
         st.info("👈 Upload CSV to start!")
         st.markdown("""
         ### Features
-        ✓ Player Names • ✓ Surface Selection • ✓ Real-time Predictions • ✓ Analytics
+        ✓ Player Selection from Data • ✓ Surface Selection • ✓ Real-time Predictions • ✓ Analytics
         
-        ### CSV Columns
+        ### CSV Columns Required
         Tournament, Date, Surface, Court, Round, Player_1, Player_2, Winner, Rank_1, Rank_2, Pts_1, Pts_2, Odd_1, Odd_2, Score
         """)
 
