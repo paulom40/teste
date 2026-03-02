@@ -373,4 +373,5 @@ def main():
         st.markdown("### Interactive Dashboard for Tennis Match Forecasting")
         st.info("👈 Please upload a CSV file in the sidebar to get started")
 
-if __name__ == "__main__
+if __name__ == "__main__":
+    main()
