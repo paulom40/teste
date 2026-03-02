@@ -270,7 +270,14 @@ def parse_ou_excel_file(file):
                 except (ValueError, TypeError):
                     pass
         
-        # Extract final odds
+        # Row 24: Blended - columns 6 & 7
+        blended_overs = float(df.iloc[24, 6]) if pd.notna(df.iloc[24, 6]) else None
+        blended_unders = float(df.iloc[24, 7]) if pd.notna(df.iloc[24, 7]) else None
+        
+        # Row 26: Logistic regression - columns 6 & 7
+        logistic_overs = float(df.iloc[26, 6]) if pd.notna(df.iloc[26, 6]) else None
+        logistic_unders = float(df.iloc[26, 7]) if pd.notna(df.iloc[26, 7]) else None
+        
         # Row 27: Our Odds - columns 6 & 7
         our_odds_overs = float(df.iloc[27, 6]) if pd.notna(df.iloc[27, 6]) else None
         our_odds_unders = float(df.iloc[27, 7]) if pd.notna(df.iloc[27, 7]) else None
@@ -278,6 +285,10 @@ def parse_ou_excel_file(file):
         # Row 28: Market Odds - columns 6 & 7
         market_odds_overs = float(df.iloc[28, 6]) if pd.notna(df.iloc[28, 6]) else None
         market_odds_unders = float(df.iloc[28, 7]) if pd.notna(df.iloc[28, 7]) else None
+        
+        # Row 29: Implied Chance from Market - columns 6 & 7
+        implied_overs = float(df.iloc[29, 6]) if pd.notna(df.iloc[29, 6]) else None
+        implied_unders = float(df.iloc[29, 7]) if pd.notna(df.iloc[29, 7]) else None
         
         # Calculate probabilities from odds (1/odds = probability)
         our_chance_overs = 1/our_odds_overs if our_odds_overs else None
@@ -294,6 +305,10 @@ def parse_ou_excel_file(file):
             'away_defensive': away_defensive,
             'total_match_pressure': total_match_pressure,
             'ou_system_data': pd.DataFrame(ou_system_data),
+            'blended_overs': blended_overs,
+            'blended_unders': blended_unders,
+            'logistic_overs': logistic_overs,
+            'logistic_unders': logistic_unders,
             'our_chance_overs': our_chance_overs,
             'our_chance_unders': our_chance_unders,
             'our_odds_overs': our_odds_overs,
@@ -301,7 +316,9 @@ def parse_ou_excel_file(file):
             'market_odds_overs': market_odds_overs,
             'market_odds_unders': market_odds_unders,
             'market_chance_overs': market_chance_overs,
-            'market_chance_unders': market_chance_unders
+            'market_chance_unders': market_chance_unders,
+            'implied_overs': implied_overs,
+            'implied_unders': implied_unders
         }
     except Exception as e:
         st.error(f"Error parsing Excel file: {str(e)}")
@@ -713,6 +730,38 @@ if uploaded_file:
                                 f"{ou_data['total_match_pressure']:.2f}",
                                 help="Combined attacking and defensive pressure"
                             )
+                            
+                            st.divider()
+                            
+                            # Advanced Model Metrics
+                            st.subheader("🔬 Advanced Model Metrics")
+                            
+                            # Logistic Regression
+                            st.markdown("**Logistic Regression**")
+                            logistic_col1, logistic_col2 = st.columns(2)
+                            with logistic_col1:
+                                if ou_data['logistic_overs']:
+                                    st.write(f"🎯 Overs: {ou_data['logistic_overs']*100:.2f}%")
+                            with logistic_col2:
+                                if ou_data['logistic_unders']:
+                                    st.write(f"🎯 Unders: {ou_data['logistic_unders']*100:.2f}%")
+                            
+                            # Our Odds & Implied Chance
+                            st.markdown("**Our Odds & Market Implied**")
+                            our_impl_col1, our_impl_col2, our_impl_col3, our_impl_col4 = st.columns(4)
+                            
+                            with our_impl_col1:
+                                if ou_data['our_odds_overs']:
+                                    st.write(f"💰 Our Overs Odds: {ou_data['our_odds_overs']:.2f}")
+                            with our_impl_col2:
+                                if ou_data['our_odds_unders']:
+                                    st.write(f"💰 Our Unders Odds: {ou_data['our_odds_unders']:.2f}")
+                            with our_impl_col3:
+                                if ou_data['implied_overs']:
+                                    st.write(f"📊 Market Overs: {ou_data['implied_overs']*100:.2f}%")
+                            with our_impl_col4:
+                                if ou_data['implied_unders']:
+                                    st.write(f"📊 Market Unders: {ou_data['implied_unders']*100:.2f}%")
                             
                             st.divider()
                             
