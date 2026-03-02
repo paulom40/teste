@@ -1,17 +1,3 @@
-"""
-WTA MATCH PREDICTION STREAMLIT APP - COMPLETE
-==============================================
-Interactive dashboard for tennis match predictions with player names and surface selection
-
-Based on: "How Modern Systems Predict Tennis Matches"
-6-Factor Framework Implementation
-
-SETUP:
-1. pip install streamlit pandas numpy scikit-learn plotly
-2. streamlit run app.py
-3. Upload your wta_matches.csv file
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
