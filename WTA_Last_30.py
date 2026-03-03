@@ -3,10 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, calibration_curve
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.calibration import CalibratedClassifierCV
 import warnings
 warnings.filterwarnings('ignore')
@@ -47,7 +47,7 @@ def load_and_train_model(csv_file):
     features.append(df['Pts_2'].values)
     feature_names.append('Player_2_Points')
     
-    # Ratio features (more stable than pure differences)
+    # Ratio features
     rank_ratio = df['Rank_2'] / df['Rank_1']
     rank_ratio = rank_ratio.fillna(1)
     features.append(rank_ratio.values)
@@ -83,7 +83,6 @@ def load_and_train_model(csv_file):
         features.append((df['Odd_1'] - df['Odd_2']).values)
         feature_names.append('Odds_Differential')
         
-        # Odds ratio (more stable)
         odds_ratio = (df['Odd_1'] + 0.1) / (df['Odd_2'] + 0.1)
         features.append(odds_ratio.values)
         feature_names.append('Odds_Ratio')
@@ -99,24 +98,23 @@ def load_and_train_model(csv_file):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # TUNED MODEL: Use Gradient Boosting with calibration
-    # Gradient Boosting often has better calibration than Random Forest
+    # Train Gradient Boosting
     gb_model = GradientBoostingClassifier(
-        n_estimators=200,           # More estimators
-        learning_rate=0.05,         # Lower learning rate for better generalization
-        max_depth=5,                # Optimal depth
-        min_samples_split=10,       # Prevent overfitting
-        min_samples_leaf=5,         # Prevent overfitting
-        subsample=0.8,              # Stochastic boosting
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=5,
+        min_samples_split=10,
+        min_samples_leaf=5,
+        subsample=0.8,
         random_state=42,
-        validation_fraction=0.1,    # Early stopping
+        validation_fraction=0.1,
         n_iter_no_change=10,
         tol=1e-4
     )
     
     gb_model.fit(X_train_scaled, y_train)
     
-    # Calibrate the model for better probability estimates
+    # Calibrate the model
     calibrated_model = CalibratedClassifierCV(gb_model, method='sigmoid', cv=5)
     calibrated_model.fit(X_train_scaled, y_train)
     
@@ -130,10 +128,10 @@ def load_and_train_model(csv_file):
     f1 = f1_score(y_test, y_test_pred)
     auc_score = roc_auc_score(y_test, y_test_proba)
     
-    # Cross-validation score
+    # Cross-validation
     cv_scores = cross_val_score(calibrated_model, X_train_scaled, y_train, cv=5, scoring='roc_auc')
     
-    # Feature importance from base model
+    # Feature importance
     importance_df = pd.DataFrame({
         'Feature': feature_names,
         'Importance': gb_model.feature_importances_
@@ -159,7 +157,6 @@ def load_and_train_model(csv_file):
     }
 
 def get_last_30_matches(df, player_name):
-    """Get last 30 matches for a player"""
     p1_matches = df[df['Player_1'] == player_name].copy()
     p2_matches = df[df['Player_2'] == player_name].copy()
     
@@ -167,12 +164,9 @@ def get_last_30_matches(df, player_name):
     all_matches = all_matches.sort_index()
     
     last_30 = all_matches.tail(30)
-    
     return last_30
 
 def calculate_opponent_strength(last_30_matches, player_name):
-    """Calculate opponent strength for last 30 matches"""
-    
     if len(last_30_matches) == 0:
         return None
     
@@ -218,7 +212,6 @@ def calculate_opponent_strength(last_30_matches, player_name):
     }
 
 def calculate_player_stats_last_30(df, player_name):
-    """Calculate stats from last 30 matches"""
     last_30 = get_last_30_matches(df, player_name)
     
     if len(last_30) == 0:
@@ -266,8 +259,6 @@ def calculate_player_stats_last_30(df, player_name):
     }
 
 def calculate_game_lines(p_a_prob, player_a_name, player_b_name):
-    """Calculate betting lines based on probability"""
-    
     if p_a_prob >= 0.5:
         american_odds_fav = int(-100 / (1/p_a_prob - 1)) if p_a_prob < 1 else -9999
         american_odds_under = int(100 * (1/((1-p_a_prob)) - 1)) if p_a_prob > 0 else 9999
@@ -293,15 +284,15 @@ def calculate_game_lines(p_a_prob, player_a_name, player_b_name):
 
 def show_home(model_data):
     st.header("🎾 WTA Match Predictor & Game Lines")
-    st.markdown("*Advanced prediction system with fine-tuned calibration*")
+    st.markdown("*Calibrated predictions with opponent strength analysis*")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Matches", len(model_data['df']))
     with col2:
-        st.metric("Model Accuracy", f"{model_data['test_accuracy']:.1%}")
+        st.metric("Accuracy", f"{model_data['test_accuracy']:.1%}")
     with col3:
-        st.metric("AUC-ROC Score", f"{model_data['auc_score']:.1%}")
+        st.metric("AUC-ROC", f"{model_data['auc_score']:.1%}")
     with col4:
         st.metric("Status", "✓ Calibrated")
     
@@ -323,33 +314,27 @@ def show_home(model_data):
         st.dataframe(metrics_df.style.format({'Score': '{:.1%}'}), use_container_width=True, hide_index=True)
     
     with col2:
-        st.subheader("🔄 Cross-Validation Scores")
+        st.subheader("🔄 Cross-Validation")
         st.write(f"Mean CV Score: {np.mean(model_data['cv_scores']):.1%}")
         st.write(f"Std Dev: ±{np.std(model_data['cv_scores']):.1%}")
-        st.write("\n**Model Quality Indicators:**")
-        st.write("✓ Gradient Boosting with calibration")
-        st.write("✓ Cross-validated performance")
-        st.write("✓ Optimized hyperparameters")
-        st.write("✓ Better probability estimation")
+        st.write("\n**Improvements:**")
+        st.write("✓ Gradient Boosting Model")
+        st.write("✓ Sigmoid Calibration")
+        st.write("✓ 5-fold Cross-Validation")
     
     st.markdown("---")
-    st.subheader("📈 Top 10 Features by Importance")
+    st.subheader("📈 Top 15 Features")
     
-    top_10_features = model_data['importance_df'].head(10)
+    top_features = model_data['importance_df'].head(15)
     fig = go.Figure(data=[
-        go.Bar(
-            y=top_10_features['Feature'],
-            x=top_10_features['Importance'],
-            orientation='h',
-            marker_color='#667eea'
-        )
+        go.Bar(y=top_features['Feature'], x=top_features['Importance'], orientation='h', marker_color='#667eea')
     ])
-    fig.update_layout(title="Feature Importance", xaxis_title="Importance", height=400)
+    fig.update_layout(title="Feature Importance", xaxis_title="Importance", height=500)
     st.plotly_chart(fig, use_container_width=True)
 
 def show_predictions(model_data):
     st.header("🔮 Predict & Game Lines")
-    st.markdown("**Last 30 Matches Analysis with Calibrated Predictions**")
+    st.markdown("Last 30 matches analysis with calibrated predictions")
     
     st.markdown("---")
     
@@ -371,7 +356,7 @@ def show_predictions(model_data):
                 with col_m2:
                     st.metric("Wins", stats_a['wins'])
                 with col_m3:
-                    st.metric("Win %", f"{stats_a['win_rate']:.1%}")
+                    st.metric("Rate", f"{stats_a['win_rate']:.1%}")
                 
                 rank_1 = st.number_input("Rank", value=int(stats_a['rank']), key="rank_a")
                 pts_1 = st.number_input("Points", value=int(stats_a['points']), key="pts_a")
@@ -390,7 +375,7 @@ def show_predictions(model_data):
                 with col_m2:
                     st.metric("Wins ", stats_b['wins'])
                 with col_m3:
-                    st.metric("Win % ", f"{stats_b['win_rate']:.1%}")
+                    st.metric("Rate ", f"{stats_b['win_rate']:.1%}")
                 
                 rank_2 = st.number_input("Rank ", value=int(stats_b['rank']), key="rank_b")
                 pts_2 = st.number_input("Points ", value=int(stats_b['points']), key="pts_b")
@@ -412,8 +397,6 @@ def show_predictions(model_data):
     if st.button("⚡ Predict Winner & Game Lines", use_container_width=True):
         
         features = [rank_2 - rank_1, rank_1, rank_2, pts_1 - pts_2, pts_1, pts_2]
-        
-        # Ratio features
         features.append(rank_2 / rank_1 if rank_1 > 0 else 1)
         features.append((pts_1 + 1) / (pts_2 + 1))
         
@@ -442,17 +425,17 @@ def show_predictions(model_data):
         lines = calculate_game_lines(p_a, player_a_name, player_b_name)
         
         st.markdown("---")
-        st.subheader("📊 CALIBRATED PREDICTION RESULTS")
+        st.subheader("📊 PREDICTION RESULTS")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             if p_a > p_b:
                 st.success(f"🏆 {player_a_name}")
-                st.metric("Win Probability", f"{p_a:.2%}")
+                st.metric("Win Prob", f"{p_a:.2%}")
             else:
                 st.success(f"🏆 {player_b_name}")
-                st.metric("Win Probability", f"{p_b:.2%}")
+                st.metric("Win Prob", f"{p_b:.2%}")
         
         with col2:
             conf = abs(p_a - 0.5)
@@ -467,8 +450,7 @@ def show_predictions(model_data):
                 st.success("Very High")
         
         with col3:
-            st.metric("Model AUC-ROC", f"{model_data['auc_score']:.1%}")
-            st.caption("Calibrated probability")
+            st.metric("AUC-ROC", f"{model_data['auc_score']:.1%}")
         
         st.markdown("---")
         st.subheader("📈 GAME LINES")
@@ -477,59 +459,41 @@ def show_predictions(model_data):
         
         with col1:
             st.metric("SPREAD", f"{lines['favorite']} -{lines['spread']:.1f}")
-            st.caption("Games favored")
         
         with col2:
             st.metric("OVER/UNDER", f"{lines['over_under']:.1f}")
-            st.caption("Total games")
         
         with col3:
             st.metric("MONEYLINE", f"{lines['american_odds_fav']}")
-            st.caption(f"{lines['underdog']}: +{lines['american_odds_under']}")
         
         st.markdown("---")
-        st.subheader("📊 OPPONENT STRENGTH ANALYSIS (Last 30 Matches)")
+        st.subheader("📊 OPPONENT STRENGTH (Last 30)")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader(f"{player_a_name}")
-            if stats_a:
-                st.write(f"**Matches:** {stats_a['total_matches']} | **Wins:** {stats_a['wins']} | **Rate:** {stats_a['win_rate']:.1%}")
-                
-                opp_a = stats_a['opponent_strength']
-                st.write(f"\n**Opponent Strength:**")
-                st.write(f"• Avg Rank: #{opp_a['avg_opponent_rank']:.0f}")
-                st.write(f"• Median: #{opp_a['median_opponent_rank']:.0f}")
-                
-                st.write(f"\n**Win Rate by Opponent Level:**")
-                st.write(f"• vs Top 10: {opp_a['vs_top_10']['wins']}/{opp_a['vs_top_10']['count']} ({opp_a['vs_top_10']['rate']:.1%})")
-                st.write(f"• vs Top 50: {opp_a['vs_top_50']['wins']}/{opp_a['vs_top_50']['count']} ({opp_a['vs_top_50']['rate']:.1%})")
-                st.write(f"• vs 50+: {opp_a['vs_lower_50']['wins']}/{opp_a['vs_lower_50']['count']} ({opp_a['vs_lower_50']['rate']:.1%})")
+            st.write(f"**{player_a_name}**")
+            st.write(f"Matches: {stats_a['total_matches']} | Wins: {stats_a['wins']} | Rate: {stats_a['win_rate']:.1%}")
+            opp_a = stats_a['opponent_strength']
+            st.write(f"Avg Opponent: #{opp_a['avg_opponent_rank']:.0f}")
+            st.write(f"vs Top 10: {opp_a['vs_top_10']['wins']}/{opp_a['vs_top_10']['count']} ({opp_a['vs_top_10']['rate']:.1%})")
+            st.write(f"vs Top 50: {opp_a['vs_top_50']['wins']}/{opp_a['vs_top_50']['count']} ({opp_a['vs_top_50']['rate']:.1%})")
         
         with col2:
-            st.subheader(f"{player_b_name}")
-            if stats_b:
-                st.write(f"**Matches:** {stats_b['total_matches']} | **Wins:** {stats_b['wins']} | **Rate:** {stats_b['win_rate']:.1%}")
-                
-                opp_b = stats_b['opponent_strength']
-                st.write(f"\n**Opponent Strength:**")
-                st.write(f"• Avg Rank: #{opp_b['avg_opponent_rank']:.0f}")
-                st.write(f"• Median: #{opp_b['median_opponent_rank']:.0f}")
-                
-                st.write(f"\n**Win Rate by Opponent Level:**")
-                st.write(f"• vs Top 10: {opp_b['vs_top_10']['wins']}/{opp_b['vs_top_10']['count']} ({opp_b['vs_top_10']['rate']:.1%})")
-                st.write(f"• vs Top 50: {opp_b['vs_top_50']['wins']}/{opp_b['vs_top_50']['count']} ({opp_b['vs_top_50']['rate']:.1%})")
-                st.write(f"• vs 50+: {opp_b['vs_lower_50']['wins']}/{opp_b['vs_lower_50']['count']} ({opp_b['vs_lower_50']['rate']:.1%})")
+            st.write(f"**{player_b_name}**")
+            st.write(f"Matches: {stats_b['total_matches']} | Wins: {stats_b['wins']} | Rate: {stats_b['win_rate']:.1%}")
+            opp_b = stats_b['opponent_strength']
+            st.write(f"Avg Opponent: #{opp_b['avg_opponent_rank']:.0f}")
+            st.write(f"vs Top 10: {opp_b['vs_top_10']['wins']}/{opp_b['vs_top_10']['count']} ({opp_b['vs_top_10']['rate']:.1%})")
+            st.write(f"vs Top 50: {opp_b['vs_top_50']['wins']}/{opp_b['vs_top_50']['count']} ({opp_b['vs_top_50']['rate']:.1%})")
         
         st.markdown("---")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.subheader("Opponent Strength")
             opp_comp = pd.DataFrame({
-                'Metric': ['Avg Opp', 'Median Opp', 'Best', 'Worst'],
+                'Metric': ['Avg Opp', 'Median', 'Best', 'Worst'],
                 player_a_name: [
                     f"#{stats_a['opponent_strength']['avg_opponent_rank']:.0f}",
                     f"#{stats_a['opponent_strength']['median_opponent_rank']:.0f}",
@@ -546,54 +510,30 @@ def show_predictions(model_data):
             st.dataframe(opp_comp, use_container_width=True, hide_index=True)
         
         with col2:
-            st.subheader("Overall")
             comp = pd.DataFrame({
-                'Metric': ['Rank', 'Points', 'W/L', 'Rate', 'P(Win)', 'Opp Avg'],
-                player_a_name: [
-                    f"#{rank_1}",
-                    pts_1,
-                    f"{stats_a['wins']}/{stats_a['total_matches']}",
-                    f"{stats_a['win_rate']:.1%}",
-                    f"{p_a:.2%}",
-                    f"#{stats_a['opponent_strength']['avg_opponent_rank']:.0f}"
-                ],
-                player_b_name: [
-                    f"#{rank_2}",
-                    pts_2,
-                    f"{stats_b['wins']}/{stats_b['total_matches']}",
-                    f"{stats_b['win_rate']:.1%}",
-                    f"{p_b:.2%}",
-                    f"#{stats_b['opponent_strength']['avg_opponent_rank']:.0f}"
-                ]
+                'Metric': ['Rank', 'Points', 'W/L', 'Rate', 'P(Win)'],
+                player_a_name: [f"#{rank_1}", pts_1, f"{stats_a['wins']}/{stats_a['total_matches']}", f"{stats_a['win_rate']:.1%}", f"{p_a:.2%}"],
+                player_b_name: [f"#{rank_2}", pts_2, f"{stats_b['wins']}/{stats_b['total_matches']}", f"{stats_b['win_rate']:.1%}", f"{p_b:.2%}"]
             })
             st.dataframe(comp, use_container_width=True, hide_index=True)
         
         with col3:
             fig = go.Figure([go.Bar(x=[player_a_name, player_b_name], y=[p_a, p_b], marker_color=['#667eea', '#764ba2'])])
-            fig.update_layout(title="Calibrated Probability", yaxis=dict(range=[0, 1]), showlegend=False, height=350)
+            fig.update_layout(title="Probability", yaxis=dict(range=[0, 1]), showlegend=False, height=350)
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("---")
+        st.subheader("🔍 INSIGHTS")
         
-        st.subheader("🔍 KEY INSIGHTS")
-        
-        stronger_opp = stats_a['opponent_strength']['avg_opponent_rank'] < stats_b['opponent_strength']['avg_opponent_rank']
-        better_vs_top = stats_a['opponent_strength']['vs_top_10']['rate'] > stats_b['opponent_strength']['vs_top_10']['rate']
-        
-        if stronger_opp:
-            st.write(f"✓ {player_a_name} faced stronger opponents (avg #{stats_a['opponent_strength']['avg_opponent_rank']:.0f} vs #{stats_b['opponent_strength']['avg_opponent_rank']:.0f})")
+        if stats_a['opponent_strength']['avg_opponent_rank'] < stats_b['opponent_strength']['avg_opponent_rank']:
+            st.write(f"✓ {player_a_name} faced stronger opponents")
         else:
-            st.write(f"✓ {player_b_name} faced stronger opponents (avg #{stats_b['opponent_strength']['avg_opponent_rank']:.0f} vs #{stats_a['opponent_strength']['avg_opponent_rank']:.0f})")
-        
-        if better_vs_top:
-            st.write(f"✓ {player_a_name} performs better vs Top 10 ({stats_a['opponent_strength']['vs_top_10']['rate']:.1%} vs {stats_b['opponent_strength']['vs_top_10']['rate']:.1%})")
-        else:
-            st.write(f"✓ {player_b_name} performs better vs Top 10 ({stats_b['opponent_strength']['vs_top_10']['rate']:.1%} vs {stats_a['opponent_strength']['vs_top_10']['rate']:.1%})")
+            st.write(f"✓ {player_b_name} faced stronger opponents")
         
         if stats_a['win_rate'] > stats_b['win_rate']:
-            st.write(f"✓ {player_a_name} has better recent form ({stats_a['win_rate']:.1%} vs {stats_b['win_rate']:.1%})")
+            st.write(f"✓ {player_a_name} has better recent form")
         else:
-            st.write(f"✓ {player_b_name} has better recent form ({stats_b['win_rate']:.1%} vs {stats_a['win_rate']:.1%})")
+            st.write(f"✓ {player_b_name} has better recent form")
 
 def main():
     st.sidebar.title("🎾 WTA Predictor")
@@ -604,7 +544,7 @@ def main():
     
     if uploaded_file:
         model_data = load_and_train_model(uploaded_file)
-        st.sidebar.success("✓ Model Calibrated!")
+        st.sidebar.success("✓ Ready!")
         st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
         
         if page == "🏠 Home":
@@ -613,8 +553,8 @@ def main():
             show_predictions(model_data)
     else:
         st.title("🎾 WTA Predictor")
-        st.markdown("### Calibrated Match Prediction & Game Lines")
-        st.info("👈 Upload your WTA CSV file to begin!")
+        st.markdown("### Calibrated Predictions & Game Lines")
+        st.info("👈 Upload CSV to start!")
 
 if __name__ == "__main__":
     main()
