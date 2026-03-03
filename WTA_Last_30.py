@@ -17,10 +17,12 @@ st.set_page_config(page_title="WTA Predictor", page_icon="🎾", layout="wide")
 def load_and_train_model(csv_file):
     df = pd.read_csv(csv_file)
     
+    # Convert numeric columns
     for col in ['Rank_1', 'Rank_2', 'Pts_1', 'Pts_2', 'Odd_1', 'Odd_2']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
+    # Drop rows with missing critical values
     df = df.dropna(subset=['Player_1', 'Player_2', 'Winner', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
     df['Player_1_Won'] = (df['Winner'] == df['Player_1']).astype(int)
     
@@ -28,67 +30,81 @@ def load_and_train_model(csv_file):
     feature_names = []
     
     # Ranking features
-    features.append((df['Rank_2'] - df['Rank_1']).values)
+    features.append((df['Rank_2'] - df['Rank_1']).fillna(0).values)
     feature_names.append('Ranking_Differential')
     
-    features.append(df['Rank_1'].values)
+    features.append(df['Rank_1'].fillna(100).values)
     feature_names.append('Player_1_Rank')
     
-    features.append(df['Rank_2'].values)
+    features.append(df['Rank_2'].fillna(100).values)
     feature_names.append('Player_2_Rank')
     
     # Points features
-    features.append((df['Pts_1'] - df['Pts_2']).values)
+    features.append((df['Pts_1'] - df['Pts_2']).fillna(0).values)
     feature_names.append('Points_Differential')
     
-    features.append(df['Pts_1'].values)
+    features.append(df['Pts_1'].fillna(0).values)
     feature_names.append('Player_1_Points')
     
-    features.append(df['Pts_2'].values)
+    features.append(df['Pts_2'].fillna(0).values)
     feature_names.append('Player_2_Points')
     
-    # Ratio features
-    rank_ratio = df['Rank_2'] / df['Rank_1']
-    rank_ratio = rank_ratio.fillna(1)
-    features.append(rank_ratio.values)
+    # Ratio features with safe division
+    rank_ratio = np.where(df['Rank_1'] > 0, df['Rank_2'] / df['Rank_1'], 1.0)
+    rank_ratio = np.nan_to_num(rank_ratio, nan=1.0, posinf=1.0, neginf=1.0)
+    features.append(rank_ratio)
     feature_names.append('Rank_Ratio')
     
-    pts_ratio = (df['Pts_1'] + 1) / (df['Pts_2'] + 1)
-    features.append(pts_ratio.values)
+    pts_ratio = np.where(df['Pts_2'] > -1, (df['Pts_1'] + 1) / (df['Pts_2'] + 1), 1.0)
+    pts_ratio = np.nan_to_num(pts_ratio, nan=1.0, posinf=1.0, neginf=1.0)
+    features.append(pts_ratio)
     feature_names.append('Points_Ratio')
     
     # Surface features
     if 'Surface' in df.columns:
-        surfaces = pd.get_dummies(df['Surface'], prefix='Surface')
+        surfaces = pd.get_dummies(df['Surface'], prefix='Surface', dummy_na=False)
         for col in surfaces.columns:
             features.append(surfaces[col].values)
             feature_names.append(col)
     
     # Round features
     if 'Round' in df.columns:
-        rounds = pd.get_dummies(df['Round'], prefix='Round')
+        rounds = pd.get_dummies(df['Round'], prefix='Round', dummy_na=False)
         for col in rounds.columns:
             features.append(rounds[col].values)
             feature_names.append(col)
     
     # Court features
     if 'Court' in df.columns:
-        courts = pd.get_dummies(df['Court'], prefix='Court')
+        courts = pd.get_dummies(df['Court'], prefix='Court', dummy_na=False)
         for col in courts.columns:
             features.append(courts[col].values)
             feature_names.append(col)
     
     # Odds features
     if 'Odd_1' in df.columns and 'Odd_2' in df.columns:
-        features.append((df['Odd_1'] - df['Odd_2']).values)
+        odds_diff = (df['Odd_1'].fillna(1.5) - df['Odd_2'].fillna(1.5)).values
+        odds_diff = np.nan_to_num(odds_diff, nan=0.0)
+        features.append(odds_diff)
         feature_names.append('Odds_Differential')
         
-        odds_ratio = (df['Odd_1'] + 0.1) / (df['Odd_2'] + 0.1)
-        features.append(odds_ratio.values)
+        odds_ratio = np.where(df['Odd_2'] > 0, (df['Odd_1'].fillna(1.5) + 0.1) / (df['Odd_2'].fillna(1.5) + 0.1), 1.0)
+        odds_ratio = np.nan_to_num(odds_ratio, nan=1.0, posinf=1.0, neginf=1.0)
+        features.append(odds_ratio)
         feature_names.append('Odds_Ratio')
     
+    # Stack and clean
     X = np.column_stack(features)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    
     y = df['Player_1_Won'].values
+    
+    # Verify data
+    if len(X) < 50:
+        raise ValueError(f"Not enough matches. Need at least 50, got {len(X)}")
+    
+    if np.any(~np.isfinite(X)):
+        raise ValueError("Data contains NaN or infinite values after cleaning")
     
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
@@ -123,9 +139,9 @@ def load_and_train_model(csv_file):
     y_test_proba = calibrated_model.predict_proba(X_test_scaled)[:, 1]
     
     test_acc = accuracy_score(y_test, y_test_pred)
-    precision = precision_score(y_test, y_test_pred)
-    recall = recall_score(y_test, y_test_pred)
-    f1 = f1_score(y_test, y_test_pred)
+    precision = precision_score(y_test, y_test_pred, zero_division=0)
+    recall = recall_score(y_test, y_test_pred, zero_division=0)
+    f1 = f1_score(y_test, y_test_pred, zero_division=0)
     auc_score = roc_auc_score(y_test, y_test_proba)
     
     # Cross-validation
@@ -184,21 +200,21 @@ def calculate_opponent_strength(last_30_matches, player_name):
         opponent_ranks.append(opponent_rank)
         opponent_results.append(result)
     
-    avg_opponent_rank = np.mean(opponent_ranks)
-    median_opponent_rank = np.median(opponent_ranks)
-    best_opponent_rank = np.min(opponent_ranks)
-    worst_opponent_rank = np.max(opponent_ranks)
+    avg_opponent_rank = np.nanmean(opponent_ranks) if opponent_ranks else 100
+    median_opponent_rank = np.nanmedian(opponent_ranks) if opponent_ranks else 100
+    best_opponent_rank = np.nanmin(opponent_ranks) if opponent_ranks else 100
+    worst_opponent_rank = np.nanmax(opponent_ranks) if opponent_ranks else 100
     
-    top_10_opponents = [r for r in opponent_ranks if r <= 10]
-    top_10_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] <= 10])
+    top_10_opponents = [r for r in opponent_ranks if r and r <= 10]
+    top_10_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] and opponent_ranks[i] <= 10])
     top_10_rate = top_10_wins / len(top_10_opponents) if top_10_opponents else 0
     
-    top_50_opponents = [r for r in opponent_ranks if r <= 50]
-    top_50_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] <= 50])
+    top_50_opponents = [r for r in opponent_ranks if r and r <= 50]
+    top_50_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] and opponent_ranks[i] <= 50])
     top_50_rate = top_50_wins / len(top_50_opponents) if top_50_opponents else 0
     
-    lower_ranked = [r for r in opponent_ranks if r > 50]
-    lower_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] > 50])
+    lower_ranked = [r for r in opponent_ranks if r and r > 50]
+    lower_wins = sum([opponent_results[i] for i in range(len(opponent_ranks)) if opponent_ranks[i] and opponent_ranks[i] > 50])
     lower_rate = lower_wins / len(lower_ranked) if lower_ranked else 0
     
     return {
@@ -222,26 +238,26 @@ def calculate_player_stats_last_30(df, player_name):
     win_rate = wins / len(last_30) if len(last_30) > 0 else 0
     
     latest = last_30.iloc[-1]
-    if player_name == latest.get('Player_1'):
-        rank = latest['Rank_1']
-        points = latest['Pts_1']
-        odds = latest.get('Odd_1', 1.5)
-    else:
-        rank = latest['Rank_2']
-        points = latest['Pts_2']
-        odds = latest.get('Odd_2', 2.5)
+    rank = latest.get('Rank_1', 100) if player_name == latest.get('Player_1') else latest.get('Rank_2', 100)
+    points = latest.get('Pts_1', 0) if player_name == latest.get('Player_1') else latest.get('Pts_2', 0)
+    odds = latest.get('Odd_1', 1.5) if player_name == latest.get('Player_1') else latest.get('Odd_2', 2.5)
+    
+    rank = float(rank) if rank else 100
+    points = float(points) if points else 0
+    odds = float(odds) if odds else 1.5
     
     surface_stats = {}
     if 'Surface' in last_30.columns:
         for surface in last_30['Surface'].unique():
-            surface_matches = last_30[last_30['Surface'] == surface]
-            surface_wins = len(surface_matches[surface_matches['Winner'] == player_name])
-            surface_rate = surface_wins / len(surface_matches) if len(surface_matches) > 0 else 0
-            surface_stats[surface] = {
-                'matches': len(surface_matches),
-                'wins': surface_wins,
-                'rate': surface_rate
-            }
+            if pd.notna(surface):
+                surface_matches = last_30[last_30['Surface'] == surface]
+                surface_wins = len(surface_matches[surface_matches['Winner'] == player_name])
+                surface_rate = surface_wins / len(surface_matches) if len(surface_matches) > 0 else 0
+                surface_stats[surface] = {
+                    'matches': len(surface_matches),
+                    'wins': surface_wins,
+                    'rate': surface_rate
+                }
     
     opponent_strength = calculate_opponent_strength(last_30, player_name)
     
@@ -317,10 +333,10 @@ def show_home(model_data):
         st.subheader("🔄 Cross-Validation")
         st.write(f"Mean CV Score: {np.mean(model_data['cv_scores']):.1%}")
         st.write(f"Std Dev: ±{np.std(model_data['cv_scores']):.1%}")
-        st.write("\n**Improvements:**")
-        st.write("✓ Gradient Boosting Model")
+        st.write("\n**Model Quality:**")
+        st.write("✓ Gradient Boosting")
         st.write("✓ Sigmoid Calibration")
-        st.write("✓ 5-fold Cross-Validation")
+        st.write("✓ 5-fold CV")
     
     st.markdown("---")
     st.subheader("📈 Top 15 Features")
@@ -358,9 +374,9 @@ def show_predictions(model_data):
                 with col_m3:
                     st.metric("Rate", f"{stats_a['win_rate']:.1%}")
                 
-                rank_1 = st.number_input("Rank", value=int(stats_a['rank']), key="rank_a")
-                pts_1 = st.number_input("Points", value=int(stats_a['points']), key="pts_a")
-                odds_1 = st.number_input("Odds", value=float(stats_a['odds']), step=0.1, key="odds_a")
+                rank_1 = st.number_input("Rank", value=int(stats_a['rank']), key="rank_a", min_value=1)
+                pts_1 = st.number_input("Points", value=int(stats_a['points']), key="pts_a", min_value=0)
+                odds_1 = st.number_input("Odds", value=float(stats_a['odds']), step=0.1, key="odds_a", min_value=1.0)
     
     with col_b:
         st.subheader("👤 Player B")
@@ -377,9 +393,9 @@ def show_predictions(model_data):
                 with col_m3:
                     st.metric("Rate ", f"{stats_b['win_rate']:.1%}")
                 
-                rank_2 = st.number_input("Rank ", value=int(stats_b['rank']), key="rank_b")
-                pts_2 = st.number_input("Points ", value=int(stats_b['points']), key="pts_b")
-                odds_2 = st.number_input("Odds ", value=float(stats_b['odds']), step=0.1, key="odds_b")
+                rank_2 = st.number_input("Rank ", value=int(stats_b['rank']), key="rank_b", min_value=1)
+                pts_2 = st.number_input("Points ", value=int(stats_b['points']), key="pts_b", min_value=0)
+                odds_2 = st.number_input("Odds ", value=float(stats_b['odds']), step=0.1, key="odds_b", min_value=1.0)
     
     st.markdown("---")
     
@@ -543,18 +559,29 @@ def main():
     uploaded_file = st.sidebar.file_uploader("CSV", type=['csv'])
     
     if uploaded_file:
-        model_data = load_and_train_model(uploaded_file)
-        st.sidebar.success("✓ Ready!")
-        st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
-        
-        if page == "🏠 Home":
-            show_home(model_data)
-        else:
-            show_predictions(model_data)
+        try:
+            model_data = load_and_train_model(uploaded_file)
+            st.sidebar.success("✓ Ready!")
+            st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
+            
+            if page == "🏠 Home":
+                show_home(model_data)
+            else:
+                show_predictions(model_data)
+        except Exception as e:
+            st.error(f"Error loading model: {str(e)}")
+            st.info("Please check your CSV file format and ensure it has all required columns")
     else:
         st.title("🎾 WTA Predictor")
         st.markdown("### Calibrated Predictions & Game Lines")
         st.info("👈 Upload CSV to start!")
+        st.markdown("""
+        **Required CSV Columns:**
+        - Tournament, Date, Surface, Court, Round
+        - Player_1, Player_2, Winner
+        - Rank_1, Rank_2, Pts_1, Pts_2
+        - Odd_1, Odd_2, Score
+        """)
 
 if __name__ == "__main__":
     main()
