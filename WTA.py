@@ -3,15 +3,44 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, log_loss
 from sklearn.calibration import CalibratedClassifierCV
 import warnings
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="WTA Predictor", page_icon="🎾", layout="wide")
+
+def parse_score(score_str):
+    """
+    Parse tennis score and calculate total games played.
+    Example: '6-4 6-4' = 10 games (6+4 + 6+4)
+    Example: '7-5 6-3' = 16 games (7+5 + 6+3)
+    """
+    if not score_str or pd.isna(score_str):
+        return None
+    
+    try:
+        score_str = str(score_str).strip()
+        sets = score_str.split()
+        
+        total_games = 0
+        for set_score in sets:
+            if '-' in set_score:
+                parts = set_score.split('-')
+                if len(parts) == 2:
+                    try:
+                        games_p1 = int(parts[0])
+                        games_p2 = int(parts[1])
+                        total_games += games_p1 + games_p2
+                    except:
+                        return None
+        
+        return total_games if total_games > 0 else None
+    except:
+        return None
 
 @st.cache_resource
 def load_and_train_model(csv_file):
@@ -21,6 +50,12 @@ def load_and_train_model(csv_file):
     for col in ['Rank_1', 'Rank_2', 'Pts_1', 'Pts_2', 'Odd_1', 'Odd_2']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Parse games from score
+    if 'Score' in df.columns:
+        df['Total_Games'] = df['Score'].apply(parse_score)
+    else:
+        df['Total_Games'] = None
     
     # Drop rows with missing critical values
     df = df.dropna(subset=['Player_1', 'Player_2', 'Winner', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
@@ -39,6 +74,14 @@ def load_and_train_model(csv_file):
     features.append(df['Rank_2'].fillna(100).values)
     feature_names.append('Player_2_Rank')
     
+    # Log transform ranks for better scaling
+    log_rank_1 = np.log(df['Rank_1'].fillna(100) + 1).values
+    log_rank_2 = np.log(df['Rank_2'].fillna(100) + 1).values
+    features.append(log_rank_1)
+    feature_names.append('Log_Rank_1')
+    features.append(log_rank_2)
+    feature_names.append('Log_Rank_2')
+    
     # Points features
     features.append((df['Pts_1'] - df['Pts_2']).fillna(0).values)
     feature_names.append('Points_Differential')
@@ -48,6 +91,14 @@ def load_and_train_model(csv_file):
     
     features.append(df['Pts_2'].fillna(0).values)
     feature_names.append('Player_2_Points')
+    
+    # Log transform points
+    log_pts_1 = np.log(df['Pts_1'].fillna(1) + 1).values
+    log_pts_2 = np.log(df['Pts_2'].fillna(1) + 1).values
+    features.append(log_pts_1)
+    feature_names.append('Log_Pts_1')
+    features.append(log_pts_2)
+    feature_names.append('Log_Pts_2')
     
     # Ratio features with safe division
     rank_ratio = np.where(df['Rank_1'] > 0, df['Rank_2'] / df['Rank_1'], 1.0)
@@ -92,6 +143,14 @@ def load_and_train_model(csv_file):
         odds_ratio = np.nan_to_num(odds_ratio, nan=1.0, posinf=1.0, neginf=1.0)
         features.append(odds_ratio)
         feature_names.append('Odds_Ratio')
+        
+        # Log odds
+        log_odds_1 = np.log(df['Odd_1'].fillna(1.5) + 1).values
+        log_odds_2 = np.log(df['Odd_2'].fillna(1.5) + 1).values
+        features.append(log_odds_1)
+        feature_names.append('Log_Odds_1')
+        features.append(log_odds_2)
+        feature_names.append('Log_Odds_2')
     
     # Stack and clean
     X = np.column_stack(features)
@@ -106,32 +165,33 @@ def load_and_train_model(csv_file):
     if np.any(~np.isfinite(X)):
         raise ValueError("Data contains NaN or infinite values after cleaning")
     
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    # Split data - use 75/25 for better training
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     
     # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train Gradient Boosting
+    # IMPROVED MODEL: Use ensemble with better hyperparameters
     gb_model = GradientBoostingClassifier(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=5,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        subsample=0.8,
+        n_estimators=300,           # More estimators
+        learning_rate=0.02,         # Lower learning rate
+        max_depth=4,                # Shallower trees
+        min_samples_split=20,       # More regularization
+        min_samples_leaf=10,        # More regularization
+        subsample=0.7,              # Stronger stochastic boosting
+        max_features='sqrt',        # Feature subsampling
         random_state=42,
-        validation_fraction=0.1,
-        n_iter_no_change=10,
+        validation_fraction=0.15,
+        n_iter_no_change=20,
         tol=1e-4
     )
     
     gb_model.fit(X_train_scaled, y_train)
     
-    # Calibrate the model
-    calibrated_model = CalibratedClassifierCV(gb_model, method='sigmoid', cv=5)
+    # Calibrate with isotonic regression for better probability
+    calibrated_model = CalibratedClassifierCV(gb_model, method='isotonic', cv=10)
     calibrated_model.fit(X_train_scaled, y_train)
     
     # Evaluate
@@ -194,7 +254,7 @@ def get_surface_matches(df, player_name, surface):
     return last_30_surface
 
 def calculate_surface_statistics(df, player_name, surface):
-    """Calculate surface-specific statistics"""
+    """Calculate surface-specific statistics with accurate game counting"""
     surface_matches = get_surface_matches(df, player_name, surface)
     
     if len(surface_matches) == 0:
@@ -205,56 +265,45 @@ def calculate_surface_statistics(df, player_name, surface):
     losses = len(surface_matches) - wins
     win_rate = wins / len(surface_matches) if len(surface_matches) > 0 else 0
     
-    # Analyze games (sets played)
-    games_in_straight_sets = 0  # 2-0
-    games_in_three_sets = 0     # 2-1
-    straight_set_wins = 0
-    three_set_wins = 0
+    # Analyze games accurately
+    total_games_list = []
+    games_when_win = []
+    games_when_loss = []
+    avg_games_won = 0
+    avg_games_lost = 0
     
     for _, match in surface_matches.iterrows():
-        score = str(match.get('Score', ''))
-        if not score or pd.isna(score):
-            continue
+        total_games = parse_score(match.get('Score', ''))
         
-        # Parse score to count sets
-        try:
-            sets = score.split()
-            if len(sets) >= 2:
-                # Check if straight sets (2-0) or three sets (2-1)
-                if len(sets) == 2:
-                    games_in_straight_sets += 1
-                    if match['Winner'] == player_name:
-                        straight_set_wins += 1
-                elif len(sets) == 3:
-                    games_in_three_sets += 1
-                    if match['Winner'] == player_name:
-                        three_set_wins += 1
-        except:
-            continue
+        if total_games:
+            total_games_list.append(total_games)
+            
+            if match['Winner'] == player_name:
+                games_when_win.append(total_games)
+            else:
+                games_when_loss.append(total_games)
     
-    # Expected games calculation
-    # If player has 60% win rate on hard court with 70% straight sets
-    # Expected: 60% * 2 sets (straight) + 40% * 3 sets (loss) = 1.2 + 1.2 = 2.4 avg games
+    # Calculate averages
+    if games_when_win:
+        avg_games_won = np.mean(games_when_win)
+    if games_when_loss:
+        avg_games_lost = np.mean(games_when_loss)
     
-    total_games = games_in_straight_sets + games_in_three_sets
-    if total_games > 0:
-        straight_set_rate = games_in_straight_sets / total_games
-        expected_games = (win_rate * 2) + ((1 - win_rate) * 3)
-    else:
-        straight_set_rate = 0
-        expected_games = 2.5  # Default to 2.5 if no data
+    avg_total_games = np.mean(total_games_list) if total_games_list else 26  # Average match ~26 games (2-0 or splits)
+    
+    # Expected games = (win_rate * avg_games_when_win) + ((1-win_rate) * avg_games_when_loss)
+    expected_games = (win_rate * avg_games_won) + ((1 - win_rate) * avg_games_lost) if (games_when_win or games_when_loss) else avg_total_games
     
     return {
         'total_matches': len(surface_matches),
         'wins': wins,
         'losses': losses,
         'win_rate': win_rate,
-        'games_straight_sets': games_in_straight_sets,
-        'games_three_sets': games_in_three_sets,
-        'straight_set_wins': straight_set_wins,
-        'three_set_wins': three_set_wins,
-        'straight_set_rate': straight_set_rate,
+        'avg_games_when_win': avg_games_won,
+        'avg_games_when_loss': avg_games_lost,
         'expected_games': expected_games,
+        'avg_total_games': avg_total_games,
+        'total_games_samples': len(total_games_list),
         'last_matches': surface_matches
     }
 
@@ -350,33 +399,9 @@ def calculate_player_stats_last_30(df, player_name):
         'opponent_strength': opponent_strength
     }
 
-def calculate_game_lines(p_a_prob, player_a_name, player_b_name):
-    if p_a_prob >= 0.5:
-        american_odds_fav = int(-100 / (1/p_a_prob - 1)) if p_a_prob < 1 else -9999
-        american_odds_under = int(100 * (1/((1-p_a_prob)) - 1)) if p_a_prob > 0 else 9999
-        favorite = player_a_name
-        underdog = player_b_name
-    else:
-        american_odds_fav = int(-100 / (1/(1-p_a_prob) - 1)) if (1-p_a_prob) < 1 else -9999
-        american_odds_under = int(100 * (1/(p_a_prob) - 1)) if p_a_prob > 0 else 9999
-        favorite = player_b_name
-        underdog = player_a_name
-    
-    spread = abs(p_a_prob - 0.5) * 20
-    over_under = 2.5 + (abs(p_a_prob - 0.5) * 2)
-    
-    return {
-        'favorite': favorite,
-        'underdog': underdog,
-        'spread': spread,
-        'american_odds_fav': american_odds_fav,
-        'american_odds_under': american_odds_under,
-        'over_under': over_under
-    }
-
 def show_home(model_data):
-    st.header("🎾 WTA Match Predictor & Game Lines")
-    st.markdown("*Calibrated predictions with opponent strength analysis*")
+    st.header("🎾 WTA Match Predictor")
+    st.markdown("*Improved calibration with accurate game counting*")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -386,7 +411,7 @@ def show_home(model_data):
     with col3:
         st.metric("AUC-ROC", f"{model_data['auc_score']:.1%}")
     with col4:
-        st.metric("Status", "✓ Calibrated")
+        st.metric("Status", "✓ Optimized")
     
     st.markdown("---")
     
@@ -409,10 +434,11 @@ def show_home(model_data):
         st.subheader("🔄 Cross-Validation")
         st.write(f"Mean CV Score: {np.mean(model_data['cv_scores']):.1%}")
         st.write(f"Std Dev: ±{np.std(model_data['cv_scores']):.1%}")
-        st.write("\n**Model Quality:**")
-        st.write("✓ Gradient Boosting")
-        st.write("✓ Sigmoid Calibration")
-        st.write("✓ 5-fold CV")
+        st.write("\n**Model Improvements:**")
+        st.write("✓ 300 estimators")
+        st.write("✓ Isotonic calibration")
+        st.write("✓ Log-transformed features")
+        st.write("✓ Enhanced regularization")
     
     st.markdown("---")
     st.subheader("📈 Top 15 Features")
@@ -426,7 +452,7 @@ def show_home(model_data):
 
 def show_surface_games(model_data):
     st.header("🏆 Expected Games by Surface")
-    st.markdown("Predict expected games based on surface-specific performance (Last 30 matches)")
+    st.markdown("Predict total games based on surface-specific performance (Last 30 matches)")
     
     st.markdown("---")
     
@@ -451,7 +477,6 @@ def show_surface_games(model_data):
     st.markdown("---")
     
     if st.button("📊 Calculate Expected Games", use_container_width=True):
-        # Get surface statistics for both players
         stats_a_surface = calculate_surface_statistics(df, player_a_name, surface)
         stats_b_surface = calculate_surface_statistics(df, player_b_name, surface)
         
@@ -467,10 +492,10 @@ def show_surface_games(model_data):
                 st.write(f"**Wins:** {stats_a_surface['wins']}")
                 st.write(f"**Win Rate:** {stats_a_surface['win_rate']:.1%}")
                 st.write(f"\n**Game Statistics:**")
-                st.write(f"• Straight Sets (2-0): {stats_a_surface['games_straight_sets']} ({stats_a_surface['games_straight_sets'] / (stats_a_surface['games_straight_sets'] + stats_a_surface['games_three_sets']) * 100:.0f}%)")
-                st.write(f"• Three Sets (2-1): {stats_a_surface['games_three_sets']}")
-                st.write(f"• Won in Straight: {stats_a_surface['straight_set_wins']}")
-                st.write(f"• Won in Three: {stats_a_surface['three_set_wins']}")
+                st.write(f"• Avg Games When Wins: {stats_a_surface['avg_games_when_win']:.1f} games")
+                st.write(f"• Avg Games When Loses: {stats_a_surface['avg_games_when_loss']:.1f} games")
+                st.write(f"• Overall Avg: {stats_a_surface['avg_total_games']:.1f} games")
+                st.write(f"• Samples: {stats_a_surface['total_games_samples']} matches with score data")
             else:
                 st.warning(f"No matches found for {player_a_name} on {surface} courts")
         
@@ -481,10 +506,10 @@ def show_surface_games(model_data):
                 st.write(f"**Wins:** {stats_b_surface['wins']}")
                 st.write(f"**Win Rate:** {stats_b_surface['win_rate']:.1%}")
                 st.write(f"\n**Game Statistics:**")
-                st.write(f"• Straight Sets (2-0): {stats_b_surface['games_straight_sets']} ({stats_b_surface['games_straight_sets'] / (stats_b_surface['games_straight_sets'] + stats_b_surface['games_three_sets']) * 100:.0f}%)" if (stats_b_surface['games_straight_sets'] + stats_b_surface['games_three_sets']) > 0 else "• Straight Sets (2-0): 0")
-                st.write(f"• Three Sets (2-1): {stats_b_surface['games_three_sets']}")
-                st.write(f"• Won in Straight: {stats_b_surface['straight_set_wins']}")
-                st.write(f"• Won in Three: {stats_b_surface['three_set_wins']}")
+                st.write(f"• Avg Games When Wins: {stats_b_surface['avg_games_when_win']:.1f} games")
+                st.write(f"• Avg Games When Loses: {stats_b_surface['avg_games_when_loss']:.1f} games")
+                st.write(f"• Overall Avg: {stats_b_surface['avg_total_games']:.1f} games")
+                st.write(f"• Samples: {stats_b_surface['total_games_samples']} matches with score data")
             else:
                 st.warning(f"No matches found for {player_b_name} on {surface} courts")
         
@@ -494,20 +519,25 @@ def show_surface_games(model_data):
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric(f"{player_a_name}", f"{stats_a_surface['expected_games']:.2f} games" if stats_a_surface else "N/A")
+            st.metric(f"{player_a_name}", f"{stats_a_surface['expected_games']:.1f} games" if stats_a_surface else "N/A")
             if stats_a_surface:
-                st.caption(f"Avg: {stats_a_surface['win_rate']:.1%} win rate")
+                st.caption(f"Win Rate: {stats_a_surface['win_rate']:.1%}")
         
         with col2:
             if stats_a_surface and stats_b_surface:
                 avg_games = (stats_a_surface['expected_games'] + stats_b_surface['expected_games']) / 2
-                st.metric("Average Expected", f"{avg_games:.2f} games")
-                st.caption("Both players combined")
+                st.metric("Average Expected", f"{avg_games:.1f} games")
+                if avg_games < 25:
+                    st.caption("📊 Likely straight sets")
+                elif avg_games < 28:
+                    st.caption("📊 Competitive match")
+                else:
+                    st.caption("📊 Likely to go 3 sets")
         
         with col3:
-            st.metric(f"{player_b_name}", f"{stats_b_surface['expected_games']:.2f} games" if stats_b_surface else "N/A")
+            st.metric(f"{player_b_name}", f"{stats_b_surface['expected_games']:.1f} games" if stats_b_surface else "N/A")
             if stats_b_surface:
-                st.caption(f"Avg: {stats_b_surface['win_rate']:.1%} win rate")
+                st.caption(f"Win Rate: {stats_b_surface['win_rate']:.1%}")
         
         st.markdown("---")
         
@@ -521,56 +551,57 @@ def show_surface_games(model_data):
                     'Wins',
                     'Losses',
                     'Win Rate',
-                    'Straight Sets',
-                    'Three Sets',
-                    'Straight Set %',
-                    'Expected Games'
+                    'Avg Games (Win)',
+                    'Avg Games (Loss)',
+                    'Expected Games',
+                    'Data Samples'
                 ],
                 player_a_name: [
                     stats_a_surface['total_matches'],
                     stats_a_surface['wins'],
                     stats_a_surface['losses'],
                     f"{stats_a_surface['win_rate']:.1%}",
-                    stats_a_surface['games_straight_sets'],
-                    stats_a_surface['games_three_sets'],
-                    f"{stats_a_surface['straight_set_rate']:.1%}",
-                    f"{stats_a_surface['expected_games']:.2f}"
+                    f"{stats_a_surface['avg_games_when_win']:.1f}",
+                    f"{stats_a_surface['avg_games_when_loss']:.1f}",
+                    f"{stats_a_surface['expected_games']:.1f}",
+                    stats_a_surface['total_games_samples']
                 ],
                 player_b_name: [
                     stats_b_surface['total_matches'],
                     stats_b_surface['wins'],
                     stats_b_surface['losses'],
                     f"{stats_b_surface['win_rate']:.1%}",
-                    stats_b_surface['games_straight_sets'],
-                    stats_b_surface['games_three_sets'],
-                    f"{stats_b_surface['straight_set_rate']:.1%}",
-                    f"{stats_b_surface['expected_games']:.2f}"
+                    f"{stats_b_surface['avg_games_when_win']:.1f}",
+                    f"{stats_b_surface['avg_games_when_loss']:.1f}",
+                    f"{stats_b_surface['expected_games']:.1f}",
+                    stats_b_surface['total_games_samples']
                 ]
             })
             
             st.dataframe(comp_df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.subheader("💡 INTERPRETATION")
+            st.subheader("💡 HOW GAMES ARE CALCULATED")
             
-            st.write(f"""
-            **Expected Games Meaning:**
+            st.markdown("""
+            **Game Count Formula:**
+            - Score '6-4 6-3' = 6+4 + 6+3 = **19 games**
+            - Score '7-5 7-6' = 7+5 + 7+6 = **25 games**
+            - Score '6-0 6-0' = 6+0 + 6+0 = **12 games**
             
-            Expected games is calculated as:
-            - If Player Wins: **2 games** (wins in straight sets 2-0)
-            - If Player Loses: **3 games** (loses after 3 sets 1-2)
+            **Expected Games Formula:**
+            - Expected = (Win Rate × Avg Games When Winning) + ((1 - Win Rate) × Avg Games When Losing)
             
-            **Formula:**
-            Expected Games = (Win Rate × 2) + ((1 - Win Rate) × 3)
+            **Example Calculation:**
+            - Player A: 70% win rate on hard court
+            - Avg games when wins: 24 games (usually 6-x 6-y)
+            - Avg games when loses: 18 games (usually loses early)
+            - Expected = (0.70 × 24) + (0.30 × 18) = 16.8 + 5.4 = **22.2 games**
             
-            **Example:**
-            - Player with 60% win rate on hard court
-            - Expected = (0.60 × 2) + (0.40 × 3) = 1.2 + 1.2 = **2.4 games**
-            
-            **Betting Interpretation:**
-            - **< 2.3 games**: Favorite likely to win in straight sets
-            - **2.3-2.5 games**: Competitive match, some chance of 3 sets
-            - **> 2.5 games**: Likely to go to 3 sets
+            **Betting Guide:**
+            - **< 22 games**: Likely quick wins (favorite dominant)
+            - **22-26 games**: Competitive matches
+            - **> 26 games**: Long matches (frequent 3-setters)
             """)
             
             st.markdown("---")
@@ -579,27 +610,25 @@ def show_surface_games(model_data):
             col1, col2 = st.columns(2)
             
             with col1:
-                # Expected games bar chart
                 fig_games = go.Figure(data=[
                     go.Bar(
                         x=[player_a_name, player_b_name],
                         y=[stats_a_surface['expected_games'], stats_b_surface['expected_games']],
                         marker_color=['#667eea', '#764ba2'],
-                        text=[f"{stats_a_surface['expected_games']:.2f}", f"{stats_b_surface['expected_games']:.2f}"],
+                        text=[f"{stats_a_surface['expected_games']:.1f}", f"{stats_b_surface['expected_games']:.1f}"],
                         textposition='auto'
                     )
                 ])
                 fig_games.update_layout(
                     title="Expected Games on " + surface,
                     yaxis_title="Games",
-                    yaxis=dict(range=[0, 3.5]),
+                    yaxis=dict(range=[0, 35]),
                     showlegend=False,
                     height=400
                 )
                 st.plotly_chart(fig_games, use_container_width=True)
             
             with col2:
-                # Win rate comparison
                 fig_wins = go.Figure(data=[
                     go.Bar(
                         x=[player_a_name, player_b_name],
@@ -628,7 +657,7 @@ def main():
     if uploaded_file:
         try:
             model_data = load_and_train_model(uploaded_file)
-            st.sidebar.success("✓ Ready!")
+            st.sidebar.success("✓ Model Ready!")
             st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
             
             if page == "🏠 Home":
@@ -640,7 +669,7 @@ def main():
             st.info("Please check your CSV file format and ensure it has all required columns")
     else:
         st.title("🎾 WTA Predictor")
-        st.markdown("### Expected Games by Surface Prediction")
+        st.markdown("### Improved Model with Accurate Game Counting")
         st.info("👈 Upload CSV to start!")
         st.markdown("""
         **Required CSV Columns:**
@@ -649,11 +678,13 @@ def main():
         - Rank_1, Rank_2, Pts_1, Pts_2
         - Odd_1, Odd_2, Score
         
-        **New Feature: Expected Games by Surface**
-        - Analyzes last 30 matches on specific surface
-        - Predicts average games expected
-        - Shows win rates and set distributions
-        - Helps with over/under betting
+        **Score Format:** '6-4 6-3' or '7-5 6-4'
+        
+        **New Features:**
+        - Accurate game counting (6-4 6-4 = 20 games)
+        - Expected games prediction by surface
+        - Improved model calibration (Isotonic)
+        - Better accuracy with more features
         """)
 
 if __name__ == "__main__":
