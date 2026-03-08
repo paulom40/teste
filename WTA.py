@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
@@ -21,9 +21,8 @@ def fetch_wta_github_data():
     Fetch WTA data from GitHub
     """
     try:
-        # Direct URL to raw Excel file
         url = "https://github.com/paulom40/teste/raw/main/wta_data.xlsx"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         df = pd.read_excel(BytesIO(response.content))
         st.sidebar.success("✓ Data loaded from GitHub")
         return df
@@ -34,7 +33,6 @@ def fetch_wta_github_data():
 def calculate_total_games(row):
     """
     Calculate total games from set-by-set scores
-    W1, L1, W2, L2, W3, L3, W4, L4, W5, L5
     """
     total_games = 0
     
@@ -53,7 +51,7 @@ def calculate_total_games(row):
 
 def get_set_score(row):
     """
-    Create set score string (6-4 6-3 etc)
+    Create set score string
     """
     sets = []
     for i in range(1, 6):
@@ -73,138 +71,153 @@ def get_set_score(row):
 def load_and_train_model(df):
     """
     Train model with GitHub WTA data
-    Uses exact column names from provided data
+    Creates a dataset where we predict if Player A (Winner) will beat Player B (Loser)
     """
     
     # Calculate derived metrics
     df['Total_Games'] = df.apply(calculate_total_games, axis=1)
     df['Set_Score'] = df.apply(get_set_score, axis=1)
     
-    # Create binary target: 1 = Player 1 (Winner) wins, 0 = Player 2 (Loser) wins
-    df['Player_1'] = df['Winner']
-    df['Player_2'] = df['Loser']
-    df['Rank_1'] = df['WRank']
-    df['Rank_2'] = df['LRank']
-    df['Pts_1'] = df['WPts']
-    df['Pts_2'] = df['LPts']
-    df['Player_1_Won'] = 1  # Winner is always 1 in this dataset
+    # Create two copies: one for winner perspective, one for loser perspective
+    # This creates training samples where both outcomes (win/loss) are represented
+    
+    df_winner = df.copy()
+    df_winner['Player_1'] = df_winner['Winner']
+    df_winner['Player_2'] = df_winner['Loser']
+    df_winner['Rank_1'] = df_winner['WRank']
+    df_winner['Rank_2'] = df_winner['LRank']
+    df_winner['Pts_1'] = df_winner['WPts']
+    df_winner['Pts_2'] = df_winner['LPts']
+    df_winner['Player_1_Won'] = 1  # Winner won
+    
+    df_loser = df.copy()
+    df_loser['Player_1'] = df_loser['Loser']
+    df_loser['Player_2'] = df_loser['Winner']
+    df_loser['Rank_1'] = df_loser['LRank']
+    df_loser['Rank_2'] = df_loser['WRank']
+    df_loser['Pts_1'] = df_loser['LPts']
+    df_loser['Pts_2'] = df_loser['WPts']
+    df_loser['Player_1_Won'] = 0  # Loser lost
+    
+    # Combine both perspectives
+    df_combined = pd.concat([df_winner, df_loser], ignore_index=True)
     
     # Clean numeric columns
     numeric_cols = ['Rank_1', 'Rank_2', 'Pts_1', 'Pts_2', 'B365W', 'B365L', 'MaxW', 'MaxL', 'AvgW', 'AvgL']
     for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        if col in df_combined.columns:
+            df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce')
     
     # Drop rows with missing critical values
-    df = df.dropna(subset=['Player_1', 'Player_2', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
+    df_combined = df_combined.dropna(subset=['Player_1', 'Player_2', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
     
-    # Fill missing odds with medians
-    if 'B365W' in df.columns:
-        df['B365W'] = df['B365W'].fillna(df['B365W'].median())
-    if 'B365L' in df.columns:
-        df['B365L'] = df['B365L'].fillna(df['B365L'].median())
+    # Fill missing odds
+    if 'B365W' in df_combined.columns:
+        df_combined['B365W'] = df_combined['B365W'].fillna(df_combined['B365W'].median())
+    if 'B365L' in df_combined.columns:
+        df_combined['B365L'] = df_combined['B365L'].fillna(df_combined['B365L'].median())
     
     features = []
     feature_names = []
     
     # ===== RANKING FEATURES =====
-    features.append((df['Rank_2'] - df['Rank_1']).fillna(0).values)
+    features.append((df_combined['Rank_2'] - df_combined['Rank_1']).fillna(0).values)
     feature_names.append('Ranking_Differential')
     
-    features.append(df['Rank_1'].fillna(100).values)
-    feature_names.append('Winner_Rank')
+    features.append(df_combined['Rank_1'].fillna(100).values)
+    feature_names.append('Player_1_Rank')
     
-    features.append(df['Rank_2'].fillna(100).values)
-    feature_names.append('Loser_Rank')
+    features.append(df_combined['Rank_2'].fillna(100).values)
+    feature_names.append('Player_2_Rank')
     
-    # Log-transformed ranks (better scaling)
-    log_rank_1 = np.log(df['Rank_1'].fillna(100) + 1).values
-    log_rank_2 = np.log(df['Rank_2'].fillna(100) + 1).values
+    # Log-transformed ranks
+    log_rank_1 = np.log(df_combined['Rank_1'].fillna(100) + 1).values
+    log_rank_2 = np.log(df_combined['Rank_2'].fillna(100) + 1).values
     features.append(log_rank_1)
-    feature_names.append('Log_Winner_Rank')
+    feature_names.append('Log_Rank_1')
     features.append(log_rank_2)
-    feature_names.append('Log_Loser_Rank')
+    feature_names.append('Log_Rank_2')
     
     # Rank ratio
-    rank_ratio = np.where(df['Rank_1'] > 0, df['Rank_2'] / df['Rank_1'], 1.0)
+    rank_ratio = np.where(df_combined['Rank_1'] > 0, df_combined['Rank_2'] / df_combined['Rank_1'], 1.0)
     rank_ratio = np.nan_to_num(rank_ratio, nan=1.0, posinf=1.0, neginf=1.0)
     features.append(rank_ratio)
     feature_names.append('Rank_Ratio')
     
     # ===== POINTS FEATURES =====
-    features.append((df['Pts_1'] - df['Pts_2']).fillna(0).values)
+    features.append((df_combined['Pts_1'] - df_combined['Pts_2']).fillna(0).values)
     feature_names.append('Points_Differential')
     
-    features.append(df['Pts_1'].fillna(0).values)
-    feature_names.append('Winner_Points')
+    features.append(df_combined['Pts_1'].fillna(0).values)
+    feature_names.append('Player_1_Points')
     
-    features.append(df['Pts_2'].fillna(0).values)
-    feature_names.append('Loser_Points')
+    features.append(df_combined['Pts_2'].fillna(0).values)
+    feature_names.append('Player_2_Points')
     
     # Log-transformed points
-    log_pts_1 = np.log(df['Pts_1'].fillna(1) + 1).values
-    log_pts_2 = np.log(df['Pts_2'].fillna(1) + 1).values
+    log_pts_1 = np.log(df_combined['Pts_1'].fillna(1) + 1).values
+    log_pts_2 = np.log(df_combined['Pts_2'].fillna(1) + 1).values
     features.append(log_pts_1)
-    feature_names.append('Log_Winner_Points')
+    feature_names.append('Log_Pts_1')
     features.append(log_pts_2)
-    feature_names.append('Log_Loser_Points')
+    feature_names.append('Log_Pts_2')
     
     # Points ratio
-    pts_ratio = np.where(df['Pts_2'] > 0, (df['Pts_1'] + 1) / (df['Pts_2'] + 1), 1.0)
+    pts_ratio = np.where(df_combined['Pts_2'] > 0, (df_combined['Pts_1'] + 1) / (df_combined['Pts_2'] + 1), 1.0)
     pts_ratio = np.nan_to_num(pts_ratio, nan=1.0, posinf=1.0, neginf=1.0)
     features.append(pts_ratio)
     feature_names.append('Points_Ratio')
     
     # ===== BETTING ODDS FEATURES =====
-    if 'B365W' in df.columns and 'B365L' in df.columns:
-        features.append((df['B365W'] - df['B365L']).fillna(0).values)
+    if 'B365W' in df_combined.columns and 'B365L' in df_combined.columns:
+        features.append((df_combined['B365W'] - df_combined['B365L']).fillna(0).values)
         feature_names.append('Odds_Differential')
         
-        odds_ratio = np.where(df['B365L'] > 0, (df['B365W'] + 0.1) / (df['B365L'] + 0.1), 1.0)
+        odds_ratio = np.where(df_combined['B365L'] > 0, (df_combined['B365W'] + 0.1) / (df_combined['B365L'] + 0.1), 1.0)
         odds_ratio = np.nan_to_num(odds_ratio, nan=1.0, posinf=1.0, neginf=1.0)
         features.append(odds_ratio)
         feature_names.append('Odds_Ratio')
         
         # Log odds
-        log_odds_w = np.log(df['B365W'].fillna(1.5) + 1).values
-        log_odds_l = np.log(df['B365L'].fillna(1.5) + 1).values
-        features.append(log_odds_w)
-        feature_names.append('Log_Odds_Winner')
-        features.append(log_odds_l)
-        feature_names.append('Log_Odds_Loser')
+        log_odds_1 = np.log(df_combined['B365W'].fillna(1.5) + 1).values
+        log_odds_2 = np.log(df_combined['B365L'].fillna(1.5) + 1).values
+        features.append(log_odds_1)
+        feature_names.append('Log_Odds_1')
+        features.append(log_odds_2)
+        feature_names.append('Log_Odds_2')
     
     # ===== CATEGORICAL FEATURES =====
     # Surface
-    if 'Surface' in df.columns:
-        surfaces = pd.get_dummies(df['Surface'], prefix='Surface', dummy_na=False)
+    if 'Surface' in df_combined.columns:
+        surfaces = pd.get_dummies(df_combined['Surface'], prefix='Surface', dummy_na=False)
         for col in surfaces.columns:
             features.append(surfaces[col].values)
             feature_names.append(col)
     
     # Tier
-    if 'Tier' in df.columns:
-        tiers = pd.get_dummies(df['Tier'], prefix='Tier', dummy_na=False)
+    if 'Tier' in df_combined.columns:
+        tiers = pd.get_dummies(df_combined['Tier'], prefix='Tier', dummy_na=False)
         for col in tiers.columns:
             features.append(tiers[col].values)
             feature_names.append(col)
     
     # Court
-    if 'Court' in df.columns:
-        courts = pd.get_dummies(df['Court'], prefix='Court', dummy_na=False)
+    if 'Court' in df_combined.columns:
+        courts = pd.get_dummies(df_combined['Court'], prefix='Court', dummy_na=False)
         for col in courts.columns:
             features.append(courts[col].values)
             feature_names.append(col)
     
     # Round
-    if 'Round' in df.columns:
-        rounds = pd.get_dummies(df['Round'], prefix='Round', dummy_na=False)
+    if 'Round' in df_combined.columns:
+        rounds = pd.get_dummies(df_combined['Round'], prefix='Round', dummy_na=False)
         for col in rounds.columns:
             features.append(rounds[col].values)
             feature_names.append(col)
     
     # Best of
-    if 'Best of' in df.columns:
-        best_of = pd.get_dummies(df['Best of'], prefix='Best_of', dummy_na=False)
+    if 'Best of' in df_combined.columns:
+        best_of = pd.get_dummies(df_combined['Best of'], prefix='Best_of', dummy_na=False)
         for col in best_of.columns:
             features.append(best_of[col].values)
             feature_names.append(col)
@@ -213,17 +226,22 @@ def load_and_train_model(df):
     X = np.column_stack(features)
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     
-    y = np.ones(len(df))  # All are winners in this dataset
+    y = df_combined['Player_1_Won'].values
     
-    # Verify
-    if len(X) < 50:
-        raise ValueError(f"Need 50+ matches, got {len(X)}")
+    # Verify we have both classes
+    if len(np.unique(y)) < 2:
+        raise ValueError("Dataset must have both winning and losing samples")
+    
+    if len(X) < 100:
+        raise ValueError(f"Need 100+ matches, got {len(X)}")
     
     if np.any(~np.isfinite(X)):
         raise ValueError("Data contains invalid values")
     
+    st.sidebar.info(f"Training data: {len(X)} samples, {len(feature_names)} features")
+    
     # Split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     
     # Scale
     scaler = StandardScaler()
@@ -274,8 +292,7 @@ def load_and_train_model(df):
     return {
         'model': calibrated_model,
         'scaler': scaler,
-        'df': df,
-        'y': y,
+        'df': df,  # Original data
         'feature_names': feature_names,
         'importance_df': importance_df,
         'test_accuracy': test_acc,
@@ -283,16 +300,12 @@ def load_and_train_model(df):
         'recall': recall,
         'f1': f1,
         'auc_score': auc_score,
-        'cv_scores': cv_scores,
-        'X_train': X_train,
-        'X_test': X_test
+        'cv_scores': cv_scores
     }
 
 def get_player_surface_stats(df, player_name, surface):
     """Get player stats on specific surface"""
-    # Player as winner
     as_winner = df[(df['Winner'] == player_name) & (df['Surface'] == surface)].copy()
-    # Player as loser
     as_loser = df[(df['Loser'] == player_name) & (df['Surface'] == surface)].copy()
     
     all_matches = pd.concat([as_winner, as_loser], ignore_index=False)
@@ -306,6 +319,9 @@ def calculate_surface_stats_detailed(df, player_name, surface):
     
     if len(matches) == 0:
         return None
+    
+    # Calculate total games for each match
+    matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
     
     wins = len(matches[matches['Winner'] == player_name])
     losses = len(matches) - wins
@@ -326,8 +342,7 @@ def calculate_surface_stats_detailed(df, player_name, surface):
             'avg_total_games': 22,
             'total_games_samples': 0,
             'straight_set_wins': 0,
-            'three_set_wins': 0,
-            'recent_matches': []
+            'three_set_wins': 0
         }
     
     games_when_win = []
@@ -365,8 +380,7 @@ def calculate_surface_stats_detailed(df, player_name, surface):
         'avg_total_games': avg_total,
         'total_games_samples': len(valid_matches),
         'straight_set_wins': straight_set_wins,
-        'three_set_wins': three_set_wins,
-        'recent_matches': valid_matches.tail(5)[['Date', 'Tournament', 'Winner', 'Loser', 'Set_Score', 'Total_Games']].to_dict('records')
+        'three_set_wins': three_set_wins
     }
 
 def show_home(model_data):
@@ -408,7 +422,7 @@ def show_home(model_data):
         st.write("✓ 500 estimators")
         st.write("✓ 15-fold isotonic calibration")
         st.write("✓ Learning rate: 0.01")
-        st.write("✓ Max depth: 3")
+        st.write("✓ Both win/loss samples")
     
     st.markdown("---")
     st.subheader("📈 Top 20 Features")
@@ -608,7 +622,7 @@ def main():
         try:
             with st.spinner("Training model..."):
                 model_data = load_and_train_model(df_data)
-            st.sidebar.success(f"✓ {len(model_data['df'])} matches loaded")
+            st.sidebar.success(f"✓ Model trained!")
             st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
             
             if page == "🏠 Home":
@@ -617,9 +631,10 @@ def main():
                 show_surface_games(model_data)
         except Exception as e:
             st.error(f"Training Error: {str(e)}")
+            st.info("Please try again or check data format")
     else:
         st.title("🎾 WTA Predictor")
-        st.error("Could not load data from GitHub")
+        st.error("❌ Could not load data from GitHub")
         st.markdown("""
         **Data Source:**
         https://github.com/paulom40/teste/blob/main/wta_data.xlsx
