@@ -43,10 +43,7 @@ def calculate_total_games(row):
 # ============= PROFESSIONAL TIPSTER FEATURES =============
 
 def calculate_h2h_stats(df, player_a, player_b, surface=None):
-    """
-    CRITICAL: Head-to-head record analysis
-    Strongest predictor in professional betting
-    """
+    """Head-to-head record analysis"""
     h2h = df[((df['Winner'] == player_a) & (df['Loser'] == player_b)) |
              ((df['Winner'] == player_b) & (df['Loser'] == player_a))]
     
@@ -54,27 +51,22 @@ def calculate_h2h_stats(df, player_a, player_b, surface=None):
         h2h = h2h[h2h['Surface'] == surface]
     
     if len(h2h) == 0:
-        return 0.5, 0, 0  # No history, neutral
+        return 0.5, 0, 0
     
     wins_a = len(h2h[h2h['Winner'] == player_a])
     total = len(h2h)
     h2h_rate = wins_a / total
     
-    # Recent H2H (last 3 matches carry more weight)
     recent_h2h = h2h.tail(3)
     recent_wins = len(recent_h2h[recent_h2h['Winner'] == player_a])
     recent_rate = recent_wins / len(recent_h2h) if len(recent_h2h) > 0 else 0.5
     
-    # Psychological edge: if dominating recently
     psych_edge = recent_rate - h2h_rate
     
     return h2h_rate, total, psych_edge
 
 def calculate_momentum_score(matches, player_name):
-    """
-    VERY IMPORTANT: Weighted recent form (recent > older)
-    Pros use: last 5, last 10, last 20 with different weights
-    """
+    """Weighted recent form"""
     if len(matches) == 0:
         return 0.5
     
@@ -87,14 +79,10 @@ def calculate_momentum_score(matches, player_name):
     ])
     
     momentum = weighted_wins / weights.sum()
-    
     return momentum
 
 def calculate_win_streak(matches, player_name):
-    """
-    Current win/loss streak (momentum indicator)
-    Psychological factor
-    """
+    """Current win/loss streak"""
     if len(matches) == 0:
         return 0
     
@@ -110,10 +98,7 @@ def calculate_win_streak(matches, player_name):
     return streak
 
 def calculate_consistency_score(matches, player_name):
-    """
-    Consistency score: steady performers > volatile
-    Variance in wins across different opponents
-    """
+    """Consistency score"""
     if len(matches) == 0:
         return 0.5
     
@@ -125,22 +110,14 @@ def calculate_consistency_score(matches, player_name):
     if len(player_matches) == 0:
         return 0.5
     
-    # Calculate rolling performance
     performance = [(m['Winner'] == player_name) for _, m in player_matches.iterrows()]
-    
-    # Low variance = consistent
-    # High variance = inconsistent
     variance = np.var(performance) if len(performance) > 1 else 0.5
-    
-    consistency = 1 - variance  # Higher = more consistent
+    consistency = 1 - variance
     
     return consistency
 
 def calculate_strength_of_schedule(matches, player_name):
-    """
-    IMPORTANT: Quality of opponents faced
-    Playing better/worse competition matters
-    """
+    """Quality of opponents faced"""
     if len(matches) == 0:
         return 0
     
@@ -151,7 +128,6 @@ def calculate_strength_of_schedule(matches, player_name):
     if len(player_matches) == 0:
         return 0
     
-    # Average opponent ranking (lower = tougher)
     opponent_ranks = []
     for _, match in player_matches.iterrows():
         if match['Winner'] == player_name:
@@ -160,111 +136,40 @@ def calculate_strength_of_schedule(matches, player_name):
             opponent_ranks.append(match['WRank'])
     
     avg_opponent_rank = np.mean(opponent_ranks)
-    
-    # Strength of schedule: lower rank = tougher
-    # Normalize to 0-1 scale
     sos = 1 / (1 + avg_opponent_rank / 100)
     
     return sos
 
-def calculate_fatigue_score(matches, player_name, current_date=None):
-    """
-    CRITICAL: Fatigue/rest analysis
-    Days since last match + matches in last 7 days
-    """
-    if current_date is None:
-        current_date = datetime.now()
+def calculate_surface_performance(df, player_name, surface):
+    """Surface-specific performance"""
+    surface_matches = df[
+        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
+        (df['Surface'] == surface)
+    ].tail(30)
     
-    player_matches = matches[
-        (matches['Winner'] == player_name) | (matches['Loser'] == player_name)
-    ].sort_values('Date')
+    if len(surface_matches) == 0:
+        return None
     
-    if len(player_matches) == 0:
-        return 0.5  # No data = neutral
+    wins = len(surface_matches[surface_matches['Winner'] == player_name])
+    total = len(surface_matches)
+    win_rate = wins / total if total > 0 else 0.5
     
-    last_match = player_matches.iloc[-1]
+    # Calculate average games on this surface
+    surface_matches['Total_Games'] = surface_matches.apply(calculate_total_games, axis=1)
+    valid_games = surface_matches.dropna(subset=['Total_Games'])
     
-    try:
-        last_match_date = pd.to_datetime(last_match['Date'])
-        days_rest = (current_date - last_match_date).days
-    except:
-        days_rest = 0
+    avg_games = np.mean(valid_games['Total_Games']) if len(valid_games) > 0 else 24
     
-    # Matches in last 7 days (burnout indicator)
-    try:
-        week_matches = player_matches[
-            (current_date - pd.to_datetime(player_matches['Date'])).dt.days <= 7
-        ]
-        matches_last_week = len(week_matches)
-    except:
-        matches_last_week = 0
-    
-    # Fatigue factor: more rest = better, more recent matches = worse
-    # Formula: days_rest / (1 + matches_last_week)
-    # Days 0-2: high fatigue
-    # Days 3-4: medium
-    # Days 5+: fresh
-    
-    if days_rest <= 2 and matches_last_week >= 2:
-        fatigue = -0.3  # Fatigued
-    elif days_rest <= 2:
-        fatigue = -0.1  # Slightly fatigued
-    elif days_rest >= 5:
-        fatigue = 0.2  # Fresh
-    else:
-        fatigue = 0  # Normal
-    
-    return fatigue
-
-def calculate_tier_performance(matches, player_name, tier=None):
-    """
-    IMPORTANT: Performance varies by tournament tier
-    Grand Slam vs 500s vs 250s
-    """
-    if tier is None:
-        return 0.5
-    
-    tier_matches = matches[
-        ((matches['Winner'] == player_name) | (matches['Loser'] == player_name)) &
-        (matches['Tier'] == tier)
-    ].tail(20)
-    
-    if len(tier_matches) == 0:
-        return 0.5
-    
-    wins = len(tier_matches[tier_matches['Winner'] == player_name])
-    win_rate = wins / len(tier_matches)
-    
-    return win_rate
-
-def calculate_surface_trend(matches, player_name, surface):
-    """
-    IMPORTANT: Surface trend (improving/declining on this surface)
-    """
-    surface_matches = matches[
-        ((matches['Winner'] == player_name) | (matches['Loser'] == player_name)) &
-        (matches['Surface'] == surface)
-    ]
-    
-    if len(surface_matches) < 5:
-        return 0
-    
-    # Trend: recent performance vs. overall
-    recent_5 = surface_matches.tail(5)
-    overall = surface_matches.tail(30)
-    
-    recent_wins = len(recent_5[recent_5['Winner'] == player_name]) / len(recent_5)
-    overall_wins = len(overall[overall['Winner'] == player_name]) / len(overall)
-    
-    trend = recent_wins - overall_wins
-    
-    return trend
+    return {
+        'matches': total,
+        'wins': wins,
+        'win_rate': win_rate,
+        'avg_games': avg_games
+    }
 
 @st.cache_resource
 def load_enhanced_model(df):
-    """
-    Enhanced model with professional tipster features
-    """
+    """Enhanced model with professional tipster features"""
     df['Total_Games'] = df.apply(calculate_total_games, axis=1)
     
     df_winner = df.copy()
@@ -302,12 +207,10 @@ def load_enhanced_model(df):
     features = []
     feature_names = []
     
-    # ===== PROFESSIONAL FEATURES =====
-    
-    # 1. H2H ANALYSIS (CRITICAL)
     st.sidebar.write("📊 Computing professional features...")
     progress = st.sidebar.progress(0)
     
+    # 1. H2H ANALYSIS
     h2h_features = []
     psych_features = []
     
@@ -328,7 +231,7 @@ def load_enhanced_model(df):
     features.append(np.array(psych_features))
     feature_names.append('Psychological_Edge')
     
-    # 2. MOMENTUM WEIGHTING (VERY IMPORTANT)
+    # 2. MOMENTUM WEIGHTING
     momentum_features = []
     for idx, (_, row) in enumerate(df_combined.iterrows()):
         if idx % 100 == 0:
@@ -346,7 +249,7 @@ def load_enhanced_model(df):
     features.append(np.array(momentum_features))
     feature_names.append('Momentum_Score')
     
-    # 3. WIN STREAK (PSYCHOLOGICAL)
+    # 3. WIN STREAK
     streak_features = []
     for idx, (_, row) in enumerate(df_combined.iterrows()):
         if idx % 100 == 0:
@@ -364,7 +267,7 @@ def load_enhanced_model(df):
     features.append(np.array(streak_features))
     feature_names.append('Win_Streak')
     
-    # 4. CONSISTENCY (VOLATILITY)
+    # 4. CONSISTENCY
     consistency_features = []
     for idx, (_, row) in enumerate(df_combined.iterrows()):
         if idx % 100 == 0:
@@ -648,9 +551,197 @@ def show_home(model_data):
         **Typical impact**: +1-2% accuracy improvement
         """)
 
+def show_player_selection(model_data):
+    st.header("👥 Player Selection & Surface Analysis")
+    st.markdown("*Compare players and analyze surface performance*")
+    
+    st.markdown("---")
+    
+    df = model_data['df']
+    all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
+    surfaces = sorted(df['Surface'].dropna().unique())
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("👤 Player 1")
+        player_a = st.selectbox("Select Player 1", all_players, key="player_1")
+    
+    with col2:
+        st.subheader("👤 Player 2")
+        player_b = st.selectbox("Select Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="player_2")
+    
+    with col3:
+        st.subheader("🏟️ Surface")
+        surface = st.selectbox("Select Surface", surfaces, key="surface")
+    
+    st.markdown("---")
+    
+    if st.button("📊 Analyze Players", use_container_width=True):
+        st.markdown("---")
+        st.subheader("📈 PROFESSIONAL ANALYSIS")
+        
+        # Get player stats
+        stats_a = calculate_surface_performance(df, player_a, surface)
+        stats_b = calculate_surface_performance(df, player_b, surface)
+        
+        # Get H2H stats
+        h2h_rate, h2h_count, psych_edge = calculate_h2h_stats(df, player_a, player_b, surface)
+        
+        # Get momentum and other metrics
+        player_a_matches = df[(df['Winner'] == player_a) | (df['Loser'] == player_a)]
+        player_b_matches = df[(df['Winner'] == player_b) | (df['Loser'] == player_b)]
+        
+        momentum_a = calculate_momentum_score(player_a_matches, player_a)
+        momentum_b = calculate_momentum_score(player_b_matches, player_b)
+        
+        streak_a = calculate_win_streak(player_a_matches, player_a)
+        streak_b = calculate_win_streak(player_b_matches, player_b)
+        
+        consistency_a = calculate_consistency_score(player_a_matches, player_a)
+        consistency_b = calculate_consistency_score(player_b_matches, player_b)
+        
+        sos_a = calculate_strength_of_schedule(player_a_matches, player_a)
+        sos_b = calculate_strength_of_schedule(player_b_matches, player_b)
+        
+        # Display comparison
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader(f"🎾 {player_a}")
+            if stats_a:
+                st.metric("Matches on Surface", stats_a['matches'])
+                st.metric("Record", f"{stats_a['wins']}-{stats_a['wins'] - stats_a['wins']}")
+                st.metric("Win Rate", f"{stats_a['win_rate']:.1%}")
+                st.metric("Avg Games", f"{stats_a['avg_games']:.1f}")
+            
+            st.write("**Professional Metrics:**")
+            st.write(f"• Momentum Score: {momentum_a:.1%}")
+            st.write(f"• Win Streak: {streak_a} matches")
+            st.write(f"• Consistency: {consistency_a:.1%}")
+            st.write(f"• Strength of Schedule: {sos_a:.2f}")
+        
+        with col2:
+            st.subheader(f"🎾 {player_b}")
+            if stats_b:
+                st.metric("Matches on Surface", stats_b['matches'])
+                st.metric("Record", f"{stats_b['wins']}-{stats_b['wins'] - stats_b['wins']}")
+                st.metric("Win Rate", f"{stats_b['win_rate']:.1%}")
+                st.metric("Avg Games", f"{stats_b['avg_games']:.1f}")
+            
+            st.write("**Professional Metrics:**")
+            st.write(f"• Momentum Score: {momentum_b:.1%}")
+            st.write(f"• Win Streak: {streak_b} matches")
+            st.write(f"• Consistency: {consistency_b:.1%}")
+            st.write(f"• Strength of Schedule: {sos_b:.2f}")
+        
+        st.markdown("---")
+        st.subheader("⚔️ HEAD-TO-HEAD ANALYSIS")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(f"{player_a} H2H Record", f"{h2h_rate:.1%}" if h2h_count > 0 else "No H2H")
+        
+        with col2:
+            st.metric("Total Matches", h2h_count if h2h_count > 0 else "0")
+        
+        with col3:
+            if psych_edge > 0:
+                st.success(f"✓ {player_a} Has Edge: +{psych_edge:.1%}")
+            elif psych_edge < 0:
+                st.success(f"✓ {player_b} Has Edge: +{abs(psych_edge):.1%}")
+            else:
+                st.info("🤝 Evenly Matched")
+        
+        st.markdown("---")
+        st.subheader("📊 Detailed Statistics")
+        
+        # Create comparison table
+        comp_df = pd.DataFrame({
+            'Metric': [
+                'Surface Matches',
+                'Win Rate (Surface)',
+                'Avg Games (Surface)',
+                'Overall Momentum',
+                'Current Streak',
+                'Consistency',
+                'Schedule Strength',
+                f'H2H Record ({surface})'
+            ],
+            player_a: [
+                stats_a['matches'] if stats_a else 'N/A',
+                f"{stats_a['win_rate']:.1%}" if stats_a else 'N/A',
+                f"{stats_a['avg_games']:.1f}" if stats_a else 'N/A',
+                f"{momentum_a:.1%}",
+                f"{streak_a}W",
+                f"{consistency_a:.1%}",
+                f"{sos_a:.2f}",
+                f"{h2h_rate:.1%}" if h2h_count > 0 else "No Data"
+            ],
+            player_b: [
+                stats_b['matches'] if stats_b else 'N/A',
+                f"{stats_b['win_rate']:.1%}" if stats_b else 'N/A',
+                f"{stats_b['avg_games']:.1f}" if stats_b else 'N/A',
+                f"{momentum_b:.1%}",
+                f"{streak_b}W",
+                f"{consistency_b:.1%}",
+                f"{sos_b:.2f}",
+                f"{1-h2h_rate:.1%}" if h2h_count > 0 else "No Data"
+            ]
+        })
+        
+        st.dataframe(comp_df, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.subheader("📈 Visual Comparison")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Win Rate Comparison
+            if stats_a and stats_b:
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=[player_a, player_b],
+                        y=[stats_a['win_rate'], stats_b['win_rate']],
+                        marker_color=['#667eea', '#764ba2'],
+                        text=[f"{stats_a['win_rate']:.1%}", f"{stats_b['win_rate']:.1%}"],
+                        textposition='auto'
+                    )
+                ])
+                fig.update_layout(
+                    title=f"Win Rate on {surface}",
+                    yaxis_title="Win Rate",
+                    yaxis=dict(range=[0, 1]),
+                    showlegend=False,
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Momentum Comparison
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=[player_a, player_b],
+                    y=[momentum_a, momentum_b],
+                    marker_color=['#667eea', '#764ba2'],
+                    text=[f"{momentum_a:.1%}", f"{momentum_b:.1%}"],
+                    textposition='auto'
+                )
+            ])
+            fig.update_layout(
+                title="Momentum Score",
+                yaxis_title="Momentum",
+                yaxis=dict(range=[0, 1]),
+                showlegend=False,
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 def main():
     st.sidebar.title("🎾 WTA Professional Predictor")
-    page = st.sidebar.radio("Page", ["🏠 Home"])
+    page = st.sidebar.radio("Page", ["🏠 Home", "👥 Player Selection"])
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📥 Data Loading")
@@ -664,7 +755,10 @@ def main():
             st.sidebar.success(f"✓ Model trained!")
             st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
             
-            show_home(model_data)
+            if page == "🏠 Home":
+                show_home(model_data)
+            else:
+                show_player_selection(model_data)
         except Exception as e:
             st.error(f"Training Error: {str(e)}")
             import traceback
