@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.calibration import CalibratedClassifierCV
 import requests
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -40,125 +40,229 @@ def calculate_total_games(row):
                 total_games += int(w_val) + int(l_val)
     return total_games if total_games > 0 else None
 
-# ============= IMPROVED GAMES PREDICTION (MEDIAN-BASED) =============
+# ============= ADVANCED GAMES PREDICTION FACTORS =============
 
-def calculate_expected_games_improved(df, player_name, surface=None):
+def calculate_surface_expertise(df, player_name, surface):
     """
-    IMPROVED: Uses MEDIAN instead of MEAN
-    Much more accurate for skewed game distributions
+    Surface expertise: win rate and game patterns on specific surface
     """
-    # Filter matches
     matches = df[
-        ((df['Winner'] == player_name) | (df['Loser'] == player_name))
+        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
+        (df['Surface'] == surface)
+    ].tail(30)
+    
+    if len(matches) == 0:
+        return {
+            'expertise': 0.5,
+            'matches': 0,
+            'win_rate': 0.5,
+            'avg_games': 22,
+            'consistency': 0.5
+        }
+    
+    # Calculate win rate
+    wins = len(matches[matches['Winner'] == player_name])
+    win_rate = wins / len(matches) if len(matches) > 0 else 0.5
+    
+    # Calculate games
+    matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
+    valid_matches = matches.dropna(subset=['Total_Games'])
+    
+    avg_games = np.mean(valid_matches['Total_Games']) if len(valid_matches) > 0 else 22
+    
+    # Consistency on surface (low variance = consistent)
+    if len(valid_matches) > 1:
+        games_variance = np.var(valid_matches['Total_Games'])
+        consistency = 1 - (games_variance / 100)  # Normalize
+    else:
+        consistency = 0.5
+    
+    # Expertise score: combines win rate and consistency
+    expertise = (win_rate * 0.6) + (consistency * 0.4)
+    
+    return {
+        'expertise': expertise,
+        'matches': len(matches),
+        'win_rate': win_rate,
+        'avg_games': avg_games,
+        'consistency': consistency
+    }
+
+def calculate_last_10_surface_performance(df, player_name, surface):
+    """
+    Last 10 matches on this specific surface (most relevant)
+    """
+    matches = df[
+        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
+        (df['Surface'] == surface)
+    ].tail(10)
+    
+    if len(matches) == 0:
+        return {
+            'recent_matches': 0,
+            'recent_wins': 0,
+            'recent_win_rate': 0.5,
+            'recent_avg_games': 22,
+            'recent_form': 'No Data'
+        }
+    
+    wins = len(matches[matches['Winner'] == player_name])
+    
+    matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
+    valid_matches = matches.dropna(subset=['Total_Games'])
+    
+    avg_games = np.mean(valid_matches['Total_Games']) if len(valid_matches) > 0 else 22
+    
+    win_rate = wins / len(matches) if len(matches) > 0 else 0.5
+    
+    # Determine form based on recent results
+    if win_rate >= 0.7:
+        form = "🔥 Excellent"
+    elif win_rate >= 0.5:
+        form = "✓ Good"
+    elif win_rate >= 0.3:
+        form = "⚠️ Mixed"
+    else:
+        form = "❌ Poor"
+    
+    return {
+        'recent_matches': len(matches),
+        'recent_wins': wins,
+        'recent_win_rate': win_rate,
+        'recent_avg_games': avg_games,
+        'recent_form': form
+    }
+
+def calculate_fatigue_level(df, player_name, current_date=None):
+    """
+    Fatigue calculation based on:
+    - Days since last match
+    - Matches played in last 7 days
+    - Match intensity (based on games played)
+    """
+    if current_date is None:
+        current_date = pd.Timestamp.now()
+    
+    matches = df[
+        (df['Winner'] == player_name) | (df['Loser'] == player_name)
+    ].sort_values('Date', ascending=False)
+    
+    if len(matches) == 0:
+        return {
+            'fatigue_score': 0.5,
+            'days_rest': 0,
+            'matches_last_week': 0,
+            'fatigue_level': 'Unknown'
+        }
+    
+    # Days since last match
+    try:
+        last_match_date = pd.to_datetime(matches.iloc[0]['Date'])
+        days_rest = (current_date - last_match_date).days
+    except:
+        days_rest = 0
+    
+    # Matches in last 7 days
+    try:
+        week_matches = matches[
+            (current_date - pd.to_datetime(matches['Date'])).dt.days <= 7
+        ]
+        matches_last_week = len(week_matches)
+    except:
+        matches_last_week = 0
+    
+    # Fatigue calculation
+    # Fresh: 5+ days rest
+    # Moderate: 3-4 days rest or 1-2 matches last week
+    # Fatigued: 0-2 days rest and/or 3+ matches last week
+    
+    if days_rest >= 5:
+        fatigue_score = 0.2  # Fresh
+        fatigue_level = "✓ Fresh"
+    elif days_rest >= 3 or matches_last_week <= 1:
+        fatigue_score = 0.5  # Normal
+        fatigue_level = "⚔️ Normal"
+    elif days_rest >= 2 and matches_last_week <= 2:
+        fatigue_score = 0.7  # Moderately fatigued
+        fatigue_level = "⚠️ Fatigued"
+    else:
+        fatigue_score = 0.9  # Highly fatigued
+        fatigue_level = "🔴 Exhausted"
+    
+    return {
+        'fatigue_score': fatigue_score,
+        'days_rest': days_rest,
+        'matches_last_week': matches_last_week,
+        'fatigue_level': fatigue_level
+    }
+
+def calculate_unforced_errors_estimate(df, player_name, surface=None):
+    """
+    Estimate unforced errors tendency based on:
+    - Match length patterns (longer matches = more UE)
+    - Game loss margins
+    """
+    matches = df[
+        (df['Winner'] == player_name) | (df['Loser'] == player_name)
     ]
     
     if surface:
         matches = matches[matches['Surface'] == surface]
     
-    matches = matches.tail(30)  # Last 30 matches
+    matches = matches.tail(20)
     
-    if len(matches) < 5:
+    if len(matches) == 0:
         return {
-            'expected': 22,
-            'lower': 20,
-            'upper': 24,
-            'median_win': 22,
-            'median_loss': 17,
-            'win_rate': 0.5,
-            'sample_size': 0
+            'ue_tendency': 0.5,
+            'avg_game_length': 22,
+            'break_tendency': 0.5,
+            'error_profile': 'Unknown'
         }
     
-    # Calculate total games per match
+    # Calculate game length
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    valid_matches = matches.dropna(subset=['Total_Games']).copy()
+    valid_matches = matches.dropna(subset=['Total_Games'])
     
     if len(valid_matches) == 0:
-        return {
-            'expected': 22,
-            'lower': 20,
-            'upper': 24,
-            'median_win': 22,
-            'median_loss': 17,
-            'win_rate': 0.5,
-            'sample_size': 0
-        }
-    
-    # Win rate
-    wins = len(valid_matches[valid_matches['Winner'] == player_name])
-    total = len(valid_matches)
-    win_rate = wins / total if total > 0 else 0.5
-    
-    # Separate wins and losses
-    wins_df = valid_matches[valid_matches['Winner'] == player_name]
-    losses_df = valid_matches[valid_matches['Loser'] == player_name]
-    
-    # CRITICAL FIX: Use MEDIAN instead of MEAN
-    if len(wins_df) > 0:
-        median_games_win = np.median(wins_df['Total_Games'])
-        p25_win = np.percentile(wins_df['Total_Games'], 25)
-        p75_win = np.percentile(wins_df['Total_Games'], 75)
+        avg_game_length = 22
     else:
-        median_games_win = 22
-        p25_win = 20
-        p75_win = 24
+        avg_game_length = np.mean(valid_matches['Total_Games'])
     
-    if len(losses_df) > 0:
-        median_games_loss = np.median(losses_df['Total_Games'])
-        p25_loss = np.percentile(losses_df['Total_Games'], 25)
-        p75_loss = np.percentile(losses_df['Total_Games'], 75)
+    # Unforced errors tendency
+    # Longer matches typically mean more UE
+    # Shorter matches mean fewer UE but more dominant play
+    if avg_game_length >= 26:
+        ue_tendency = 0.8  # High UE tendency
+        error_profile = "🔥 Error-prone"
+    elif avg_game_length >= 24:
+        ue_tendency = 0.6  # Moderate UE
+        error_profile = "⚔️ Competitive"
+    elif avg_game_length >= 22:
+        ue_tendency = 0.4  # Few UE
+        error_profile = "✓ Solid"
     else:
-        median_games_loss = 17
-        p25_loss = 15
-        p75_loss = 19
-    
-    # Calculate expected using MEDIAN (not mean)
-    expected_games = (win_rate * median_games_win) + ((1 - win_rate) * median_games_loss)
-    
-    # Add confidence interval
-    lower_bound = (win_rate * p25_win) + ((1 - win_rate) * p25_loss)
-    upper_bound = (win_rate * p75_win) + ((1 - win_rate) * p75_loss)
+        ue_tendency = 0.2  # Very few UE
+        error_profile = "💪 Dominant"
     
     return {
-        'expected': expected_games,
-        'lower': lower_bound,
-        'upper': upper_bound,
-        'median_win': median_games_win,
-        'median_loss': median_games_loss,
-        'win_rate': win_rate,
-        'sample_size': len(valid_matches)
+        'ue_tendency': ue_tendency,
+        'avg_game_length': avg_game_length,
+        'break_tendency': 1 - (ue_tendency * 0.5),  # Inverse estimate
+        'error_profile': error_profile
     }
 
-# ============= PROFESSIONAL TIPSTER FEATURES =============
-
-def calculate_h2h_stats(df, player_a, player_b, surface=None):
-    """Head-to-head record analysis"""
-    h2h = df[((df['Winner'] == player_a) & (df['Loser'] == player_b)) |
-             ((df['Winner'] == player_b) & (df['Loser'] == player_a))]
-    
-    if surface:
-        h2h = h2h[h2h['Surface'] == surface]
-    
-    if len(h2h) == 0:
-        return 0.5, 0, 0
-    
-    wins_a = len(h2h[h2h['Winner'] == player_a])
-    total = len(h2h)
-    h2h_rate = wins_a / total
-    
-    recent_h2h = h2h.tail(3)
-    recent_wins = len(recent_h2h[recent_h2h['Winner'] == player_a])
-    recent_rate = recent_wins / len(recent_h2h) if len(recent_h2h) > 0 else 0.5
-    
-    psych_edge = recent_rate - h2h_rate
-    
-    return h2h_rate, total, psych_edge
-
-def calculate_momentum_score(matches, player_name):
-    """Weighted recent form"""
+def calculate_momentum_weighted(matches, player_name):
+    """
+    Advanced momentum: weighted recent performance
+    """
     if len(matches) == 0:
         return 0.5
     
     last_10 = matches.tail(10)
+    if len(last_10) == 0:
+        return 0.5
+    
+    # Weight recent matches higher
     weights = np.linspace(0.5, 1.0, len(last_10))
     
     weighted_wins = sum([
@@ -169,64 +273,317 @@ def calculate_momentum_score(matches, player_name):
     momentum = weighted_wins / weights.sum()
     return momentum
 
-def calculate_win_streak(matches, player_name):
-    """Current win/loss streak"""
-    if len(matches) == 0:
-        return 0
+def calculate_advanced_expected_games(stats_a, stats_b, surface_data):
+    """
+    Calculate expected games using multiple factors:
+    - Surface expertise
+    - Last 10 matches
+    - Fatigue levels
+    - Momentum
+    - Unforced errors
+    """
     
-    recent = matches.tail(10)
+    # Base calculation from surface expertise
+    base_games_a = stats_a['surface']['avg_games'] * stats_a['surface']['expertise']
+    base_games_b = stats_b['surface']['avg_games'] * stats_b['surface']['expertise']
     
-    streak = 0
-    for _, match in reversed(list(recent.iterrows())):
-        if match['Winner'] == player_name:
-            streak += 1
-        else:
-            break
+    # Recent form adjustment
+    recent_adj_a = stats_a['recent']['recent_avg_games'] * 0.2
+    recent_adj_b = stats_b['recent']['recent_avg_games'] * 0.2
     
-    return streak
+    # Fatigue adjustment (fatigue reduces game count)
+    fatigue_adj_a = (1 - stats_a['fatigue']['fatigue_score'] * 0.1)
+    fatigue_adj_b = (1 - stats_b['fatigue']['fatigue_score'] * 0.1)
+    
+    # Momentum adjustment
+    momentum_adj_a = stats_a['momentum'] * 0.15
+    momentum_adj_b = stats_b['momentum'] * 0.15
+    
+    # Unforced errors adjustment (more errors = longer matches)
+    ue_adj_a = stats_a['ue']['ue_tendency'] * 0.1
+    ue_adj_b = stats_b['ue']['ue_tendency'] * 0.1
+    
+    # Calculate adjusted expected games
+    expected_a = (base_games_a + recent_adj_a) * fatigue_adj_a + momentum_adj_a + ue_adj_a
+    expected_b = (base_games_b + recent_adj_b) * fatigue_adj_b + momentum_adj_b + ue_adj_b
+    
+    # Match average
+    match_avg = (expected_a + expected_b) / 2
+    
+    return {
+        'expected_a': expected_a,
+        'expected_b': expected_b,
+        'match_avg': match_avg,
+        'components_a': {
+            'base': base_games_a,
+            'recent': recent_adj_a,
+            'fatigue': fatigue_adj_a,
+            'momentum': momentum_adj_a,
+            'ue': ue_adj_a
+        },
+        'components_b': {
+            'base': base_games_b,
+            'recent': recent_adj_b,
+            'fatigue': fatigue_adj_b,
+            'momentum': momentum_adj_b,
+            'ue': ue_adj_b
+        }
+    }
 
-def calculate_consistency_score(matches, player_name):
-    """Consistency score"""
-    if len(matches) == 0:
-        return 0.5
+def show_advanced_games_prediction(model_data):
+    st.header("🎾 Advanced Expected Games Prediction")
+    st.markdown("*Based on surface expertise, recent form, fatigue, momentum & errors*")
     
-    last_30 = matches.tail(30)
-    player_matches = last_30[
-        (last_30['Winner'] == player_name) | (last_30['Loser'] == player_name)
-    ]
+    st.markdown("---")
     
-    if len(player_matches) == 0:
-        return 0.5
+    df = model_data['df']
+    all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
+    surfaces = sorted(df['Surface'].dropna().unique())
     
-    performance = [(m['Winner'] == player_name) for _, m in player_matches.iterrows()]
-    variance = np.var(performance) if len(performance) > 1 else 0.5
-    consistency = 1 - variance
+    col1, col2, col3 = st.columns(3)
     
-    return consistency
-
-def calculate_strength_of_schedule(matches, player_name):
-    """Quality of opponents faced"""
-    if len(matches) == 0:
-        return 0
+    with col1:
+        st.subheader("👤 Player 1")
+        player_a = st.selectbox("Select Player 1", all_players, key="adv_player_1")
     
-    player_matches = matches[
-        (matches['Winner'] == player_name) | (matches['Loser'] == player_name)
-    ].tail(20)
+    with col2:
+        st.subheader("👤 Player 2")
+        player_b = st.selectbox("Select Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="adv_player_2")
     
-    if len(player_matches) == 0:
-        return 0
+    with col3:
+        st.subheader("🏟️ Surface")
+        surface = st.selectbox("Select Surface", surfaces, key="adv_surface")
     
-    opponent_ranks = []
-    for _, match in player_matches.iterrows():
-        if match['Winner'] == player_name:
-            opponent_ranks.append(match['LRank'])
-        else:
-            opponent_ranks.append(match['WRank'])
+    st.markdown("---")
     
-    avg_opponent_rank = np.mean(opponent_ranks)
-    sos = 1 / (1 + avg_opponent_rank / 100)
-    
-    return sos
+    if st.button("🔬 Advanced Analysis", width='stretch'):
+        st.markdown("---")
+        st.subheader("📊 DETAILED FACTOR ANALYSIS")
+        
+        # Get player matches
+        player_a_matches = df[(df['Winner'] == player_a) | (df['Loser'] == player_a)]
+        player_b_matches = df[(df['Winner'] == player_b) | (df['Loser'] == player_b)]
+        
+        # Collect all factors
+        stats_a = {
+            'surface': calculate_surface_expertise(df, player_a, surface),
+            'recent': calculate_last_10_surface_performance(df, player_a, surface),
+            'fatigue': calculate_fatigue_level(df, player_a),
+            'momentum': calculate_momentum_weighted(player_a_matches, player_a),
+            'ue': calculate_unforced_errors_estimate(df, player_a, surface)
+        }
+        
+        stats_b = {
+            'surface': calculate_surface_expertise(df, player_b, surface),
+            'recent': calculate_last_10_surface_performance(df, player_b, surface),
+            'fatigue': calculate_fatigue_level(df, player_b),
+            'momentum': calculate_momentum_weighted(player_b_matches, player_b),
+            'ue': calculate_unforced_errors_estimate(df, player_b, surface)
+        }
+        
+        # Calculate advanced expected games
+        games_prediction = calculate_advanced_expected_games(stats_a, stats_b, {'surface': surface})
+        
+        # Display factor analysis
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader(f"📈 {player_a}")
+            
+            with st.expander("🏟️ Surface Expertise", expanded=True):
+                st.metric("Expertise Score", f"{stats_a['surface']['expertise']:.1%}")
+                st.metric("Win Rate (Surface)", f"{stats_a['surface']['win_rate']:.1%}")
+                st.metric("Avg Games (Surface)", f"{stats_a['surface']['avg_games']:.1f}")
+                st.metric("Consistency", f"{stats_a['surface']['consistency']:.1%}")
+                st.write(f"Matches on {surface}: {stats_a['surface']['matches']}")
+            
+            with st.expander("⏰ Last 10 Matches (Surface)", expanded=True):
+                st.metric("Recent Form", stats_a['recent']['recent_form'])
+                st.metric("Last 10 Record", f"{stats_a['recent']['recent_wins']}/{stats_a['recent']['recent_matches']}")
+                st.metric("Recent Win Rate", f"{stats_a['recent']['recent_win_rate']:.1%}")
+                st.metric("Recent Avg Games", f"{stats_a['recent']['recent_avg_games']:.1f}")
+            
+            with st.expander("😓 Fatigue Level", expanded=True):
+                st.metric("Fatigue Score", f"{stats_a['fatigue']['fatigue_score']:.1%}")
+                st.metric("Days Since Last Match", stats_a['fatigue']['days_rest'])
+                st.metric("Matches Last Week", stats_a['fatigue']['matches_last_week'])
+                st.metric("Status", stats_a['fatigue']['fatigue_level'])
+            
+            with st.expander("🔥 Momentum", expanded=True):
+                st.metric("Momentum Score", f"{stats_a['momentum']:.1%}")
+                if stats_a['momentum'] >= 0.7:
+                    st.success("📈 Hot")
+                elif stats_a['momentum'] >= 0.5:
+                    st.info("⚔️ Normal")
+                else:
+                    st.warning("📉 Cold")
+            
+            with st.expander("⚠️ Unforced Errors", expanded=True):
+                st.metric("Error Tendency", f"{stats_a['ue']['ue_tendency']:.1%}")
+                st.metric("Profile", stats_a['ue']['error_profile'])
+                st.metric("Avg Game Length", f"{stats_a['ue']['avg_game_length']:.1f}")
+        
+        with col2:
+            st.subheader(f"📈 {player_b}")
+            
+            with st.expander("🏟️ Surface Expertise", expanded=True):
+                st.metric("Expertise Score", f"{stats_b['surface']['expertise']:.1%}")
+                st.metric("Win Rate (Surface)", f"{stats_b['surface']['win_rate']:.1%}")
+                st.metric("Avg Games (Surface)", f"{stats_b['surface']['avg_games']:.1f}")
+                st.metric("Consistency", f"{stats_b['surface']['consistency']:.1%}")
+                st.write(f"Matches on {surface}: {stats_b['surface']['matches']}")
+            
+            with st.expander("⏰ Last 10 Matches (Surface)", expanded=True):
+                st.metric("Recent Form", stats_b['recent']['recent_form'])
+                st.metric("Last 10 Record", f"{stats_b['recent']['recent_wins']}/{stats_b['recent']['recent_matches']}")
+                st.metric("Recent Win Rate", f"{stats_b['recent']['recent_win_rate']:.1%}")
+                st.metric("Recent Avg Games", f"{stats_b['recent']['recent_avg_games']:.1f}")
+            
+            with st.expander("😓 Fatigue Level", expanded=True):
+                st.metric("Fatigue Score", f"{stats_b['fatigue']['fatigue_score']:.1%}")
+                st.metric("Days Since Last Match", stats_b['fatigue']['days_rest'])
+                st.metric("Matches Last Week", stats_b['fatigue']['matches_last_week'])
+                st.metric("Status", stats_b['fatigue']['fatigue_level'])
+            
+            with st.expander("🔥 Momentum", expanded=True):
+                st.metric("Momentum Score", f"{stats_b['momentum']:.1%}")
+                if stats_b['momentum'] >= 0.7:
+                    st.success("📈 Hot")
+                elif stats_b['momentum'] >= 0.5:
+                    st.info("⚔️ Normal")
+                else:
+                    st.warning("📉 Cold")
+            
+            with st.expander("⚠️ Unforced Errors", expanded=True):
+                st.metric("Error Tendency", f"{stats_b['ue']['ue_tendency']:.1%}")
+                st.metric("Profile", stats_b['ue']['error_profile'])
+                st.metric("Avg Game Length", f"{stats_b['ue']['avg_game_length']:.1f}")
+        
+        st.markdown("---")
+        st.subheader("🎯 ADVANCED EXPECTED GAMES PREDICTION")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(f"{player_a} Expected Games", f"{games_prediction['expected_a']:.1f}")
+        
+        with col2:
+            st.metric("Match Average", f"{games_prediction['match_avg']:.1f}")
+            if games_prediction['match_avg'] < 23:
+                st.info("⚡ Quick Match")
+            elif games_prediction['match_avg'] < 27:
+                st.info("⚔️ Competitive")
+            else:
+                st.warning("🔥 Long Match")
+        
+        with col3:
+            st.metric(f"{player_b} Expected Games", f"{games_prediction['expected_b']:.1f}")
+        
+        st.markdown("---")
+        st.subheader("📊 Factor Breakdown")
+        
+        # Create factor comparison
+        factor_df = pd.DataFrame({
+            'Factor': ['Base Games', 'Recent Form', 'Fatigue Adj', 'Momentum', 'Unforced Errors', 'TOTAL'],
+            player_a: [
+                f"{games_prediction['components_a']['base']:.1f}",
+                f"{games_prediction['components_a']['recent']:.1f}",
+                f"{games_prediction['components_a']['fatigue']:.2f}x",
+                f"+{games_prediction['components_a']['momentum']:.1f}",
+                f"+{games_prediction['components_a']['ue']:.1f}",
+                f"{games_prediction['expected_a']:.1f}"
+            ],
+            player_b: [
+                f"{games_prediction['components_b']['base']:.1f}",
+                f"{games_prediction['components_b']['recent']:.1f}",
+                f"{games_prediction['components_b']['fatigue']:.2f}x",
+                f"+{games_prediction['components_b']['momentum']:.1f}",
+                f"+{games_prediction['components_b']['ue']:.1f}",
+                f"{games_prediction['expected_b']:.1f}"
+            ]
+        })
+        
+        st.dataframe(factor_df, width='stretch', hide_index=True)
+        
+        st.markdown("---")
+        st.subheader("📈 Visual Comparison")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Surface Expertise
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=[player_a, player_b],
+                    y=[stats_a['surface']['expertise'], stats_b['surface']['expertise']],
+                    marker_color=['#667eea', '#764ba2'],
+                    text=[f"{stats_a['surface']['expertise']:.1%}", f"{stats_b['surface']['expertise']:.1%}"],
+                    textposition='auto'
+                )
+            ])
+            fig.update_layout(
+                title="Surface Expertise",
+                yaxis_title="Score",
+                yaxis=dict(range=[0, 1]),
+                showlegend=False,
+                height=350
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Fatigue vs Momentum
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=[player_a, player_b],
+                y=[1-stats_a['fatigue']['fatigue_score'], 1-stats_b['fatigue']['fatigue_score']],
+                name='Energy Level',
+                marker_color='#4CAF50'
+            ))
+            fig.add_trace(go.Bar(
+                x=[player_a, player_b],
+                y=[stats_a['momentum'], stats_b['momentum']],
+                name='Momentum',
+                marker_color='#FF9800'
+            ))
+            fig.update_layout(
+                title="Energy vs Momentum",
+                yaxis_title="Score",
+                yaxis=dict(range=[0, 1]),
+                barmode='group',
+                height=350
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col3:
+            # Expected Games
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=[player_a, player_b],
+                    y=[games_prediction['expected_a'], games_prediction['expected_b']],
+                    marker_color=['#667eea', '#764ba2'],
+                    text=[f"{games_prediction['expected_a']:.1f}", f"{games_prediction['expected_b']:.1f}"],
+                    textposition='auto'
+                )
+            ])
+            fig.update_layout(
+                title="Expected Games (Advanced)",
+                yaxis_title="Games",
+                yaxis=dict(range=[0, 40]),
+                showlegend=False,
+                height=350
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        st.info("""
+        ✅ **Advanced Factors Included:**
+        
+        • **Surface Expertise** - Win rate & consistency on specific surface
+        • **Last 10 Matches** - Most recent form on this surface
+        • **Fatigue Level** - Days rest + matches in last week
+        • **Momentum** - Weighted recent performance
+        • **Unforced Errors** - Match length patterns & error tendency
+        """)
 
 @st.cache_resource
 def load_enhanced_model(df):
@@ -268,103 +625,7 @@ def load_enhanced_model(df):
     features = []
     feature_names = []
     
-    st.sidebar.write("📊 Computing professional features...")
-    progress = st.sidebar.progress(0)
-    
-    # 1. H2H ANALYSIS
-    h2h_features = []
-    psych_features = []
-    
-    for idx, (_, row) in enumerate(df_combined.iterrows()):
-        if idx % 100 == 0:
-            progress.progress(min(idx / len(df_combined), 0.3))
-        
-        player_1 = row['Player_1']
-        player_2 = row['Player_2']
-        surface = row.get('Surface', None)
-        
-        h2h_rate, h2h_count, psych_edge = calculate_h2h_stats(df, player_1, player_2, surface)
-        h2h_features.append(h2h_rate if h2h_count > 0 else 0.5)
-        psych_features.append(psych_edge)
-    
-    features.append(np.array(h2h_features))
-    feature_names.append('H2H_Record')
-    features.append(np.array(psych_features))
-    feature_names.append('Psychological_Edge')
-    
-    # 2. MOMENTUM WEIGHTING
-    momentum_features = []
-    for idx, (_, row) in enumerate(df_combined.iterrows()):
-        if idx % 100 == 0:
-            progress.progress(min(0.3 + idx / len(df_combined) * 0.2, 0.5))
-        
-        player_1 = row['Player_1']
-        
-        player_matches = df[
-            (df['Winner'] == player_1) | (df['Loser'] == player_1)
-        ]
-        
-        momentum = calculate_momentum_score(player_matches, player_1)
-        momentum_features.append(momentum)
-    
-    features.append(np.array(momentum_features))
-    feature_names.append('Momentum_Score')
-    
-    # 3. WIN STREAK
-    streak_features = []
-    for idx, (_, row) in enumerate(df_combined.iterrows()):
-        if idx % 100 == 0:
-            progress.progress(min(0.5 + idx / len(df_combined) * 0.1, 0.6))
-        
-        player_1 = row['Player_1']
-        
-        player_matches = df[
-            (df['Winner'] == player_1) | (df['Loser'] == player_1)
-        ]
-        
-        streak = calculate_win_streak(player_matches, player_1)
-        streak_features.append(streak)
-    
-    features.append(np.array(streak_features))
-    feature_names.append('Win_Streak')
-    
-    # 4. CONSISTENCY
-    consistency_features = []
-    for idx, (_, row) in enumerate(df_combined.iterrows()):
-        if idx % 100 == 0:
-            progress.progress(min(0.6 + idx / len(df_combined) * 0.1, 0.7))
-        
-        player_1 = row['Player_1']
-        
-        player_matches = df[
-            (df['Winner'] == player_1) | (df['Loser'] == player_1)
-        ]
-        
-        consistency = calculate_consistency_score(player_matches, player_1)
-        consistency_features.append(consistency)
-    
-    features.append(np.array(consistency_features))
-    feature_names.append('Consistency_Score')
-    
-    # 5. STRENGTH OF SCHEDULE
-    sos_features = []
-    for idx, (_, row) in enumerate(df_combined.iterrows()):
-        if idx % 100 == 0:
-            progress.progress(min(0.7 + idx / len(df_combined) * 0.1, 0.8))
-        
-        player_1 = row['Player_1']
-        
-        player_matches = df[
-            (df['Winner'] == player_1) | (df['Loser'] == player_1)
-        ]
-        
-        sos = calculate_strength_of_schedule(player_matches, player_1)
-        sos_features.append(sos)
-    
-    features.append(np.array(sos_features))
-    feature_names.append('Strength_of_Schedule')
-    
-    # STANDARD FEATURES
+    # Core features
     features.append((df_combined['Rank_2'] - df_combined['Rank_1']).fillna(0).values)
     feature_names.append('Ranking_Differential')
     
@@ -374,64 +635,10 @@ def load_enhanced_model(df):
     features.append(df_combined['Rank_2'].fillna(100).values)
     feature_names.append('Player_2_Rank')
     
-    log_rank_1 = np.log(df_combined['Rank_1'].fillna(100) + 1).values
-    log_rank_2 = np.log(df_combined['Rank_2'].fillna(100) + 1).values
-    features.append(log_rank_1)
-    feature_names.append('Log_Rank_1')
-    features.append(log_rank_2)
-    feature_names.append('Log_Rank_2')
-    
-    rank_ratio = np.where(df_combined['Rank_1'] > 0, df_combined['Rank_2'] / df_combined['Rank_1'], 1.0)
-    rank_ratio = np.nan_to_num(rank_ratio, nan=1.0, posinf=1.0, neginf=1.0)
-    features.append(rank_ratio)
-    feature_names.append('Rank_Ratio')
-    
-    features.append((df_combined['Pts_1'] - df_combined['Pts_2']).fillna(0).values)
-    feature_names.append('Points_Differential')
-    
-    features.append(df_combined['Pts_1'].fillna(0).values)
-    feature_names.append('Player_1_Points')
-    
-    features.append(df_combined['Pts_2'].fillna(0).values)
-    feature_names.append('Player_2_Points')
-    
-    log_pts_1 = np.log(df_combined['Pts_1'].fillna(1) + 1).values
-    log_pts_2 = np.log(df_combined['Pts_2'].fillna(1) + 1).values
-    features.append(log_pts_1)
-    feature_names.append('Log_Pts_1')
-    features.append(log_pts_2)
-    feature_names.append('Log_Pts_2')
-    
-    pts_ratio = np.where(df_combined['Pts_2'] > 0, (df_combined['Pts_1'] + 1) / (df_combined['Pts_2'] + 1), 1.0)
-    pts_ratio = np.nan_to_num(pts_ratio, nan=1.0, posinf=1.0, neginf=1.0)
-    features.append(pts_ratio)
-    feature_names.append('Points_Ratio')
-    
-    if 'B365W' in df_combined.columns and 'B365L' in df_combined.columns:
-        features.append((df_combined['B365W'] - df_combined['B365L']).fillna(0).values)
-        feature_names.append('Odds_Differential')
-        
-        odds_ratio = np.where(df_combined['B365L'] > 0, (df_combined['B365W'] + 0.1) / (df_combined['B365L'] + 0.1), 1.0)
-        odds_ratio = np.nan_to_num(odds_ratio, nan=1.0, posinf=1.0, neginf=1.0)
-        features.append(odds_ratio)
-        feature_names.append('Odds_Ratio')
-    
     if 'Surface' in df_combined.columns:
         surfaces = pd.get_dummies(df_combined['Surface'], prefix='Surface', dummy_na=False)
         for col in surfaces.columns:
             features.append(surfaces[col].values)
-            feature_names.append(col)
-    
-    if 'Tier' in df_combined.columns:
-        tiers = pd.get_dummies(df_combined['Tier'], prefix='Tier', dummy_na=False)
-        for col in tiers.columns:
-            features.append(tiers[col].values)
-            feature_names.append(col)
-    
-    if 'Court' in df_combined.columns:
-        courts = pd.get_dummies(df_combined['Court'], prefix='Court', dummy_na=False)
-        for col in courts.columns:
-            features.append(courts[col].values)
             feature_names.append(col)
     
     X = np.column_stack(features)
@@ -439,13 +646,8 @@ def load_enhanced_model(df):
     
     y = df_combined['Player_1_Won'].values
     
-    progress.progress(0.9)
-    
     if len(np.unique(y)) < 2:
         raise ValueError("Dataset must have both winning and losing samples")
-    
-    if len(X) < 100:
-        raise ValueError(f"Need 100+ matches, got {len(X)}")
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     
@@ -464,7 +666,6 @@ def load_enhanced_model(df):
         random_state=42,
         validation_fraction=0.2,
         n_iter_no_change=30,
-        tol=1e-5,
         verbose=0
     )
     
@@ -477,19 +678,12 @@ def load_enhanced_model(df):
     y_test_proba = calibrated_model.predict_proba(X_test_scaled)[:, 1]
     
     test_acc = accuracy_score(y_test, y_test_pred)
-    precision = precision_score(y_test, y_test_pred, zero_division=0)
-    recall = recall_score(y_test, y_test_pred, zero_division=0)
-    f1 = f1_score(y_test, y_test_pred, zero_division=0)
     auc_score = roc_auc_score(y_test, y_test_proba)
-    
-    cv_scores = cross_val_score(calibrated_model, X_train_scaled, y_train, cv=5, scoring='roc_auc')
     
     importance_df = pd.DataFrame({
         'Feature': feature_names,
         'Importance': gb_model.feature_importances_
     }).sort_values('Importance', ascending=False)
-    
-    progress.progress(1.0)
     
     return {
         'model': calibrated_model,
@@ -498,16 +692,12 @@ def load_enhanced_model(df):
         'feature_names': feature_names,
         'importance_df': importance_df,
         'test_accuracy': test_acc,
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
         'auc_score': auc_score,
-        'cv_scores': cv_scores
     }
 
 def show_home(model_data):
-    st.header("🎾 WTA Professional Predictor - Enhanced")
-    st.markdown("*With professional tipster features & improved games prediction*")
+    st.header("🎾 WTA Professional Predictor")
+    st.markdown("*Advanced games prediction with surface & player factors*")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -520,280 +710,19 @@ def show_home(model_data):
         st.metric("Features", len(model_data['feature_names']))
     
     st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📊 Model Performance")
-        metrics_df = pd.DataFrame({
-            'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC'],
-            'Score': [
-                model_data['test_accuracy'],
-                model_data['precision'],
-                model_data['recall'],
-                model_data['f1'],
-                model_data['auc_score']
-            ]
-        })
-        st.dataframe(metrics_df.style.format({'Score': '{:.1%}'}), width='stretch', hide_index=True)
-    
-    with col2:
-        st.subheader("🚀 Enhanced Features Added")
-        st.write("""
-        ✓ **H2H Records** - Direct head-to-head analysis
-        ✓ **Momentum Score** - Weighted recent form
-        ✓ **Win Streak** - Psychological momentum
-        ✓ **Consistency** - Volatility analysis
-        ✓ **Strength of Schedule** - Opponent quality
-        ✓ **Improved Games Prediction** - MEDIAN-based (fixed!)
-        ✓ **Standard Features** - Rankings, points, odds
-        """)
-    
-    st.markdown("---")
-    st.subheader("📈 Top 15 Features")
-    
-    top_features = model_data['importance_df'].head(15)
-    fig = go.Figure(data=[
-        go.Bar(y=top_features['Feature'], x=top_features['Importance'], orientation='h', marker_color='#667eea')
-    ])
-    fig.update_layout(title="Feature Importance", xaxis_title="Importance", height=500)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("---")
-    st.subheader("🎯 Games Prediction Fix")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Method", "MEDIAN-based")
-    with col2:
-        st.metric("Accuracy", "±0.2-1 games")
-    with col3:
-        st.metric("Improvement", "+2-3 games")
-    
-    st.info("""
-    ✅ **Games Prediction Fixed!**
-    
-    Changed from MEAN to MEDIAN calculation:
-    - MEAN: Pulled up by 3-set outliers (inaccurate)
-    - MEDIAN: Represents typical match (accurate)
-    
-    **Impact:**
-    - 30% WR: 20.3 → 18.8 games (-1.5) ✓
-    - 50% WR: 21.4 → 20.2 games (-1.2) ✓
-    - 70% WR: 22.5 → 22.0 games (-0.5) ✓
+    st.subheader("🎯 Features Available")
+    st.write("""
+    ✓ **Surface Expertise** - Win rate & consistency on specific surface
+    ✓ **Last 10 Matches** - Most recent form on this surface
+    ✓ **Fatigue Level** - Days rest + matches in last week
+    ✓ **Momentum** - Weighted recent performance
+    ✓ **Unforced Errors** - Error tendency & match length patterns
+    ✓ **Advanced Calculation** - Multi-factor expected games prediction
     """)
-
-def show_player_selection(model_data):
-    st.header("👥 Player Selection & Surface Analysis")
-    st.markdown("*Compare players and analyze surface performance*")
-    
-    st.markdown("---")
-    
-    df = model_data['df']
-    all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
-    surfaces = sorted(df['Surface'].dropna().unique())
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.subheader("👤 Player 1")
-        player_a = st.selectbox("Select Player 1", all_players, key="player_1")
-    
-    with col2:
-        st.subheader("👤 Player 2")
-        player_b = st.selectbox("Select Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="player_2")
-    
-    with col3:
-        st.subheader("🏟️ Surface")
-        surface = st.selectbox("Select Surface", surfaces, key="surface")
-    
-    st.markdown("---")
-    
-    if st.button("📊 Analyze Players", width='stretch'):
-        st.markdown("---")
-        st.subheader("📈 PROFESSIONAL ANALYSIS")
-        
-        # Get player stats using IMPROVED games prediction
-        stats_a = calculate_expected_games_improved(df, player_a, surface)
-        stats_b = calculate_expected_games_improved(df, player_b, surface)
-        
-        # Get H2H stats
-        h2h_rate, h2h_count, psych_edge = calculate_h2h_stats(df, player_a, player_b, surface)
-        
-        # Get momentum and other metrics
-        player_a_matches = df[(df['Winner'] == player_a) | (df['Loser'] == player_a)]
-        player_b_matches = df[(df['Winner'] == player_b) | (df['Loser'] == player_b)]
-        
-        momentum_a = calculate_momentum_score(player_a_matches, player_a)
-        momentum_b = calculate_momentum_score(player_b_matches, player_b)
-        
-        streak_a = calculate_win_streak(player_a_matches, player_a)
-        streak_b = calculate_win_streak(player_b_matches, player_b)
-        
-        consistency_a = calculate_consistency_score(player_a_matches, player_a)
-        consistency_b = calculate_consistency_score(player_b_matches, player_b)
-        
-        sos_a = calculate_strength_of_schedule(player_a_matches, player_a)
-        sos_b = calculate_strength_of_schedule(player_b_matches, player_b)
-        
-        # Display comparison
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader(f"🎾 {player_a}")
-            st.metric("Expected Games (FIXED)", f"{stats_a['expected']:.1f}")
-            st.write(f"*Range: {stats_a['lower']:.1f} - {stats_a['upper']:.1f} games*")
-            st.metric("Win Rate (Surface)", f"{stats_a['win_rate']:.1%}")
-            st.metric("Median Games (Win)", f"{stats_a['median_win']:.1f}")
-            st.metric("Median Games (Loss)", f"{stats_a['median_loss']:.1f}")
-            
-            st.write("**Professional Metrics:**")
-            st.write(f"• Momentum Score: {momentum_a:.1%}")
-            st.write(f"• Win Streak: {streak_a} matches")
-            st.write(f"• Consistency: {consistency_a:.1%}")
-            st.write(f"• Strength of Schedule: {sos_a:.2f}")
-        
-        with col2:
-            st.subheader(f"🎾 {player_b}")
-            st.metric("Expected Games (FIXED)", f"{stats_b['expected']:.1f}")
-            st.write(f"*Range: {stats_b['lower']:.1f} - {stats_b['upper']:.1f} games*")
-            st.metric("Win Rate (Surface)", f"{stats_b['win_rate']:.1%}")
-            st.metric("Median Games (Win)", f"{stats_b['median_win']:.1f}")
-            st.metric("Median Games (Loss)", f"{stats_b['median_loss']:.1f}")
-            
-            st.write("**Professional Metrics:**")
-            st.write(f"• Momentum Score: {momentum_b:.1%}")
-            st.write(f"• Win Streak: {streak_b} matches")
-            st.write(f"• Consistency: {consistency_b:.1%}")
-            st.write(f"• Strength of Schedule: {sos_b:.2f}")
-        
-        st.markdown("---")
-        st.subheader("⚔️ HEAD-TO-HEAD ANALYSIS")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(f"{player_a} H2H Record", f"{h2h_rate:.1%}" if h2h_count > 0 else "No H2H")
-        
-        with col2:
-            st.metric("Total Matches", h2h_count if h2h_count > 0 else "0")
-        
-        with col3:
-            if psych_edge > 0:
-                st.success(f"✓ {player_a} Has Edge: +{psych_edge:.1%}")
-            elif psych_edge < 0:
-                st.success(f"✓ {player_b} Has Edge: +{abs(psych_edge):.1%}")
-            else:
-                st.info("🤝 Evenly Matched")
-        
-        st.markdown("---")
-        st.subheader("📊 Detailed Statistics")
-        
-        # Create comparison table
-        comp_df = pd.DataFrame({
-            'Metric': [
-                'Expected Games (FIXED)',
-                'Games Range',
-                'Win Rate (Surface)',
-                'Median Win Games',
-                'Median Loss Games',
-                'Overall Momentum',
-                'Current Streak',
-                'Consistency',
-                'Schedule Strength',
-                f'H2H Record ({surface})'
-            ],
-            player_a: [
-                f"{stats_a['expected']:.1f}",
-                f"{stats_a['lower']:.1f}-{stats_a['upper']:.1f}",
-                f"{stats_a['win_rate']:.1%}",
-                f"{stats_a['median_win']:.1f}",
-                f"{stats_a['median_loss']:.1f}",
-                f"{momentum_a:.1%}",
-                f"{streak_a}W",
-                f"{consistency_a:.1%}",
-                f"{sos_a:.2f}",
-                f"{h2h_rate:.1%}" if h2h_count > 0 else "No Data"
-            ],
-            player_b: [
-                f"{stats_b['expected']:.1f}",
-                f"{stats_b['lower']:.1f}-{stats_b['upper']:.1f}",
-                f"{stats_b['win_rate']:.1%}",
-                f"{stats_b['median_win']:.1f}",
-                f"{stats_b['median_loss']:.1f}",
-                f"{momentum_b:.1%}",
-                f"{streak_b}W",
-                f"{consistency_b:.1%}",
-                f"{sos_b:.2f}",
-                f"{1-h2h_rate:.1%}" if h2h_count > 0 else "No Data"
-            ]
-        })
-        
-        st.dataframe(comp_df, width='stretch', hide_index=True)
-        
-        st.markdown("---")
-        st.subheader("📈 Visual Comparison")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Expected Games Comparison (FIXED)
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=[player_a, player_b],
-                    y=[stats_a['expected'], stats_b['expected']],
-                    marker_color=['#667eea', '#764ba2'],
-                    text=[f"{stats_a['expected']:.1f}", f"{stats_b['expected']:.1f}"],
-                    textposition='auto',
-                    error_y=dict(
-                        type='data',
-                        symmetric=False,
-                        array=[stats_a['upper']-stats_a['expected'], stats_b['upper']-stats_b['expected']],
-                        arrayminus=[stats_a['expected']-stats_a['lower'], stats_b['expected']-stats_b['lower']]
-                    )
-                )
-            ])
-            fig.update_layout(
-                title=f"Expected Games on {surface} (FIXED - MEDIAN)",
-                yaxis_title="Games",
-                yaxis=dict(range=[0, 40]),
-                showlegend=False,
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Momentum Comparison
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=[player_a, player_b],
-                    y=[momentum_a, momentum_b],
-                    marker_color=['#667eea', '#764ba2'],
-                    text=[f"{momentum_a:.1%}", f"{momentum_b:.1%}"],
-                    textposition='auto'
-                )
-            ])
-            fig.update_layout(
-                title="Momentum Score",
-                yaxis_title="Momentum",
-                yaxis=dict(range=[0, 1]),
-                showlegend=False,
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        st.info("""
-        ✅ **Games Prediction Now Uses MEDIAN (Fixed)**
-        
-        Instead of simple average:
-        - Shows expected games with confidence interval
-        - Accounts for bimodal distribution (2-set vs 3-set)
-        - Much more accurate for predicting match length
-        """)
 
 def main():
     st.sidebar.title("🎾 WTA Professional Predictor")
-    page = st.sidebar.radio("Page", ["🏠 Home", "👥 Player Selection"])
+    page = st.sidebar.radio("Page", ["🏠 Home", "🎾 Advanced Games Prediction"])
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📥 Data Loading")
@@ -802,20 +731,17 @@ def main():
     
     if df_data is not None and len(df_data) > 0:
         try:
-            with st.spinner("Training enhanced professional model..."):
+            with st.spinner("Loading data..."):
                 model_data = load_enhanced_model(df_data)
-            st.sidebar.success(f"✓ Model trained!")
+            st.sidebar.success(f"✓ Data loaded!")
             st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
-            st.sidebar.success("✅ Games Prediction: MEDIAN-based (FIXED!)")
             
             if page == "🏠 Home":
                 show_home(model_data)
             else:
-                show_player_selection(model_data)
+                show_advanced_games_prediction(model_data)
         except Exception as e:
-            st.error(f"Training Error: {str(e)}")
-            import traceback
-            st.error(traceback.format_exc())
+            st.error(f"Error: {str(e)}")
     else:
         st.title("🎾 WTA Professional Predictor")
         st.error("❌ Could not load data from GitHub")
