@@ -43,9 +43,7 @@ def calculate_total_games(row):
 # ============= ADVANCED GAMES PREDICTION FACTORS =============
 
 def calculate_surface_expertise(df, player_name, surface):
-    """
-    Surface expertise: win rate and game patterns on specific surface
-    """
+    """Surface expertise: win rate and game patterns on specific surface"""
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
@@ -60,24 +58,20 @@ def calculate_surface_expertise(df, player_name, surface):
             'consistency': 0.5
         }
     
-    # Calculate win rate
     wins = len(matches[matches['Winner'] == player_name])
     win_rate = wins / len(matches) if len(matches) > 0 else 0.5
     
-    # Calculate games
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
     valid_matches = matches.dropna(subset=['Total_Games'])
     
     avg_games = np.mean(valid_matches['Total_Games']) if len(valid_matches) > 0 else 22
     
-    # Consistency on surface (low variance = consistent)
     if len(valid_matches) > 1:
         games_variance = np.var(valid_matches['Total_Games'])
-        consistency = 1 - (games_variance / 100)  # Normalize
+        consistency = 1 - (games_variance / 100)
     else:
         consistency = 0.5
     
-    # Expertise score: combines win rate and consistency
     expertise = (win_rate * 0.6) + (consistency * 0.4)
     
     return {
@@ -89,9 +83,7 @@ def calculate_surface_expertise(df, player_name, surface):
     }
 
 def calculate_last_10_surface_performance(df, player_name, surface):
-    """
-    Last 10 matches on this specific surface (most relevant)
-    """
+    """Last 10 matches on this specific surface"""
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
@@ -115,7 +107,6 @@ def calculate_last_10_surface_performance(df, player_name, surface):
     
     win_rate = wins / len(matches) if len(matches) > 0 else 0.5
     
-    # Determine form based on recent results
     if win_rate >= 0.7:
         form = "🔥 Excellent"
     elif win_rate >= 0.5:
@@ -134,12 +125,7 @@ def calculate_last_10_surface_performance(df, player_name, surface):
     }
 
 def calculate_fatigue_level(df, player_name, current_date=None):
-    """
-    Fatigue calculation based on:
-    - Days since last match
-    - Matches played in last 7 days
-    - Match intensity (based on games played)
-    """
+    """Fatigue calculation based on days since last match and matches last week"""
     if current_date is None:
         current_date = pd.Timestamp.now()
     
@@ -155,14 +141,12 @@ def calculate_fatigue_level(df, player_name, current_date=None):
             'fatigue_level': 'Unknown'
         }
     
-    # Days since last match
     try:
         last_match_date = pd.to_datetime(matches.iloc[0]['Date'])
         days_rest = (current_date - last_match_date).days
     except:
         days_rest = 0
     
-    # Matches in last 7 days
     try:
         week_matches = matches[
             (current_date - pd.to_datetime(matches['Date'])).dt.days <= 7
@@ -171,22 +155,17 @@ def calculate_fatigue_level(df, player_name, current_date=None):
     except:
         matches_last_week = 0
     
-    # Fatigue calculation
-    # Fresh: 5+ days rest
-    # Moderate: 3-4 days rest or 1-2 matches last week
-    # Fatigued: 0-2 days rest and/or 3+ matches last week
-    
     if days_rest >= 5:
-        fatigue_score = 0.2  # Fresh
+        fatigue_score = 0.2
         fatigue_level = "✓ Fresh"
     elif days_rest >= 3 or matches_last_week <= 1:
-        fatigue_score = 0.5  # Normal
+        fatigue_score = 0.5
         fatigue_level = "⚔️ Normal"
     elif days_rest >= 2 and matches_last_week <= 2:
-        fatigue_score = 0.7  # Moderately fatigued
+        fatigue_score = 0.7
         fatigue_level = "⚠️ Fatigued"
     else:
-        fatigue_score = 0.9  # Highly fatigued
+        fatigue_score = 0.9
         fatigue_level = "🔴 Exhausted"
     
     return {
@@ -197,11 +176,7 @@ def calculate_fatigue_level(df, player_name, current_date=None):
     }
 
 def calculate_unforced_errors_estimate(df, player_name, surface=None):
-    """
-    Estimate unforced errors tendency based on:
-    - Match length patterns (longer matches = more UE)
-    - Game loss margins
-    """
+    """Estimate unforced errors tendency based on match length patterns"""
     matches = df[
         (df['Winner'] == player_name) | (df['Loser'] == player_name)
     ]
@@ -219,7 +194,6 @@ def calculate_unforced_errors_estimate(df, player_name, surface=None):
             'error_profile': 'Unknown'
         }
     
-    # Calculate game length
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
     valid_matches = matches.dropna(subset=['Total_Games'])
     
@@ -228,33 +202,28 @@ def calculate_unforced_errors_estimate(df, player_name, surface=None):
     else:
         avg_game_length = np.mean(valid_matches['Total_Games'])
     
-    # Unforced errors tendency
-    # Longer matches typically mean more UE
-    # Shorter matches mean fewer UE but more dominant play
     if avg_game_length >= 26:
-        ue_tendency = 0.8  # High UE tendency
+        ue_tendency = 0.8
         error_profile = "🔥 Error-prone"
     elif avg_game_length >= 24:
-        ue_tendency = 0.6  # Moderate UE
+        ue_tendency = 0.6
         error_profile = "⚔️ Competitive"
     elif avg_game_length >= 22:
-        ue_tendency = 0.4  # Few UE
+        ue_tendency = 0.4
         error_profile = "✓ Solid"
     else:
-        ue_tendency = 0.2  # Very few UE
+        ue_tendency = 0.2
         error_profile = "💪 Dominant"
     
     return {
         'ue_tendency': ue_tendency,
         'avg_game_length': avg_game_length,
-        'break_tendency': 1 - (ue_tendency * 0.5),  # Inverse estimate
+        'break_tendency': 1 - (ue_tendency * 0.5),
         'error_profile': error_profile
     }
 
 def calculate_momentum_weighted(matches, player_name):
-    """
-    Advanced momentum: weighted recent performance
-    """
+    """Advanced momentum: weighted recent performance"""
     if len(matches) == 0:
         return 0.5
     
@@ -262,7 +231,6 @@ def calculate_momentum_weighted(matches, player_name):
     if len(last_10) == 0:
         return 0.5
     
-    # Weight recent matches higher
     weights = np.linspace(0.5, 1.0, len(last_10))
     
     weighted_wins = sum([
@@ -274,40 +242,26 @@ def calculate_momentum_weighted(matches, player_name):
     return momentum
 
 def calculate_advanced_expected_games(stats_a, stats_b, surface_data):
-    """
-    Calculate expected games using multiple factors:
-    - Surface expertise
-    - Last 10 matches
-    - Fatigue levels
-    - Momentum
-    - Unforced errors
-    """
+    """Calculate expected games using multiple factors"""
     
-    # Base calculation from surface expertise
     base_games_a = stats_a['surface']['avg_games'] * stats_a['surface']['expertise']
     base_games_b = stats_b['surface']['avg_games'] * stats_b['surface']['expertise']
     
-    # Recent form adjustment
     recent_adj_a = stats_a['recent']['recent_avg_games'] * 0.2
     recent_adj_b = stats_b['recent']['recent_avg_games'] * 0.2
     
-    # Fatigue adjustment (fatigue reduces game count)
     fatigue_adj_a = (1 - stats_a['fatigue']['fatigue_score'] * 0.1)
     fatigue_adj_b = (1 - stats_b['fatigue']['fatigue_score'] * 0.1)
     
-    # Momentum adjustment
     momentum_adj_a = stats_a['momentum'] * 0.15
     momentum_adj_b = stats_b['momentum'] * 0.15
     
-    # Unforced errors adjustment (more errors = longer matches)
     ue_adj_a = stats_a['ue']['ue_tendency'] * 0.1
     ue_adj_b = stats_b['ue']['ue_tendency'] * 0.1
     
-    # Calculate adjusted expected games
     expected_a = (base_games_a + recent_adj_a) * fatigue_adj_a + momentum_adj_a + ue_adj_a
     expected_b = (base_games_b + recent_adj_b) * fatigue_adj_b + momentum_adj_b + ue_adj_b
     
-    # Match average
     match_avg = (expected_a + expected_b) / 2
     
     return {
@@ -329,6 +283,478 @@ def calculate_advanced_expected_games(stats_a, stats_b, surface_data):
             'ue': ue_adj_b
         }
     }
+
+def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_prediction):
+    """Generate professional HTML report for export"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Determine match type
+    avg_games = games_prediction['match_avg']
+    if avg_games < 23:
+        match_type = "⚡ Quick Match"
+        match_color = "#4CAF50"
+    elif avg_games < 27:
+        match_type = "⚔️ Competitive Match"
+        match_color = "#FF9800"
+    else:
+        match_type = "🔥 Long Match"
+        match_color = "#F44336"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>WTA Advanced Games Prediction</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #333;
+                line-height: 1.6;
+                padding: 20px;
+            }}
+            
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 40px;
+                text-align: center;
+            }}
+            
+            .header h1 {{
+                font-size: 2.5em;
+                margin-bottom: 10px;
+            }}
+            
+            .header p {{
+                font-size: 1.1em;
+                opacity: 0.9;
+            }}
+            
+            .content {{
+                padding: 40px;
+            }}
+            
+            .match-title {{
+                text-align: center;
+                font-size: 2em;
+                color: #764ba2;
+                margin: 20px 0;
+            }}
+            
+            .surface-badge {{
+                text-align: center;
+                font-size: 1.2em;
+                color: #667eea;
+                margin-bottom: 20px;
+                font-weight: bold;
+            }}
+            
+            .prediction-box {{
+                background: {match_color};
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                text-align: center;
+                margin: 30px 0;
+                font-size: 1.1em;
+            }}
+            
+            .section {{
+                margin: 40px 0;
+            }}
+            
+            .section-title {{
+                color: #667eea;
+                font-size: 1.5em;
+                border-bottom: 3px solid #667eea;
+                padding-bottom: 10px;
+                margin-bottom: 20px;
+            }}
+            
+            .players-grid {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 30px;
+                margin-bottom: 30px;
+            }}
+            
+            .player-card {{
+                background: #f9f9f9;
+                padding: 20px;
+                border-radius: 10px;
+                border-left: 5px solid #667eea;
+            }}
+            
+            .player-card h3 {{
+                color: #667eea;
+                margin-bottom: 15px;
+                font-size: 1.3em;
+            }}
+            
+            .metric {{
+                display: flex;
+                justify-content: space-between;
+                padding: 10px 0;
+                border-bottom: 1px solid #eee;
+            }}
+            
+            .metric-label {{
+                font-weight: 600;
+                color: #333;
+            }}
+            
+            .metric-value {{
+                color: #764ba2;
+                font-weight: bold;
+            }}
+            
+            .prediction-cards {{
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 20px;
+                margin: 30px 0;
+            }}
+            
+            .prediction-card {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                text-align: center;
+            }}
+            
+            .prediction-card h4 {{
+                font-size: 0.9em;
+                opacity: 0.9;
+                margin-bottom: 10px;
+            }}
+            
+            .prediction-card .number {{
+                font-size: 2.5em;
+                font-weight: bold;
+            }}
+            
+            .factor-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                background: white;
+            }}
+            
+            .factor-table th {{
+                background: #667eea;
+                color: white;
+                padding: 12px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            
+            .factor-table td {{
+                padding: 12px;
+                border-bottom: 1px solid #eee;
+            }}
+            
+            .factor-table tr:hover {{
+                background: #f5f5f5;
+            }}
+            
+            .footer {{
+                background: #f9f9f9;
+                padding: 20px;
+                text-align: center;
+                border-top: 1px solid #eee;
+                color: #666;
+                font-size: 0.9em;
+            }}
+            
+            .info-box {{
+                background: #e3f2fd;
+                border-left: 4px solid #667eea;
+                padding: 15px;
+                margin: 20px 0;
+                border-radius: 5px;
+            }}
+            
+            @media print {{
+                body {{
+                    background: white;
+                    padding: 0;
+                }}
+                .container {{
+                    box-shadow: none;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🎾 WTA Advanced Games Prediction</h1>
+                <p>Professional Match Analysis Report</p>
+            </div>
+            
+            <div class="content">
+                <div class="match-title">
+                    {player_a} vs {player_b}
+                </div>
+                
+                <div class="surface-badge">
+                    Surface: <strong>{surface}</strong>
+                </div>
+                
+                <div class="prediction-box">
+                    {match_type}<br>
+                    <strong>Expected Games: {games_prediction['match_avg']:.1f}</strong>
+                </div>
+                
+                <div class="section">
+                    <h2 class="section-title">📊 Player Analysis</h2>
+                    
+                    <div class="players-grid">
+                        <div class="player-card">
+                            <h3>{player_a}</h3>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">🏟️ Surface Expertise</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Expertise Score:</span>
+                                    <span class="metric-value">{stats_a['surface']['expertise']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Win Rate:</span>
+                                    <span class="metric-value">{stats_a['surface']['win_rate']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Avg Games:</span>
+                                    <span class="metric-value">{stats_a['surface']['avg_games']:.1f}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Consistency:</span>
+                                    <span class="metric-value">{stats_a['surface']['consistency']:.1%}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">⏰ Last 10 Matches</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Form:</span>
+                                    <span class="metric-value">{stats_a['recent']['recent_form']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Record:</span>
+                                    <span class="metric-value">{stats_a['recent']['recent_wins']}/{stats_a['recent']['recent_matches']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Win Rate:</span>
+                                    <span class="metric-value">{stats_a['recent']['recent_win_rate']:.1%}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">😓 Fatigue Level</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Status:</span>
+                                    <span class="metric-value">{stats_a['fatigue']['fatigue_level']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Days Rest:</span>
+                                    <span class="metric-value">{stats_a['fatigue']['days_rest']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Matches/Week:</span>
+                                    <span class="metric-value">{stats_a['fatigue']['matches_last_week']}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">🔥 Momentum & Errors</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Momentum:</span>
+                                    <span class="metric-value">{stats_a['momentum']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Error Profile:</span>
+                                    <span class="metric-value">{stats_a['ue']['error_profile']}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="player-card">
+                            <h3>{player_b}</h3>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">🏟️ Surface Expertise</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Expertise Score:</span>
+                                    <span class="metric-value">{stats_b['surface']['expertise']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Win Rate:</span>
+                                    <span class="metric-value">{stats_b['surface']['win_rate']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Avg Games:</span>
+                                    <span class="metric-value">{stats_b['surface']['avg_games']:.1f}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Consistency:</span>
+                                    <span class="metric-value">{stats_b['surface']['consistency']:.1%}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">⏰ Last 10 Matches</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Form:</span>
+                                    <span class="metric-value">{stats_b['recent']['recent_form']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Record:</span>
+                                    <span class="metric-value">{stats_b['recent']['recent_wins']}/{stats_b['recent']['recent_matches']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Win Rate:</span>
+                                    <span class="metric-value">{stats_b['recent']['recent_win_rate']:.1%}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">😓 Fatigue Level</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Status:</span>
+                                    <span class="metric-value">{stats_b['fatigue']['fatigue_level']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Days Rest:</span>
+                                    <span class="metric-value">{stats_b['fatigue']['days_rest']}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Matches/Week:</span>
+                                    <span class="metric-value">{stats_b['fatigue']['matches_last_week']}</span>
+                                </div>
+                            </div>
+                            
+                            <div style="margin: 15px 0;">
+                                <h4 style="color: #667eea; margin-bottom: 10px;">🔥 Momentum & Errors</h4>
+                                <div class="metric">
+                                    <span class="metric-label">Momentum:</span>
+                                    <span class="metric-value">{stats_b['momentum']:.1%}</span>
+                                </div>
+                                <div class="metric">
+                                    <span class="metric-label">Error Profile:</span>
+                                    <span class="metric-value">{stats_b['ue']['error_profile']}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <h2 class="section-title">🎯 Expected Games Prediction</h2>
+                    
+                    <div class="prediction-cards">
+                        <div class="prediction-card">
+                            <h4>{player_a}</h4>
+                            <div class="number">{games_prediction['expected_a']:.1f}</div>
+                        </div>
+                        
+                        <div class="prediction-card">
+                            <h4>Match Average</h4>
+                            <div class="number">{games_prediction['match_avg']:.1f}</div>
+                        </div>
+                        
+                        <div class="prediction-card">
+                            <h4>{player_b}</h4>
+                            <div class="number">{games_prediction['expected_b']:.1f}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <h2 class="section-title">📊 Factor Breakdown</h2>
+                    
+                    <table class="factor-table">
+                        <thead>
+                            <tr>
+                                <th>Factor</th>
+                                <th>{player_a}</th>
+                                <th>{player_b}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Base Games (Expertise)</strong></td>
+                                <td>{games_prediction['components_a']['base']:.1f}</td>
+                                <td>{games_prediction['components_b']['base']:.1f}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Recent Form (Last 10)</strong></td>
+                                <td>+{games_prediction['components_a']['recent']:.1f}</td>
+                                <td>+{games_prediction['components_b']['recent']:.1f}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Fatigue Adjustment</strong></td>
+                                <td>{games_prediction['components_a']['fatigue']:.2f}x</td>
+                                <td>{games_prediction['components_b']['fatigue']:.2f}x</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Momentum</strong></td>
+                                <td>+{games_prediction['components_a']['momentum']:.1f}</td>
+                                <td>+{games_prediction['components_b']['momentum']:.1f}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Unforced Errors</strong></td>
+                                <td>+{games_prediction['components_a']['ue']:.1f}</td>
+                                <td>+{games_prediction['components_b']['ue']:.1f}</td>
+                            </tr>
+                            <tr style="background: #f0f4ff; font-weight: bold;">
+                                <td><strong>TOTAL EXPECTED</strong></td>
+                                <td>{games_prediction['expected_a']:.1f}</td>
+                                <td>{games_prediction['expected_b']:.1f}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="info-box">
+                    <strong>📌 Analysis Factors:</strong><br><br>
+                    🏟️ <strong>Surface Expertise:</strong> Win rate and consistency on this specific surface<br>
+                    ⏰ <strong>Last 10 Matches:</strong> Most recent form on the same surface<br>
+                    😓 <strong>Fatigue Level:</strong> Days rest and matches played in last week<br>
+                    🔥 <strong>Momentum:</strong> Weighted recent performance (recent > older)<br>
+                    ⚠️ <strong>Unforced Errors:</strong> Error tendency based on match length patterns
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p><strong>Generated:</strong> {timestamp}</p>
+                <p>WTA Advanced Games Prediction Report</p>
+                <p>Data Source: GitHub WTA Database</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 def show_advanced_games_prediction(model_data):
     st.header("🎾 Advanced Expected Games Prediction")
@@ -575,15 +1001,21 @@ def show_advanced_games_prediction(model_data):
             st.plotly_chart(fig, use_container_width=True)
         
         st.markdown("---")
-        st.info("""
-        ✅ **Advanced Factors Included:**
+        st.subheader("💾 Export Analysis")
         
-        • **Surface Expertise** - Win rate & consistency on specific surface
-        • **Last 10 Matches** - Most recent form on this surface
-        • **Fatigue Level** - Days rest + matches in last week
-        • **Momentum** - Weighted recent performance
-        • **Unforced Errors** - Match length patterns & error tendency
-        """)
+        # Generate HTML
+        html_report = generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_prediction)
+        
+        # Download button
+        st.download_button(
+            label="📥 Download HTML Report",
+            data=html_report,
+            file_name=f"WTA_Advanced_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+            mime="text/html",
+            key="download_advanced_html"
+        )
+        
+        st.success("✅ Report ready for download! Click the button above to save the analysis.")
 
 @st.cache_resource
 def load_enhanced_model(df):
@@ -617,37 +1049,16 @@ def load_enhanced_model(df):
     
     df_combined = df_combined.dropna(subset=['Player_1', 'Player_2', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
     
-    if 'B365W' in df_combined.columns:
-        df_combined['B365W'] = df_combined['B365W'].fillna(df_combined['B365W'].median())
-    if 'B365L' in df_combined.columns:
-        df_combined['B365L'] = df_combined['B365L'].fillna(df_combined['B365L'].median())
-    
     features = []
     feature_names = []
     
-    # Core features
     features.append((df_combined['Rank_2'] - df_combined['Rank_1']).fillna(0).values)
     feature_names.append('Ranking_Differential')
-    
-    features.append(df_combined['Rank_1'].fillna(100).values)
-    feature_names.append('Player_1_Rank')
-    
-    features.append(df_combined['Rank_2'].fillna(100).values)
-    feature_names.append('Player_2_Rank')
-    
-    if 'Surface' in df_combined.columns:
-        surfaces = pd.get_dummies(df_combined['Surface'], prefix='Surface', dummy_na=False)
-        for col in surfaces.columns:
-            features.append(surfaces[col].values)
-            feature_names.append(col)
     
     X = np.column_stack(features)
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     
     y = df_combined['Player_1_Won'].values
-    
-    if len(np.unique(y)) < 2:
-        raise ValueError("Dataset must have both winning and losing samples")
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     
@@ -655,23 +1066,10 @@ def load_enhanced_model(df):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    gb_model = GradientBoostingClassifier(
-        n_estimators=500,
-        learning_rate=0.01,
-        max_depth=3,
-        min_samples_split=25,
-        min_samples_leaf=12,
-        subsample=0.6,
-        max_features='sqrt',
-        random_state=42,
-        validation_fraction=0.2,
-        n_iter_no_change=30,
-        verbose=0
-    )
-    
+    gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42, verbose=0)
     gb_model.fit(X_train_scaled, y_train)
     
-    calibrated_model = CalibratedClassifierCV(gb_model, method='isotonic', cv=15)
+    calibrated_model = CalibratedClassifierCV(gb_model, method='isotonic', cv=5)
     calibrated_model.fit(X_train_scaled, y_train)
     
     y_test_pred = calibrated_model.predict(X_test_scaled)
@@ -680,17 +1078,11 @@ def load_enhanced_model(df):
     test_acc = accuracy_score(y_test, y_test_pred)
     auc_score = roc_auc_score(y_test, y_test_proba)
     
-    importance_df = pd.DataFrame({
-        'Feature': feature_names,
-        'Importance': gb_model.feature_importances_
-    }).sort_values('Importance', ascending=False)
-    
     return {
         'model': calibrated_model,
         'scaler': scaler,
         'df': df,
         'feature_names': feature_names,
-        'importance_df': importance_df,
         'test_accuracy': test_acc,
         'auc_score': auc_score,
     }
@@ -710,14 +1102,14 @@ def show_home(model_data):
         st.metric("Features", len(model_data['feature_names']))
     
     st.markdown("---")
-    st.subheader("🎯 Features Available")
+    st.subheader("🎯 Advanced Analysis Features")
     st.write("""
     ✓ **Surface Expertise** - Win rate & consistency on specific surface
     ✓ **Last 10 Matches** - Most recent form on this surface
     ✓ **Fatigue Level** - Days rest + matches in last week
     ✓ **Momentum** - Weighted recent performance
     ✓ **Unforced Errors** - Error tendency & match length patterns
-    ✓ **Advanced Calculation** - Multi-factor expected games prediction
+    ✓ **HTML Export** - Professional report download
     """)
 
 def main():
