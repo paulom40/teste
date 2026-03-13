@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 st.set_page_config(page_title="ATP Advanced Predictor", page_icon="🎾", layout="wide")
 
 @st.cache_data
-def fetch_wta_github_data():
+def fetch_atp_github_data():
     try:
         url = "https://github.com/paulom40/teste/raw/main/atp_data.xlsx"
         response = requests.get(url, timeout=10)
@@ -414,7 +414,7 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>WTA Match Prediction</title>
+        <title>atp Match Prediction</title>
         <style>
             * {{
                 margin: 0;
@@ -586,7 +586,7 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
     <body>
         <div class="container">
             <div class="header">
-                <h1>🎾 WTA Match Prediction Report</h1>
+                <h1>🎾 atp Match Prediction Report</h1>
                 <p>Advanced Analysis - Last 15 Games • Fatigue • Skills • Stronger Shots</p>
             </div>
             
@@ -783,7 +783,7 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
             
             <div class="footer">
                 <p><strong>Generated:</strong> {timestamp}</p>
-                <p>WTA Complete Advanced Predictor | Model Accuracy ±{model_data['mae']:.2f} games</p>
+                <p>atp Complete Advanced Predictor | Model Accuracy ±{model_data['mae']:.2f} games</p>
             </div>
         </div>
     </body>
@@ -793,10 +793,10 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
     return html
 
 def main():
-    st.sidebar.title("🎾 WTA Advanced Predictor")
+    st.sidebar.title("🎾 atp Advanced Predictor")
     
     # Load data
-    df = fetch_wta_github_data()
+    df = fetch_atp_github_data()
     
     if df is None:
         st.error("❌ Could not load data")
@@ -815,7 +815,7 @@ def main():
     st.sidebar.metric("Error ±", f"{model_data['mae']:.2f} games")
     
     # Main interface
-    st.header("🎾 WTA Complete Advanced Match Predictor")
+    st.header("🎾 atp Complete Advanced Match Predictor")
     st.markdown("*Last 15 Games • Fatigue • Skills • Stronger Shots • HTML Export*")
     
     st.markdown("---")
@@ -929,7 +929,7 @@ def main():
         st.download_button(
             label="📥 Download HTML Report",
             data=html,
-            file_name=f"WTA_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+            file_name=f"atp_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
             mime="text/html",
             key="download"
         )
