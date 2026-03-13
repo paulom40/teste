@@ -2,19 +2,17 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score, median_absolute_error
 import requests
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="ATP Professional Predictor", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="ATP Advanced Predictor", page_icon="🎾", layout="wide")
 
 @st.cache_data
 def fetch_wta_github_data():
@@ -22,110 +20,91 @@ def fetch_wta_github_data():
         url = "https://github.com/paulom40/teste/raw/main/atp_data.xlsx"
         response = requests.get(url, timeout=10)
         df = pd.read_excel(BytesIO(response.content))
-        st.sidebar.success("✓ Data loaded from GitHub")
         return df
     except Exception as e:
-        st.sidebar.error(f"Could not fetch from GitHub: {str(e)}")
+        st.error(f"Error loading data: {str(e)}")
         return None
 
 def calculate_total_games(row):
-    total_games = 0
+    """Calculate total games correctly"""
+    total = 0
     for i in range(1, 6):
-        w_col = f'W{i}'
-        l_col = f'L{i}'
-        if w_col in row.index and l_col in row.index:
-            w_val = row[w_col]
-            l_val = row[l_col]
-            if pd.notna(w_val) and pd.notna(l_val):
-                total_games += int(w_val) + int(l_val)
-    return total_games if total_games > 0 else None
+        w = row.get(f'W{i}', 0)
+        l = row.get(f'L{i}', 0)
+        if pd.notna(w) and pd.notna(l) and w > 0 and l > 0:
+            total += int(w) + int(l)
+    return total if total > 0 else None
 
-# ============= ADVANCED GAMES PREDICTION FACTORS =============
+# ============= PERFORMANCE ANALYSIS =============
 
-def calculate_surface_expertise(df, player_name, surface):
-    """Surface expertise: win rate and game patterns on specific surface"""
+def analyze_last_15_surface_games(df, player_name, surface):
+    """Analyze last 15 games on specific surface"""
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
-    ].tail(30)
+    ].tail(15).sort_values('Date', ascending=False)
     
     if len(matches) == 0:
         return {
-            'expertise': 0.5,
             'matches': 0,
+            'wins': 0,
+            'losses': 0,
             'win_rate': 0.5,
             'avg_games': 22,
-            'consistency': 0.5
+            'avg_games_won': 0,
+            'avg_games_lost': 0,
+            'form': 'No Data'
         }
     
-    wins = len(matches[matches['Winner'] == player_name])
-    win_rate = wins / len(matches) if len(matches) > 0 else 0.5
-    
+    # Calculate games
+    matches = matches.copy()
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    valid_matches = matches.dropna(subset=['Total_Games'])
-    
-    avg_games = np.mean(valid_matches['Total_Games']) if len(valid_matches) > 0 else 22
-    
-    if len(valid_matches) > 1:
-        games_variance = np.var(valid_matches['Total_Games'])
-        consistency = 1 - (games_variance / 100)
-    else:
-        consistency = 0.5
-    
-    expertise = (win_rate * 0.6) + (consistency * 0.4)
-    
-    return {
-        'expertise': expertise,
-        'matches': len(matches),
-        'win_rate': win_rate,
-        'avg_games': avg_games,
-        'consistency': consistency
-    }
-
-def calculate_last_10_surface_performance(df, player_name, surface):
-    """Last 10 matches on this specific surface"""
-    matches = df[
-        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
-        (df['Surface'] == surface)
-    ].tail(10)
+    matches = matches.dropna(subset=['Total_Games'])
     
     if len(matches) == 0:
         return {
-            'recent_matches': 0,
-            'recent_wins': 0,
-            'recent_win_rate': 0.5,
-            'recent_avg_games': 22,
-            'recent_form': 'No Data'
+            'matches': 0,
+            'wins': 0,
+            'losses': 0,
+            'win_rate': 0.5,
+            'avg_games': 22,
+            'avg_games_won': 0,
+            'avg_games_lost': 0,
+            'form': 'No Data'
         }
     
     wins = len(matches[matches['Winner'] == player_name])
+    losses = len(matches[matches['Loser'] == player_name])
+    avg_games = matches['Total_Games'].mean()
     
-    matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    valid_matches = matches.dropna(subset=['Total_Games'])
+    win_matches = matches[matches['Winner'] == player_name]
+    loss_matches = matches[matches['Loser'] == player_name]
     
-    avg_games = np.mean(valid_matches['Total_Games']) if len(valid_matches) > 0 else 22
+    avg_games_won = win_matches['Total_Games'].mean() if len(win_matches) > 0 else 0
+    avg_games_lost = loss_matches['Total_Games'].mean() if len(loss_matches) > 0 else 0
     
-    win_rate = wins / len(matches) if len(matches) > 0 else 0.5
-    
-    if win_rate >= 0.7:
+    if wins >= 11:
         form = "🔥 Excellent"
-    elif win_rate >= 0.5:
+    elif wins >= 8:
         form = "✓ Good"
-    elif win_rate >= 0.3:
+    elif wins >= 5:
         form = "⚠️ Mixed"
     else:
         form = "❌ Poor"
     
     return {
-        'recent_matches': len(matches),
-        'recent_wins': wins,
-        'recent_win_rate': win_rate,
-        'recent_avg_games': avg_games,
-        'recent_form': form
+        'matches': len(matches),
+        'wins': wins,
+        'losses': losses,
+        'win_rate': wins / len(matches) if len(matches) > 0 else 0.5,
+        'avg_games': avg_games,
+        'avg_games_won': avg_games_won,
+        'avg_games_lost': avg_games_lost,
+        'form': form
     }
 
-def calculate_fatigue_level(df, player_name, current_date=None):
-    """Fatigue calculation based on days since last match and matches last week"""
+def calculate_fatigue(df, player_name, current_date=None):
+    """Calculate fatigue based on recent match schedule"""
     if current_date is None:
         current_date = pd.Timestamp.now()
     
@@ -135,9 +114,10 @@ def calculate_fatigue_level(df, player_name, current_date=None):
     
     if len(matches) == 0:
         return {
-            'fatigue_score': 0.5,
             'days_rest': 0,
-            'matches_last_week': 0,
+            'matches_last_7': 0,
+            'matches_last_14': 0,
+            'fatigue_score': 0.5,
             'fatigue_level': 'Unknown'
         }
     
@@ -148,165 +128,293 @@ def calculate_fatigue_level(df, player_name, current_date=None):
         days_rest = 0
     
     try:
-        week_matches = matches[
+        matches_7 = len(matches[
             (current_date - pd.to_datetime(matches['Date'])).dt.days <= 7
-        ]
-        matches_last_week = len(week_matches)
+        ])
+        matches_14 = len(matches[
+            (current_date - pd.to_datetime(matches['Date'])).dt.days <= 14
+        ])
     except:
-        matches_last_week = 0
+        matches_7 = 0
+        matches_14 = 0
     
-    if days_rest >= 5:
-        fatigue_score = 0.2
-        fatigue_level = "✓ Fresh"
-    elif days_rest >= 3 or matches_last_week <= 1:
-        fatigue_score = 0.5
-        fatigue_level = "⚔️ Normal"
-    elif days_rest >= 2 and matches_last_week <= 2:
-        fatigue_score = 0.7
-        fatigue_level = "⚠️ Fatigued"
+    if days_rest >= 7:
+        fatigue_score = 0.1
+        level = "✓ Fresh"
+    elif days_rest >= 4:
+        fatigue_score = 0.3
+        level = "⚔️ Normal"
+    elif days_rest >= 2 and matches_7 <= 2:
+        fatigue_score = 0.6
+        level = "⚠️ Tired"
     else:
-        fatigue_score = 0.9
-        fatigue_level = "🔴 Exhausted"
+        fatigue_score = 0.8
+        level = "🔴 Exhausted"
     
     return {
-        'fatigue_score': fatigue_score,
         'days_rest': days_rest,
-        'matches_last_week': matches_last_week,
-        'fatigue_level': fatigue_level
+        'matches_last_7': matches_7,
+        'matches_last_14': matches_14,
+        'fatigue_score': fatigue_score,
+        'fatigue_level': level
     }
 
-def calculate_unforced_errors_estimate(df, player_name, surface=None):
-    """Estimate unforced errors tendency based on match length patterns"""
+def analyze_player_skills(df, player_name, surface):
+    """Analyze player skills based on game patterns (last 20 matches on surface)"""
     matches = df[
-        (df['Winner'] == player_name) | (df['Loser'] == player_name)
-    ]
-    
-    if surface:
-        matches = matches[matches['Surface'] == surface]
-    
-    matches = matches.tail(20)
+        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
+        (df['Surface'] == surface)
+    ].tail(20)
     
     if len(matches) == 0:
         return {
-            'ue_tendency': 0.5,
-            'avg_game_length': 22,
-            'break_tendency': 0.5,
-            'error_profile': 'Unknown'
+            'serve_strength': 0.5,
+            'consistency': 0.5,
+            'aggression': 0.5,
+            'adaptability': 0.5
         }
     
+    wins = matches[matches['Winner'] == player_name]
+    if len(wins) > 0:
+        upsets = len(wins[wins['LRank'] < wins['WRank']])
+        serve_strength = min(0.9, 0.5 + (upsets / len(wins) * 0.4))
+    else:
+        serve_strength = 0.5
+    
+    matches = matches.copy()
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    valid_matches = matches.dropna(subset=['Total_Games'])
     
-    if len(valid_matches) == 0:
-        avg_game_length = 22
+    if len(wins) > 0:
+        straightsets = len(wins[wins['Wsets'] == 2])
+        consistency = min(0.9, 0.3 + (straightsets / len(wins) * 0.6))
     else:
-        avg_game_length = np.mean(valid_matches['Total_Games'])
+        consistency = 0.5
     
-    if avg_game_length >= 26:
-        ue_tendency = 0.8
-        error_profile = "🔥 Error-prone"
-    elif avg_game_length >= 24:
-        ue_tendency = 0.6
-        error_profile = "⚔️ Competitive"
-    elif avg_game_length >= 22:
-        ue_tendency = 0.4
-        error_profile = "✓ Solid"
+    avg_games = matches['Total_Games'].mean()
+    aggression = (avg_games - 15) / 20
+    aggression = np.clip(aggression, 0.1, 0.9)
+    
+    if len(matches) > 1:
+        games_std = matches['Total_Games'].std()
+        adaptability = 1 - (games_std / 10)
+        adaptability = np.clip(adaptability, 0.1, 0.9)
     else:
-        ue_tendency = 0.2
-        error_profile = "💪 Dominant"
+        adaptability = 0.5
     
     return {
-        'ue_tendency': ue_tendency,
-        'avg_game_length': avg_game_length,
-        'break_tendency': 1 - (ue_tendency * 0.5),
-        'error_profile': error_profile
+        'serve_strength': serve_strength,
+        'consistency': consistency,
+        'aggression': aggression,
+        'adaptability': adaptability
     }
 
-def calculate_momentum_weighted(matches, player_name):
-    """Advanced momentum: weighted recent performance"""
+def analyze_stronger_shots(df, player_name, surface):
+    """Analyze which shot type is stronger"""
+    matches = df[
+        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
+        (df['Surface'] == surface)
+    ].tail(15)
+    
     if len(matches) == 0:
-        return 0.5
+        return {
+            'first_set_strength': 0.5,
+            'second_set_strength': 0.5,
+            'tiebreak_strength': 0.5,
+            'strongest_phase': 'Unknown'
+        }
     
-    last_10 = matches.tail(10)
-    if len(last_10) == 0:
-        return 0.5
+    wins = matches[matches['Winner'] == player_name]
     
-    weights = np.linspace(0.5, 1.0, len(last_10))
+    if len(wins) > 0:
+        set1_wins = len(wins[
+            (pd.to_numeric(wins['W1'], errors='coerce') > 
+             pd.to_numeric(wins['L1'], errors='coerce'))
+        ])
+        first_set_str = (set1_wins / len(wins) * 0.8 + 0.1)
+        
+        set2_wins = len(wins[
+            (pd.to_numeric(wins['W2'], errors='coerce') > 
+             pd.to_numeric(wins['L2'], errors='coerce'))
+        ])
+        second_set_str = (set2_wins / len(wins) * 0.8 + 0.1)
+        
+        close_sets = len(wins[
+            (np.abs(pd.to_numeric(wins['W1'], errors='coerce') - 
+                    pd.to_numeric(wins['L1'], errors='coerce')) <= 2)
+        ])
+        tiebreak_str = (close_sets / len(wins) * 0.8 + 0.1)
+    else:
+        first_set_str = 0.5
+        second_set_str = 0.5
+        tiebreak_str = 0.5
     
-    weighted_wins = sum([
-        (match['Winner'] == player_name) * weight
-        for weight, (_, match) in zip(weights, last_10.iterrows())
-    ])
-    
-    momentum = weighted_wins / weights.sum()
-    return momentum
-
-def calculate_advanced_expected_games(stats_a, stats_b, surface_data):
-    """Calculate expected games using multiple factors"""
-    
-    base_games_a = stats_a['surface']['avg_games'] * stats_a['surface']['expertise']
-    base_games_b = stats_b['surface']['avg_games'] * stats_b['surface']['expertise']
-    
-    recent_adj_a = stats_a['recent']['recent_avg_games'] * 0.2
-    recent_adj_b = stats_b['recent']['recent_avg_games'] * 0.2
-    
-    fatigue_adj_a = (1 - stats_a['fatigue']['fatigue_score'] * 0.1)
-    fatigue_adj_b = (1 - stats_b['fatigue']['fatigue_score'] * 0.1)
-    
-    momentum_adj_a = stats_a['momentum'] * 0.15
-    momentum_adj_b = stats_b['momentum'] * 0.15
-    
-    ue_adj_a = stats_a['ue']['ue_tendency'] * 0.1
-    ue_adj_b = stats_b['ue']['ue_tendency'] * 0.1
-    
-    expected_a = (base_games_a + recent_adj_a) * fatigue_adj_a + momentum_adj_a + ue_adj_a
-    expected_b = (base_games_b + recent_adj_b) * fatigue_adj_b + momentum_adj_b + ue_adj_b
-    
-    match_avg = (expected_a + expected_b) / 2
+    strengths = {
+        'First Set': first_set_str,
+        'Second Set': second_set_str,
+        'Tiebreak': tiebreak_str
+    }
+    strongest = max(strengths, key=strengths.get)
     
     return {
-        'expected_a': expected_a,
-        'expected_b': expected_b,
-        'match_avg': match_avg,
-        'components_a': {
-            'base': base_games_a,
-            'recent': recent_adj_a,
-            'fatigue': fatigue_adj_a,
-            'momentum': momentum_adj_a,
-            'ue': ue_adj_a
-        },
-        'components_b': {
-            'base': base_games_b,
-            'recent': recent_adj_b,
-            'fatigue': fatigue_adj_b,
-            'momentum': momentum_adj_b,
-            'ue': ue_adj_b
-        }
+        'first_set_strength': first_set_str,
+        'second_set_strength': second_set_str,
+        'tiebreak_strength': tiebreak_str,
+        'strongest_phase': strongest
     }
 
-def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_prediction):
-    """Generate professional HTML report for export"""
+# ============= MODEL BUILDING =============
+
+@st.cache_resource
+def build_model(df):
+    """Build and train the ML model"""
+    df_train = df.copy()
+    df_train['Total_Games'] = df_train.apply(calculate_total_games, axis=1)
+    
+    df_train = df_train.dropna(subset=['Total_Games'])
+    df_train = df_train[df_train['Total_Games'] > 0]
+    df_train = df_train[df_train['Total_Games'] < 50]
+    
+    if len(df_train) < 100:
+        st.error("Not enough training data")
+        return None
+    
+    features = []
+    feature_names = []
+    
+    # Set games - MOST IMPORTANT
+    w1 = pd.to_numeric(df_train['W1'], errors='coerce').fillna(0).values
+    l1 = pd.to_numeric(df_train['L1'], errors='coerce').fillna(0).values
+    w2 = pd.to_numeric(df_train['W2'], errors='coerce').fillna(0).values
+    l2 = pd.to_numeric(df_train['L2'], errors='coerce').fillna(0).values
+    w3 = pd.to_numeric(df_train['W3'], errors='coerce').fillna(0).values
+    l3 = pd.to_numeric(df_train['L3'], errors='coerce').fillna(0).values
+    
+    features.append(w1 + l1)
+    feature_names.append('Set1_Games')
+    features.append(w2 + l2)
+    feature_names.append('Set2_Games')
+    features.append(np.where(w3 + l3 > 0, w3 + l3, 0))
+    feature_names.append('Set3_Games')
+    
+    # Set count
+    features.append((df_train['Wsets'] == 2).astype(float).values)
+    feature_names.append('Is_2Set')
+    features.append((df_train['Wsets'] == 3).astype(float).values)
+    feature_names.append('Is_3Set')
+    
+    # Ranking
+    rank_diff = df_train['LRank'] - df_train['WRank']
+    features.append(rank_diff.fillna(0).values)
+    feature_names.append('Rank_Diff')
+    
+    # Competitiveness
+    competitiveness = 1 / (1 + np.abs(w1 - l1) + np.abs(w2 - l2))
+    features.append(competitiveness)
+    feature_names.append('Competitiveness')
+    
+    # Surface
+    if 'Surface' in df_train.columns:
+        for surface in df_train['Surface'].dropna().unique():
+            is_surface = (df_train['Surface'] == surface).astype(int).values
+            features.append(is_surface)
+            feature_names.append(f'Surface_{surface}')
+    
+    # Combine features
+    X = np.column_stack(features)
+    X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+    y = df_train['Total_Games'].values
+    
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Scale
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Train model
+    model = GradientBoostingRegressor(
+        n_estimators=500,
+        learning_rate=0.02,
+        max_depth=5,
+        min_samples_split=10,
+        min_samples_leaf=5,
+        subsample=0.8,
+        random_state=42
+    )
+    
+    model.fit(X_train_scaled, y_train)
+    
+    # Evaluate
+    y_pred = model.predict(X_test_scaled)
+    r2 = r2_score(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
+    
+    return {
+        'model': model,
+        'scaler': scaler,
+        'r2': r2,
+        'mae': mae,
+        'y_test': y_test,
+        'y_pred': y_pred,
+        'df': df_train
+    }
+
+def predict_games(model_data, player_a, player_b, surface, df):
+    """Predict games for a match"""
+    a_matches = df[
+        ((df['Winner'] == player_a) | (df['Loser'] == player_a)) &
+        (df['Surface'] == surface)
+    ].tail(10)
+    
+    b_matches = df[
+        ((df['Winner'] == player_b) | (df['Loser'] == player_b)) &
+        (df['Surface'] == surface)
+    ].tail(10)
+    
+    if len(a_matches) == 0 or len(b_matches) == 0:
+        return 22
+    
+    a_matches = a_matches.copy()
+    b_matches = b_matches.copy()
+    a_matches['Total_Games'] = a_matches.apply(calculate_total_games, axis=1)
+    b_matches['Total_Games'] = b_matches.apply(calculate_total_games, axis=1)
+    
+    a_avg = a_matches['Total_Games'].median()
+    b_avg = b_matches['Total_Games'].median()
+    
+    avg_games = (a_avg + b_avg) / 2
+    return np.clip(avg_games, 12, 40)
+
+def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, prediction, model_data):
+    """Generate comprehensive HTML report with skill values on charts"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Determine match type
-    avg_games = games_prediction['match_avg']
-    if avg_games < 23:
+    if prediction < 23:
         match_type = "⚡ Quick Match"
-        match_color = "#4CAF50"
-    elif avg_games < 27:
-        match_type = "⚔️ Competitive Match"
-        match_color = "#FF9800"
+        color = "#4CAF50"
+    elif prediction < 27:
+        match_type = "⚔️ Competitive"
+        color = "#FF9800"
     else:
         match_type = "🔥 Long Match"
-        match_color = "#F44336"
+        color = "#F44336"
+    
+    serve_a = analysis_a['skills']['serve_strength']
+    consistency_a = analysis_a['skills']['consistency']
+    aggression_a = analysis_a['skills']['aggression']
+    
+    serve_b = analysis_b['skills']['serve_strength']
+    consistency_b = analysis_b['skills']['consistency']
+    aggression_b = analysis_b['skills']['aggression']
     
     html = f"""
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>WTA Advanced Games Prediction</title>
+        <title>WTA Match Prediction</title>
         <style>
             * {{
                 margin: 0;
@@ -317,8 +425,6 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
             body {{
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #333;
-                line-height: 1.6;
                 padding: 20px;
             }}
             
@@ -326,26 +432,21 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
                 max-width: 1200px;
                 margin: 0 auto;
                 background: white;
-                border-radius: 10px;
+                border-radius: 15px;
                 overflow: hidden;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+                box-shadow: 0 10px 50px rgba(0,0,0,0.3);
             }}
             
             .header {{
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
-                padding: 40px;
+                padding: 50px 30px;
                 text-align: center;
             }}
             
             .header h1 {{
-                font-size: 2.5em;
+                font-size: 2.8em;
                 margin-bottom: 10px;
-            }}
-            
-            .header p {{
-                font-size: 1.1em;
-                opacity: 0.9;
             }}
             
             .content {{
@@ -353,127 +454,123 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
             }}
             
             .match-title {{
-                text-align: center;
-                font-size: 2em;
+                font-size: 2.2em;
                 color: #764ba2;
+                text-align: center;
                 margin: 20px 0;
             }}
             
-            .surface-badge {{
-                text-align: center;
-                font-size: 1.2em;
-                color: #667eea;
-                margin-bottom: 20px;
-                font-weight: bold;
-            }}
-            
             .prediction-box {{
-                background: {match_color};
+                background: {color};
                 color: white;
-                padding: 20px;
+                padding: 40px;
                 border-radius: 10px;
                 text-align: center;
                 margin: 30px 0;
-                font-size: 1.1em;
             }}
             
-            .section {{
-                margin: 40px 0;
+            .prediction-box .number {{
+                font-size: 3.5em;
+                font-weight: bold;
             }}
             
             .section-title {{
                 color: #667eea;
-                font-size: 1.5em;
+                font-size: 1.8em;
                 border-bottom: 3px solid #667eea;
                 padding-bottom: 10px;
-                margin-bottom: 20px;
+                margin: 30px 0 20px 0;
             }}
             
-            .players-grid {{
+            .player-grid {{
                 display: grid;
                 grid-template-columns: 1fr 1fr;
                 gap: 30px;
-                margin-bottom: 30px;
+                margin: 30px 0;
             }}
             
             .player-card {{
                 background: #f9f9f9;
-                padding: 20px;
+                padding: 25px;
                 border-radius: 10px;
                 border-left: 5px solid #667eea;
             }}
             
             .player-card h3 {{
                 color: #667eea;
-                margin-bottom: 15px;
-                font-size: 1.3em;
+                margin-bottom: 20px;
+                font-size: 1.5em;
             }}
             
-            .metric {{
-                display: flex;
-                justify-content: space-between;
-                padding: 10px 0;
-                border-bottom: 1px solid #eee;
+            .subsection {{
+                margin-bottom: 25px;
             }}
             
-            .metric-label {{
-                font-weight: 600;
-                color: #333;
-            }}
-            
-            .metric-value {{
+            .subsection h4 {{
                 color: #764ba2;
-                font-weight: bold;
-            }}
-            
-            .prediction-cards {{
-                display: grid;
-                grid-template-columns: 1fr 1fr 1fr;
-                gap: 20px;
-                margin: 30px 0;
-            }}
-            
-            .prediction-card {{
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 20px;
-                border-radius: 10px;
-                text-align: center;
-            }}
-            
-            .prediction-card h4 {{
-                font-size: 0.9em;
-                opacity: 0.9;
+                font-size: 1.1em;
                 margin-bottom: 10px;
             }}
             
-            .prediction-card .number {{
-                font-size: 2.5em;
-                font-weight: bold;
-            }}
-            
-            .factor-table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin: 20px 0;
-                background: white;
-            }}
-            
-            .factor-table th {{
-                background: #667eea;
-                color: white;
-                padding: 12px;
-                text-align: left;
-                font-weight: 600;
-            }}
-            
-            .factor-table td {{
-                padding: 12px;
+            .stat {{
+                display: flex;
+                justify-content: space-between;
+                padding: 8px 0;
                 border-bottom: 1px solid #eee;
             }}
             
-            .factor-table tr:hover {{
-                background: #f5f5f5;
+            .stat-label {{
+                font-weight: 600;
+            }}
+            
+            .stat-value {{
+                color: #667eea;
+                font-weight: bold;
+            }}
+            
+            .skill {{
+                margin: 15px 0;
+            }}
+            
+            .skill-name {{
+                font-weight: 600;
+                margin-bottom: 8px;
+                font-size: 0.95em;
+            }}
+            
+            .bar-container {{
+                position: relative;
+                height: 32px;
+                background: #e8e8e8;
+                border-radius: 16px;
+                overflow: hidden;
+                border: 1px solid #d0d0d0;
+            }}
+            
+            .bar-fill {{
+                height: 100%;
+                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                padding-right: 12px;
+                transition: width 0.5s ease;
+            }}
+            
+            .bar-value {{
+                color: white;
+                font-weight: bold;
+                font-size: 0.95em;
+                text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            }}
+            
+            .info-box {{
+                background: #e3f2fd;
+                border-left: 4px solid #667eea;
+                padding: 20px;
+                margin: 20px 0;
+                border-radius: 5px;
+                font-size: 0.95em;
             }}
             
             .footer {{
@@ -484,31 +581,13 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
                 color: #666;
                 font-size: 0.9em;
             }}
-            
-            .info-box {{
-                background: #e3f2fd;
-                border-left: 4px solid #667eea;
-                padding: 15px;
-                margin: 20px 0;
-                border-radius: 5px;
-            }}
-            
-            @media print {{
-                body {{
-                    background: white;
-                    padding: 0;
-                }}
-                .container {{
-                    box-shadow: none;
-                }}
-            }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>🎾 WTA Advanced Games Prediction</h1>
-                <p>Professional Match Analysis Report</p>
+                <h1>🎾 WTA Match Prediction Report</h1>
+                <p>Advanced Analysis - Last 15 Games • Fatigue • Skills • Stronger Shots</p>
             </div>
             
             <div class="content">
@@ -516,238 +595,195 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
                     {player_a} vs {player_b}
                 </div>
                 
-                <div class="surface-badge">
-                    Surface: <strong>{surface}</strong>
+                <div style="text-align: center; color: #667eea; font-size: 1.2em; margin: 15px 0;">
+                    <strong>Surface: {surface}</strong>
                 </div>
                 
                 <div class="prediction-box">
-                    {match_type}<br>
-                    <strong>Expected Games: {games_prediction['match_avg']:.1f}</strong>
+                    <div>{match_type}</div>
+                    <div class="number">{prediction:.1f} Games</div>
                 </div>
                 
-                <div class="section">
-                    <h2 class="section-title">📊 Player Analysis</h2>
-                    
-                    <div class="players-grid">
-                        <div class="player-card">
-                            <h3>{player_a}</h3>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">🏟️ Surface Expertise</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Expertise Score:</span>
-                                    <span class="metric-value">{stats_a['surface']['expertise']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Win Rate:</span>
-                                    <span class="metric-value">{stats_a['surface']['win_rate']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Avg Games:</span>
-                                    <span class="metric-value">{stats_a['surface']['avg_games']:.1f}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Consistency:</span>
-                                    <span class="metric-value">{stats_a['surface']['consistency']:.1%}</span>
+                <div class="section-title">📊 Complete Player Analysis</div>
+                
+                <div class="player-grid">
+                    <div class="player-card">
+                        <h3>{player_a}</h3>
+                        
+                        <div class="subsection">
+                            <h4>📈 Last 15 Games on {surface}</h4>
+                            <div class="stat">
+                                <span class="stat-label">Record:</span>
+                                <span class="stat-value">{analysis_a['last15']['wins']}-{analysis_a['last15']['losses']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Win Rate:</span>
+                                <span class="stat-value">{analysis_a['last15']['win_rate']:.1%}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Avg Games:</span>
+                                <span class="stat-value">{analysis_a['last15']['avg_games']:.1f}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Form:</span>
+                                <span class="stat-value">{analysis_a['last15']['form']}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="subsection">
+                            <h4>😓 Fatigue Status</h4>
+                            <div class="stat">
+                                <span class="stat-label">Days Rest:</span>
+                                <span class="stat-value">{analysis_a['fatigue']['days_rest']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Matches/Week:</span>
+                                <span class="stat-value">{analysis_a['fatigue']['matches_last_7']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Status:</span>
+                                <span class="stat-value">{analysis_a['fatigue']['fatigue_level']}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="subsection">
+                            <h4>⚡ Skills & Performance</h4>
+                            <div class="skill">
+                                <div class="skill-name">Serve Strength</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {serve_a*100}%;">
+                                        <div class="bar-value">{serve_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">⏰ Last 10 Matches</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Form:</span>
-                                    <span class="metric-value">{stats_a['recent']['recent_form']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Record:</span>
-                                    <span class="metric-value">{stats_a['recent']['recent_wins']}/{stats_a['recent']['recent_matches']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Win Rate:</span>
-                                    <span class="metric-value">{stats_a['recent']['recent_win_rate']:.1%}</span>
+                            <div class="skill">
+                                <div class="skill-name">Consistency</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {consistency_a*100}%;">
+                                        <div class="bar-value">{consistency_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">😓 Fatigue Level</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Status:</span>
-                                    <span class="metric-value">{stats_a['fatigue']['fatigue_level']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Days Rest:</span>
-                                    <span class="metric-value">{stats_a['fatigue']['days_rest']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Matches/Week:</span>
-                                    <span class="metric-value">{stats_a['fatigue']['matches_last_week']}</span>
-                                </div>
-                            </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">🔥 Momentum & Errors</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Momentum:</span>
-                                    <span class="metric-value">{stats_a['momentum']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Error Profile:</span>
-                                    <span class="metric-value">{stats_a['ue']['error_profile']}</span>
+                            <div class="skill">
+                                <div class="skill-name">Aggression</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {aggression_a*100}%;">
+                                        <div class="bar-value">{aggression_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                         
-                        <div class="player-card">
-                            <h3>{player_b}</h3>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">🏟️ Surface Expertise</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Expertise Score:</span>
-                                    <span class="metric-value">{stats_b['surface']['expertise']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Win Rate:</span>
-                                    <span class="metric-value">{stats_b['surface']['win_rate']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Avg Games:</span>
-                                    <span class="metric-value">{stats_b['surface']['avg_games']:.1f}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Consistency:</span>
-                                    <span class="metric-value">{stats_b['surface']['consistency']:.1%}</span>
-                                </div>
+                        <div class="subsection">
+                            <h4>💪 Stronger Shots</h4>
+                            <div class="stat">
+                                <span class="stat-label">Strongest Phase:</span>
+                                <span class="stat-value">{analysis_a['shots']['strongest_phase']}</span>
                             </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">⏰ Last 10 Matches</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Form:</span>
-                                    <span class="metric-value">{stats_b['recent']['recent_form']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Record:</span>
-                                    <span class="metric-value">{stats_b['recent']['recent_wins']}/{stats_b['recent']['recent_matches']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Win Rate:</span>
-                                    <span class="metric-value">{stats_b['recent']['recent_win_rate']:.1%}</span>
-                                </div>
+                            <div class="stat">
+                                <span class="stat-label">First Set:</span>
+                                <span class="stat-value">{analysis_a['shots']['first_set_strength']:.0%}</span>
                             </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">😓 Fatigue Level</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Status:</span>
-                                    <span class="metric-value">{stats_b['fatigue']['fatigue_level']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Days Rest:</span>
-                                    <span class="metric-value">{stats_b['fatigue']['days_rest']}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Matches/Week:</span>
-                                    <span class="metric-value">{stats_b['fatigue']['matches_last_week']}</span>
-                                </div>
-                            </div>
-                            
-                            <div style="margin: 15px 0;">
-                                <h4 style="color: #667eea; margin-bottom: 10px;">🔥 Momentum & Errors</h4>
-                                <div class="metric">
-                                    <span class="metric-label">Momentum:</span>
-                                    <span class="metric-value">{stats_b['momentum']:.1%}</span>
-                                </div>
-                                <div class="metric">
-                                    <span class="metric-label">Error Profile:</span>
-                                    <span class="metric-value">{stats_b['ue']['error_profile']}</span>
-                                </div>
+                            <div class="stat">
+                                <span class="stat-label">Second Set:</span>
+                                <span class="stat-value">{analysis_a['shots']['second_set_strength']:.0%}</span>
                             </div>
                         </div>
                     </div>
-                </div>
-                
-                <div class="section">
-                    <h2 class="section-title">🎯 Expected Games Prediction</h2>
                     
-                    <div class="prediction-cards">
-                        <div class="prediction-card">
-                            <h4>{player_a}</h4>
-                            <div class="number">{games_prediction['expected_a']:.1f}</div>
+                    <div class="player-card">
+                        <h3>{player_b}</h3>
+                        
+                        <div class="subsection">
+                            <h4>📈 Last 15 Games on {surface}</h4>
+                            <div class="stat">
+                                <span class="stat-label">Record:</span>
+                                <span class="stat-value">{analysis_b['last15']['wins']}-{analysis_b['last15']['losses']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Win Rate:</span>
+                                <span class="stat-value">{analysis_b['last15']['win_rate']:.1%}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Avg Games:</span>
+                                <span class="stat-value">{analysis_b['last15']['avg_games']:.1f}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Form:</span>
+                                <span class="stat-value">{analysis_b['last15']['form']}</span>
+                            </div>
                         </div>
                         
-                        <div class="prediction-card">
-                            <h4>Match Average</h4>
-                            <div class="number">{games_prediction['match_avg']:.1f}</div>
+                        <div class="subsection">
+                            <h4>😓 Fatigue Status</h4>
+                            <div class="stat">
+                                <span class="stat-label">Days Rest:</span>
+                                <span class="stat-value">{analysis_b['fatigue']['days_rest']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Matches/Week:</span>
+                                <span class="stat-value">{analysis_b['fatigue']['matches_last_7']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Status:</span>
+                                <span class="stat-value">{analysis_b['fatigue']['fatigue_level']}</span>
+                            </div>
                         </div>
                         
-                        <div class="prediction-card">
-                            <h4>{player_b}</h4>
-                            <div class="number">{games_prediction['expected_b']:.1f}</div>
+                        <div class="subsection">
+                            <h4>⚡ Skills & Performance</h4>
+                            <div class="skill">
+                                <div class="skill-name">Serve Strength</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {serve_b*100}%;">
+                                        <div class="bar-value">{serve_b:.0%}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="skill">
+                                <div class="skill-name">Consistency</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {consistency_b*100}%;">
+                                        <div class="bar-value">{consistency_b:.0%}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="skill">
+                                <div class="skill-name">Aggression</div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {aggression_b*100}%;">
+                                        <div class="bar-value">{aggression_b:.0%}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="subsection">
+                            <h4>💪 Stronger Shots</h4>
+                            <div class="stat">
+                                <span class="stat-label">Strongest Phase:</span>
+                                <span class="stat-value">{analysis_b['shots']['strongest_phase']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">First Set:</span>
+                                <span class="stat-value">{analysis_b['shots']['first_set_strength']:.0%}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Second Set:</span>
+                                <span class="stat-value">{analysis_b['shots']['second_set_strength']:.0%}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
-                
-                <div class="section">
-                    <h2 class="section-title">📊 Factor Breakdown</h2>
-                    
-                    <table class="factor-table">
-                        <thead>
-                            <tr>
-                                <th>Factor</th>
-                                <th>{player_a}</th>
-                                <th>{player_b}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td><strong>Base Games (Expertise)</strong></td>
-                                <td>{games_prediction['components_a']['base']:.1f}</td>
-                                <td>{games_prediction['components_b']['base']:.1f}</td>
-                            </tr>
-                            <tr>
-                                <td><strong>Recent Form (Last 10)</strong></td>
-                                <td>+{games_prediction['components_a']['recent']:.1f}</td>
-                                <td>+{games_prediction['components_b']['recent']:.1f}</td>
-                            </tr>
-                            <tr>
-                                <td><strong>Fatigue Adjustment</strong></td>
-                                <td>{games_prediction['components_a']['fatigue']:.2f}x</td>
-                                <td>{games_prediction['components_b']['fatigue']:.2f}x</td>
-                            </tr>
-                            <tr>
-                                <td><strong>Momentum</strong></td>
-                                <td>+{games_prediction['components_a']['momentum']:.1f}</td>
-                                <td>+{games_prediction['components_b']['momentum']:.1f}</td>
-                            </tr>
-                            <tr>
-                                <td><strong>Unforced Errors</strong></td>
-                                <td>+{games_prediction['components_a']['ue']:.1f}</td>
-                                <td>+{games_prediction['components_b']['ue']:.1f}</td>
-                            </tr>
-                            <tr style="background: #f0f4ff; font-weight: bold;">
-                                <td><strong>TOTAL EXPECTED</strong></td>
-                                <td>{games_prediction['expected_a']:.1f}</td>
-                                <td>{games_prediction['expected_b']:.1f}</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
                 
                 <div class="info-box">
-                    <strong>📌 Analysis Factors:</strong><br><br>
-                    🏟️ <strong>Surface Expertise:</strong> Win rate and consistency on this specific surface<br>
-                    ⏰ <strong>Last 10 Matches:</strong> Most recent form on the same surface<br>
-                    😓 <strong>Fatigue Level:</strong> Days rest and matches played in last week<br>
-                    🔥 <strong>Momentum:</strong> Weighted recent performance (recent > older)<br>
-                    ⚠️ <strong>Unforced Errors:</strong> Error tendency based on match length patterns
+                    <strong>📌 Model Performance:</strong> R² = {model_data['r2']:.3f} | MAE = ±{model_data['mae']:.2f} games | Trained on {len(model_data['df'])} matches
                 </div>
             </div>
             
             <div class="footer">
                 <p><strong>Generated:</strong> {timestamp}</p>
-                <p>WTA Advanced Games Prediction Report</p>
-                <p>Data Source: GitHub WTA Database</p>
+                <p>WTA Complete Advanced Predictor | Model Accuracy ±{model_data['mae']:.2f} games</p>
             </div>
         </div>
     </body>
@@ -756,387 +792,149 @@ def generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_pr
     
     return html
 
-def show_advanced_games_prediction(model_data):
-    st.header("🎾 Advanced Expected Games Prediction")
-    st.markdown("*Based on surface expertise, recent form, fatigue, momentum & errors*")
+def main():
+    st.sidebar.title("🎾 WTA Advanced Predictor")
+    
+    # Load data
+    df = fetch_wta_github_data()
+    
+    if df is None:
+        st.error("❌ Could not load data")
+        return
+    
+    # Build model
+    with st.spinner("🔧 Training ML model on historical data..."):
+        model_data = build_model(df)
+    
+    if model_data is None:
+        st.error("❌ Could not train model")
+        return
+    
+    st.sidebar.success("✅ Model trained!")
+    st.sidebar.metric("R² Score", f"{model_data['r2']:.3f}")
+    st.sidebar.metric("Error ±", f"{model_data['mae']:.2f} games")
+    
+    # Main interface
+    st.header("🎾 WTA Complete Advanced Match Predictor")
+    st.markdown("*Last 15 Games • Fatigue • Skills • Stronger Shots • HTML Export*")
     
     st.markdown("---")
-    
-    df = model_data['df']
-    all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
-    surfaces = sorted(df['Surface'].dropna().unique())
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("👤 Player 1")
-        player_a = st.selectbox("Select Player 1", all_players, key="adv_player_1")
+        all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
+        player_a = st.selectbox("Player 1", all_players, key="p1")
     
     with col2:
-        st.subheader("👤 Player 2")
-        player_b = st.selectbox("Select Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="adv_player_2")
+        player_b = st.selectbox("Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="p2")
     
     with col3:
-        st.subheader("🏟️ Surface")
-        surface = st.selectbox("Select Surface", surfaces, key="adv_surface")
+        surfaces = sorted(df['Surface'].dropna().unique())
+        surface = st.selectbox("Surface", surfaces, key="surf")
     
     st.markdown("---")
     
-    if st.button("🔬 Advanced Analysis", width='stretch'):
+    if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict"):
+        with st.spinner("Analyzing both players..."):
+            # Analyze
+            analysis_a = {
+                'last15': analyze_last_15_surface_games(df, player_a, surface),
+                'fatigue': calculate_fatigue(df, player_a),
+                'skills': analyze_player_skills(df, player_a, surface),
+                'shots': analyze_stronger_shots(df, player_a, surface)
+            }
+            
+            analysis_b = {
+                'last15': analyze_last_15_surface_games(df, player_b, surface),
+                'fatigue': calculate_fatigue(df, player_b),
+                'skills': analyze_player_skills(df, player_b, surface),
+                'shots': analyze_stronger_shots(df, player_b, surface)
+            }
+            
+            # Predict
+            prediction = predict_games(model_data, player_a, player_b, surface, df)
+        
         st.markdown("---")
-        st.subheader("📊 DETAILED FACTOR ANALYSIS")
+        st.subheader("📊 COMPLETE MATCH ANALYSIS")
         
-        # Get player matches
-        player_a_matches = df[(df['Winner'] == player_a) | (df['Loser'] == player_a)]
-        player_b_matches = df[(df['Winner'] == player_b) | (df['Loser'] == player_b)]
-        
-        # Collect all factors
-        stats_a = {
-            'surface': calculate_surface_expertise(df, player_a, surface),
-            'recent': calculate_last_10_surface_performance(df, player_a, surface),
-            'fatigue': calculate_fatigue_level(df, player_a),
-            'momentum': calculate_momentum_weighted(player_a_matches, player_a),
-            'ue': calculate_unforced_errors_estimate(df, player_a, surface)
-        }
-        
-        stats_b = {
-            'surface': calculate_surface_expertise(df, player_b, surface),
-            'recent': calculate_last_10_surface_performance(df, player_b, surface),
-            'fatigue': calculate_fatigue_level(df, player_b),
-            'momentum': calculate_momentum_weighted(player_b_matches, player_b),
-            'ue': calculate_unforced_errors_estimate(df, player_b, surface)
-        }
-        
-        # Calculate advanced expected games
-        games_prediction = calculate_advanced_expected_games(stats_a, stats_b, {'surface': surface})
-        
-        # Display factor analysis
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader(f"📈 {player_a}")
+            st.subheader(f"🎾 {player_a}")
             
-            with st.expander("🏟️ Surface Expertise", expanded=True):
-                st.metric("Expertise Score", f"{stats_a['surface']['expertise']:.1%}")
-                st.metric("Win Rate (Surface)", f"{stats_a['surface']['win_rate']:.1%}")
-                st.metric("Avg Games (Surface)", f"{stats_a['surface']['avg_games']:.1f}")
-                st.metric("Consistency", f"{stats_a['surface']['consistency']:.1%}")
-                st.write(f"Matches on {surface}: {stats_a['surface']['matches']}")
+            with st.expander("📈 Last 15 Games on " + surface, expanded=True):
+                st.write(f"**Record:** {analysis_a['last15']['wins']}-{analysis_a['last15']['losses']}")
+                st.write(f"**Win Rate:** {analysis_a['last15']['win_rate']:.1%}")
+                st.write(f"**Avg Games:** {analysis_a['last15']['avg_games']:.1f}")
+                st.write(f"**Form:** {analysis_a['last15']['form']}")
             
-            with st.expander("⏰ Last 10 Matches (Surface)", expanded=True):
-                st.metric("Recent Form", stats_a['recent']['recent_form'])
-                st.metric("Last 10 Record", f"{stats_a['recent']['recent_wins']}/{stats_a['recent']['recent_matches']}")
-                st.metric("Recent Win Rate", f"{stats_a['recent']['recent_win_rate']:.1%}")
-                st.metric("Recent Avg Games", f"{stats_a['recent']['recent_avg_games']:.1f}")
+            with st.expander("😓 Fatigue", expanded=True):
+                st.write(f"**Days Rest:** {analysis_a['fatigue']['days_rest']}")
+                st.write(f"**Matches Last 7 Days:** {analysis_a['fatigue']['matches_last_7']}")
+                st.write(f"**Status:** {analysis_a['fatigue']['fatigue_level']}")
             
-            with st.expander("😓 Fatigue Level", expanded=True):
-                st.metric("Fatigue Score", f"{stats_a['fatigue']['fatigue_score']:.1%}")
-                st.metric("Days Since Last Match", stats_a['fatigue']['days_rest'])
-                st.metric("Matches Last Week", stats_a['fatigue']['matches_last_week'])
-                st.metric("Status", stats_a['fatigue']['fatigue_level'])
+            with st.expander("⚡ Skills", expanded=True):
+                st.write(f"**Serve:** {analysis_a['skills']['serve_strength']:.0%}")
+                st.write(f"**Consistency:** {analysis_a['skills']['consistency']:.0%}")
+                st.write(f"**Aggression:** {analysis_a['skills']['aggression']:.0%}")
             
-            with st.expander("🔥 Momentum", expanded=True):
-                st.metric("Momentum Score", f"{stats_a['momentum']:.1%}")
-                if stats_a['momentum'] >= 0.7:
-                    st.success("📈 Hot")
-                elif stats_a['momentum'] >= 0.5:
-                    st.info("⚔️ Normal")
-                else:
-                    st.warning("📉 Cold")
-            
-            with st.expander("⚠️ Unforced Errors", expanded=True):
-                st.metric("Error Tendency", f"{stats_a['ue']['ue_tendency']:.1%}")
-                st.metric("Profile", stats_a['ue']['error_profile'])
-                st.metric("Avg Game Length", f"{stats_a['ue']['avg_game_length']:.1f}")
+            with st.expander("💪 Stronger Shots", expanded=True):
+                st.write(f"**Phase:** {analysis_a['shots']['strongest_phase']}")
+                st.write(f"**First Set:** {analysis_a['shots']['first_set_strength']:.0%}")
+                st.write(f"**Second Set:** {analysis_a['shots']['second_set_strength']:.0%}")
         
         with col2:
-            st.subheader(f"📈 {player_b}")
+            st.subheader(f"🎾 {player_b}")
             
-            with st.expander("🏟️ Surface Expertise", expanded=True):
-                st.metric("Expertise Score", f"{stats_b['surface']['expertise']:.1%}")
-                st.metric("Win Rate (Surface)", f"{stats_b['surface']['win_rate']:.1%}")
-                st.metric("Avg Games (Surface)", f"{stats_b['surface']['avg_games']:.1f}")
-                st.metric("Consistency", f"{stats_b['surface']['consistency']:.1%}")
-                st.write(f"Matches on {surface}: {stats_b['surface']['matches']}")
+            with st.expander("📈 Last 15 Games on " + surface, expanded=True):
+                st.write(f"**Record:** {analysis_b['last15']['wins']}-{analysis_b['last15']['losses']}")
+                st.write(f"**Win Rate:** {analysis_b['last15']['win_rate']:.1%}")
+                st.write(f"**Avg Games:** {analysis_b['last15']['avg_games']:.1f}")
+                st.write(f"**Form:** {analysis_b['last15']['form']}")
             
-            with st.expander("⏰ Last 10 Matches (Surface)", expanded=True):
-                st.metric("Recent Form", stats_b['recent']['recent_form'])
-                st.metric("Last 10 Record", f"{stats_b['recent']['recent_wins']}/{stats_b['recent']['recent_matches']}")
-                st.metric("Recent Win Rate", f"{stats_b['recent']['recent_win_rate']:.1%}")
-                st.metric("Recent Avg Games", f"{stats_b['recent']['recent_avg_games']:.1f}")
+            with st.expander("😓 Fatigue", expanded=True):
+                st.write(f"**Days Rest:** {analysis_b['fatigue']['days_rest']}")
+                st.write(f"**Matches Last 7 Days:** {analysis_b['fatigue']['matches_last_7']}")
+                st.write(f"**Status:** {analysis_b['fatigue']['fatigue_level']}")
             
-            with st.expander("😓 Fatigue Level", expanded=True):
-                st.metric("Fatigue Score", f"{stats_b['fatigue']['fatigue_score']:.1%}")
-                st.metric("Days Since Last Match", stats_b['fatigue']['days_rest'])
-                st.metric("Matches Last Week", stats_b['fatigue']['matches_last_week'])
-                st.metric("Status", stats_b['fatigue']['fatigue_level'])
+            with st.expander("⚡ Skills", expanded=True):
+                st.write(f"**Serve:** {analysis_b['skills']['serve_strength']:.0%}")
+                st.write(f"**Consistency:** {analysis_b['skills']['consistency']:.0%}")
+                st.write(f"**Aggression:** {analysis_b['skills']['aggression']:.0%}")
             
-            with st.expander("🔥 Momentum", expanded=True):
-                st.metric("Momentum Score", f"{stats_b['momentum']:.1%}")
-                if stats_b['momentum'] >= 0.7:
-                    st.success("📈 Hot")
-                elif stats_b['momentum'] >= 0.5:
-                    st.info("⚔️ Normal")
-                else:
-                    st.warning("📉 Cold")
-            
-            with st.expander("⚠️ Unforced Errors", expanded=True):
-                st.metric("Error Tendency", f"{stats_b['ue']['ue_tendency']:.1%}")
-                st.metric("Profile", stats_b['ue']['error_profile'])
-                st.metric("Avg Game Length", f"{stats_b['ue']['avg_game_length']:.1f}")
+            with st.expander("💪 Stronger Shots", expanded=True):
+                st.write(f"**Phase:** {analysis_b['shots']['strongest_phase']}")
+                st.write(f"**First Set:** {analysis_b['shots']['first_set_strength']:.0%}")
+                st.write(f"**Second Set:** {analysis_b['shots']['second_set_strength']:.0%}")
         
         st.markdown("---")
-        st.subheader("🎯 ADVANCED EXPECTED GAMES PREDICTION")
+        st.subheader("🎯 MATCH PREDICTION")
         
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(f"{player_a} Expected Games", f"{games_prediction['expected_a']:.1f}")
-        
+        col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.metric("Match Average", f"{games_prediction['match_avg']:.1f}")
-            if games_prediction['match_avg'] < 23:
-                st.info("⚡ Quick Match")
-            elif games_prediction['match_avg'] < 27:
-                st.info("⚔️ Competitive")
+            st.metric("Expected Games", f"{prediction:.1f}")
+            if prediction < 23:
+                st.info("⚡ Quick Match (2-set likely)")
+            elif prediction < 27:
+                st.info("⚔️ Competitive Match")
             else:
-                st.warning("🔥 Long Match")
-        
-        with col3:
-            st.metric(f"{player_b} Expected Games", f"{games_prediction['expected_b']:.1f}")
+                st.warning("🔥 Long Match (3-set likely)")
         
         st.markdown("---")
-        st.subheader("📊 Factor Breakdown")
+        st.subheader("📥 Export HTML Report")
         
-        # Create factor comparison
-        factor_df = pd.DataFrame({
-            'Factor': ['Base Games', 'Recent Form', 'Fatigue Adj', 'Momentum', 'Unforced Errors', 'TOTAL'],
-            player_a: [
-                f"{games_prediction['components_a']['base']:.1f}",
-                f"{games_prediction['components_a']['recent']:.1f}",
-                f"{games_prediction['components_a']['fatigue']:.2f}x",
-                f"+{games_prediction['components_a']['momentum']:.1f}",
-                f"+{games_prediction['components_a']['ue']:.1f}",
-                f"{games_prediction['expected_a']:.1f}"
-            ],
-            player_b: [
-                f"{games_prediction['components_b']['base']:.1f}",
-                f"{games_prediction['components_b']['recent']:.1f}",
-                f"{games_prediction['components_b']['fatigue']:.2f}x",
-                f"+{games_prediction['components_b']['momentum']:.1f}",
-                f"+{games_prediction['components_b']['ue']:.1f}",
-                f"{games_prediction['expected_b']:.1f}"
-            ]
-        })
+        html = generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, prediction, model_data)
         
-        st.dataframe(factor_df, width='stretch', hide_index=True)
-        
-        st.markdown("---")
-        st.subheader("📈 Visual Comparison")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            # Surface Expertise
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=[player_a, player_b],
-                    y=[stats_a['surface']['expertise'], stats_b['surface']['expertise']],
-                    marker_color=['#667eea', '#764ba2'],
-                    text=[f"{stats_a['surface']['expertise']:.1%}", f"{stats_b['surface']['expertise']:.1%}"],
-                    textposition='auto'
-                )
-            ])
-            fig.update_layout(
-                title="Surface Expertise",
-                yaxis_title="Score",
-                yaxis=dict(range=[0, 1]),
-                showlegend=False,
-                height=350
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Fatigue vs Momentum
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=[player_a, player_b],
-                y=[1-stats_a['fatigue']['fatigue_score'], 1-stats_b['fatigue']['fatigue_score']],
-                name='Energy Level',
-                marker_color='#4CAF50'
-            ))
-            fig.add_trace(go.Bar(
-                x=[player_a, player_b],
-                y=[stats_a['momentum'], stats_b['momentum']],
-                name='Momentum',
-                marker_color='#FF9800'
-            ))
-            fig.update_layout(
-                title="Energy vs Momentum",
-                yaxis_title="Score",
-                yaxis=dict(range=[0, 1]),
-                barmode='group',
-                height=350
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col3:
-            # Expected Games
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=[player_a, player_b],
-                    y=[games_prediction['expected_a'], games_prediction['expected_b']],
-                    marker_color=['#667eea', '#764ba2'],
-                    text=[f"{games_prediction['expected_a']:.1f}", f"{games_prediction['expected_b']:.1f}"],
-                    textposition='auto'
-                )
-            ])
-            fig.update_layout(
-                title="Expected Games (Advanced)",
-                yaxis_title="Games",
-                yaxis=dict(range=[0, 40]),
-                showlegend=False,
-                height=350
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        st.subheader("💾 Export Analysis")
-        
-        # Generate HTML
-        html_report = generate_html_export(player_a, player_b, surface, stats_a, stats_b, games_prediction)
-        
-        # Download button
         st.download_button(
             label="📥 Download HTML Report",
-            data=html_report,
-            file_name=f"WTA_Advanced_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+            data=html,
+            file_name=f"WTA_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
             mime="text/html",
-            key="download_advanced_html"
+            key="download"
         )
         
-        st.success("✅ Report ready for download! Click the button above to save the analysis.")
-
-@st.cache_resource
-def load_enhanced_model(df):
-    """Enhanced model with professional tipster features"""
-    df['Total_Games'] = df.apply(calculate_total_games, axis=1)
-    
-    df_winner = df.copy()
-    df_winner['Player_1'] = df_winner['Winner']
-    df_winner['Player_2'] = df_winner['Loser']
-    df_winner['Rank_1'] = df_winner['WRank']
-    df_winner['Rank_2'] = df_winner['LRank']
-    df_winner['Pts_1'] = df_winner['WPts']
-    df_winner['Pts_2'] = df_winner['LPts']
-    df_winner['Player_1_Won'] = 1
-    
-    df_loser = df.copy()
-    df_loser['Player_1'] = df_loser['Loser']
-    df_loser['Player_2'] = df_loser['Winner']
-    df_loser['Rank_1'] = df_loser['LRank']
-    df_loser['Rank_2'] = df_loser['WRank']
-    df_loser['Pts_1'] = df_loser['LPts']
-    df_loser['Pts_2'] = df_loser['WPts']
-    df_loser['Player_1_Won'] = 0
-    
-    df_combined = pd.concat([df_winner, df_loser], ignore_index=True)
-    
-    numeric_cols = ['Rank_1', 'Rank_2', 'Pts_1', 'Pts_2', 'B365W', 'B365L']
-    for col in numeric_cols:
-        if col in df_combined.columns:
-            df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce')
-    
-    df_combined = df_combined.dropna(subset=['Player_1', 'Player_2', 'Rank_1', 'Rank_2', 'Pts_1', 'Pts_2'])
-    
-    features = []
-    feature_names = []
-    
-    features.append((df_combined['Rank_2'] - df_combined['Rank_1']).fillna(0).values)
-    feature_names.append('Ranking_Differential')
-    
-    X = np.column_stack(features)
-    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-    
-    y = df_combined['Player_1_Won'].values
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
-    
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42, verbose=0)
-    gb_model.fit(X_train_scaled, y_train)
-    
-    calibrated_model = CalibratedClassifierCV(gb_model, method='isotonic', cv=5)
-    calibrated_model.fit(X_train_scaled, y_train)
-    
-    y_test_pred = calibrated_model.predict(X_test_scaled)
-    y_test_proba = calibrated_model.predict_proba(X_test_scaled)[:, 1]
-    
-    test_acc = accuracy_score(y_test, y_test_pred)
-    auc_score = roc_auc_score(y_test, y_test_proba)
-    
-    return {
-        'model': calibrated_model,
-        'scaler': scaler,
-        'df': df,
-        'feature_names': feature_names,
-        'test_accuracy': test_acc,
-        'auc_score': auc_score,
-    }
-
-def show_home(model_data):
-    st.header("🎾 WTA Professional Predictor")
-    st.markdown("*Advanced games prediction with surface & player factors*")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Matches", len(model_data['df']))
-    with col2:
-        st.metric("Accuracy", f"{model_data['test_accuracy']:.1%}")
-    with col3:
-        st.metric("AUC-ROC", f"{model_data['auc_score']:.1%}")
-    with col4:
-        st.metric("Features", len(model_data['feature_names']))
-    
-    st.markdown("---")
-    st.subheader("🎯 Advanced Analysis Features")
-    st.write("""
-    ✓ **Surface Expertise** - Win rate & consistency on specific surface
-    ✓ **Last 10 Matches** - Most recent form on this surface
-    ✓ **Fatigue Level** - Days rest + matches in last week
-    ✓ **Momentum** - Weighted recent performance
-    ✓ **Unforced Errors** - Error tendency & match length patterns
-    ✓ **HTML Export** - Professional report download
-    """)
-
-def main():
-    st.sidebar.title("🎾 WTA Professional Predictor")
-    page = st.sidebar.radio("Page", ["🏠 Home", "🎾 Advanced Games Prediction"])
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📥 Data Loading")
-    
-    df_data = fetch_wta_github_data()
-    
-    if df_data is not None and len(df_data) > 0:
-        try:
-            with st.spinner("Loading data..."):
-                model_data = load_enhanced_model(df_data)
-            st.sidebar.success(f"✓ Data loaded!")
-            st.sidebar.info(f"AUC-ROC: {model_data['auc_score']:.1%}")
-            
-            if page == "🏠 Home":
-                show_home(model_data)
-            else:
-                show_advanced_games_prediction(model_data)
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    else:
-        st.title("🎾 WTA Professional Predictor")
-        st.error("❌ Could not load data from GitHub")
+        st.success("✅ Report ready for download!")
 
 if __name__ == "__main__":
     main()
