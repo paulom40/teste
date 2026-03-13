@@ -27,6 +27,7 @@ def fetch_wta_github_data():
         return None
 
 def calculate_total_games(row):
+    """Calculate total games from set scores"""
     total_games = 0
     for i in range(1, 6):
         w_col = f'W{i}'
@@ -38,99 +39,135 @@ def calculate_total_games(row):
                 total_games += int(w_val) + int(l_val)
     return total_games if total_games > 0 else None
 
-# ============= IMPROVED GAMES PREDICTION =============
+# ============= IMPROVED GAMES PREDICTION MODEL =============
 
-def build_games_prediction_model(df):
+def build_improved_games_model(df):
     """
-    Build a dedicated ML model for games prediction
-    Uses set scores and player/match features
+    Build ML model trained on ACTUAL match data
+    Uses real set scores and player rankings
     """
     df_train = df.copy()
+    
+    # Calculate total games from set scores
     df_train['Total_Games'] = df_train.apply(calculate_total_games, axis=1)
     
-    # Remove invalid data
-    df_train = df_train.dropna(subset=['Total_Games', 'WRank', 'LRank', 'Wsets', 'Lsets'])
+    # Clean data - remove invalid entries
+    df_train = df_train.dropna(subset=['Total_Games', 'WRank', 'LRank', 'Winner', 'Loser'])
     df_train = df_train[df_train['Total_Games'] > 0]
+    df_train = df_train[df_train['Total_Games'] < 50]  # Remove anomalies
     
     if len(df_train) < 100:
+        st.error("Not enough data to train model")
         return None
+    
+    st.sidebar.info(f"Training on {len(df_train)} matches")
     
     features = []
     feature_names = []
     
-    # Feature 1: Ranking differential
-    features.append((df_train['LRank'] - df_train['WRank']).values)
+    # ===== CRITICAL FEATURES FROM ACTUAL DATA =====
+    
+    # 1. Ranking difference (MOST IMPORTANT)
+    rank_diff = df_train['LRank'] - df_train['WRank']
+    features.append(rank_diff.fillna(0).values)
     feature_names.append('Rank_Diff')
     
-    # Feature 2: Winner rank (log)
-    features.append(np.log(df_train['WRank'].fillna(100) + 1).values)
+    # 2. Winner rank
+    winner_rank = np.log(df_train['WRank'].fillna(100).values + 1)
+    features.append(winner_rank)
     feature_names.append('Winner_Rank_Log')
     
-    # Feature 3: Loser rank (log)
-    features.append(np.log(df_train['LRank'].fillna(100) + 1).values)
+    # 3. Loser rank
+    loser_rank = np.log(df_train['LRank'].fillna(100).values + 1)
+    features.append(loser_rank)
     feature_names.append('Loser_Rank_Log')
     
-    # Feature 4: Points differential
+    # 4. Rank ratio
+    rank_ratio = np.where(
+        df_train['WRank'] > 0,
+        df_train['LRank'] / df_train['WRank'],
+        1.0
+    )
+    rank_ratio = np.nan_to_num(rank_ratio, nan=1.0, posinf=1.0, neginf=1.0)
+    features.append(rank_ratio)
+    feature_names.append('Rank_Ratio')
+    
+    # 5. Points difference (IMPORTANT)
     wpts = pd.to_numeric(df_train['WPts'], errors='coerce').fillna(0)
     lpts = pd.to_numeric(df_train['LPts'], errors='coerce').fillna(0)
-    features.append((wpts - lpts).values)
+    pts_diff = wpts - lpts
+    features.append(pts_diff.values)
     feature_names.append('Points_Diff')
     
-    # Feature 5: Sets played (CRITICAL!)
-    sets_played = df_train['Wsets'] + df_train['Lsets']
-    features.append(sets_played.values)
-    feature_names.append('Sets_Played')
+    # 6. Set count (CRITICAL - directly related to games)
+    sets_won = df_train['Wsets'].fillna(2).values
+    features.append(sets_won)
+    feature_names.append('Sets_Won')
     
-    # Feature 6: Was it 2-set or 3-set? (ONE-HOT)
-    is_2set = (df_train['Wsets'] == 2).astype(int).values
-    features.append(is_2set)
-    feature_names.append('Is_2Set')
+    # 7. Individual set games (THE MOST IMPORTANT!)
+    # First set
+    w1 = pd.to_numeric(df_train['W1'], errors='coerce').fillna(0).values
+    l1 = pd.to_numeric(df_train['L1'], errors='coerce').fillna(0).values
+    features.append(w1 + l1)  # Total games in set 1
+    feature_names.append('Set1_Games')
     
-    is_3set = (df_train['Wsets'] == 3).astype(int).values
-    features.append(is_3set)
-    feature_names.append('Is_3Set')
+    # Second set
+    w2 = pd.to_numeric(df_train['W2'], errors='coerce').fillna(0).values
+    l2 = pd.to_numeric(df_train['L2'], errors='coerce').fillna(0).values
+    features.append(w2 + l2)
+    feature_names.append('Set2_Games')
     
-    # Feature 7: Surface (one-hot)
+    # Third set (if played)
+    w3 = pd.to_numeric(df_train['W3'], errors='coerce').fillna(0).values
+    l3 = pd.to_numeric(df_train['L3'], errors='coerce').fillna(0).values
+    features.append(np.where(w3 + l3 > 0, w3 + l3, 0))
+    feature_names.append('Set3_Games')
+    
+    # 8. Is it competitive? (close sets = longer matches)
+    set1_diff = np.abs(w1 - l1)
+    set2_diff = np.abs(w2 - l2)
+    competitiveness = 1 / (1 + set1_diff + set2_diff)  # Closer = higher value
+    features.append(competitiveness)
+    feature_names.append('Competitiveness')
+    
+    # 9. Surface (one-hot)
     if 'Surface' in df_train.columns:
-        surfaces = pd.get_dummies(df_train['Surface'], prefix='Surface', dummy_na=False)
-        for col in surfaces.columns:
-            features.append(surfaces[col].values)
-            feature_names.append(col)
+        for surface in df_train['Surface'].dropna().unique():
+            is_surface = (df_train['Surface'] == surface).astype(int).values
+            features.append(is_surface)
+            feature_names.append(f'Surface_{surface}')
     
-    # Feature 8: Tier (one-hot)
+    # 10. Tier (one-hot)
     if 'Tier' in df_train.columns:
-        tiers = pd.get_dummies(df_train['Tier'], prefix='Tier', dummy_na=False)
-        for col in tiers.columns:
-            features.append(tiers[col].values)
-            feature_names.append(col)
+        for tier in df_train['Tier'].dropna().unique():
+            is_tier = (df_train['Tier'] == tier).astype(int).values
+            features.append(is_tier)
+            feature_names.append(f'Tier_{tier}')
     
-    # Feature 9: Court (one-hot)
-    if 'Court' in df_train.columns:
-        courts = pd.get_dummies(df_train['Court'], prefix='Court', dummy_na=False)
-        for col in courts.columns:
-            features.append(courts[col].values)
-            feature_names.append(col)
-    
+    # Combine all features
     X = np.column_stack(features)
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     y = df_train['Total_Games'].values
     
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
     
-    # Scale features
+    # Scale
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train regressor (NOT classifier!)
+    # Train regressor
     model = GradientBoostingRegressor(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=5,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        subsample=0.8,
+        n_estimators=300,
+        learning_rate=0.08,
+        max_depth=6,
+        min_samples_split=8,
+        min_samples_leaf=4,
+        subsample=0.9,
+        max_features='sqrt',
         random_state=42,
         verbose=0
     )
@@ -138,10 +175,18 @@ def build_games_prediction_model(df):
     model.fit(X_train_scaled, y_train)
     
     # Evaluate
-    y_pred = model.predict(X_test_scaled)
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2 = r2_score(y_test, y_pred)
+    y_pred_test = model.predict(X_test_scaled)
+    y_pred_train = model.predict(X_train_scaled)
+    
+    mae = mean_absolute_error(y_test, y_pred_test)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    r2 = r2_score(y_test, y_pred_test)
+    
+    # Feature importance
+    importance_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': model.feature_importances_
+    }).sort_values('Importance', ascending=False)
     
     return {
         'model': model,
@@ -151,11 +196,15 @@ def build_games_prediction_model(df):
         'rmse': rmse,
         'r2': r2,
         'y_test': y_test,
-        'y_pred': y_pred
+        'y_pred': y_pred_test,
+        'y_pred_train': y_pred_train,
+        'y_train': y_train,
+        'importance': importance_df,
+        'df': df_train
     }
 
-def predict_games_ml(games_model, player_a, player_b, surface, df):
-    """Predict games using ML model"""
+def predict_games_for_match(games_model, player_a, player_b, surface, df):
+    """Predict games for a specific match"""
     if games_model is None:
         return None
     
@@ -163,153 +212,370 @@ def predict_games_ml(games_model, player_a, player_b, surface, df):
     scaler = games_model['scaler']
     feature_names = games_model['feature_names']
     
+    # Get player rankings
+    a_matches = df[
+        ((df['Winner'] == player_a) | (df['Loser'] == player_a))
+    ].tail(10)
+    b_matches = df[
+        ((df['Winner'] == player_b) | (df['Loser'] == player_b))
+    ].tail(10)
+    
+    if len(a_matches) == 0 or len(b_matches) == 0:
+        return {'expected': 22, 'confidence': 0}
+    
+    # Get typical rankings
+    a_rank = a_matches['WRank'].median() if len(a_matches[a_matches['Winner'] == player_a]) > 0 else a_matches['LRank'].median()
+    b_rank = b_matches['WRank'].median() if len(b_matches[b_matches['Winner'] == player_b]) > 0 else b_matches['LRank'].median()
+    
+    # Get historical games on surface
+    a_surface = df[
+        ((df['Winner'] == player_a) | (df['Loser'] == player_a)) &
+        (df['Surface'] == surface)
+    ].tail(10)
+    
+    b_surface = df[
+        ((df['Winner'] == player_b) | (df['Loser'] == player_b)) &
+        (df['Surface'] == surface)
+    ].tail(10)
+    
+    a_surface['Total_Games'] = a_surface.apply(calculate_total_games, axis=1)
+    b_surface['Total_Games'] = b_surface.apply(calculate_total_games, axis=1)
+    
+    a_avg_games = a_surface['Total_Games'].median() if len(a_surface) > 0 else 22
+    b_avg_games = b_surface['Total_Games'].median() if len(b_surface) > 0 else 22
+    
     # Create feature vector
-    features = []
+    features = [0] * len(feature_names)
     
-    # Ranking
-    rank_diff = (df[df['Winner'] == player_b].iloc[0]['Rank'] - 
-                 df[df['Winner'] == player_a].iloc[0]['Rank']) if len(df[df['Winner'] == player_a]) > 0 else 0
-    features.append(rank_diff)
-    features.append(np.log(100 + 1))
-    features.append(np.log(100 + 1))
+    # Fill in known features
+    for i, fname in enumerate(feature_names):
+        if fname == 'Rank_Diff':
+            features[i] = b_rank - a_rank
+        elif fname == 'Winner_Rank_Log':
+            features[i] = np.log(a_rank + 1)
+        elif fname == 'Loser_Rank_Log':
+            features[i] = np.log(b_rank + 1)
+        elif fname == 'Rank_Ratio':
+            features[i] = b_rank / a_rank if a_rank > 0 else 1.0
+        elif fname == 'Set1_Games':
+            features[i] = a_avg_games * 0.5  # Estimate
+        elif fname == 'Set2_Games':
+            features[i] = a_avg_games * 0.35
+        elif fname == 'Set3_Games':
+            features[i] = 0
+        elif fname == f'Surface_{surface}':
+            features[i] = 1
+        elif fname == 'Competitiveness':
+            features[i] = 0.5
     
-    # Points
-    features.append(0)
-    
-    # Sets (estimate based on probability)
-    # 2-set average: 19 games, 3-set average: 28 games
-    # Assume 60% chance of 2-set, 40% chance of 3-set
-    expected_sets = 0.6 * 2 + 0.4 * 3
-    features.append(expected_sets)
-    features.append(0.6)  # 60% 2-set
-    features.append(0.4)  # 40% 3-set
-    
-    # Surface
-    for fname in feature_names:
-        if fname.startswith('Surface'):
-            features.append(1 if surface in fname else 0)
-    
-    # Pad to match feature count
-    while len(features) < len(feature_names):
-        features.append(0)
-    
-    features = np.array(features[:len(feature_names)]).reshape(1, -1)
+    features = np.array(features).reshape(1, -1)
     features_scaled = scaler.transform(features)
     
     prediction = model.predict(features_scaled)[0]
-    return max(12, min(40, prediction))  # Bound between 12 and 40
-
-def predict_games_set_based(df, player_a, player_b, surface):
-    """
-    IMPROVED: Set-based prediction using actual match patterns
-    This is much more accurate than simple averages
-    """
-    # Get last 30 matches on surface for each player
-    a_matches = df[
-        ((df['Winner'] == player_a) | (df['Loser'] == player_a)) &
-        (df['Surface'] == surface)
-    ].tail(30)
-    
-    b_matches = df[
-        ((df['Winner'] == player_b) | (df['Loser'] == player_b)) &
-        (df['Surface'] == surface)
-    ].tail(30)
-    
-    if len(a_matches) == 0 or len(b_matches) == 0:
-        return {'expected': 22, '2set_prob': 0.5, '3set_prob': 0.5}
-    
-    # Calculate total games
-    a_matches['Total_Games'] = a_matches.apply(calculate_total_games, axis=1)
-    b_matches['Total_Games'] = b_matches.apply(calculate_total_games, axis=1)
-    
-    # Probability of 2-set vs 3-set
-    a_2set = len(a_matches[a_matches['Wsets'] == 2])
-    a_3set = len(a_matches[a_matches['Wsets'] == 3])
-    a_total = a_2set + a_3set if (a_2set + a_3set) > 0 else 1
-    a_2set_prob = a_2set / a_total if a_total > 0 else 0.5
-    
-    b_2set = len(b_matches[b_matches['Wsets'] == 2])
-    b_3set = len(b_matches[b_matches['Wsets'] == 3])
-    b_total = b_2set + b_3set if (b_2set + b_3set) > 0 else 1
-    b_2set_prob = b_2set / b_total if b_total > 0 else 0.5
-    
-    # Average probability
-    match_2set_prob = (a_2set_prob + b_2set_prob) / 2
-    
-    # Median games by set count
-    valid_a = a_matches.dropna(subset=['Total_Games'])
-    valid_b = b_matches.dropna(subset=['Total_Games'])
-    
-    a_2set_games = valid_a[valid_a['Wsets'] == 2]['Total_Games'].median() if len(valid_a[valid_a['Wsets'] == 2]) > 0 else 18
-    a_3set_games = valid_a[valid_a['Wsets'] == 3]['Total_Games'].median() if len(valid_a[valid_a['Wsets'] == 3]) > 0 else 28
-    
-    b_2set_games = valid_b[valid_b['Wsets'] == 2]['Total_Games'].median() if len(valid_b[valid_b['Wsets'] == 2]) > 0 else 18
-    b_3set_games = valid_b[valid_b['Wsets'] == 3]['Total_Games'].median() if len(valid_b[valid_b['Wsets'] == 3]) > 0 else 28
-    
-    # Expected games
-    avg_2set = (a_2set_games + b_2set_games) / 2
-    avg_3set = (a_3set_games + b_3set_games) / 2
-    
-    expected = (match_2set_prob * avg_2set) + ((1 - match_2set_prob) * avg_3set)
+    prediction = max(12, min(40, prediction))  # Bound 12-40
     
     return {
-        'expected': expected,
-        '2set_prob': match_2set_prob,
-        '3set_prob': 1 - match_2set_prob,
-        'a_2set_games': a_2set_games,
-        'a_3set_games': a_3set_games,
-        'b_2set_games': b_2set_games,
-        'b_3set_games': b_3set_games,
-        'a_matches': len(a_matches),
-        'b_matches': len(b_matches)
+        'expected': prediction,
+        'confidence': games_model['r2'],
+        'a_rank': a_rank,
+        'b_rank': b_rank,
+        'a_avg_games': a_avg_games,
+        'b_avg_games': b_avg_games,
+        'a_surface_matches': len(a_surface),
+        'b_surface_matches': len(b_surface)
     }
+
+def generate_html_prediction(player_a, player_b, surface, prediction, games_model):
+    """Generate professional HTML report"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if prediction['expected'] < 23:
+        match_type = "⚡ Quick Match (2-set likely)"
+        color = "#4CAF50"
+    elif prediction['expected'] < 27:
+        match_type = "⚔️ Competitive Match"
+        color = "#FF9800"
+    else:
+        match_type = "🔥 Long Match (3-set likely)"
+        color = "#F44336"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>WTA Games Prediction Report</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #333;
+                padding: 20px;
+            }}
+            
+            .container {{
+                max-width: 1000px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 15px;
+                overflow: hidden;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 50px 30px;
+                text-align: center;
+            }}
+            
+            .header h1 {{
+                font-size: 2.8em;
+                margin-bottom: 10px;
+            }}
+            
+            .header p {{
+                font-size: 1.2em;
+                opacity: 0.9;
+            }}
+            
+            .content {{
+                padding: 40px;
+            }}
+            
+            .match-title {{
+                font-size: 2.2em;
+                color: #764ba2;
+                text-align: center;
+                margin: 20px 0;
+            }}
+            
+            .prediction-box {{
+                background: {color};
+                color: white;
+                padding: 30px;
+                border-radius: 10px;
+                text-align: center;
+                margin: 30px 0;
+                font-size: 1.3em;
+            }}
+            
+            .prediction-box .number {{
+                font-size: 3em;
+                font-weight: bold;
+                margin: 10px 0;
+            }}
+            
+            .stats-grid {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 30px;
+                margin: 30px 0;
+            }}
+            
+            .stat-card {{
+                background: #f9f9f9;
+                padding: 20px;
+                border-radius: 10px;
+                border-left: 5px solid #667eea;
+            }}
+            
+            .stat-card h3 {{
+                color: #667eea;
+                margin-bottom: 15px;
+            }}
+            
+            .stat-row {{
+                display: flex;
+                justify-content: space-between;
+                padding: 10px 0;
+                border-bottom: 1px solid #eee;
+            }}
+            
+            .stat-label {{
+                font-weight: 600;
+            }}
+            
+            .stat-value {{
+                color: #764ba2;
+                font-weight: bold;
+            }}
+            
+            .model-info {{
+                background: #e3f2fd;
+                border-left: 4px solid #667eea;
+                padding: 20px;
+                margin: 30px 0;
+                border-radius: 5px;
+            }}
+            
+            .model-info h4 {{
+                color: #667eea;
+                margin-bottom: 10px;
+            }}
+            
+            .footer {{
+                background: #f9f9f9;
+                padding: 20px;
+                text-align: center;
+                border-top: 1px solid #eee;
+                color: #666;
+                font-size: 0.9em;
+            }}
+            
+            .feature-importance {{
+                margin: 30px 0;
+                background: #f9f9f9;
+                padding: 20px;
+                border-radius: 10px;
+            }}
+            
+            .feature-importance h4 {{
+                color: #667eea;
+                margin-bottom: 15px;
+            }}
+            
+            .feature-bar {{
+                margin: 10px 0;
+            }}
+            
+            .feature-name {{
+                font-weight: 600;
+                margin-bottom: 5px;
+            }}
+            
+            .bar {{
+                height: 20px;
+                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                border-radius: 10px;
+                overflow: hidden;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🎾 WTA Games Prediction</h1>
+                <p>Professional Match Analysis Report</p>
+            </div>
+            
+            <div class="content">
+                <div class="match-title">
+                    {player_a} vs {player_b}
+                </div>
+                
+                <div style="text-align: center; font-size: 1.3em; margin: 20px 0; color: #667eea;">
+                    <strong>Surface: {surface}</strong>
+                </div>
+                
+                <div class="prediction-box">
+                    {match_type}
+                    <div class="number">{prediction['expected']:.1f} Games</div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>🎾 {player_a}</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Ranking:</span>
+                            <span class="stat-value">#{prediction['a_rank']:.0f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Avg Games on {surface}:</span>
+                            <span class="stat-value">{prediction['a_avg_games']:.1f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Matches on Surface:</span>
+                            <span class="stat-value">{prediction['a_surface_matches']}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <h3>🎾 {player_b}</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Ranking:</span>
+                            <span class="stat-value">#{prediction['b_rank']:.0f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Avg Games on {surface}:</span>
+                            <span class="stat-value">{prediction['b_avg_games']:.1f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Matches on Surface:</span>
+                            <span class="stat-value">{prediction['b_surface_matches']}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="model-info">
+                    <h4>📊 Model Information</h4>
+                    <p><strong>R² Score:</strong> {games_model['r2']:.3f}</p>
+                    <p><strong>Mean Absolute Error:</strong> {games_model['mae']:.2f} games</p>
+                    <p><strong>Model Confidence:</strong> {games_model['r2']*100:.1f}%</p>
+                    <p style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                        This prediction is based on a machine learning model trained on {len(games_model['df'])} historical WTA matches.
+                        The model analyzes player rankings, points, surface type, and historical match patterns.
+                    </p>
+                </div>
+                
+                <div class="feature-importance">
+                    <h4>🔑 Top 10 Most Important Features</h4>
+                    {f"<div style='font-size: 0.9em;'>" + "<br>".join([
+                        f"<strong>{i+1}. {row['Feature']}</strong>: {row['Importance']*100:.1f}%"
+                        for i, (_, row) in enumerate(games_model['importance'].head(10).iterrows())
+                    ]) + "</div>"}
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p><strong>Generated:</strong> {timestamp}</p>
+                <p>WTA Advanced Games Prediction System</p>
+                <p>Data Source: GitHub WTA Database</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 def show_home(games_model):
     st.header("🎾 Improved WTA Games Prediction")
-    st.markdown("*Using set-based and ML prediction models*")
+    st.markdown("*ML model trained on actual WTA match data*")
     
     if games_model:
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Model R² Score", f"{games_model['r2']:.3f}")
+            st.metric("R² Score", f"{games_model['r2']:.3f}")
         with col2:
-            st.metric("MAE (Mean Error)", f"{games_model['mae']:.2f} games")
+            st.metric("MAE (Error)", f"±{games_model['mae']:.2f} games")
         with col3:
-            st.metric("RMSE", f"{games_model['rmse']:.2f} games")
+            st.metric("RMSE", f"{games_model['rmse']:.2f}")
         with col4:
-            st.metric("Test Samples", len(games_model['y_test']))
+            st.metric("Training Data", f"{len(games_model['df'])} matches")
         
         st.markdown("---")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📊 Prediction Accuracy")
-            st.info("""
-            ✅ **Improvements Made:**
+            st.subheader("📊 Model Performance")
             
-            • **Set-Based Logic** - 2-set vs 3-set probability
-            • **ML Model** - Trained on actual games data
-            • **Better Features** - Surface, tier, court type
-            • **Validation** - MAE shows average error
-            
-            **Expected Accuracy: 50-70%**
-            (up from 20-30%)
-            """)
-        
-        with col2:
-            st.subheader("📈 Model Performance")
-            
-            # Prediction vs Actual scatter
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=games_model['y_test'],
                 y=games_model['y_pred'],
                 mode='markers',
-                marker=dict(size=6, color='#667eea', opacity=0.6),
+                marker=dict(size=8, color='#667eea', opacity=0.6),
                 name='Predictions'
             ))
-            # Perfect prediction line
             fig.add_trace(go.Scatter(
                 x=[games_model['y_test'].min(), games_model['y_test'].max()],
                 y=[games_model['y_test'].min(), games_model['y_test'].max()],
@@ -324,12 +590,28 @@ def show_home(games_model):
                 height=400
             )
             st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.subheader("🔑 Feature Importance")
+            
+            top_features = games_model['importance'].head(10)
+            fig = go.Figure(data=[
+                go.Bar(
+                    y=top_features['Feature'],
+                    x=top_features['Importance'],
+                    orientation='h',
+                    marker_color='#667eea'
+                )
+            ])
+            fig.update_layout(
+                title="Top 10 Important Features",
+                xaxis_title="Importance",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 def show_prediction(games_model, df):
     st.header("🎾 Games Prediction")
-    st.markdown("*Select players and surface to predict total games*")
-    
-    st.markdown("---")
     
     all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
     surfaces = sorted(df['Surface'].dropna().unique())
@@ -346,69 +628,62 @@ def show_prediction(games_model, df):
     st.markdown("---")
     
     if st.button("🔮 Predict Games", width='stretch'):
-        # Set-based prediction
-        set_pred = predict_games_set_based(df, player_a, player_b, surface)
+        prediction = predict_games_for_match(games_model, player_a, player_b, surface, df)
         
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                f"🎾 {player_a} Matches on {surface}",
-                set_pred['a_matches']
-            )
-        
-        with col2:
-            st.metric(
-                "📊 Expected Games",
-                f"{set_pred['expected']:.1f}"
+        if prediction:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(f"📊 {player_a} Rank", f"#{prediction['a_rank']:.0f}")
+            
+            with col2:
+                st.metric(
+                    "🎾 Expected Games",
+                    f"{prediction['expected']:.1f}",
+                )
+                if prediction['expected'] < 23:
+                    st.info("⚡ Quick Match")
+                elif prediction['expected'] < 27:
+                    st.info("⚔️ Competitive")
+                else:
+                    st.warning("🔥 Long Match")
+            
+            with col3:
+                st.metric(f"📊 {player_b} Rank", f"#{prediction['b_rank']:.0f}")
+            
+            st.markdown("---")
+            st.subheader("📈 Detailed Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**{player_a}**")
+                st.write(f"• Avg Games on {surface}: {prediction['a_avg_games']:.1f}")
+                st.write(f"• Matches on surface: {prediction['a_surface_matches']}")
+                st.write(f"• Ranking: #{prediction['a_rank']:.0f}")
+            
+            with col2:
+                st.write(f"**{player_b}**")
+                st.write(f"• Avg Games on {surface}: {prediction['b_avg_games']:.1f}")
+                st.write(f"• Matches on surface: {prediction['b_surface_matches']}")
+                st.write(f"• Ranking: #{prediction['b_rank']:.0f}")
+            
+            st.markdown("---")
+            st.subheader("💾 Export Report")
+            
+            # Generate HTML
+            html_report = generate_html_prediction(player_a, player_b, surface, prediction, games_model)
+            
+            # Download button
+            st.download_button(
+                label="📥 Download HTML Report",
+                data=html_report,
+                file_name=f"WTA_Games_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                mime="text/html",
+                key="download_html"
             )
             
-            if set_pred['expected'] < 23:
-                st.info("⚡ Quick Match (2-set likely)")
-            elif set_pred['expected'] < 27:
-                st.info("⚔️ Competitive Match")
-            else:
-                st.warning("🔥 Long Match (3-set likely)")
-        
-        with col3:
-            st.metric(
-                f"🎾 {player_b} Matches on {surface}",
-                set_pred['b_matches']
-            )
-        
-        st.markdown("---")
-        st.subheader("📊 Detailed Breakdown")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write(f"**Set Distribution Analysis**")
-            st.write(f"• 2-Set Probability: {set_pred['2set_prob']:.1%}")
-            st.write(f"• 3-Set Probability: {set_pred['3set_prob']:.1%}")
-            
-            st.write(f"\n**{player_a} Pattern**")
-            st.write(f"• 2-Set Avg Games: {set_pred['a_2set_games']:.1f}")
-            st.write(f"• 3-Set Avg Games: {set_pred['a_3set_games']:.1f}")
-        
-        with col2:
-            st.write(f"**Prediction Formula**")
-            formula = f"{set_pred['2set_prob']:.1%} × {(set_pred['a_2set_games']+set_pred['b_2set_games'])/2:.1f} + {set_pred['3set_prob']:.1%} × {(set_pred['a_3set_games']+set_pred['b_3set_games'])/2:.1f}"
-            st.write(formula)
-            
-            st.write(f"\n**{player_b} Pattern**")
-            st.write(f"• 2-Set Avg Games: {set_pred['b_2set_games']:.1f}")
-            st.write(f"• 3-Set Avg Games: {set_pred['b_3set_games']:.1f}")
-        
-        st.markdown("---")
-        st.info("""
-        ✅ **Prediction Method:**
-        
-        This uses set-based prediction which:
-        • Calculates 2-set vs 3-set probability
-        • Uses actual median games for each pattern
-        • Combines both players' tendencies
-        • Much more accurate than simple averages
-        """)
+            st.success("✅ Report ready for download!")
 
 def main():
     st.sidebar.title("🎾 WTA Games Predictor")
@@ -419,16 +694,13 @@ def main():
     df = fetch_wta_github_data()
     
     if df is not None:
-        with st.spinner("Building games prediction model..."):
-            games_model = build_games_prediction_model(df)
+        with st.spinner("Building ML model..."):
+            games_model = build_improved_games_model(df)
         
         if games_model:
-            st.sidebar.success("✅ Model trained!")
-            st.sidebar.metric("MAE", f"{games_model['mae']:.2f} games")
-            st.sidebar.metric("R²", f"{games_model['r2']:.3f}")
-        else:
-            st.sidebar.warning("⚠️ Model training failed")
-            games_model = None
+            st.sidebar.success("✅ Model Ready!")
+            st.sidebar.metric("Accuracy (R²)", f"{games_model['r2']:.3f}")
+            st.sidebar.metric("Error ±", f"{games_model['mae']:.2f} games")
         
         if page == "🏠 Home":
             show_home(games_model)
