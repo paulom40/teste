@@ -387,7 +387,7 @@ def predict_games(model_data, player_a, player_b, surface, df):
     return np.clip(avg_games, 12, 40)
 
 def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, prediction, model_data):
-    """Generate comprehensive HTML report"""
+    """Generate comprehensive HTML report with skill values on charts"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     if prediction < 23:
@@ -399,6 +399,14 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
     else:
         match_type = "🔥 Long Match"
         color = "#F44336"
+    
+    serve_a = analysis_a['skills']['serve_strength']
+    consistency_a = analysis_a['skills']['consistency']
+    aggression_a = analysis_a['skills']['aggression']
+    
+    serve_b = analysis_b['skills']['serve_strength']
+    consistency_b = analysis_b['skills']['consistency']
+    aggression_b = analysis_b['skills']['aggression']
     
     html = f"""
     <!DOCTYPE html>
@@ -495,7 +503,7 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
             }}
             
             .subsection {{
-                margin-bottom: 20px;
+                margin-bottom: 25px;
             }}
             
             .subsection h4 {{
@@ -521,25 +529,39 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
             }}
             
             .skill {{
-                margin: 12px 0;
+                margin: 15px 0;
             }}
             
             .skill-name {{
                 font-weight: 600;
-                margin-bottom: 5px;
+                margin-bottom: 8px;
                 font-size: 0.95em;
             }}
             
-            .bar {{
-                height: 18px;
-                background: #eee;
-                border-radius: 9px;
+            .bar-container {{
+                position: relative;
+                height: 32px;
+                background: #e8e8e8;
+                border-radius: 16px;
                 overflow: hidden;
+                border: 1px solid #d0d0d0;
             }}
             
             .bar-fill {{
                 height: 100%;
                 background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                padding-right: 12px;
+                transition: width 0.5s ease;
+            }}
+            
+            .bar-value {{
+                color: white;
+                font-weight: bold;
+                font-size: 0.95em;
+                text-shadow: 0 1px 3px rgba(0,0,0,0.3);
             }}
             
             .info-box {{
@@ -625,23 +647,29 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                         </div>
                         
                         <div class="subsection">
-                            <h4>⚡ Skills</h4>
+                            <h4>⚡ Skills & Performance</h4>
                             <div class="skill">
                                 <div class="skill-name">Serve Strength</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_a['skills']['serve_strength']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {serve_a*100}%;">
+                                        <div class="bar-value">{serve_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="skill">
                                 <div class="skill-name">Consistency</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_a['skills']['consistency']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {consistency_a*100}%;">
+                                        <div class="bar-value">{consistency_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="skill">
                                 <div class="skill-name">Aggression</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_a['skills']['aggression']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {aggression_a*100}%;">
+                                        <div class="bar-value">{aggression_a:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -651,6 +679,14 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                             <div class="stat">
                                 <span class="stat-label">Strongest Phase:</span>
                                 <span class="stat-value">{analysis_a['shots']['strongest_phase']}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">First Set:</span>
+                                <span class="stat-value">{analysis_a['shots']['first_set_strength']:.0%}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Second Set:</span>
+                                <span class="stat-value">{analysis_a['shots']['second_set_strength']:.0%}</span>
                             </div>
                         </div>
                     </div>
@@ -695,23 +731,29 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                         </div>
                         
                         <div class="subsection">
-                            <h4>⚡ Skills</h4>
+                            <h4>⚡ Skills & Performance</h4>
                             <div class="skill">
                                 <div class="skill-name">Serve Strength</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_b['skills']['serve_strength']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {serve_b*100}%;">
+                                        <div class="bar-value">{serve_b:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="skill">
                                 <div class="skill-name">Consistency</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_b['skills']['consistency']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {consistency_b*100}%;">
+                                        <div class="bar-value">{consistency_b:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                             <div class="skill">
                                 <div class="skill-name">Aggression</div>
-                                <div class="bar">
-                                    <div class="bar-fill" style="width: {analysis_b['skills']['aggression']*100}%"></div>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {aggression_b*100}%;">
+                                        <div class="bar-value">{aggression_b:.0%}</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -722,12 +764,20 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                                 <span class="stat-label">Strongest Phase:</span>
                                 <span class="stat-value">{analysis_b['shots']['strongest_phase']}</span>
                             </div>
+                            <div class="stat">
+                                <span class="stat-label">First Set:</span>
+                                <span class="stat-value">{analysis_b['shots']['first_set_strength']:.0%}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Second Set:</span>
+                                <span class="stat-value">{analysis_b['shots']['second_set_strength']:.0%}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
                 
                 <div class="info-box">
-                    <strong>📌 Model Performance:</strong> R² = {model_data['r2']:.3f} | MAE = ±{model_data['mae']:.2f} games
+                    <strong>📌 Model Performance:</strong> R² = {model_data['r2']:.3f} | MAE = ±{model_data['mae']:.2f} games | Trained on {len(model_data['df'])} matches
                 </div>
             </div>
             
@@ -825,14 +875,14 @@ def main():
                 st.write(f"**Status:** {analysis_a['fatigue']['fatigue_level']}")
             
             with st.expander("⚡ Skills", expanded=True):
-                st.write(f"**Serve:** {analysis_a['skills']['serve_strength']:.1%}")
-                st.write(f"**Consistency:** {analysis_a['skills']['consistency']:.1%}")
-                st.write(f"**Aggression:** {analysis_a['skills']['aggression']:.1%}")
+                st.write(f"**Serve:** {analysis_a['skills']['serve_strength']:.0%}")
+                st.write(f"**Consistency:** {analysis_a['skills']['consistency']:.0%}")
+                st.write(f"**Aggression:** {analysis_a['skills']['aggression']:.0%}")
             
             with st.expander("💪 Stronger Shots", expanded=True):
                 st.write(f"**Phase:** {analysis_a['shots']['strongest_phase']}")
-                st.write(f"**First Set:** {analysis_a['shots']['first_set_strength']:.1%}")
-                st.write(f"**Second Set:** {analysis_a['shots']['second_set_strength']:.1%}")
+                st.write(f"**First Set:** {analysis_a['shots']['first_set_strength']:.0%}")
+                st.write(f"**Second Set:** {analysis_a['shots']['second_set_strength']:.0%}")
         
         with col2:
             st.subheader(f"🎾 {player_b}")
@@ -849,14 +899,14 @@ def main():
                 st.write(f"**Status:** {analysis_b['fatigue']['fatigue_level']}")
             
             with st.expander("⚡ Skills", expanded=True):
-                st.write(f"**Serve:** {analysis_b['skills']['serve_strength']:.1%}")
-                st.write(f"**Consistency:** {analysis_b['skills']['consistency']:.1%}")
-                st.write(f"**Aggression:** {analysis_b['skills']['aggression']:.1%}")
+                st.write(f"**Serve:** {analysis_b['skills']['serve_strength']:.0%}")
+                st.write(f"**Consistency:** {analysis_b['skills']['consistency']:.0%}")
+                st.write(f"**Aggression:** {analysis_b['skills']['aggression']:.0%}")
             
             with st.expander("💪 Stronger Shots", expanded=True):
                 st.write(f"**Phase:** {analysis_b['shots']['strongest_phase']}")
-                st.write(f"**First Set:** {analysis_b['shots']['first_set_strength']:.1%}")
-                st.write(f"**Second Set:** {analysis_b['shots']['second_set_strength']:.1%}")
+                st.write(f"**First Set:** {analysis_b['shots']['first_set_strength']:.0%}")
+                st.write(f"**Second Set:** {analysis_b['shots']['second_set_strength']:.0%}")
         
         st.markdown("---")
         st.subheader("🎯 MATCH PREDICTION")
