@@ -37,12 +37,12 @@ def calculate_total_games(row):
 
 # ============= PERFORMANCE ANALYSIS =============
 
-def analyze_last_5_surface_games(df, player_name, surface):
-    """Analyze last 5 games on specific surface"""
+def analyze_last_15_surface_games(df, player_name, surface):
+    """Analyze last 15 games on specific surface"""
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
-    ].tail(5).sort_values('Date', ascending=False)
+    ].tail(15).sort_values('Date', ascending=False)
     
     if len(matches) == 0:
         return {
@@ -83,11 +83,11 @@ def analyze_last_5_surface_games(df, player_name, surface):
     avg_games_won = win_matches['Total_Games'].mean() if len(win_matches) > 0 else 0
     avg_games_lost = loss_matches['Total_Games'].mean() if len(loss_matches) > 0 else 0
     
-    if wins >= 4:
+    if wins >= 11:
         form = "🔥 Excellent"
-    elif wins >= 3:
+    elif wins >= 8:
         form = "✓ Good"
-    elif wins >= 2:
+    elif wins >= 5:
         form = "⚠️ Mixed"
     else:
         form = "❌ Poor"
@@ -160,7 +160,7 @@ def calculate_fatigue(df, player_name, current_date=None):
     }
 
 def analyze_player_skills(df, player_name, surface):
-    """Analyze player skills based on game patterns"""
+    """Analyze player skills based on game patterns (last 20 matches on surface)"""
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
@@ -365,12 +365,12 @@ def predict_games(model_data, player_a, player_b, surface, df):
     a_matches = df[
         ((df['Winner'] == player_a) | (df['Loser'] == player_a)) &
         (df['Surface'] == surface)
-    ].tail(5)
+    ].tail(10)
     
     b_matches = df[
         ((df['Winner'] == player_b) | (df['Loser'] == player_b)) &
         (df['Surface'] == surface)
-    ].tail(5)
+    ].tail(10)
     
     if len(a_matches) == 0 or len(b_matches) == 0:
         return 22
@@ -587,7 +587,7 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
         <div class="container">
             <div class="header">
                 <h1>🎾 WTA Match Prediction Report</h1>
-                <p>Advanced Analysis - Last 5 Games • Fatigue • Skills • Stronger Shots</p>
+                <p>Advanced Analysis - Last 15 Games • Fatigue • Skills • Stronger Shots</p>
             </div>
             
             <div class="content">
@@ -611,22 +611,22 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                         <h3>{player_a}</h3>
                         
                         <div class="subsection">
-                            <h4>📈 Last 5 Games on {surface}</h4>
+                            <h4>📈 Last 15 Games on {surface}</h4>
                             <div class="stat">
                                 <span class="stat-label">Record:</span>
-                                <span class="stat-value">{analysis_a['last5']['wins']}-{analysis_a['last5']['losses']}</span>
+                                <span class="stat-value">{analysis_a['last15']['wins']}-{analysis_a['last15']['losses']}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Win Rate:</span>
-                                <span class="stat-value">{analysis_a['last5']['win_rate']:.1%}</span>
+                                <span class="stat-value">{analysis_a['last15']['win_rate']:.1%}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Avg Games:</span>
-                                <span class="stat-value">{analysis_a['last5']['avg_games']:.1f}</span>
+                                <span class="stat-value">{analysis_a['last15']['avg_games']:.1f}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Form:</span>
-                                <span class="stat-value">{analysis_a['last5']['form']}</span>
+                                <span class="stat-value">{analysis_a['last15']['form']}</span>
                             </div>
                         </div>
                         
@@ -695,22 +695,22 @@ def generate_html_report(player_a, player_b, surface, analysis_a, analysis_b, pr
                         <h3>{player_b}</h3>
                         
                         <div class="subsection">
-                            <h4>📈 Last 5 Games on {surface}</h4>
+                            <h4>📈 Last 15 Games on {surface}</h4>
                             <div class="stat">
                                 <span class="stat-label">Record:</span>
-                                <span class="stat-value">{analysis_b['last5']['wins']}-{analysis_b['last5']['losses']}</span>
+                                <span class="stat-value">{analysis_b['last15']['wins']}-{analysis_b['last15']['losses']}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Win Rate:</span>
-                                <span class="stat-value">{analysis_b['last5']['win_rate']:.1%}</span>
+                                <span class="stat-value">{analysis_b['last15']['win_rate']:.1%}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Avg Games:</span>
-                                <span class="stat-value">{analysis_b['last5']['avg_games']:.1f}</span>
+                                <span class="stat-value">{analysis_b['last15']['avg_games']:.1f}</span>
                             </div>
                             <div class="stat">
                                 <span class="stat-label">Form:</span>
-                                <span class="stat-value">{analysis_b['last5']['form']}</span>
+                                <span class="stat-value">{analysis_b['last15']['form']}</span>
                             </div>
                         </div>
                         
@@ -816,7 +816,7 @@ def main():
     
     # Main interface
     st.header("🎾 WTA Complete Advanced Match Predictor")
-    st.markdown("*Last 5 Games • Fatigue • Skills • Stronger Shots • HTML Export*")
+    st.markdown("*Last 15 Games • Fatigue • Skills • Stronger Shots • HTML Export*")
     
     st.markdown("---")
     
@@ -839,14 +839,14 @@ def main():
         with st.spinner("Analyzing both players..."):
             # Analyze
             analysis_a = {
-                'last5': analyze_last_5_surface_games(df, player_a, surface),
+                'last15': analyze_last_15_surface_games(df, player_a, surface),
                 'fatigue': calculate_fatigue(df, player_a),
                 'skills': analyze_player_skills(df, player_a, surface),
                 'shots': analyze_stronger_shots(df, player_a, surface)
             }
             
             analysis_b = {
-                'last5': analyze_last_5_surface_games(df, player_b, surface),
+                'last15': analyze_last_15_surface_games(df, player_b, surface),
                 'fatigue': calculate_fatigue(df, player_b),
                 'skills': analyze_player_skills(df, player_b, surface),
                 'shots': analyze_stronger_shots(df, player_b, surface)
@@ -863,11 +863,11 @@ def main():
         with col1:
             st.subheader(f"🎾 {player_a}")
             
-            with st.expander("📈 Last 5 Games on " + surface, expanded=True):
-                st.write(f"**Record:** {analysis_a['last5']['wins']}-{analysis_a['last5']['losses']}")
-                st.write(f"**Win Rate:** {analysis_a['last5']['win_rate']:.1%}")
-                st.write(f"**Avg Games:** {analysis_a['last5']['avg_games']:.1f}")
-                st.write(f"**Form:** {analysis_a['last5']['form']}")
+            with st.expander("📈 Last 15 Games on " + surface, expanded=True):
+                st.write(f"**Record:** {analysis_a['last15']['wins']}-{analysis_a['last15']['losses']}")
+                st.write(f"**Win Rate:** {analysis_a['last15']['win_rate']:.1%}")
+                st.write(f"**Avg Games:** {analysis_a['last15']['avg_games']:.1f}")
+                st.write(f"**Form:** {analysis_a['last15']['form']}")
             
             with st.expander("😓 Fatigue", expanded=True):
                 st.write(f"**Days Rest:** {analysis_a['fatigue']['days_rest']}")
@@ -887,11 +887,11 @@ def main():
         with col2:
             st.subheader(f"🎾 {player_b}")
             
-            with st.expander("📈 Last 5 Games on " + surface, expanded=True):
-                st.write(f"**Record:** {analysis_b['last5']['wins']}-{analysis_b['last5']['losses']}")
-                st.write(f"**Win Rate:** {analysis_b['last5']['win_rate']:.1%}")
-                st.write(f"**Avg Games:** {analysis_b['last5']['avg_games']:.1f}")
-                st.write(f"**Form:** {analysis_b['last5']['form']}")
+            with st.expander("📈 Last 15 Games on " + surface, expanded=True):
+                st.write(f"**Record:** {analysis_b['last15']['wins']}-{analysis_b['last15']['losses']}")
+                st.write(f"**Win Rate:** {analysis_b['last15']['win_rate']:.1%}")
+                st.write(f"**Avg Games:** {analysis_b['last15']['avg_games']:.1f}")
+                st.write(f"**Form:** {analysis_b['last15']['form']}")
             
             with st.expander("😓 Fatigue", expanded=True):
                 st.write(f"**Days Rest:** {analysis_b['fatigue']['days_rest']}")
