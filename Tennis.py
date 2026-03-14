@@ -10,7 +10,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="TENNIS Predictor Pro 2026", layout="wide")
+st.set_page_config(page_title="WTA Predictor Pro 2026", layout="wide")
 
 # ── Styling ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -29,17 +29,21 @@ st.markdown("""
     }
     .big-num { font-size: 6.8em; font-weight: 800; line-height: 0.92; }
     .match-msg { font-size: 1.7em; margin-bottom: 14px; }
+    .card { background:#fafafa; border-radius:12px; padding:24px; margin:20px 0; border-left:5px solid #7E57C2; }
+    table.detail-table { width:100%; border-collapse:collapse; margin:16px 0; }
+    .detail-table th, .detail-table td { padding:10px; text-align:left; border-bottom:1px solid #eee; }
+    .detail-table th { background:#f0f0ff; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎾 TENNIS Match Predictor Pro")
-st.caption("March 2026 • Surface-focused • Last 15 matches on selected surface")
+st.title("🎾 WTA Match Predictor Pro")
+st.caption("March 2026 • Surface-focused analysis • Last 15 matches on selected surface")
 
 # ── File Upload & Data Loading ─────────────────────────────────────────────
 uploaded_file = st.file_uploader("Upload WTA matches Excel file", type=["xlsx"])
 
 if not uploaded_file:
-    st.info("Please upload your TENNIS dataset (xlsx format)")
+    st.info("Please upload your WTA dataset (xlsx format)")
     st.stop()
 
 @st.cache_data
@@ -47,19 +51,16 @@ def load_wta_data(file):
     df = pd.read_excel(file)
     df.columns = df.columns.str.strip()
 
-    # Fix comma → dot in odds
     odds_cols = ['B365W','B365L','PSW','PSL','MaxW','MaxL','AvgW','AvgL']
     for c in odds_cols:
         if c in df.columns:
             df[c] = df[c].astype(str).str.replace(',','.').replace('',np.nan).astype(float)
 
-    # Date (assuming DD/MM/YYYY from your sample)
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
 
     df = df.sort_values('Date', ascending=False)
 
-    # Build total games
     for s in ['1','2','3']:
         df[f'W{s}'] = pd.to_numeric(df.get(f'W{s}',0), errors='coerce').fillna(0).astype(int)
         df[f'L{s}'] = pd.to_numeric(df.get(f'L{s}',0), errors='coerce').fillna(0).astype(int)
@@ -82,8 +83,7 @@ st.success(f"Loaded {len(df):,} completed matches • Surfaces: {', '.join(sorte
 
 def get_player_matches(df, player, surface=None):
     cond = (df['Winner'] == player) | (df['Loser'] == player)
-    if surface:
-        cond &= (df['Surface'] == surface)
+    if surface: cond &= (df['Surface'] == surface)
     return df[cond].sort_values('Date', ascending=False)
 
 
@@ -100,7 +100,7 @@ def analyze_last_15(df, player, surface):
         'wins': wins,
         'losses': len(m)-wins,
         'wr': round(wr,1),
-        'avg_games': round(m['Total_Games'].mean(),1),
+        'avg_games': round(m['Total_Games'].mean(),1) if 'Total_Games' in m.columns else 21.0,
         'form': form
     }
 
@@ -116,7 +116,7 @@ def calculate_surface_stats(df, player, surface, n=15):
         }
 
     wr = (m['Winner'] == player).mean()
-    avg_g = m['Total_Games'].mean() if 'Total_Games' in m else 21.5
+    avg_g = m['Total_Games'].mean() if 'Total_Games' in m.columns else 21.5
     wr_dev = wr - 0.5
 
     bases = {
@@ -126,7 +126,7 @@ def calculate_surface_stats(df, player, surface, n=15):
     }
     b = bases.get(surface, bases['Hard'])
 
-    adj = wr_dev * 0.22   # moderate swing
+    adj = wr_dev * 0.22
 
     stats = {
         'matches': len(m),
@@ -161,7 +161,7 @@ def head_to_head(df, p1, p2, surface=None):
     h = df[cond]
     if len(h)==0: return {'total':0, f"{p1} wins":0, f"{p2} wins":0, 'avg_g':21.0}
     w1 = (h['Winner']==p1).sum()
-    return {'total':len(h), f"{p1} wins":w1, f"{p2} wins":len(h)-w1, 'avg_g':round(h['Total_Games'].mean(),1)}
+    return {'total':len(h), f"{p1} wins":w1, f"{p2} wins":len(h)-w1, 'avg_g':round(h['Total_Games'].mean(),1) if 'Total_Games' in h.columns else 21.0}
 
 
 @st.cache_resource
@@ -230,7 +230,6 @@ if st.button("Generate Prediction", type="primary"):
         ml_val = heur
         if model and model['model']:
             try:
-                # very simplified proxy features – improve later
                 r1 = df[df['Winner']==player1]['WRank'].mean() or 400
                 r2 = df[df['Winner']==player2]['WRank'].mean() or 400
                 vec = [s1['avg_games']]*5 + [3]*3 + [0.7,0.3, r1,r2,r2-r1] + [1 if x==surf else 0 for x in sorted(df['Surface'].unique())]
@@ -248,126 +247,161 @@ if st.button("Generate Prediction", type="primary"):
             'h2h':h2h, 'prediction':final_pred,
             'model_ok': bool(model and model['model'])
         })
+        st.rerun()
 
-# ── Show Results ───────────────────────────────────────────────────────────
-if st.session_state.get('predicted', False):
-    p1 = st.session_state.p1
-    p2 = st.session_state.p2
-    s  = st.session_state.surface
-    pred = st.session_state.prediction
+# ── Always-visible content + Export ────────────────────────────────────────
+st.markdown("---")
 
-    color = "#66BB6A" if pred < 21 else "#FFB74D" if pred < 26 else "#EF5350"
+# Current values (fallback if no prediction)
+curr_p1 = st.session_state.get('p1', player1)
+curr_p2 = st.session_state.get('p2', player2)
+curr_surf = st.session_state.get('surface', surf)
+has_pred = 'prediction' in st.session_state
+pred_val = st.session_state.get('prediction', None)
+pred_str = f"{pred_val:.1f}" if has_pred else "—"
+color = "#66BB6A" if (has_pred and pred_val < 21) else "#FFB74D" if (has_pred and pred_val < 26) else "#EF5350" if has_pred else "#9E9E9E"
+msg = 'Quick match' if (has_pred and pred_val < 21) else 'Competitive' if (has_pred and pred_val < 26) else 'Long battle' if has_pred else 'Run prediction'
 
-    st.markdown(f"""
-    <div class="pred-box" style="background:{color};">
-        <div class="match-msg">{'Quick' if pred<21 else 'Competitive' if pred<26 else 'Long battle'}</div>
-        <div class="big-num">{pred:.1f}</div>
-        <div style="font-size:1.4em; opacity:0.92;">TOTAL GAMES</div>
-    </div>
-    """, unsafe_allow_html=True)
+st.markdown(f"""
+<div class="pred-box" style="background:{color};">
+    <div class="match-msg">{msg}</div>
+    <div class="big-num">{pred_str}</div>
+    <div style="font-size:1.4em; opacity:0.92;">TOTAL GAMES</div>
+</div>
+""", unsafe_allow_html=True)
 
-    colA, colB = st.columns(2)
-    with colA:
-        st.subheader(p1)
-        st.write(f"**Last 15 on {s}**: {st.session_state.d1['wins']}-{st.session_state.d1['losses']} ({st.session_state.d1['wr']}%) • {st.session_state.d1['form']}")
-        st.write(f"**Rest**: {st.session_state.fat1[1]} ({st.session_state.fat1[0]} days)")
-        with st.expander("Stats"):
-            for k,v in st.session_state.s1.items():
-                if k not in ['matches','note']:
-                    st.write(f"**{k.replace('_',' ').title()}**: {v}")
+# ── Export Button (always visible) ─────────────────────────────────────────
+st.markdown("### Export Detailed HTML Report")
+st.caption("Includes prediction (if generated), H2H, detailed surface stats, fatigue, and more")
 
-    with colB:
-        st.subheader(p2)
-        st.write(f"**Last 15 on {s}**: {st.session_state.d2['wins']}-{st.session_state.d2['losses']} ({st.session_state.d2['wr']}%) • {st.session_state.d2['form']}")
-        st.write(f"**Rest**: {st.session_state.fat2[1]} ({st.session_state.fat2[0]} days)")
-        with st.expander("Stats"):
-            for k,v in st.session_state.s2.items():
-                if k not in ['matches','note']:
-                    st.write(f"**{k.replace('_',' ').title()}**: {v}")
+def create_detailed_html_report():
+    p1 = curr_p1 or "Player A"
+    p2 = curr_p2 or "Player B"
+    surface = curr_surf or "—"
+    pred = pred_str
+    pred_color = color
 
-    st.markdown("---")
-    h = st.session_state.h2h
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("H2H", h['total'])
-    c2.metric(f"{p1} wins", h[f"{p1} wins"])
-    c3.metric(f"{p2} wins", h[f"{p2} wins"])
-    c4.metric("Avg games H2H", f"{h['avg_g']:.1f}")
+    has_full_data = has_pred and 'd1' in st.session_state and 's1' in st.session_state
 
-    # ── EXPORT BUTTON ──────────────────────────────────────────────────────
-    st.markdown("### Export Report")
-    export_col = st.columns([1,3,1])[1]
+    stats_section = ""
+    if has_full_data:
+        s1 = st.session_state.s1
+        s2 = st.session_state.s2
+        d1 = st.session_state.d1
+        d2 = st.session_state.d2
+        fat1_days, fat1_lvl = st.session_state.fat1
+        fat2_days, fat2_lvl = st.session_state.fat2
 
-    def create_html_report():
-        html = f"""<!DOCTYPE html>
-<html>
+        stats_section = f"""
+        <h2>Detailed Last 15 Matches on {surface}</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:30px;">
+            <div class="card">
+                <h3>{p1}</h3>
+                <p><strong>Record:</strong> {d1['wins']}-{d1['losses']} ({d1['wr']}%) • {d1['form']}</p>
+                <p><strong>Rest:</strong> {fat1_lvl} ({fat1_days} days since last match)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners per match</td><td>{s1['winners']}</td></tr>
+                    <tr><td>Unforced errors per match</td><td>{s1['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{s1['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{s1['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{s1['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{s1['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{s1['rgw']}%</td></tr>
+                    <tr><td>Games won % (overall)</td><td>{s1['games_won_pct']}%</td></tr>
+                </table>
+            </div>
+            <div class="card">
+                <h3>{p2}</h3>
+                <p><strong>Record:</strong> {d2['wins']}-{d2['losses']} ({d2['wr']}%) • {d2['form']}</p>
+                <p><strong>Rest:</strong> {fat2_lvl} ({fat2_days} days since last match)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners per match</td><td>{s2['winners']}</td></tr>
+                    <tr><td>Unforced errors per match</td><td>{s2['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{s2['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{s2['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{s2['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{s2['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{s2['rgw']}%</td></tr>
+                    <tr><td>Games won % (overall)</td><td>{s2['games_won_pct']}%</td></tr>
+                </table>
+            </div>
+        </div>
+        <p style="text-align:center; font-style:italic; margin-top:20px;">
+            Model used: {'ML-enhanced' if st.session_state.get('model_ok', False) else 'Heuristic only'}<br>
+            Training performance: R² ≈ {model['r2']:.3f} | MAE ±{model['mae']:.1f} games (if applicable)
+        </p>
+        """
+    else:
+        stats_section = '<p style="text-align:center; color:#666;">Run prediction to include detailed surface stats, form, fatigue and model info.</p>'
+
+    h2h_data = ""
+    if 'h2h' in st.session_state:
+        h = st.session_state.h2h
+        h2h_data = f"""
+        <div class="card">
+            <h3>Head-to-Head on {surface}</h3>
+            <table class="detail-table">
+                <tr><th>Metric</th><th>Value</th></tr>
+                <tr><td>Total matches</td><td>{h['total']}</td></tr>
+                <tr><td>{p1} wins</td><td>{h.get(f"{p1} wins", 0)}</td></tr>
+                <tr><td>{p2} wins</td><td>{h.get(f"{p2} wins", 0)}</td></tr>
+                <tr><td>Average games per match</td><td>{h.get('avg_g', 21.0):.1f}</td></tr>
+            </table>
+        </div>
+        """
+
+    full_html = f"""<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>WTA Prediction • {p1} vs {p2}</title>
+    <meta charset="UTF-8">
+    <title>WTA Prediction Report • {p1} vs {p2}</title>
     <style>
-        body {{ font-family: system-ui, sans-serif; background: linear-gradient(to bottom right, #f0f4ff, #e8eaff); margin:0; padding:30px; }}
-        .container {{ max-width:1100px; margin:auto; background:white; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,0.12); overflow:hidden; }}
-        .header {{ background: linear-gradient(135deg, #4A148C, #7E57C2); color:white; padding:40px; text-align:center; }}
-        .content {{ padding:35px; }}
-        .pred {{ background:{color}; color:white; padding:40px; border-radius:14px; text-align:center; margin:25px 0; }}
-        .big {{ font-size:6.5em; font-weight:800; }}
-        .card {{ background:#fafafa; border-radius:12px; padding:24px; margin:20px 0; border-left:5px solid #7E57C2; }}
+        body {{ font-family: system-ui, sans-serif; background: linear-gradient(to bottom right, #f8f9ff, #f0e8ff); margin:0; padding:30px; color:#333; }}
+        .container {{ max-width:1100px; margin:auto; background:white; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,0.15); overflow:hidden; }}
+        .header {{ background: linear-gradient(135deg, #4A148C, #7E57C2); color:white; padding:45px 30px; text-align:center; }}
+        .content {{ padding:40px; }}
+        .prediction {{ background:{pred_color}; color:white; padding:45px; border-radius:14px; text-align:center; margin:30px 0; }}
+        .big {{ font-size:7em; font-weight:800; line-height:0.9; }}
+        .card {{ background:#fafafa; border-radius:12px; padding:28px; margin:24px 0; border-left:6px solid #7E57C2; }}
         table {{ width:100%; border-collapse:collapse; margin:20px 0; }}
-        th,td {{ padding:12px; text-align:left; border-bottom:1px solid #eee; }}
-        .footer {{ background:#f5f5f5; padding:20px; text-align:center; color:#555; font-size:0.9em; }}
+        th, td {{ padding:14px; text-align:left; border-bottom:1px solid #eee; }}
+        .footer {{ background:#f5f5f5; padding:25px; text-align:center; color:#666; font-size:0.95em; }}
     </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>WTA Predictor Pro</h1>
-        <p>{p1} vs {p2} • {s} • Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <h1>WTA Predictor Pro – Detailed Report</h1>
+        <p>{p1} vs {p2} • {surface} • Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </div>
     <div class="content">
-        <div class="pred">
-            <div style="font-size:1.8em;">Predicted total games</div>
-            <div class="big">{pred:.1f}</div>
+        <div class="prediction">
+            <div style="font-size:1.9em; margin-bottom:12px;">Predicted Total Games</div>
+            <div class="big">{pred}</div>
         </div>
 
-        <div class="card">
-            <h3>Head-to-Head</h3>
-            <table>
-                <tr><td>Matches</td><td>{h['total']}</td></tr>
-                <tr><td>{p1} wins</td><td>{h[f"{p1} wins"]}</td></tr>
-                <tr><td>{p2} wins</td><td>{h[f"{p2} wins"]}</td></tr>
-                <tr><td>Avg games</td><td>{h['avg_g']:.1f}</td></tr>
-            </table>
-        </div>
+        {h2h_data}
 
-        <h2>Player Comparison – Last 15 on {s}</h2>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:25px;">
-            <div class="card">
-                <h3>{p1}</h3>
-                <p>Record: {st.session_state.d1['wins']}-{st.session_state.d1['losses']} ({st.session_state.d1['wr']}%)</p>
-                <p>Form: {st.session_state.d1['form']}</p>
-                <p>Rest: {st.session_state.fat1[1]} ({st.session_state.fat1[0]} days)</p>
-            </div>
-            <div class="card">
-                <h3>{p2}</h3>
-                <p>Record: {st.session_state.d2['wins']}-{st.session_state.d2['losses']} ({st.session_state.d2['wr']}%)</p>
-                <p>Form: {st.session_state.d2['form']}</p>
-                <p>Rest: {st.session_state.fat2[1]} ({st.session_state.fat2[0]} days)</p>
-            </div>
-        </div>
+        {stats_section}
+
     </div>
     <div class="footer">
-        WTA Predictor Pro • For informational purposes only • Not official WTA data
+        Generated with WTA Predictor Pro • Analysis & estimation only – not official WTA data • For informational purposes
     </div>
 </div>
 </body>
 </html>"""
-        return html
+    return full_html
 
-    with export_col:
-        st.download_button(
-            label="📥 Download HTML Report",
-            data=create_html_report(),
-            file_name=f"wta_{p1.replace(' ','_')}_vs_{p2.replace(' ','_')}_{s}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-            mime="text/html",
-            use_container_width=True
-        )
+st.download_button(
+    label="📥 Download Detailed HTML Report",
+    data=create_detailed_html_report(),
+    file_name=f"wta_detailed_{curr_p1.replace(' ','_')}_vs_{curr_p2.replace(' ','_')}_{curr_surf}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+    mime="text/html",
+    use_container_width=True,
+    key="detailed_export"
+)
 
-st.caption("Tip: upload more historical data → better surface-specific stats & model accuracy")
+st.caption("Tip: The report includes more stats & context when you run a prediction first.")
