@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
+from sklearn.metrics import mean_absolute_error, r2_score
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime
 
-st.set_page_config(page_title="ATP Predictor Pro", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TENNIS Predictor Pro", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -24,18 +24,48 @@ st.markdown("""
         padding: 15px 30px;
         font-size: 1.2em;
         width: 100%;
+        border-radius: 10px;
+        margin: 5px 0;
     }
     .stButton > button:hover {
         background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
         color: white;
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
     }
-    div[data-testid="column"] {
+    .export-button > button {
+        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    }
+    .export-button > button:hover {
+        background: linear-gradient(135deg, #20c997 0%, #28a745 100%);
+    }
+    .prediction-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 30px;
+        border-radius: 15px;
         text-align: center;
+        margin: 20px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    .prediction-number {
+        font-size: 5em;
+        font-weight: bold;
+        color: white;
+        line-height: 1.2;
+    }
+    .prediction-label {
+        font-size: 1.5em;
+        color: white;
+        opacity: 0.9;
+    }
+    .match-type {
+        font-size: 1.8em;
+        color: white;
+        margin-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("# 🎾 ATP MATCH PREDICTOR PRO")
+st.markdown("# 🎾 TENNIS MATCH PREDICTOR PRO")
 st.markdown("Advanced machine learning model for WTA match prediction")
 st.markdown("---")
 
@@ -120,32 +150,16 @@ def calculate_mean_stats_from_last_15(df, player_name, surface):
     if len(last_15) > 0:
         last_15['is_winner'] = last_15['Winner'] == player_name
         
-        # Calculate statistics based on performance
         win_rate = len(last_15[last_15['is_winner']]) / len(last_15)
         avg_games = last_15['Total_Games'].mean()
         
-        # Winners (based on win rate)
         stats['winners'] = int(round(10 + (win_rate * 15)))
-        
-        # Unforced errors
         stats['unforced_errors'] = int(round(25 - (win_rate * 10)))
-        
-        # Net points won
         stats['net_points_won'] = int(round(15 + (avg_games / 40) * 20))
-        
-        # Service points won
         stats['service_points_won'] = int(round(55 + (win_rate * 15)))
-        
-        # Return points won
         stats['return_points_won'] = int(round(35 + (win_rate * 15)))
-        
-        # Total points won
         stats['total_points_won'] = int(round((stats['service_points_won'] + stats['return_points_won']) / 2))
-        
-        # Break points converted
         stats['break_points_converted'] = int(round(35 + (win_rate * 15)))
-        
-        # First serve percentage
         stats['first_serve_percentage'] = int(round(60 + (win_rate * 5)))
     
     return stats
@@ -214,26 +228,24 @@ def predict_total_games(df, player_a, player_b, surface):
     matches_a['Total_Games'] = matches_a.apply(calculate_total_games, axis=1)
     matches_b['Total_Games'] = matches_b.apply(calculate_total_games, axis=1)
     
-    # Remove outliers
     matches_a = matches_a[matches_a['Total_Games'].between(12, 45)]
     matches_b = matches_b[matches_b['Total_Games'].between(12, 45)]
     
     if len(matches_a) == 0 or len(matches_b) == 0:
         return 22.0
     
-    # Calculate weighted averages (more recent matches have higher weight)
+    # Calculate weighted averages
     weights_a = np.linspace(0.5, 1.0, len(matches_a))
     weights_b = np.linspace(0.5, 1.0, len(matches_b))
     
     avg_games_a = np.average(matches_a['Total_Games'], weights=weights_a)
     avg_games_b = np.average(matches_b['Total_Games'], weights=weights_b)
     
-    # Get head-to-head average if available
+    # Get head-to-head average
     h2h = get_head_to_head(df, player_a, player_b, surface)
     
     # Combine predictions
     if h2h['total'] >= 3:
-        # If enough H2H data, use weighted average
         prediction = (avg_games_a * 0.3 + avg_games_b * 0.3 + h2h['avg_games'] * 0.4)
     else:
         prediction = (avg_games_a + avg_games_b) / 2
@@ -242,13 +254,9 @@ def predict_total_games(df, player_a, player_b, surface):
     data_a = analyze_last_15(df, player_a, surface)
     data_b = analyze_last_15(df, player_b, surface)
     
-    form_factor = 1.0
-    if data_a['wins'] + data_b['losses'] > 15:
-        form_factor = 1.0 + ((data_a['wins'] - data_b['wins']) / 50)
-    
+    form_factor = 1.0 + ((data_a['wins'] - data_b['wins']) / 100)
     prediction = prediction * form_factor
     
-    # Ensure prediction is within realistic range
     return np.clip(prediction, 12, 45)
 
 @st.cache_resource
@@ -265,75 +273,54 @@ def build_model(df):
     # Create features
     features = []
     
-    # Set scores
     for i in range(1, 6):
         w = pd.to_numeric(df_train.get(f'W{i}', 0), errors='coerce').fillna(0)
         l = pd.to_numeric(df_train.get(f'L{i}', 0), errors='coerce').fillna(0)
         features.append(w + l)
     
-    # Set differences
     for i in range(1, 4):
         w = pd.to_numeric(df_train.get(f'W{i}', 0), errors='coerce').fillna(0)
         l = pd.to_numeric(df_train.get(f'L{i}', 0), errors='coerce').fillna(0)
         features.append(np.abs(w - l))
     
-    # Match outcomes
     features.append((df_train['Wsets'] == 2).astype(float).values)
     features.append((df_train['Wsets'] == 3).astype(float).values)
     
-    # Rankings
     wrank = pd.to_numeric(df_train['WRank'], errors='coerce').fillna(1000)
     lrank = pd.to_numeric(df_train['LRank'], errors='coerce').fillna(1000)
     features.append(wrank)
     features.append(lrank)
     features.append(lrank - wrank)
     
-    # Surface encoding
     if 'Surface' in df_train.columns:
         surfaces = pd.get_dummies(df_train['Surface'], prefix='Surface')
         for col in surfaces.columns:
             features.append(surfaces[col].values)
     
-    # Create feature matrix
     X = np.column_stack(features)
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
     y = df_train['Total_Games'].values
     
-    # Split and scale
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train model
-    model = GradientBoostingRegressor(
-        n_estimators=300, 
-        learning_rate=0.03, 
-        max_depth=4,
-        random_state=42
-    )
-    
+    model = GradientBoostingRegressor(n_estimators=300, learning_rate=0.03, max_depth=4, random_state=42)
     model.fit(X_train_scaled, y_train)
     
-    # Evaluate
     y_pred = model.predict(X_test_scaled)
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
     
-    return {
-        'model': model,
-        'scaler': scaler,
-        'r2': r2,
-        'mae': mae
-    }
+    return {'model': model, 'scaler': scaler, 'r2': r2, 'mae': mae}
 
 def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat_b, 
                          stats_a, stats_b, prediction, h2h, model_metrics):
     """Generate HTML report"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Match type classification
     if prediction < 23:
         match_type = "⚡ Quick Match (2-set likely)"
         color = "#4CAF50"
@@ -344,7 +331,6 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
         match_type = "🔥 Long Match (3-set likely)"
         color = "#F44336"
     
-    # Calculate win probability
     win_prob_a = (data_a['wins'] / (data_a['wins'] + data_a['losses'] + 0.001)) * 100
     win_prob_b = (data_b['wins'] / (data_b['wins'] + data_b['losses'] + 0.001)) * 100
     total_prob = win_prob_a + win_prob_b
@@ -379,13 +365,8 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
                 padding: 30px;
                 text-align: center;
             }}
-            .header h1 {{
-                margin: 0;
-                font-size: 2.5em;
-            }}
-            .content {{
-                padding: 30px;
-            }}
+            .header h1 {{ margin: 0; font-size: 2.5em; }}
+            .content {{ padding: 30px; }}
             .match-title {{
                 font-size: 2em;
                 color: #764ba2;
@@ -401,31 +382,7 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
                 text-align: center;
                 margin: 20px 0;
             }}
-            .prediction-number {{
-                font-size: 4em;
-                font-weight: bold;
-                margin: 10px 0;
-            }}
-            .prob-bar {{
-                height: 30px;
-                width: 100%;
-                background: #e0e0e0;
-                border-radius: 15px;
-                overflow: hidden;
-                margin: 20px 0;
-            }}
-            .prob-fill-a {{
-                height: 100%;
-                width: {win_prob_a:.1f}%;
-                background: #667eea;
-                float: left;
-            }}
-            .prob-fill-b {{
-                height: 100%;
-                width: {win_prob_b:.1f}%;
-                background: #764ba2;
-                float: left;
-            }}
+            .prediction-number {{ font-size: 4em; font-weight: bold; margin: 10px 0; }}
             .player-grid {{
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -452,14 +409,8 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
                 padding: 8px 0;
                 border-bottom: 1px solid #eee;
             }}
-            .stat-label {{
-                font-weight: 600;
-                color: #333;
-            }}
-            .stat-value {{
-                color: #667eea;
-                font-weight: bold;
-            }}
+            .stat-label {{ font-weight: 600; color: #333; }}
+            .stat-value {{ color: #667eea; font-weight: bold; }}
             .h2h-box {{
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
@@ -494,16 +445,6 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
                     <div class="prediction-number">{prediction:.1f} GAMES</div>
                 </div>
                 
-                <h2 style="color: #667eea;">📊 Win Probability</h2>
-                <div style="display: flex; justify-content: space-between; margin: 10px 0;">
-                    <span><strong>{player_a}:</strong> {win_prob_a:.1f}%</span>
-                    <span><strong>{player_b}:</strong> {win_prob_b:.1f}%</span>
-                </div>
-                <div class="prob-bar">
-                    <div class="prob-fill-a"></div>
-                    <div class="prob-fill-b"></div>
-                </div>
-                
                 <div class="h2h-box">
                     <h3 style="margin-top: 0;">📈 Head-to-Head</h3>
                     <div style="display: flex; justify-content: space-around; font-size: 1.1em;">
@@ -517,108 +458,45 @@ def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat
                 <div class="player-grid">
                     <div class="player-card">
                         <div class="player-name">{player_a}</div>
-                        
                         <h3>📈 Last 15 Games</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Record:</span>
-                            <span class="stat-value">{data_a['wins']}-{data_a['losses']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Win Rate:</span>
-                            <span class="stat-value">{data_a['wins']/(data_a['wins']+data_a['losses'])*100:.1f}%</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Avg Games:</span>
-                            <span class="stat-value">{data_a['avg_games']:.1f}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Form:</span>
-                            <span class="stat-value">{data_a['form']}</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Record:</span><span class="stat-value">{data_a['wins']}-{data_a['losses']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Win Rate:</span><span class="stat-value">{data_a['wins']/(data_a['wins']+data_a['losses'])*100:.1f}%</span></div>
+                        <div class="stat-row"><span class="stat-label">Avg Games:</span><span class="stat-value">{data_a['avg_games']:.1f}</span></div>
+                        <div class="stat-row"><span class="stat-label">Form:</span><span class="stat-value">{data_a['form']}</span></div>
                         
                         <h3>😓 Fatigue</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Days Rest:</span>
-                            <span class="stat-value">{fat_a['days_rest']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Status:</span>
-                            <span class="stat-value">{fat_a['level']}</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Days Rest:</span><span class="stat-value">{fat_a['days_rest']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Status:</span><span class="stat-value">{fat_a['level']}</span></div>
                         
                         <h3>📊 Statistics</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Winners:</span>
-                            <span class="stat-value">{stats_a['winners']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Unforced Errors:</span>
-                            <span class="stat-value">{stats_a['unforced_errors']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Service Points Won:</span>
-                            <span class="stat-value">{stats_a['service_points_won']}%</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Return Points Won:</span>
-                            <span class="stat-value">{stats_a['return_points_won']}%</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Winners:</span><span class="stat-value">{stats_a['winners']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Unforced Errors:</span><span class="stat-value">{stats_a['unforced_errors']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Service Points:</span><span class="stat-value">{stats_a['service_points_won']}%</span></div>
+                        <div class="stat-row"><span class="stat-label">Return Points:</span><span class="stat-value">{stats_a['return_points_won']}%</span></div>
                     </div>
                     
                     <div class="player-card">
                         <div class="player-name">{player_b}</div>
-                        
                         <h3>📈 Last 15 Games</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Record:</span>
-                            <span class="stat-value">{data_b['wins']}-{data_b['losses']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Win Rate:</span>
-                            <span class="stat-value">{data_b['wins']/(data_b['wins']+data_b['losses'])*100:.1f}%</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Avg Games:</span>
-                            <span class="stat-value">{data_b['avg_games']:.1f}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Form:</span>
-                            <span class="stat-value">{data_b['form']}</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Record:</span><span class="stat-value">{data_b['wins']}-{data_b['losses']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Win Rate:</span><span class="stat-value">{data_b['wins']/(data_b['wins']+data_b['losses'])*100:.1f}%</span></div>
+                        <div class="stat-row"><span class="stat-label">Avg Games:</span><span class="stat-value">{data_b['avg_games']:.1f}</span></div>
+                        <div class="stat-row"><span class="stat-label">Form:</span><span class="stat-value">{data_b['form']}</span></div>
                         
                         <h3>😓 Fatigue</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Days Rest:</span>
-                            <span class="stat-value">{fat_b['days_rest']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Status:</span>
-                            <span class="stat-value">{fat_b['level']}</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Days Rest:</span><span class="stat-value">{fat_b['days_rest']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Status:</span><span class="stat-value">{fat_b['level']}</span></div>
                         
                         <h3>📊 Statistics</h3>
-                        <div class="stat-row">
-                            <span class="stat-label">Winners:</span>
-                            <span class="stat-value">{stats_b['winners']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Unforced Errors:</span>
-                            <span class="stat-value">{stats_b['unforced_errors']}</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Service Points Won:</span>
-                            <span class="stat-value">{stats_b['service_points_won']}%</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Return Points Won:</span>
-                            <span class="stat-value">{stats_b['return_points_won']}%</span>
-                        </div>
+                        <div class="stat-row"><span class="stat-label">Winners:</span><span class="stat-value">{stats_b['winners']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Unforced Errors:</span><span class="stat-value">{stats_b['unforced_errors']}</span></div>
+                        <div class="stat-row"><span class="stat-label">Service Points:</span><span class="stat-value">{stats_b['service_points_won']}%</span></div>
+                        <div class="stat-row"><span class="stat-label">Return Points:</span><span class="stat-value">{stats_b['return_points_won']}%</span></div>
                     </div>
                 </div>
                 
                 <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin-top: 20px;">
-                    <strong>📌 Model Performance:</strong><br>
-                    R² Score: {model_metrics['r2']:.3f} | MAE: ±{model_metrics['mae']:.2f} games
+                    <strong>📌 Model Performance:</strong> R²: {model_metrics['r2']:.3f} | Accuracy: ±{model_metrics['mae']:.2f} games
                 </div>
             </div>
             
@@ -671,9 +549,11 @@ with col3:
 
 st.markdown("---")
 
-# Initialize session state for storing prediction results
+# Initialize session state
 if 'prediction_results' not in st.session_state:
     st.session_state.prediction_results = None
+if 'show_results' not in st.session_state:
+    st.session_state.show_results = False
 
 # PREDICT BUTTON
 if st.button("🔮 PREDICT MATCH", use_container_width=True):
@@ -688,7 +568,7 @@ if st.button("🔮 PREDICT MATCH", use_container_width=True):
         h2h = get_head_to_head(df, player_a, player_b, surface)
         prediction = predict_total_games(df, player_a, player_b, surface)
         
-        # Store results in session state
+        # Store results
         st.session_state.prediction_results = {
             'player_a': player_a,
             'player_b': player_b,
@@ -703,31 +583,41 @@ if st.button("🔮 PREDICT MATCH", use_container_width=True):
             'prediction': prediction,
             'model_metrics': {'r2': model_data['r2'], 'mae': model_data['mae']}
         }
-        
-        st.success("✅ Prediction complete! Scroll down to see results.")
+        st.session_state.show_results = True
+        st.rerun()
 
 # Display results if they exist
-if st.session_state.prediction_results:
+if st.session_state.show_results and st.session_state.prediction_results:
     results = st.session_state.prediction_results
     
     st.markdown("---")
     st.markdown("# 📊 MATCH ANALYSIS RESULTS")
     
-    # PREDICTION SECTION
+    # PREDICTION SECTION - NOW VISIBLE AND PROMINENT
     st.markdown("## 🎯 TOTAL GAMES PREDICTION")
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        prediction = results['prediction']
-        if prediction < 23:
-            st.success(f"⚡ **{prediction:.1f} GAMES** - Quick Match (2-set likely)")
-            st.markdown(f"<h1 style='text-align: center; color: #4CAF50; font-size: 4em;'>{prediction:.1f}</h1>", unsafe_allow_html=True)
-        elif prediction < 27:
-            st.info(f"⚔️ **{prediction:.1f} GAMES** - Competitive Match")
-            st.markdown(f"<h1 style='text-align: center; color: #FF9800; font-size: 4em;'>{prediction:.1f}</h1>", unsafe_allow_html=True)
-        else:
-            st.warning(f"🔥 **{prediction:.1f} GAMES** - Long Match (3-set likely)")
-            st.markdown(f"<h1 style='text-align: center; color: #F44336; font-size: 4em;'>{prediction:.1f}</h1>", unsafe_allow_html=True)
+    # Create a large, visible prediction box
+    prediction = results['prediction']
+    
+    # Determine color and message based on prediction
+    if prediction < 23:
+        box_color = "linear-gradient(135deg, #4CAF50 0%, #45a049 100%)"
+        match_message = "⚡ QUICK MATCH (2-set likely)"
+    elif prediction < 27:
+        box_color = "linear-gradient(135deg, #FF9800 0%, #f57c00 100%)"
+        match_message = "⚔️ COMPETITIVE MATCH"
+    else:
+        box_color = "linear-gradient(135deg, #F44336 0%, #d32f2f 100%)"
+        match_message = "🔥 LONG MATCH (3-set likely)"
+    
+    # Display prediction in a big box
+    st.markdown(f"""
+    <div style="background: {box_color}; padding: 40px; border-radius: 20px; text-align: center; margin: 20px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+        <div style="font-size: 2em; color: white; margin-bottom: 10px;">{match_message}</div>
+        <div style="font-size: 6em; font-weight: bold; color: white; line-height: 1.2;">{prediction:.1f}</div>
+        <div style="font-size: 1.5em; color: white; opacity: 0.9;">TOTAL GAMES</div>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Head-to-Head
     st.markdown("## 📊 HEAD-TO-HEAD")
@@ -754,11 +644,13 @@ if st.session_state.prediction_results:
         st.write(f"**Average Games:** {data_a['avg_games']:.1f}")
         st.write(f"**Fatigue:** {fat_a['level']} ({fat_a['days_rest']} days rest)")
         
-        st.write("\n**Statistics (Last 15):**")
-        st.write(f"• Winners: {stats_a['winners']}")
-        st.write(f"• Unforced Errors: {stats_a['unforced_errors']}")
-        st.write(f"• Service Points Won: {stats_a['service_points_won']}%")
-        st.write(f"• Return Points Won: {stats_a['return_points_won']}%")
+        with st.expander("📊 View Detailed Statistics"):
+            st.write(f"• Winners: {stats_a['winners']}")
+            st.write(f"• Unforced Errors: {stats_a['unforced_errors']}")
+            st.write(f"• Service Points Won: {stats_a['service_points_won']}%")
+            st.write(f"• Return Points Won: {stats_a['return_points_won']}%")
+            st.write(f"• Break Points Converted: {stats_a['break_points_converted']}%")
+            st.write(f"• First Serve %: {stats_a['first_serve_percentage']}%")
     
     with col2:
         st.markdown(f"## 🎾 {results['player_b']}")
@@ -771,18 +663,20 @@ if st.session_state.prediction_results:
         st.write(f"**Average Games:** {data_b['avg_games']:.1f}")
         st.write(f"**Fatigue:** {fat_b['level']} ({fat_b['days_rest']} days rest)")
         
-        st.write("\n**Statistics (Last 15):**")
-        st.write(f"• Winners: {stats_b['winners']}")
-        st.write(f"• Unforced Errors: {stats_b['unforced_errors']}")
-        st.write(f"• Service Points Won: {stats_b['service_points_won']}%")
-        st.write(f"• Return Points Won: {stats_b['return_points_won']}%")
+        with st.expander("📊 View Detailed Statistics"):
+            st.write(f"• Winners: {stats_b['winners']}")
+            st.write(f"• Unforced Errors: {stats_b['unforced_errors']}")
+            st.write(f"• Service Points Won: {stats_b['service_points_won']}%")
+            st.write(f"• Return Points Won: {stats_b['return_points_won']}%")
+            st.write(f"• Break Points Converted: {stats_b['break_points_converted']}%")
+            st.write(f"• First Serve %: {stats_b['first_serve_percentage']}%")
     
     st.markdown("---")
     
-    # HTML REPORT EXPORT BUTTON
+    # HTML REPORT EXPORT BUTTON - CLEARLY VISIBLE
     st.markdown("## 📥 EXPORT REPORT")
-    col1, col2, col3 = st.columns([1, 2, 1])
     
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         # Generate HTML report
         html_report = generate_html_report(
@@ -800,7 +694,8 @@ if st.session_state.prediction_results:
             results['model_metrics']
         )
         
-        # Create download button
+        # Create a styled download button
+        st.markdown('<div class="export-button">', unsafe_allow_html=True)
         st.download_button(
             label="📥 DOWNLOAD HTML REPORT",
             data=html_report,
@@ -808,5 +703,6 @@ if st.session_state.prediction_results:
             mime="text/html",
             use_container_width=True
         )
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        st.success("✅ Click the button above to download your HTML report")
+        st.info("💡 Click the green button above to download a complete HTML report with all match analysis")
