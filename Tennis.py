@@ -8,10 +8,8 @@ from sklearn.metrics import mean_absolute_error, r2_score
 import requests
 from io import BytesIO
 
-# PAGE CONFIG - HIDE SIDEBAR
 st.set_page_config(page_title="TENNIS Predictor", layout="wide", initial_sidebar_state="collapsed")
 
-# Hide the sidebar
 st.markdown("""
 <style>
     [data-testid="stSidebar"] {
@@ -20,48 +18,45 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# TITLE - VERY TOP
 st.markdown("# 🎾 TENNIS MATCH PREDICTOR")
-st.markdown("## Upload Your Excel File to Get Started")
+st.markdown("Upload your Excel file with match data to analyze")
 st.markdown("---")
 
-# UPLOAD SECTION - VERY PROMINENT
-st.markdown("### 📥 STEP 1: SELECT YOUR DATA FILE")
+# BIG UPLOAD SECTION
+st.markdown("## 📥 UPLOAD YOUR EXCEL FILE FROM YOUR COMPUTER")
+st.markdown("**Your file should have columns:** Winner, Loser, W1-W5, L1-L5, WRank, LRank, Surface, Date, Wsets")
 
-col1, col2, col3 = st.columns([1, 1, 1])
+uploaded_file = st.file_uploader(
+    "👇 CLICK HERE TO SELECT YOUR EXCEL FILE (.xlsx or .xls) FROM YOUR COMPUTER",
+    type=['xlsx', 'xls'],
+    help="Select the Excel file on your local machine containing WTA match data"
+)
 
-with col1:
-    st.markdown("**Upload Excel**")
-    uploaded_file = st.file_uploader(
-        "Choose Excel file",
-        type=['xlsx', 'xls'],
-        label_visibility="collapsed"
-    )
-
-with col2:
-    st.markdown("**OR**")
-    st.write("")  # spacing
-
-with col3:
-    st.markdown("**Use Default Data**")
-    use_github = st.button("Load GitHub Database", use_container_width=True)
+if uploaded_file is not None:
+    st.success(f"✅ FILE SELECTED FROM YOUR COMPUTER: {uploaded_file.name}")
+else:
+    st.warning("⚠️ NO FILE SELECTED - Please click above to choose your Excel file from your computer")
+    st.info("📁 Looking for a file? Check your Downloads, Documents, or Desktop folder")
+    st.stop()
 
 st.markdown("---")
 
 # FUNCTIONS
+def load_custom_excel(uploaded_file):
+    try:
+        df = pd.read_excel(uploaded_file)
+        st.success(f"✅ FILE LOADED: {uploaded_file.name}")
+        return df, uploaded_file.name
+    except Exception as e:
+        st.error(f"❌ Error loading file: {str(e)}")
+        return None, None
+
 def fetch_wta_github_data():
     try:
         url = "https://github.com/paulom40/teste/raw/main/wta_data.xlsx"
         response = requests.get(url, timeout=10)
         return pd.read_excel(BytesIO(response.content)), "GitHub WTA Database"
     except:
-        return None, None
-
-def load_custom_excel(uploaded_file):
-    try:
-        return pd.read_excel(uploaded_file), uploaded_file.name
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
         return None, None
 
 def calculate_total_games(row):
@@ -177,33 +172,23 @@ def build_model(df):
     y_pred = model.predict(X_test)
     return {'model': model, 'scaler': scaler, 'r2': r2_score(y_test, y_pred), 'mae': mean_absolute_error(y_test, y_pred), 'df': df_train}
 
-# LOAD DATA
-df = None
-source_name = ""
-
-if uploaded_file is not None:
-    df, source_name = load_custom_excel(uploaded_file)
-elif use_github:
-    with st.spinner("Loading GitHub data..."):
-        df, source_name = fetch_wta_github_data()
+# LOAD DATA FROM UPLOADED FILE
+df, source_name = load_custom_excel(uploaded_file)
 
 if df is None:
-    st.warning("⚠️ Please upload an Excel file or click 'Load GitHub Database'")
     st.stop()
 
-# DATA LOADED
-st.success(f"✅ Data Loaded: {source_name}")
-st.info(f"📊 Total Matches: {len(df)}")
+st.info(f"📊 Total Matches Loaded: {len(df)}")
 st.markdown("---")
 
 # BUILD MODEL
-st.markdown("### ⚙️ STEP 2: TRAINING MODEL")
-with st.spinner("Training ML model on your data..."):
+st.markdown("### ⚙️ TRAINING MODEL")
+with st.spinner("Training ML model on your match data..."):
     build_model.clear()
     model_data = build_model(df)
 
 if model_data is None:
-    st.error("❌ Not enough data to train model")
+    st.error("❌ Not enough data to train model (need at least 100 matches)")
     st.stop()
 
 col1, col2, col3 = st.columns(3)
@@ -212,7 +197,7 @@ col2.metric("R² Score", f"{model_data['r2']:.3f}")
 col3.metric("Accuracy", f"±{model_data['mae']:.2f} games")
 
 st.markdown("---")
-st.markdown("### 🎾 STEP 3: SELECT PLAYERS & SURFACE")
+st.markdown("### 🎾 SELECT PLAYERS & SURFACE")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -225,7 +210,6 @@ with col3:
     surface = st.selectbox("Surface", surfaces, key="s")
 
 st.markdown("---")
-st.markdown("### 🔮 STEP 4: PREDICT MATCH")
 
 if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict"):
     with st.spinner("Analyzing players..."):
