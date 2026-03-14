@@ -8,25 +8,47 @@ from sklearn.metrics import mean_absolute_error, r2_score
 import requests
 from io import BytesIO
 
-st.set_page_config(page_title="Tennis Predictor", layout="wide")
+# PAGE CONFIG - HIDE SIDEBAR
+st.set_page_config(page_title="TENNIS Predictor", layout="wide", initial_sidebar_state="collapsed")
 
-# UPLOAD AT THE VERY TOP - FIRST THING
-st.title("🎾 Tennis Match Predictor")
-st.write("Upload your Excel file to get started!")
+# Hide the sidebar
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {
+        display: none;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-col1, col2 = st.columns([2, 1])
+# TITLE - VERY TOP
+st.markdown("# 🎾 TENNIS MATCH PREDICTOR")
+st.markdown("## Upload Your Excel File to Get Started")
+st.markdown("---")
+
+# UPLOAD SECTION - VERY PROMINENT
+st.markdown("### 📥 STEP 1: SELECT YOUR DATA FILE")
+
+col1, col2, col3 = st.columns([1, 1, 1])
 
 with col1:
-    st.subheading("📥 UPLOAD EXCEL FILE")
-    uploaded_file = st.file_uploader("Select .xlsx or .xls file", type=['xlsx', 'xls'])
+    st.markdown("**Upload Excel**")
+    uploaded_file = st.file_uploader(
+        "Choose Excel file",
+        type=['xlsx', 'xls'],
+        label_visibility="collapsed"
+    )
 
 with col2:
-    st.subheading("🌐 OR USE")
-    use_github = st.button("Load GitHub Data", use_container_width=True)
+    st.markdown("**OR**")
+    st.write("")  # spacing
+
+with col3:
+    st.markdown("**Use Default Data**")
+    use_github = st.button("Load GitHub Database", use_container_width=True)
 
 st.markdown("---")
 
-# HELPER FUNCTIONS
+# FUNCTIONS
 def fetch_wta_github_data():
     try:
         url = "https://github.com/paulom40/teste/raw/main/wta_data.xlsx"
@@ -112,7 +134,7 @@ def get_fatigue(df, player_name):
         days_rest = (pd.Timestamp.now() - pd.to_datetime(matches.iloc[0]['Date'])).days
     except:
         days_rest = 0
-    level = "✓ Fresh" if days_rest >= 7 else "⚔️ Normal" if days_rest >= 4 else "⚠️ Tired"
+    level = "✓ Fresh" if days_rest >= 7 else "⚔️ Normal" if days_rest >= 4 else "⚠️ Tired" if days_rest >= 2 else "🔴 Exhausted"
     return {'days_rest': days_rest, 'level': level}
 
 @st.cache_resource
@@ -162,31 +184,35 @@ source_name = ""
 if uploaded_file is not None:
     df, source_name = load_custom_excel(uploaded_file)
 elif use_github:
-    df, source_name = fetch_wta_github_data()
+    with st.spinner("Loading GitHub data..."):
+        df, source_name = fetch_wta_github_data()
 
 if df is None:
-    st.info("👆 Please upload an Excel file or click 'Load GitHub Data'")
+    st.warning("⚠️ Please upload an Excel file or click 'Load GitHub Database'")
     st.stop()
 
+# DATA LOADED
 st.success(f"✅ Data Loaded: {source_name}")
-st.metric("Total Matches", len(df))
+st.info(f"📊 Total Matches: {len(df)}")
+st.markdown("---")
 
 # BUILD MODEL
-with st.spinner("Training model..."):
+st.markdown("### ⚙️ STEP 2: TRAINING MODEL")
+with st.spinner("Training ML model on your data..."):
     build_model.clear()
     model_data = build_model(df)
 
 if model_data is None:
-    st.error("Not enough data")
+    st.error("❌ Not enough data to train model")
     st.stop()
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Status", "Ready ✅")
+col1.metric("Status", "✅ Ready")
 col2.metric("R² Score", f"{model_data['r2']:.3f}")
-col3.metric("Accuracy", f"±{model_data['mae']:.2f}")
+col3.metric("Accuracy", f"±{model_data['mae']:.2f} games")
 
 st.markdown("---")
-st.subheader("🎾 Select Players & Surface")
+st.markdown("### 🎾 STEP 3: SELECT PLAYERS & SURFACE")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -198,8 +224,11 @@ with col3:
     surfaces = sorted(df['Surface'].dropna().unique())
     surface = st.selectbox("Surface", surfaces, key="s")
 
-if st.button("🔮 PREDICT", use_container_width=True):
-    with st.spinner("Analyzing..."):
+st.markdown("---")
+st.markdown("### 🔮 STEP 4: PREDICT MATCH")
+
+if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict"):
+    with st.spinner("Analyzing players..."):
         data_a = analyze_last_15(df, player_a, surface)
         data_b = analyze_last_15(df, player_b, surface)
         fat_a = get_fatigue(df, player_a)
@@ -208,22 +237,38 @@ if st.button("🔮 PREDICT", use_container_width=True):
         stats_b = calculate_mean_stats_from_last_15(df, player_b, surface)
     
     st.markdown("---")
-    st.header("📊 RESULTS")
+    st.markdown("# 📊 MATCH ANALYSIS RESULTS")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader(f"🎾 {player_a}")
-        st.write(f"**Last 15:** {data_a['wins']}-{data_a['losses']} {data_a['form']}")
-        st.write(f"**Avg:** {data_a['avg_games']:.1f} games | **Rest:** {fat_a['days_rest']} days")
-        st.write(f"**Winners:** {stats_a['winners']}")
-        st.write(f"**Service:** {stats_a['service_points_won']}% | **Return:** {stats_a['return_points_won']}%")
-        st.write(f"**Total Points:** {stats_a['total_points_won']}%")
+        st.markdown(f"## 🎾 {player_a}")
+        st.write(f"**Last 15 Games:** {data_a['wins']}-{data_a['losses']} {data_a['form']}")
+        st.write(f"**Average:** {data_a['avg_games']:.1f} games/match")
+        st.write(f"**Fatigue:** {fat_a['level']} ({fat_a['days_rest']} days rest)")
+        
+        st.write("\n### 📊 MEAN STATISTICS (Last 15 Games)")
+        st.write(f"• **Winners:** {stats_a['winners']}")
+        st.write(f"• **Unforced Errors:** {stats_a['unforced_errors']}")
+        st.write(f"• **Net Points Won:** {stats_a['net_points_won']}")
+        st.write(f"• **Service Points Won:** {stats_a['service_points_won']}%")
+        st.write(f"• **Return Points Won:** {stats_a['return_points_won']}%")
+        st.write(f"• **Total Points Won:** {stats_a['total_points_won']}%")
+        st.write(f"• **Break Points Converted:** {stats_a['break_points_converted']}%")
+        st.write(f"• **First Serve %:** {stats_a['first_serve_percentage']}%")
     
     with col2:
-        st.subheader(f"🎾 {player_b}")
-        st.write(f"**Last 15:** {data_b['wins']}-{data_b['losses']} {data_b['form']}")
-        st.write(f"**Avg:** {data_b['avg_games']:.1f} games | **Rest:** {fat_b['days_rest']} days")
-        st.write(f"**Winners:** {stats_b['winners']}")
-        st.write(f"**Service:** {stats_b['service_points_won']}% | **Return:** {stats_b['return_points_won']}%")
-        st.write(f"**Total Points:** {stats_b['total_points_won']}%")
+        st.markdown(f"## 🎾 {player_b}")
+        st.write(f"**Last 15 Games:** {data_b['wins']}-{data_b['losses']} {data_b['form']}")
+        st.write(f"**Average:** {data_b['avg_games']:.1f} games/match")
+        st.write(f"**Fatigue:** {fat_b['level']} ({fat_b['days_rest']} days rest)")
+        
+        st.write("\n### 📊 MEAN STATISTICS (Last 15 Games)")
+        st.write(f"• **Winners:** {stats_b['winners']}")
+        st.write(f"• **Unforced Errors:** {stats_b['unforced_errors']}")
+        st.write(f"• **Net Points Won:** {stats_b['net_points_won']}")
+        st.write(f"• **Service Points Won:** {stats_b['service_points_won']}%")
+        st.write(f"• **Return Points Won:** {stats_b['return_points_won']}%")
+        st.write(f"• **Total Points Won:** {stats_b['total_points_won']}%")
+        st.write(f"• **Break Points Converted:** {stats_b['break_points_converted']}%")
+        st.write(f"• **First Serve %:** {stats_b['first_serve_percentage']}%")
