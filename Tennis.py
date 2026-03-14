@@ -132,6 +132,306 @@ def get_fatigue(df, player_name):
     level = "✓ Fresh" if days_rest >= 7 else "⚔️ Normal" if days_rest >= 4 else "⚠️ Tired" if days_rest >= 2 else "🔴 Exhausted"
     return {'days_rest': days_rest, 'level': level}
 
+def predict_total_games(df, player_a, player_b, surface):
+    """Predict total games for the match"""
+    a_matches = df[((df['Winner'] == player_a) | (df['Loser'] == player_a)) & (df['Surface'] == surface)].tail(15)
+    b_matches = df[((df['Winner'] == player_b) | (df['Loser'] == player_b)) & (df['Surface'] == surface)].tail(15)
+    
+    if len(a_matches) == 0 or len(b_matches) == 0:
+        return 22
+    
+    a_matches = a_matches.copy()
+    b_matches = b_matches.copy()
+    a_matches['Total_Games'] = a_matches.apply(calculate_total_games, axis=1)
+    b_matches['Total_Games'] = b_matches.apply(calculate_total_games, axis=1)
+    
+    a_avg = a_matches['Total_Games'].median()
+    b_avg = b_matches['Total_Games'].median()
+    
+    avg_games = (a_avg + b_avg) / 2
+    return np.clip(avg_games, 12, 40)
+
+def generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat_b, stats_a, stats_b, prediction, model_r2, model_mae):
+    """Generate HTML report"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if prediction < 23:
+        match_type = "⚡ Quick Match (2-set likely)"
+        color = "#4CAF50"
+    elif prediction < 27:
+        match_type = "⚔️ Competitive Match"
+        color = "#FF9800"
+    else:
+        match_type = "🔥 Long Match (3-set likely)"
+        color = "#F44336"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>WTA Match Prediction</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 20px;
+                margin: 0;
+            }}
+            .container {{
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 15px;
+                overflow: hidden;
+                box-shadow: 0 10px 50px rgba(0,0,0,0.3);
+            }}
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 40px 30px;
+                text-align: center;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 2.5em;
+            }}
+            .content {{
+                padding: 40px;
+            }}
+            .match-title {{
+                font-size: 2em;
+                color: #764ba2;
+                text-align: center;
+                margin: 20px 0;
+            }}
+            .prediction-box {{
+                background: {color};
+                color: white;
+                padding: 30px;
+                border-radius: 10px;
+                text-align: center;
+                margin: 30px 0;
+            }}
+            .prediction-number {{
+                font-size: 3em;
+                font-weight: bold;
+                margin: 10px 0;
+            }}
+            .player-grid {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 30px;
+                margin: 30px 0;
+            }}
+            .player-card {{
+                background: #f9f9f9;
+                padding: 25px;
+                border-radius: 10px;
+                border-left: 5px solid #667eea;
+            }}
+            .player-name {{
+                color: #667eea;
+                font-size: 1.5em;
+                font-weight: bold;
+                margin-bottom: 15px;
+            }}
+            .stat-row {{
+                display: flex;
+                justify-content: space-between;
+                padding: 8px 0;
+                border-bottom: 1px solid #eee;
+            }}
+            .stat-label {{
+                font-weight: 600;
+                color: #333;
+            }}
+            .stat-value {{
+                color: #667eea;
+                font-weight: bold;
+            }}
+            .footer {{
+                background: #f9f9f9;
+                padding: 20px;
+                text-align: center;
+                border-top: 1px solid #eee;
+                color: #666;
+                font-size: 0.9em;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🎾 WTA Match Prediction Report</h1>
+                <p>Advanced Analysis - Last 15 Games • MEAN Statistics</p>
+            </div>
+            
+            <div class="content">
+                <div class="match-title">{player_a} vs {player_b}</div>
+                <div style="text-align: center; color: #667eea; font-size: 1.1em; margin: 15px 0;">
+                    <strong>Surface: {surface}</strong>
+                </div>
+                
+                <div class="prediction-box">
+                    <div>{match_type}</div>
+                    <div class="prediction-number">{prediction:.1f} GAMES</div>
+                </div>
+                
+                <h2 style="color: #667eea; border-bottom: 3px solid #667eea; padding-bottom: 10px;">📊 Complete Player Analysis</h2>
+                
+                <div class="player-grid">
+                    <div class="player-card">
+                        <div class="player-name">{player_a}</div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">📈 Last 15 Games</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Record:</span>
+                            <span class="stat-value">{data_a['wins']}-{data_a['losses']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Win Rate:</span>
+                            <span class="stat-value">{data_a['wins']/(data_a['wins']+data_a['losses'])*100:.1f}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Avg Games:</span>
+                            <span class="stat-value">{data_a['avg_games']:.1f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Form:</span>
+                            <span class="stat-value">{data_a['form']}</span>
+                        </div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">😓 Fatigue</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Days Rest:</span>
+                            <span class="stat-value">{fat_a['days_rest']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Status:</span>
+                            <span class="stat-value">{fat_a['level']}</span>
+                        </div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">📊 MEAN Statistics (Last 15 Games)</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Winners:</span>
+                            <span class="stat-value">{stats_a['winners']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Unforced Errors:</span>
+                            <span class="stat-value">{stats_a['unforced_errors']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Net Points Won:</span>
+                            <span class="stat-value">{stats_a['net_points_won']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Service Points Won:</span>
+                            <span class="stat-value">{stats_a['service_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Return Points Won:</span>
+                            <span class="stat-value">{stats_a['return_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Total Points Won:</span>
+                            <span class="stat-value">{stats_a['total_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Break Points Converted:</span>
+                            <span class="stat-value">{stats_a['break_points_converted']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">First Serve %:</span>
+                            <span class="stat-value">{stats_a['first_serve_percentage']}%</span>
+                        </div>
+                    </div>
+                    
+                    <div class="player-card">
+                        <div class="player-name">{player_b}</div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">📈 Last 15 Games</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Record:</span>
+                            <span class="stat-value">{data_b['wins']}-{data_b['losses']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Win Rate:</span>
+                            <span class="stat-value">{data_b['wins']/(data_b['wins']+data_b['losses'])*100:.1f}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Avg Games:</span>
+                            <span class="stat-value">{data_b['avg_games']:.1f}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Form:</span>
+                            <span class="stat-value">{data_b['form']}</span>
+                        </div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">😓 Fatigue</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Days Rest:</span>
+                            <span class="stat-value">{fat_b['days_rest']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Status:</span>
+                            <span class="stat-value">{fat_b['level']}</span>
+                        </div>
+                        
+                        <h3 style="color: #764ba2; margin-top: 20px;">📊 MEAN Statistics (Last 15 Games)</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Winners:</span>
+                            <span class="stat-value">{stats_b['winners']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Unforced Errors:</span>
+                            <span class="stat-value">{stats_b['unforced_errors']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Net Points Won:</span>
+                            <span class="stat-value">{stats_b['net_points_won']}</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Service Points Won:</span>
+                            <span class="stat-value">{stats_b['service_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Return Points Won:</span>
+                            <span class="stat-value">{stats_b['return_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Total Points Won:</span>
+                            <span class="stat-value">{stats_b['total_points_won']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Break Points Converted:</span>
+                            <span class="stat-value">{stats_b['break_points_converted']}%</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">First Serve %:</span>
+                            <span class="stat-value">{stats_b['first_serve_percentage']}%</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="background: #e3f2fd; border-left: 4px solid #667eea; padding: 20px; margin: 20px 0; border-radius: 5px;">
+                    <strong>📌 Model Information:</strong><br>
+                    R² Score: {model_r2:.3f} | Accuracy: ±{model_mae:.2f} games
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p><strong>Generated:</strong> {timestamp}</p>
+                <p>WTA Match Predictor - MEAN Statistics Analysis from Last 15 Games</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
 @st.cache_resource
 def build_model(df):
     df_train = df.copy()
@@ -219,9 +519,23 @@ if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict"):
         fat_b = get_fatigue(df, player_b)
         stats_a = calculate_mean_stats_from_last_15(df, player_a, surface)
         stats_b = calculate_mean_stats_from_last_15(df, player_b, surface)
+        prediction = predict_total_games(df, player_a, player_b, surface)
     
     st.markdown("---")
     st.markdown("# 📊 MATCH ANALYSIS RESULTS")
+    
+    # PREDICTION SECTION
+    st.markdown("## 🎯 MATCH PREDICTION")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if prediction < 23:
+            st.success(f"⚡ **QUICK MATCH** - Expected: **{prediction:.1f} GAMES** (2-set likely)")
+        elif prediction < 27:
+            st.info(f"⚔️ **COMPETITIVE MATCH** - Expected: **{prediction:.1f} GAMES**")
+        else:
+            st.warning(f"🔥 **LONG MATCH** - Expected: **{prediction:.1f} GAMES** (3-set likely)")
+    
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     
@@ -256,3 +570,18 @@ if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict"):
         st.write(f"• **Total Points Won:** {stats_b['total_points_won']}%")
         st.write(f"• **Break Points Converted:** {stats_b['break_points_converted']}%")
         st.write(f"• **First Serve %:** {stats_b['first_serve_percentage']}%")
+    
+    st.markdown("---")
+    
+    # DOWNLOAD HTML REPORT
+    st.markdown("## 📥 DOWNLOAD REPORT")
+    html_report = generate_html_report(player_a, player_b, surface, data_a, data_b, fat_a, fat_b, stats_a, stats_b, prediction, model_data['r2'], model_data['mae'])
+    
+    st.download_button(
+        label="📥 Download as HTML Report",
+        data=html_report,
+        file_name=f"WTA_{player_a}_vs_{player_b}_{surface}.html",
+        mime="text/html",
+        use_container_width=True
+    )
+    st.success("✅ Report ready to download!")
