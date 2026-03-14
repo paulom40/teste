@@ -15,11 +15,18 @@ st.set_page_config(page_title="ATP Predictor Pro", layout="wide")
 # ── Styling ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .stButton>button { background: linear-gradient(135deg, #1a237e, #3f51b5); color: white; font-weight:bold;
-        padding: 14px 32px; font-size:1.15em; border-radius:10px; width:100%; margin:10px 0; }
+    .stButton>button {
+        background: linear-gradient(135deg, #1a237e, #3f51b5);
+        color: white; font-weight:bold; border:none;
+        padding: 14px 32px; font-size:1.15em; border-radius:10px;
+        width:100%; margin:10px 0;
+    }
     .stButton>button:hover { background: linear-gradient(135deg, #3f51b5, #1a237e); }
-    .pred-box { padding: 35px; border-radius: 18px; text-align:center; margin: 25px 0;
-        box-shadow: 0 8px 25px rgba(0,0,0,0.22); color: white; }
+    .pred-box {
+        padding: 35px; border-radius: 18px; text-align:center;
+        margin: 25px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.22);
+        color: white;
+    }
     .big-num { font-size: 6.8em; font-weight: 800; line-height: 0.92; }
     .match-msg { font-size: 1.7em; margin-bottom: 14px; }
     .card { background:#f8f9fa; border-radius:12px; padding:24px; margin:20px 0; border-left:5px solid #3f51b5; }
@@ -30,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🎾 ATP Men's Tennis Predictor Pro")
-st.caption("Surface-specific Elo + Last 15 on surface • Total Games Prediction")
+st.caption("Surface-specific Elo + Last 15 matches on surface • Total Games Prediction")
 
 # ── File Upload & Robust Loading ───────────────────────────────────────────
 uploaded_file = st.file_uploader("Upload your ATP Excel file", type=["xlsx", "xls"])
@@ -95,7 +102,6 @@ def compute_surface_elo(_df, initial_elo=1500, K_base=32):
         players = set(surf_df['Winner']) | set(surf_df['Loser'])
         elo = {p: initial_elo for p in players}
         matches_played = {p: 0 for p in players}
-
         for _, row in surf_df.iterrows():
             w, l = row['Winner'], row['Loser']
             if w not in elo or l not in elo: continue
@@ -184,7 +190,6 @@ def head_to_head(df, p1, p2, surface=None):
 def train_model(df):
     d = df[df['Total_Games'].between(15,60)].copy()
     if len(d) < 80: return None
-    # ... (same feature building as before) ...
     feats = []
     for s in '12345':
         feats.append(d[f'W{s}'] + d[f'L{s}'])
@@ -217,7 +222,7 @@ with c2:
 with c3: surface = st.selectbox("Surface", sorted(df['Surface'].dropna().unique()), key="s")
 
 if st.button("🔮 Generate Prediction", type="primary", use_container_width=True):
-    with st.spinner("Calculating surface Elo + stats..."):
+    with st.spinner("Calculating..."):
         data_a = analyze_last_15(df, player_a, surface)
         data_b = analyze_last_15(df, player_b, surface)
         stats_a = calculate_surface_stats(df, player_a, surface)
@@ -248,7 +253,8 @@ if st.button("🔮 Generate Prediction", type="primary", use_container_width=Tru
         win_b = 100 - win_a
 
         st.session_state.update({
-            'predicted':True, 'player_a':player_a, 'player_b':player_b, 'surface':surface,
+            'predicted':True,
+            'player_a':player_a, 'player_b':player_b, 'surface':surface,
             'data_a':data_a, 'data_b':data_b, 'stats_a':stats_a, 'stats_b':stats_b,
             'fat_a':(days_a,fat_a), 'fat_b':(days_b,fat_b), 'h2h':h2h,
             'prediction':final_pred,
@@ -282,7 +288,7 @@ if has_pred:
     c1.metric(f"{curr_a}", f"Elo {st.session_state.elo_a}", f"Win {st.session_state.win_prob_a}%")
     c2.metric(f"{curr_b}", f"Elo {st.session_state.elo_b}", f"Win {st.session_state.win_prob_b}%")
 
-# ── DETAILED HTML EXPORT (always visible) ──────────────────────────────────
+# ── EXPORT BUTTON (always visible) ─────────────────────────────────────────
 st.markdown("### 📥 Export Detailed Report")
 
 def create_full_html_report():
@@ -307,43 +313,116 @@ def create_full_html_report():
         </div>
         """
 
-    stats_section = ""  # (same detailed tables as before - abbreviated here for space)
-    # ... (paste the same stats_section code from previous version) ...
+    # Always define stats_section (empty if no data)
+    stats_section = ""
+    if has_full:
+        da = st.session_state.data_a
+        db = st.session_state.data_b
+        sa = st.session_state.stats_a
+        sb = st.session_state.stats_b
+        fa_d, fa_l = st.session_state.fat_a
+        fb_d, fb_l = st.session_state.fat_b
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head><title>ATP Report • {p_a} vs {p_b}</title>
-<style>body{{font-family:system-ui;background:linear-gradient(to bottom right,#f0f2ff,#e3e8ff);margin:0;padding:30px;}}
-.container{{max-width:1150px;margin:auto;background:white;border-radius:18px;box-shadow:0 12px 50px rgba(0,0,0,0.18);overflow:hidden;}}
-.header{{background:linear-gradient(135deg,#1a237e,#3f51b5);color:white;padding:50px;text-align:center;}}
-.prediction{{background:{pred_color};color:white;padding:50px;border-radius:16px;text-align:center;margin:35px 0;}}
-.big{{font-size:8em;font-weight:900;}}
-.card{{background:#f8f9fa;border-radius:14px;padding:30px;margin:28px 0;border-left:7px solid #3f51b5;}}
-table{{width:100%;border-collapse:collapse;margin:22px 0;}}
-th,td{{padding:14px;text-align:left;border-bottom:1px solid #e0e0e0;}}
-.footer{{background:#f0f0f5;padding:30px;text-align:center;color:#555;}}
-</style></head>
+        stats_section = f"""
+        <h2>Last 15 on {surf} – Detailed Stats</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:30px;">
+            <div class="card">
+                <h3>{p_a}</h3>
+                <p><strong>Record:</strong> {da['wins']}-{da['losses']} ({da['wr']}%) • {da['form']}</p>
+                <p><strong>Rest:</strong> {fa_l} ({fa_d} days)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners / match</td><td>{sa['winners']}</td></tr>
+                    <tr><td>Unforced errors / match</td><td>{sa['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{sa['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{sa['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{sa['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{sa['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{sa['rgw']}%</td></tr>
+                    <tr><td>Games won % overall</td><td>{sa['games_won_pct']}%</td></tr>
+                </table>
+            </div>
+            <div class="card">
+                <h3>{p_b}</h3>
+                <p><strong>Record:</strong> {db['wins']}-{db['losses']} ({db['wr']}%) • {db['form']}</p>
+                <p><strong>Rest:</strong> {fb_l} ({fb_d} days)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners / match</td><td>{sb['winners']}</td></tr>
+                    <tr><td>Unforced errors / match</td><td>{sb['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{sb['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{sb['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{sb['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{sb['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{sb['rgw']}%</td></tr>
+                    <tr><td>Games won % overall</td><td>{sb['games_won_pct']}%</td></tr>
+                </table>
+            </div>
+        </div>
+        """
+
+    h2h_section = ""
+    if 'h2h' in st.session_state:
+        h = st.session_state.h2h
+        h2h_section = f"""
+        <div class="card">
+            <h3>Head-to-Head on {surf}</h3>
+            <table class="detail-table">
+                <tr><th>Metric</th><th>Value</th></tr>
+                <tr><td>Total matches</td><td>{h['total']}</td></tr>
+                <tr><td>{p_a} wins</td><td>{h.get(f"{p_a} wins", 0)}</td></tr>
+                <tr><td>{p_b} wins</td><td>{h.get(f"{p_b} wins", 0)}</td></tr>
+                <tr><td>Avg total games</td><td>{h.get('avg_g', 23.5):.1f}</td></tr>
+            </table>
+        </div>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ATP Prediction • {p_a} vs {p_b}</title>
+    <style>
+        body {{ font-family: system-ui, sans-serif; background: linear-gradient(to bottom right, #f0f2ff, #e3e8ff); margin:0; padding:30px; color:#222; }}
+        .container {{ max-width:1150px; margin:auto; background:white; border-radius:18px; box-shadow:0 12px 50px rgba(0,0,0,0.18); overflow:hidden; }}
+        .header {{ background: linear-gradient(135deg, #1a237e, #3f51b5); color:white; padding:50px 35px; text-align:center; }}
+        .content {{ padding:45px; }}
+        .prediction {{ background:{pred_color}; color:white; padding:50px; border-radius:16px; text-align:center; margin:35px 0; }}
+        .big {{ font-size:8em; font-weight:900; line-height:0.88; }}
+        .card {{ background:#f8f9fa; border-radius:14px; padding:30px; margin:28px 0; border-left:7px solid #3f51b5; }}
+        table {{ width:100%; border-collapse:collapse; margin:22px 0; }}
+        th, td {{ padding:14px; text-align:left; border-bottom:1px solid #e0e0e0; }}
+        .footer {{ background:#f0f0f5; padding:30px; text-align:center; color:#555; font-size:0.98em; }}
+    </style>
+</head>
 <body>
 <div class="container">
-<div class="header"><h1>ATP Predictor Pro – Surface Elo Edition</h1>
-<p>{p_a} vs {p_b} • {surf} • {datetime.now().strftime('%Y-%m-%d %H:%M')}</p></div>
-<div class="content">
-<div class="prediction"><div style="font-size:2.1em;">Predicted Total Games</div><div class="big">{pred}</div></div>
-{elo_section}
-{/* stats_section here */}
-</div>
-<div class="footer">Surface-specific Elo • Generated with ATP Predictor Pro</div>
+    <div class="header">
+        <h1>ATP Men's Tennis Predictor Pro</h1>
+        <p>{p_a} vs {p_b} • {surf} • {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    </div>
+    <div class="content">
+        <div class="prediction">
+            <div style="font-size:2.1em;">Predicted Total Games</div>
+            <div class="big">{pred}</div>
+        </div>
+        {elo_section}
+        {h2h_section}
+        {stats_section}
+    </div>
+    <div class="footer">
+        Generated with ATP Predictor Pro • Surface-specific Elo calculation • For analysis only
+    </div>
 </div>
 </body>
 </html>"""
-    return html
 
 st.download_button(
-    label="📥 Download Full HTML Report (with Surface Elo)",
+    label="📥 Download Detailed HTML Report",
     data=create_full_html_report(),
     file_name=f"ATP_{curr_a.replace(' ','_')}_vs_{curr_b.replace(' ','_')}_{curr_surf}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
     mime="text/html",
     use_container_width=True
 )
 
-st.caption("Surface Elo is calculated separately for each surface. The more matches you have, the more accurate it becomes.")
+st.caption("Tip: The report is more detailed when you run a prediction first.")
