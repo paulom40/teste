@@ -12,7 +12,7 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="WTA Advanced Predictor", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="Tennis Advanced Predictor", page_icon="🎾", layout="wide")
 
 def fetch_wta_github_data():
     """Fetch default WTA data from GitHub"""
