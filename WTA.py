@@ -4,9 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-st.set_page_config(page_title="WTA Monte Carlo Predictor", layout="wide")
+st.set_page_config(page_title="WTA Pro Predictor", layout="wide")
 
-st.title("🎾 WTA Advanced Monte Carlo Predictor")
+st.title("🎾 WTA Professional Monte Carlo Predictor")
 
 # ---------------------------------------------------------
 # Upload dataset
@@ -20,7 +20,7 @@ if uploaded_file is None:
 df = pd.read_excel(uploaded_file)
 
 # ---------------------------------------------------------
-# Prepare dataset
+# Clean dataset
 # ---------------------------------------------------------
 
 for s in ['1','2','3']:
@@ -54,53 +54,73 @@ with c3:
     surface = st.selectbox("Surface", sorted(df["Surface"].dropna().unique()))
 
 # ---------------------------------------------------------
-# Player stats
+# Player match history
 # ---------------------------------------------------------
 
-def get_matches(player):
+def get_matches(player, surface=None):
 
     m = df[(df["Winner"]==player) | (df["Loser"]==player)]
 
-    return m.sort_values("Date", ascending=False).head(25)
+    if surface:
+        m = m[m["Surface"]==surface]
 
+    return m.sort_values("Date", ascending=False).head(30)
 
-def service_hold_estimate(player):
+# ---------------------------------------------------------
+# Surface Elo
+# ---------------------------------------------------------
 
-    m = get_matches(player)
+def compute_surface_elo():
+
+    elo = {}
+
+    for surf in df["Surface"].dropna().unique():
+
+        sub = df[df["Surface"]==surf]
+
+        players = set(sub["Winner"]) | set(sub["Loser"])
+
+        ratings = {p:1500 for p in players}
+
+        for _,row in sub.iterrows():
+
+            w=row["Winner"]
+            l=row["Loser"]
+
+            exp = 1/(1+10**((ratings[l]-ratings[w])/400))
+
+            k=24
+
+            ratings[w]+=k*(1-exp)
+            ratings[l]+=k*(0-exp)
+
+        elo[surf]=ratings
+
+    return elo
+
+surface_elo = compute_surface_elo()
+
+def get_elo(player, surface):
+
+    try:
+        return surface_elo[surface][player]
+    except:
+        return 1500
+
+# ---------------------------------------------------------
+# Hold probability estimate
+# ---------------------------------------------------------
+
+def hold_estimate(player, surface):
+
+    m = get_matches(player, surface)
 
     if len(m)==0:
         return 0.65
 
     wins = (m["Winner"]==player).mean()
 
-    return 0.60 + wins*0.20
-
-
-# ---------------------------------------------------------
-# Elo rating
-# ---------------------------------------------------------
-
-def compute_elo():
-
-    players = list(set(df["Winner"]) | set(df["Loser"]))
-
-    elo = {p:1500 for p in players}
-
-    for _,row in df.iterrows():
-
-        w = row["Winner"]
-        l = row["Loser"]
-
-        exp = 1/(1+10**((elo[l]-elo[w])/400))
-
-        k = 24
-
-        elo[w] += k*(1-exp)
-        elo[l] += k*(0-exp)
-
-    return elo
-
-elo = compute_elo()
+    return 0.60 + wins*0.22
 
 # ---------------------------------------------------------
 # Game simulation
@@ -113,33 +133,31 @@ def simulate_game(p_hold):
 
 def simulate_set(pA,pB):
 
-    gA = 0
-    gB = 0
-
-    server = 0
+    gA=gB=0
+    server=0
+    tiebreak=False
 
     while True:
 
         if server==0:
-
             if simulate_game(pA):
                 gA+=1
             else:
                 gB+=1
-
         else:
-
             if simulate_game(pB):
                 gB+=1
             else:
                 gA+=1
 
-        server = 1-server
+        server=1-server
 
         if (gA>=6 or gB>=6) and abs(gA-gB)>=2:
             break
 
         if gA==6 and gB==6:
+
+            tiebreak=True
 
             if np.random.rand()<0.5:
                 gA+=1
@@ -148,48 +166,42 @@ def simulate_set(pA,pB):
 
             break
 
-    return gA,gB
+    return gA,gB,tiebreak
 
 
 def simulate_match(pA,pB):
 
-    setsA=0
-    setsB=0
-
+    setsA=setsB=0
     games=0
-    tiebreak=False
+    tb=False
 
     while setsA<2 and setsB<2:
 
-        gA,gB = simulate_set(pA,pB)
+        gA,gB,tb_flag = simulate_set(pA,pB)
 
         games += gA+gB
 
-        if gA==7 or gB==7:
-            tiebreak=True
+        if tb_flag:
+            tb=True
 
         if gA>gB:
             setsA+=1
         else:
             setsB+=1
 
-    return games, setsA, setsB, tiebreak
-
+    return games,setsA,setsB,tb
 
 # ---------------------------------------------------------
 # Monte Carlo simulation
 # ---------------------------------------------------------
 
-def monte_carlo(player_a, player_b, sims=10000):
+def monte_carlo(player_a, player_b, surface, sims=10000):
 
-    pA = service_hold_estimate(player_a)
-    pB = service_hold_estimate(player_b)
+    pA = hold_estimate(player_a, surface)
+    pB = hold_estimate(player_b, surface)
 
-    results = []
-
-    set20=0
-    set21=0
-    tb=0
+    results=[]
+    set20=set21=tb=0
 
     for _ in range(sims):
 
@@ -207,9 +219,8 @@ def monte_carlo(player_a, player_b, sims=10000):
 
     return np.array(results), set20/sims, set21/sims, tb/sims
 
-
 # ---------------------------------------------------------
-# Betting odds input
+# Betting inputs
 # ---------------------------------------------------------
 
 st.subheader("Betting Market")
@@ -229,66 +240,64 @@ with c3:
 # Run simulation
 # ---------------------------------------------------------
 
-if st.button("Run Monte Carlo Simulation"):
+if st.button("Run Simulation"):
 
-    sims,set20,set21,tb_prob = monte_carlo(player_a,player_b)
+    sims,set20,set21,tb_prob = monte_carlo(player_a,player_b,surface)
 
-    prediction = round(np.mean(sims),1)
+    pred = round(np.mean(sims),1)
 
     st.subheader("Predicted Total Games")
 
-    st.markdown(f"# {prediction}")
-
-    # Set probabilities
+    st.markdown(f"# {pred}")
 
     st.subheader("Set Probabilities")
 
     c1,c2 = st.columns(2)
 
-    c1.metric("2-0 Sets", f"{round(set20*100,1)}%")
-    c2.metric("2-1 Sets", f"{round(set21*100,1)}%")
+    c1.metric("2-0",f"{round(set20*100,1)}%")
+    c2.metric("2-1",f"{round(set21*100,1)}%")
 
-    st.metric("Tie-break Probability", f"{round(tb_prob*100,1)}%")
+    st.metric("Tie-break Probability",f"{round(tb_prob*100,1)}%")
 
-    # Over under
+    # -----------------------------------------------------
+    # Betting edge
+    # -----------------------------------------------------
 
-    prob_over = np.mean(sims > line)
+    prob_over = np.mean(sims>line)
     prob_under = 1-prob_over
 
-    edge_over = prob_over*over_odds - 1
-    edge_under = prob_under*under_odds - 1
+    edge_over = prob_over*over_odds-1
+    edge_under = prob_under*under_odds-1
 
     st.subheader("Betting Edge")
 
     c1,c2 = st.columns(2)
 
-    c1.metric("Over Probability", f"{round(prob_over*100,1)}%",
+    c1.metric("Over",f"{round(prob_over*100,1)}%",
               f"Edge {round(edge_over*100,1)}%")
 
-    c2.metric("Under Probability", f"{round(prob_under*100,1)}%",
+    c2.metric("Under",f"{round(prob_under*100,1)}%",
               f"Edge {round(edge_under*100,1)}%")
 
-    # Chart
+    # -----------------------------------------------------
+    # Distribution chart
+    # -----------------------------------------------------
 
-    fig, ax = plt.subplots()
+    fig,ax = plt.subplots()
 
-    ax.hist(sims, bins=40)
+    ax.hist(sims,bins=40)
 
     ax.set_title("Monte Carlo Total Games Distribution")
 
-    ax.set_xlabel("Total Games")
-
-    ax.set_ylabel("Frequency")
-
     st.pyplot(fig)
 
-    # ---------------------------------------------------------
-    # HTML report
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # HTML REPORT
+    # -----------------------------------------------------
 
-    html = f"""
+    html=f"""
     <html>
-    <body style="font-family:Arial;background:#f4f6ff;padding:40px">
+    <body style="font-family:Arial;padding:40px;background:#f4f6ff">
 
     <h1 style="text-align:center">WTA Monte Carlo Prediction</h1>
 
@@ -296,22 +305,15 @@ if st.button("Run Monte Carlo Simulation"):
 
     <h3 style="text-align:center">Surface: {surface}</h3>
 
-    <h1 style="text-align:center">{prediction} Total Games</h1>
+    <h1 style="text-align:center">{pred} Total Games</h1>
 
-    <h3>Set Probabilities</h3>
+    <p>2-0 probability: {round(set20*100,1)}%</p>
+    <p>2-1 probability: {round(set21*100,1)}%</p>
 
-    <p>2-0: {round(set20*100,1)}%</p>
-    <p>2-1: {round(set21*100,1)}%</p>
+    <p>Tie-break probability: {round(tb_prob*100,1)}%</p>
 
-    <h3>Tie-break Probability</h3>
-
-    <p>{round(tb_prob*100,1)}%</p>
-
-    <h3>Over / Under</h3>
-
-    <p>Line {line}</p>
-    <p>Over {round(prob_over*100,1)}%</p>
-    <p>Under {round(prob_under*100,1)}%</p>
+    <p>Over {line}: {round(prob_over*100,1)}%</p>
+    <p>Under {line}: {round(prob_under*100,1)}%</p>
 
     <p>Generated {datetime.now()}</p>
 
