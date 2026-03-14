@@ -39,15 +39,14 @@ st.markdown("""
         background: linear-gradient(135deg, #20c997 0%, #28a745 100%);
     }
     .prediction-box {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 30px;
-        border-radius: 15px;
+        padding: 40px;
+        border-radius: 20px;
         text-align: center;
-        margin: 20px 0;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        margin: 20px 0 30px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
     .prediction-number {
-        font-size: 5em;
+        font-size: 6em;
         font-weight: bold;
         color: white;
         line-height: 1.2;
@@ -58,9 +57,15 @@ st.markdown("""
         opacity: 0.9;
     }
     .match-type {
-        font-size: 1.8em;
+        font-size: 2em;
         color: white;
-        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    div[data-testid="column"] {
+        text-align: center;
+    }
+    .stAlert {
+        background-color: #f0f2f6;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -549,12 +554,6 @@ with col3:
 
 st.markdown("---")
 
-# Initialize session state
-if 'prediction_results' not in st.session_state:
-    st.session_state.prediction_results = None
-if 'show_results' not in st.session_state:
-    st.session_state.show_results = False
-
 # PREDICT BUTTON
 if st.button("🔮 PREDICT MATCH", use_container_width=True):
     with st.spinner("Analyzing players and calculating prediction..."):
@@ -568,51 +567,59 @@ if st.button("🔮 PREDICT MATCH", use_container_width=True):
         h2h = get_head_to_head(df, player_a, player_b, surface)
         prediction = predict_total_games(df, player_a, player_b, surface)
         
-        # Store results
-        st.session_state.prediction_results = {
-            'player_a': player_a,
-            'player_b': player_b,
-            'surface': surface,
-            'data_a': data_a,
-            'data_b': data_b,
-            'fat_a': fat_a,
-            'fat_b': fat_b,
-            'stats_a': stats_a,
-            'stats_b': stats_b,
-            'h2h': h2h,
-            'prediction': prediction,
-            'model_metrics': {'r2': model_data['r2'], 'mae': model_data['mae']}
-        }
-        st.session_state.show_results = True
+        # Store in session state
+        st.session_state['prediction_made'] = True
+        st.session_state['player_a'] = player_a
+        st.session_state['player_b'] = player_b
+        st.session_state['surface'] = surface
+        st.session_state['data_a'] = data_a
+        st.session_state['data_b'] = data_b
+        st.session_state['fat_a'] = fat_a
+        st.session_state['fat_b'] = fat_b
+        st.session_state['stats_a'] = stats_a
+        st.session_state['stats_b'] = stats_b
+        st.session_state['h2h'] = h2h
+        st.session_state['prediction'] = prediction
+        st.session_state['model_metrics'] = {'r2': model_data['r2'], 'mae': model_data['mae']}
+        
         st.rerun()
 
-# Display results if they exist
-if st.session_state.show_results and st.session_state.prediction_results:
-    results = st.session_state.prediction_results
-    
+# DISPLAY RESULTS IF PREDICTION EXISTS
+if st.session_state.get('prediction_made', False):
     st.markdown("---")
     st.markdown("# 📊 MATCH ANALYSIS RESULTS")
     
-    # PREDICTION SECTION - NOW VISIBLE AND PROMINENT
+    # Get data from session state
+    player_a = st.session_state['player_a']
+    player_b = st.session_state['player_b']
+    surface = st.session_state['surface']
+    data_a = st.session_state['data_a']
+    data_b = st.session_state['data_b']
+    fat_a = st.session_state['fat_a']
+    fat_b = st.session_state['fat_b']
+    stats_a = st.session_state['stats_a']
+    stats_b = st.session_state['stats_b']
+    h2h = st.session_state['h2h']
+    prediction = st.session_state['prediction']
+    model_metrics = st.session_state['model_metrics']
+    
+    # PREDICTION SECTION - BIG AND VISIBLE
     st.markdown("## 🎯 TOTAL GAMES PREDICTION")
     
-    # Create a large, visible prediction box
-    prediction = results['prediction']
-    
-    # Determine color and message based on prediction
+    # Determine color and message
     if prediction < 23:
-        box_color = "linear-gradient(135deg, #4CAF50 0%, #45a049 100%)"
+        box_color = "#4CAF50"
         match_message = "⚡ QUICK MATCH (2-set likely)"
     elif prediction < 27:
-        box_color = "linear-gradient(135deg, #FF9800 0%, #f57c00 100%)"
+        box_color = "#FF9800"
         match_message = "⚔️ COMPETITIVE MATCH"
     else:
-        box_color = "linear-gradient(135deg, #F44336 0%, #d32f2f 100%)"
+        box_color = "#F44336"
         match_message = "🔥 LONG MATCH (3-set likely)"
     
-    # Display prediction in a big box
+    # Display prediction box using st.markdown with HTML
     st.markdown(f"""
-    <div style="background: {box_color}; padding: 40px; border-radius: 20px; text-align: center; margin: 20px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+    <div style="background: {box_color}; padding: 40px; border-radius: 20px; text-align: center; margin: 20px 0 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
         <div style="font-size: 2em; color: white; margin-bottom: 10px;">{match_message}</div>
         <div style="font-size: 6em; font-weight: bold; color: white; line-height: 1.2;">{prediction:.1f}</div>
         <div style="font-size: 1.5em; color: white; opacity: 0.9;">TOTAL GAMES</div>
@@ -621,11 +628,10 @@ if st.session_state.show_results and st.session_state.prediction_results:
     
     # Head-to-Head
     st.markdown("## 📊 HEAD-TO-HEAD")
-    h2h = results['h2h']
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Meetings", h2h['total'])
-    col2.metric(f"{results['player_a']} Wins", h2h['player_a_wins'])
-    col3.metric(f"{results['player_b']} Wins", h2h['player_b_wins'])
+    col2.metric(f"{player_a} Wins", h2h['player_a_wins'])
+    col3.metric(f"{player_b} Wins", h2h['player_b_wins'])
     col4.metric("Avg Games", f"{h2h['avg_games']:.1f}")
     
     st.markdown("---")
@@ -634,11 +640,7 @@ if st.session_state.show_results and st.session_state.prediction_results:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown(f"## 🎾 {results['player_a']}")
-        data_a = results['data_a']
-        fat_a = results['fat_a']
-        stats_a = results['stats_a']
-        
+        st.markdown(f"## 🎾 {player_a}")
         st.write(f"**Last 15 Games:** {data_a['wins']}-{data_a['losses']} {data_a['form']}")
         st.write(f"**Win Rate:** {data_a['wins']/(data_a['wins']+data_a['losses'])*100:.1f}%")
         st.write(f"**Average Games:** {data_a['avg_games']:.1f}")
@@ -653,11 +655,7 @@ if st.session_state.show_results and st.session_state.prediction_results:
             st.write(f"• First Serve %: {stats_a['first_serve_percentage']}%")
     
     with col2:
-        st.markdown(f"## 🎾 {results['player_b']}")
-        data_b = results['data_b']
-        fat_b = results['fat_b']
-        stats_b = results['stats_b']
-        
+        st.markdown(f"## 🎾 {player_b}")
         st.write(f"**Last 15 Games:** {data_b['wins']}-{data_b['losses']} {data_b['form']}")
         st.write(f"**Win Rate:** {data_b['wins']/(data_b['wins']+data_b['losses'])*100:.1f}%")
         st.write(f"**Average Games:** {data_b['avg_games']:.1f}")
@@ -673,36 +671,41 @@ if st.session_state.show_results and st.session_state.prediction_results:
     
     st.markdown("---")
     
-    # HTML REPORT EXPORT BUTTON - CLEARLY VISIBLE
+    # HTML REPORT EXPORT BUTTON - ALWAYS VISIBLE
     st.markdown("## 📥 EXPORT REPORT")
     
+    # Center the button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         # Generate HTML report
         html_report = generate_html_report(
-            results['player_a'],
-            results['player_b'],
-            results['surface'],
-            results['data_a'],
-            results['data_b'],
-            results['fat_a'],
-            results['fat_b'],
-            results['stats_a'],
-            results['stats_b'],
-            results['prediction'],
-            results['h2h'],
-            results['model_metrics']
+            player_a, player_b, surface,
+            data_a, data_b, fat_a, fat_b,
+            stats_a, stats_b, prediction, h2h,
+            model_metrics
         )
         
-        # Create a styled download button
-        st.markdown('<div class="export-button">', unsafe_allow_html=True)
+        # Green download button
+        st.markdown("""
+        <style>
+        div.stButton > button:first-child {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            font-size: 1.3em;
+            padding: 20px;
+        }
+        div.stButton > button:first-child:hover {
+            background: linear-gradient(135deg, #20c997 0%, #28a745 100%);
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
         st.download_button(
-            label="📥 DOWNLOAD HTML REPORT",
+            label="📥 DOWNLOAD COMPLETE HTML REPORT",
             data=html_report,
-            file_name=f"WTA_{results['player_a']}_vs_{results['player_b']}_{results['surface']}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            file_name=f"WTA_{player_a}_vs_{player_b}_{surface}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
             mime="text/html",
             use_container_width=True
         )
-        st.markdown('</div>', unsafe_allow_html=True)
         
-        st.info("💡 Click the green button above to download a complete HTML report with all match analysis")
+        st.info("💡 Click the green button above to download a complete HTML report with all match analysis, statistics, and predictions.")
