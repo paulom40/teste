@@ -26,10 +26,10 @@ def fetch_wta_github_data():
 def load_custom_excel(uploaded_file):
     try:
         df = pd.read_excel(uploaded_file)
-        st.success(f"✅ Loaded custom file: {uploaded_file.name}")
+        st.success(f"✅ Loaded: {uploaded_file.name}")
         return df, uploaded_file.name
     except Exception as e:
-        st.error(f"❌ Error loading file: {str(e)}")
+        st.error(f"❌ Error: {str(e)}")
         return None, None
 
 def calculate_total_games(row):
@@ -41,15 +41,8 @@ def calculate_total_games(row):
             total += int(w) + int(l)
     return total if total > 0 else None
 
-# ============= MEAN STATISTICS FROM LAST 15 GAMES =============
-
 def calculate_mean_stats_from_last_15(df, player_name, surface):
-    """
-    Calculate MEAN/AVERAGE statistics from LAST 15 GAMES on surface
-    ALL matches (wins and losses) are included in calculations
-    """
-    
-    # Get LAST 15 GAMES on the surface (all matches)
+    """Calculate MEAN statistics from last 15 games on surface"""
     last_15 = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
         (df['Surface'] == surface)
@@ -57,120 +50,69 @@ def calculate_mean_stats_from_last_15(df, player_name, surface):
     
     if len(last_15) == 0:
         return {
-            'winners': 0,
-            'unforced_errors': 0,
-            'net_points_won': 0,
-            'service_points_won': 0,
-            'return_points_won': 0,
-            'total_points_won': 0,
-            'break_points_converted': 0,
-            'first_serve_percentage': 0,
-            'matches_analyzed': 0
+            'winners': 0, 'unforced_errors': 0, 'net_points_won': 0,
+            'service_points_won': 0, 'return_points_won': 0, 'total_points_won': 0,
+            'break_points_converted': 0, 'first_serve_percentage': 0, 'matches_analyzed': 0
         }
     
-    # Prepare data
     last_15['Total_Games'] = last_15.apply(calculate_total_games, axis=1)
     last_15['W1'] = pd.to_numeric(last_15['W1'], errors='coerce')
     last_15['L1'] = pd.to_numeric(last_15['L1'], errors='coerce')
-    last_15['W2'] = pd.to_numeric(last_15['W2'], errors='coerce')
-    last_15['L2'] = pd.to_numeric(last_15['L2'], errors='coerce')
     last_15['WRank'] = pd.to_numeric(last_15['WRank'], errors='coerce')
     last_15['LRank'] = pd.to_numeric(last_15['LRank'], errors='coerce')
     
     stats = {}
     
     if len(last_15) > 0:
-        # Identify if player is Winner or Loser in each match
         last_15['is_winner'] = last_15['Winner'] == player_name
-        
-        # Get player's rank and opponent's rank in each match
         last_15['player_rank'] = last_15.apply(
-            lambda row: row['WRank'] if row['is_winner'] else row['LRank'],
-            axis=1
+            lambda row: row['WRank'] if row['is_winner'] else row['LRank'], axis=1
         )
         last_15['opponent_rank'] = last_15.apply(
-            lambda row: row['LRank'] if row['is_winner'] else row['WRank'],
-            axis=1
+            lambda row: row['LRank'] if row['is_winner'] else row['WRank'], axis=1
         )
         
-        # 1. WINNERS - MEAN from ranking difference
-        # Positive rank_diff = playing lower ranked opponent = more winners
         last_15['rank_diff'] = last_15['opponent_rank'] - last_15['player_rank']
         mean_rank_diff = last_15['rank_diff'].mean()
-        
-        # Scale: 10-35 based on rank difference
         mean_winners = 10 + (min(mean_rank_diff, 150) / 150) * 25
         stats['winners'] = int(round(mean_winners))
         
-        # 2. UNFORCED ERRORS - MEAN (inverse of winners)
         mean_ue = 25 - (mean_winners - 10) * 0.5
         stats['unforced_errors'] = int(round(mean_ue))
         
-        # 3. NET POINTS WON - MEAN from games played
         mean_total_games = last_15['Total_Games'].mean()
         mean_net_points = 15 + (mean_total_games / 40) * 30
         stats['net_points_won'] = int(round(mean_net_points))
         
-        # 4. SERVICE POINTS WON - MEAN PERCENTAGE
-        # For wins: strong service (2-set wins = 75%, 3-set wins = 60%)
-        # For losses: weaker service (2-set losses = 45%, 3-set losses = 55%)
         service_points_list = []
         for idx, row in last_15.iterrows():
             if row['is_winner']:
-                if row['Wsets'] == 2:
-                    service_points_list.append(75)
-                else:
-                    service_points_list.append(60)
+                service_points_list.append(75 if row['Wsets'] == 2 else 60)
             else:
-                if row['Wsets'] == 2:
-                    service_points_list.append(45)
-                else:
-                    service_points_list.append(55)
-        
+                service_points_list.append(45 if row['Wsets'] == 2 else 55)
         mean_service_points = np.mean(service_points_list) if service_points_list else 55
         stats['service_points_won'] = int(round(mean_service_points))
         
-        # 5. RETURN POINTS WON - MEAN PERCENTAGE from first set
         w1_values = last_15['W1'].dropna()
         l1_values = last_15['L1'].dropna()
-        
         if len(w1_values) > 0 and len(l1_values) > 0:
-            mean_w1 = w1_values.mean()
-            mean_l1 = l1_values.mean()
-            if (mean_w1 + mean_l1) > 0:
-                set1_win_ratio = mean_w1 / (mean_w1 + mean_l1)
-            else:
-                set1_win_ratio = 0.6
+            set1_win_ratio = w1_values.mean() / (w1_values.mean() + l1_values.mean())
         else:
             set1_win_ratio = 0.6
-        
         mean_return_points = 30 + set1_win_ratio * 35
         stats['return_points_won'] = int(round(mean_return_points))
         
-        # 6. TOTAL POINTS WON - MEAN PERCENTAGE
-        mean_total_points = (stats['service_points_won'] + stats['return_points_won']) / 2
-        stats['total_points_won'] = int(round(mean_total_points))
+        stats['total_points_won'] = int(round((stats['service_points_won'] + stats['return_points_won']) / 2))
         
-        # 7. BREAK POINTS CONVERTED - MEAN PERCENTAGE
-        # 3-set matches = break point success needed
-        # 2-set matches = fewer breaks
         break_points_list = []
         for idx, row in last_15.iterrows():
             if row['is_winner']:
-                if row['Wsets'] == 3:
-                    break_points_list.append(60)
-                else:
-                    break_points_list.append(30)
+                break_points_list.append(60 if row['Wsets'] == 3 else 30)
             else:
-                if row['Wsets'] == 3:
-                    break_points_list.append(20)
-                else:
-                    break_points_list.append(40)
-        
+                break_points_list.append(20 if row['Wsets'] == 3 else 40)
         mean_break_points = np.mean(break_points_list) if break_points_list else 40
         stats['break_points_converted'] = int(round(mean_break_points))
         
-        # 8. FIRST SERVE PERCENTAGE - MEAN based on ranking
         mean_rank = last_15['player_rank'].mean()
         mean_first_serve = 45 + (min(mean_rank, 100) / 100) * 30
         stats['first_serve_percentage'] = int(round(mean_first_serve))
@@ -179,8 +121,6 @@ def calculate_mean_stats_from_last_15(df, player_name, surface):
     
     return stats
 
-# ============= PERFORMANCE ANALYSIS =============
-
 def analyze_last_15_surface_games(df, player_name, surface):
     matches = df[
         ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
@@ -188,28 +128,14 @@ def analyze_last_15_surface_games(df, player_name, surface):
     ].tail(15).sort_values('Date', ascending=False)
     
     if len(matches) == 0:
-        return {
-            'matches': 0,
-            'wins': 0,
-            'losses': 0,
-            'win_rate': 0.5,
-            'avg_games': 22,
-            'form': 'No Data'
-        }
+        return {'matches': 0, 'wins': 0, 'losses': 0, 'win_rate': 0.5, 'avg_games': 22, 'form': 'No Data'}
     
     matches = matches.copy()
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
     matches = matches.dropna(subset=['Total_Games'])
     
     if len(matches) == 0:
-        return {
-            'matches': 0,
-            'wins': 0,
-            'losses': 0,
-            'win_rate': 0.5,
-            'avg_games': 22,
-            'form': 'No Data'
-        }
+        return {'matches': 0, 'wins': 0, 'losses': 0, 'win_rate': 0.5, 'avg_games': 22, 'form': 'No Data'}
     
     wins = len(matches[matches['Winner'] == player_name])
     losses = len(matches[matches['Loser'] == player_name])
@@ -224,29 +150,16 @@ def analyze_last_15_surface_games(df, player_name, surface):
     else:
         form = "❌ Poor"
     
-    return {
-        'matches': len(matches),
-        'wins': wins,
-        'losses': losses,
-        'win_rate': wins / len(matches) if len(matches) > 0 else 0.5,
-        'avg_games': avg_games,
-        'form': form
-    }
+    return {'matches': len(matches), 'wins': wins, 'losses': losses, 'win_rate': wins / len(matches) if len(matches) > 0 else 0.5, 'avg_games': avg_games, 'form': form}
 
 def calculate_fatigue(df, player_name):
-    matches = df[
-        (df['Winner'] == player_name) | (df['Loser'] == player_name)
-    ].sort_values('Date', ascending=False)
-    
+    matches = df[(df['Winner'] == player_name) | (df['Loser'] == player_name)].sort_values('Date', ascending=False)
     if len(matches) == 0:
-        return {'days_rest': 0, 'matches_last_7': 0, 'fatigue_level': 'Unknown'}
-    
+        return {'days_rest': 0, 'fatigue_level': 'Unknown'}
     try:
-        last_match_date = pd.to_datetime(matches.iloc[0]['Date'])
-        days_rest = (pd.Timestamp.now() - last_match_date).days
+        days_rest = (pd.Timestamp.now() - pd.to_datetime(matches.iloc[0]['Date'])).days
     except:
         days_rest = 0
-    
     if days_rest >= 7:
         level = "✓ Fresh"
     elif days_rest >= 4:
@@ -255,119 +168,103 @@ def calculate_fatigue(df, player_name):
         level = "⚠️ Tired"
     else:
         level = "🔴 Exhausted"
-    
-    return {'days_rest': days_rest, 'matches_last_7': 0, 'fatigue_level': level}
+    return {'days_rest': days_rest, 'fatigue_level': level}
 
 def analyze_player_skills(df, player_name, surface):
-    matches = df[
-        ((df['Winner'] == player_name) | (df['Loser'] == player_name)) &
-        (df['Surface'] == surface)
-    ].tail(20)
-    
+    matches = df[((df['Winner'] == player_name) | (df['Loser'] == player_name)) & (df['Surface'] == surface)].tail(20)
     if len(matches) == 0:
         return {'serve_strength': 0.5, 'consistency': 0.5, 'aggression': 0.5}
-    
     wins = matches[matches['Winner'] == player_name]
     serve_strength = min(0.9, 0.5 + (len(wins) / len(matches) * 0.4)) if len(matches) > 0 else 0.5
-    
     matches = matches.copy()
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    
     avg_games = matches['Total_Games'].mean()
-    aggression = (avg_games - 15) / 20
-    aggression = np.clip(aggression, 0.1, 0.9)
-    
+    aggression = np.clip((avg_games - 15) / 20, 0.1, 0.9)
     consistency = min(0.9, 0.5 + (serve_strength * 0.4))
-    
     return {'serve_strength': serve_strength, 'consistency': consistency, 'aggression': aggression}
-
-# ============= MODEL BUILDING =============
 
 @st.cache_resource
 def build_model(df):
     df_train = df.copy()
     df_train['Total_Games'] = df_train.apply(calculate_total_games, axis=1)
-    
     df_train = df_train.dropna(subset=['Total_Games'])
-    df_train = df_train[df_train['Total_Games'] > 0]
-    df_train = df_train[df_train['Total_Games'] < 50]
-    
+    df_train = df_train[(df_train['Total_Games'] > 0) & (df_train['Total_Games'] < 50)]
     if len(df_train) < 100:
         st.error("Not enough training data")
         return None
-    
     features = []
-    
     w1 = pd.to_numeric(df_train['W1'], errors='coerce').fillna(0).values
     l1 = pd.to_numeric(df_train['L1'], errors='coerce').fillna(0).values
     w2 = pd.to_numeric(df_train['W2'], errors='coerce').fillna(0).values
     l2 = pd.to_numeric(df_train['L2'], errors='coerce').fillna(0).values
     w3 = pd.to_numeric(df_train['W3'], errors='coerce').fillna(0).values
     l3 = pd.to_numeric(df_train['L3'], errors='coerce').fillna(0).values
-    
     features.append(w1 + l1)
     features.append(w2 + l2)
     features.append(np.where(w3 + l3 > 0, w3 + l3, 0))
     features.append((df_train['Wsets'] == 2).astype(float).values)
     features.append((df_train['Wsets'] == 3).astype(float).values)
-    
     rank_diff = df_train['LRank'] - df_train['WRank']
     features.append(rank_diff.fillna(0).values)
-    
     competitiveness = 1 / (1 + np.abs(w1 - l1) + np.abs(w2 - l2))
     features.append(competitiveness)
-    
     if 'Surface' in df_train.columns:
         for surface in df_train['Surface'].dropna().unique():
             is_surface = (df_train['Surface'] == surface).astype(int).values
             features.append(is_surface)
-    
     X = np.column_stack(features)
     X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
     y = df_train['Total_Games'].values
-    
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
-    
     model = GradientBoostingRegressor(n_estimators=500, learning_rate=0.02, max_depth=5, random_state=42)
     model.fit(X_train_scaled, y_train)
-    
     y_pred = model.predict(X_test_scaled)
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
-    
     return {'model': model, 'scaler': scaler, 'r2': r2, 'mae': mae, 'df': df_train}
 
 def main():
     st.sidebar.title("🎾 WTA Advanced Predictor")
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📁 Data Source")
+    st.sidebar.subheader("📁 DATA SOURCE")
     
-    data_source = st.sidebar.radio("Choose data source:", ["📥 Upload Custom File", "🌐 GitHub WTA Database"])
+    # PROMINENT FILE UPLOAD
+    st.sidebar.markdown("### 📥 UPLOAD YOUR EXCEL FILE")
+    st.sidebar.markdown("Select an Excel file (.xlsx or .xls)")
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose file",
+        type=['xlsx', 'xls'],
+        label_visibility="collapsed",
+        help="Columns needed: Winner, Loser, W1-W5, L1-L5, WRank, LRank, Surface, Date, Wsets"
+    )
     
     df = None
     source_name = ""
     
-    if data_source == "📥 Upload Custom File":
-        uploaded_file = st.sidebar.file_uploader("Choose an Excel file", type=['xlsx', 'xls'])
-        if uploaded_file is not None:
-            df, source_name = load_custom_excel(uploaded_file)
-        else:
-            st.sidebar.warning("⚠️ Please upload an Excel file")
-            return
+    if uploaded_file is not None:
+        df, source_name = load_custom_excel(uploaded_file)
     else:
-        with st.spinner("📥 Loading GitHub data..."):
-            df, source_name = fetch_wta_github_data()
-        if df is None:
-            st.error("❌ Could not load data")
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🌐 OR USE GITHUB DATA")
+        if st.sidebar.button("📥 Load Default WTA Database", use_container_width=True, key="github_btn"):
+            with st.spinner("📥 Loading GitHub data..."):
+                df, source_name = fetch_wta_github_data()
+            if df is None:
+                st.error("❌ Could not load GitHub data")
+                return
+        else:
+            st.sidebar.info("📤 Upload an Excel file above\nOR\n📥 Click button to load GitHub data")
             return
     
+    if df is None:
+        return
+    
     st.sidebar.markdown("---")
-    st.sidebar.write(f"**Data Source:** {source_name}")
-    st.sidebar.metric("Total Matches", len(df))
+    st.sidebar.markdown(f"**✅ Data Loaded:**\n{source_name}")
+    st.sidebar.metric("📊 Matches", len(df))
     
     with st.spinner("🔧 Training ML model..."):
         build_model.clear()
@@ -376,28 +273,28 @@ def main():
     if model_data is None:
         return
     
-    st.sidebar.success("✅ Model trained!")
+    st.sidebar.success("✅ Model Ready!")
     st.sidebar.metric("R² Score", f"{model_data['r2']:.3f}")
-    st.sidebar.metric("Error ±", f"{model_data['mae']:.2f} games")
+    st.sidebar.metric("Accuracy", f"±{model_data['mae']:.2f} games")
     
     st.header("🎾 WTA Advanced Match Predictor")
-    st.markdown(f"*MEAN Statistics from Last 15 Games • {source_name}*")
+    st.markdown(f"**Source:** {source_name} • **Analysis:** Last 15 Games")
     st.markdown("---")
     
     col1, col2, col3 = st.columns(3)
     with col1:
         all_players = sorted(list(set(df['Winner'].unique()) | set(df['Loser'].unique())))
-        player_a = st.selectbox("Player 1", all_players, key="p1")
+        player_a = st.selectbox("🎾 Player 1", all_players, key="p1")
     with col2:
-        player_b = st.selectbox("Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="p2")
+        player_b = st.selectbox("🎾 Player 2", all_players, index=1 if len(all_players) > 1 else 0, key="p2")
     with col3:
         surfaces = sorted(df['Surface'].dropna().unique())
-        surface = st.selectbox("Surface", surfaces, key="surf")
+        surface = st.selectbox("🏆 Surface", surfaces, key="surf")
     
     st.markdown("---")
     
-    if st.button("🔮 PREDICT MATCH", use_container_width=True):
-        with st.spinner("Analyzing both players..."):
+    if st.button("🔮 PREDICT MATCH", use_container_width=True, key="predict_btn"):
+        with st.spinner("Analyzing players..."):
             analysis_a = {
                 'last15': analyze_last_15_surface_games(df, player_a, surface),
                 'fatigue': calculate_fatigue(df, player_a),
@@ -408,45 +305,52 @@ def main():
                 'fatigue': calculate_fatigue(df, player_b),
                 'skills': analyze_player_skills(df, player_b, surface)
             }
-            
-            with st.spinner("Calculating MEAN statistics from last 15 games..."):
+            with st.spinner("Calculating MEAN statistics..."):
                 stats_a = calculate_mean_stats_from_last_15(df, player_a, surface)
                 stats_b = calculate_mean_stats_from_last_15(df, player_b, surface)
         
         st.markdown("---")
-        st.subheader("📊 MATCH ANALYSIS")
+        st.subheader("📊 COMPLETE MATCH ANALYSIS")
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader(f"🎾 {player_a}")
-            st.write(f"**Last 15 Games:** {analysis_a['last15']['wins']}-{analysis_a['last15']['losses']} ({analysis_a['last15']['form']})")
-            st.write(f"**Average Games:** {analysis_a['last15']['avg_games']:.1f}")
+            st.write(f"**Last 15 Games:** {analysis_a['last15']['wins']}-{analysis_a['last15']['losses']} {analysis_a['last15']['form']}")
+            st.write(f"**Avg Games/Match:** {analysis_a['last15']['avg_games']:.1f}")
+            st.write(f"**Fatigue:** {analysis_a['fatigue']['fatigue_level']} ({analysis_a['fatigue']['days_rest']} days rest)")
             
-            st.write("\n**MEAN Statistics (Last 15 Games):**")
-            st.write(f"• Winners: {stats_a['winners']}")
-            st.write(f"• Unforced Errors: {stats_a['unforced_errors']}")
-            st.write(f"• Net Points Won: {stats_a['net_points_won']}")
-            st.write(f"• Service Points Won: {stats_a['service_points_won']}%")
-            st.write(f"• Return Points Won: {stats_a['return_points_won']}%")
-            st.write(f"• Total Points Won: {stats_a['total_points_won']}%")
-            st.write(f"• Break Points Converted: {stats_a['break_points_converted']}%")
-            st.write(f"• First Serve %: {stats_a['first_serve_percentage']}%")
+            st.write("\n**📊 MEAN Statistics (Last 15 Games):**")
+            st.write(f"• Winners: **{stats_a['winners']}**")
+            st.write(f"• Unforced Errors: **{stats_a['unforced_errors']}**")
+            st.write(f"• Net Points Won: **{stats_a['net_points_won']}**")
+            st.write(f"• Service Points Won: **{stats_a['service_points_won']}%**")
+            st.write(f"• Return Points Won: **{stats_a['return_points_won']}%**")
+            st.write(f"• Total Points Won: **{stats_a['total_points_won']}%**")
+            st.write(f"• Break Points Converted: **{stats_a['break_points_converted']}%**")
+            st.write(f"• First Serve %: **{stats_a['first_serve_percentage']}%**")
+            
+            st.write("\n**⚡ Skills:**")
+            st.write(f"• Serve: {int(analysis_a['skills']['serve_strength']*100)}% | Consistency: {int(analysis_a['skills']['consistency']*100)}% | Aggression: {int(analysis_a['skills']['aggression']*100)}%")
         
         with col2:
             st.subheader(f"🎾 {player_b}")
-            st.write(f"**Last 15 Games:** {analysis_b['last15']['wins']}-{analysis_b['last15']['losses']} ({analysis_b['last15']['form']})")
-            st.write(f"**Average Games:** {analysis_b['last15']['avg_games']:.1f}")
+            st.write(f"**Last 15 Games:** {analysis_b['last15']['wins']}-{analysis_b['last15']['losses']} {analysis_b['last15']['form']}")
+            st.write(f"**Avg Games/Match:** {analysis_b['last15']['avg_games']:.1f}")
+            st.write(f"**Fatigue:** {analysis_b['fatigue']['fatigue_level']} ({analysis_b['fatigue']['days_rest']} days rest)")
             
-            st.write("\n**MEAN Statistics (Last 15 Games):**")
-            st.write(f"• Winners: {stats_b['winners']}")
-            st.write(f"• Unforced Errors: {stats_b['unforced_errors']}")
-            st.write(f"• Net Points Won: {stats_b['net_points_won']}")
-            st.write(f"• Service Points Won: {stats_b['service_points_won']}%")
-            st.write(f"• Return Points Won: {stats_b['return_points_won']}%")
-            st.write(f"• Total Points Won: {stats_b['total_points_won']}%")
-            st.write(f"• Break Points Converted: {stats_b['break_points_converted']}%")
-            st.write(f"• First Serve %: {stats_b['first_serve_percentage']}%")
+            st.write("\n**📊 MEAN Statistics (Last 15 Games):**")
+            st.write(f"• Winners: **{stats_b['winners']}**")
+            st.write(f"• Unforced Errors: **{stats_b['unforced_errors']}**")
+            st.write(f"• Net Points Won: **{stats_b['net_points_won']}**")
+            st.write(f"• Service Points Won: **{stats_b['service_points_won']}%**")
+            st.write(f"• Return Points Won: **{stats_b['return_points_won']}%**")
+            st.write(f"• Total Points Won: **{stats_b['total_points_won']}%**")
+            st.write(f"• Break Points Converted: **{stats_b['break_points_converted']}%**")
+            st.write(f"• First Serve %: **{stats_b['first_serve_percentage']}%**")
+            
+            st.write("\n**⚡ Skills:**")
+            st.write(f"• Serve: {int(analysis_b['skills']['serve_strength']*100)}% | Consistency: {int(analysis_b['skills']['consistency']*100)}% | Aggression: {int(analysis_b['skills']['aggression']*100)}%")
 
 if __name__ == "__main__":
     main()
