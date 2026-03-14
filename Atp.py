@@ -10,7 +10,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="ATP Predictor Pro 2026", layout="wide")
+st.set_page_config(page_title="ATP Predictor Pro", layout="wide")
 
 # ── Styling ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -22,11 +22,7 @@ st.markdown("""
         width:100%; margin:10px 0;
     }
     .stButton>button:hover { background: linear-gradient(135deg, #3f51b5, #1a237e); }
-    .pred-box {
-        padding: 35px; border-radius: 18px; text-align:center;
-        margin: 25px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.22);
-        color: white;
-    }
+    .pred-box { padding: 35px; border-radius: 18px; text-align:center; margin: 25px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.22); color: white; }
     .big-num { font-size: 6.8em; font-weight: 800; line-height: 0.92; }
     .match-msg { font-size: 1.7em; margin-bottom: 14px; }
     .card { background:#f8f9fa; border-radius:12px; padding:24px; margin:20px 0; border-left:5px solid #3f51b5; }
@@ -36,77 +32,72 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎾 ATP Men's Tennis Predictor Pro")
-st.caption("March 2026 • Focus on last 15 matches on selected surface • Total games prediction")
+st.title("🎾 ATP Men's Tennis Predictor")
+st.markdown("Upload your Excel file → select players & surface → predict total games")
 
-# ── File Upload & Data ─────────────────────────────────────────────────────
-uploaded_file = st.file_uploader("Upload ATP matches CSV/Excel (or use sample data)", type=["csv", "xlsx"])
+# ── Upload & Load Data ─────────────────────────────────────────────────────
+uploaded_file = st.file_uploader("Select your ATP Excel file", type=["xlsx", "xls"])
 
-@st.cache_data
-def load_atp_data(file=None):
-    if file is not None:
-        if file.name.endswith('.csv'):
-            df = pd.read_csv(file)
-        else:
-            df = pd.read_excel(file)
-    else:
-        # Fallback placeholder - in real use download from https://github.com/JeffSackmann/tennis_atp
-        st.info("Using demo data structure. For full accuracy upload atp_matches_*.csv from Jeff Sackmann repo.")
-        df = pd.DataFrame(columns=['tourney_date','surface','winner_name','loser_name','winner_rank','loser_rank',
-                                   'w_1','l_1','w_2','l_2','w_3','l_3','w_4','l_4','w_5','l_5','w_sets','l_sets',
-                                   'minutes','comment'])
-
-    df.columns = df.columns.str.strip().str.lower()
-
-    # Standardize column names (Sackmann style)
-    rename_map = {
-        'winner_name':'winner', 'loser_name':'loser',
-        'winner_rank':'wrank', 'loser_rank':'lrank',
-        'w_1':'w1', 'l_1':'l1', 'w_2':'w2', 'l_2':'l2', 'w_3':'w3', 'l_3':'l3',
-        'w_4':'w4', 'l_4':'l4', 'w_5':'w5', 'l_5':'l5',
-        'w_sets':'wsets', 'l_sets':'lsets',
-        'tourney_date':'date', 'surface':'surface'
-    }
-    df = df.rename(columns=rename_map)
-
-    if 'date' in df.columns:
-        df['date'] = pd.to_numeric(df['date'], errors='coerce')
-        df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
-
-    df = df.sort_values('date', ascending=False)
-
-    # Calculate total games
-    for s in ['1','2','3','4','5']:
-        df[f'w{s}'] = pd.to_numeric(df.get(f'w{s}',0), errors='coerce').fillna(0).astype(int)
-        df[f'l{s}'] = pd.to_numeric(df.get(f'l{s}',0), errors='coerce').fillna(0).astype(int)
-
-    df['total_games'] = sum(df[f'{side}{s}'] for side in ['w','l'] for s in '12345')
-
-    df = df[df.get('comment','').str.contains('Completed', case=False, na=False)]
-    return df.dropna(subset=['date','winner','loser','surface','total_games'])
-
-df = load_atp_data(uploaded_file)
-
-if df.empty:
-    st.error("No valid completed matches found.")
+if not uploaded_file:
+    st.info("Upload your file to start (expected columns: Date, Surface, Winner, Loser, W1-L5, Wsets, etc.)")
     st.stop()
 
-st.success(f"Loaded {len(df):,} matches • Surfaces: {', '.join(df['surface'].dropna().unique())}")
+@st.cache_data
+def load_atp_excel(file):
+    df = pd.read_excel(file)
+    df.columns = df.columns.str.strip()
 
-# ── Helpers (adapted for ATP – more sets possible) ──────────────────────────
+    # Fix comma decimals in betting odds
+    for col in ['B365W','B365L','PSW','PSL','MaxW','MaxL','AvgW','AvgL']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace(',','.').replace('',np.nan).astype(float)
+
+    # Date – DD/MM/YYYY format
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+
+    df = df.sort_values('Date', ascending=False)
+
+    # Clean player names (remove trailing dots/spaces)
+    df['Winner'] = df['Winner'].str.strip().str.replace(r'\.$', '', regex=True)
+    df['Loser']  = df['Loser'].str.strip().str.replace(r'\.$', '', regex=True)
+
+    # Build total games (supports up to 5 sets)
+    for s in '12345':
+        df[f'W{s}'] = pd.to_numeric(df.get(f'W{s}', 0), errors='coerce').fillna(0).astype(int)
+        df[f'L{s}'] = pd.to_numeric(df.get(f'L{s}', 0), errors='coerce').fillna(0).astype(int)
+
+    df['Total_Games'] = sum(df[f'{side}{s}'] for side in 'WL' for s in '12345')
+
+    # Keep only completed matches
+    df['Completed'] = df.get('Comment', '').str.contains('Completed', case=False, na=False)
+    df = df[df['Completed']]
+
+    return df.dropna(subset=['Date', 'Winner', 'Loser', 'Surface', 'Total_Games'])
+
+df = load_atp_excel(uploaded_file)
+
+if df.empty:
+    st.error("No valid completed matches found in the file.")
+    st.stop()
+
+st.success(f"Loaded {len(df):,} completed matches • Surfaces: {', '.join(sorted(df['Surface'].dropna().unique()))}")
+
+# ── Helper Functions ───────────────────────────────────────────────────────
 
 def get_player_matches(df, player, surface=None):
-    cond = (df['winner'] == player) | (df['loser'] == player)
-    if surface: cond &= (df['surface'] == surface)
-    return df[cond].sort_values('date', ascending=False)
+    cond = (df['Winner'] == player) | (df['Loser'] == player)
+    if surface:
+        cond &= (df['Surface'] == surface)
+    return df[cond].sort_values('Date', ascending=False)
 
 
 def analyze_last_15(df, player, surface):
     m = get_player_matches(df, player, surface).head(15)
     if len(m) == 0:
-        return {'wins':0, 'losses':0, 'wr':50.0, 'avg_games':23.0, 'form':'No data'}
+        return {'wins':0, 'losses':0, 'wr':50.0, 'avg_games':23.5, 'form':'No data'}
 
-    wins = (m['winner'] == player).sum()
+    wins = (m['Winner'] == player).sum()
     wr = wins / len(m) * 100
     form = "🔥 Dominant" if wr >= 70 else "Strong" if wr >= 55 else "Mixed" if wr >= 40 else "Struggling"
 
@@ -114,7 +105,7 @@ def analyze_last_15(df, player, surface):
         'wins': wins,
         'losses': len(m)-wins,
         'wr': round(wr,1),
-        'avg_games': round(m['total_games'].mean(),1),
+        'avg_games': round(m['Total_Games'].mean(),1),
         'form': form
     }
 
@@ -129,15 +120,14 @@ def calculate_surface_stats(df, player, surface, n=15):
             'sgw':78, 'rgw':34, 'games_won_pct':56
         }
 
-    wr = (m['winner'] == player).mean()
-    avg_g = m['total_games'].mean() if 'total_games' in m.columns else 23.5
+    wr = (m['Winner'] == player).mean()
+    avg_g = m['Total_Games'].mean() if 'Total_Games' in m.columns else 23.5
     wr_dev = wr - 0.5
 
     bases = {
         'Hard':  {'win':22, 'ue':27, 'net':68, 'spw':63, 'rpw':40, 'sgw':78, 'rgw':34},
-        'Clay':  {'win':18, 'ue':32, 'net':62, 'spw':59, 'rpw':44, 'sgw':73, 'rgw':39},
-        'Grass': {'win':25, 'ue':24, 'net':74, 'spw':66, 'rpw':38, 'sgw':83, 'rgw':32},
-        'Carpet': {'win':23, 'ue':26, 'net':70, 'spw':64, 'rpw':39, 'sgw':80, 'rgw':33},
+        'Clay':  {'win':18, 'ue':33, 'net':62, 'spw':59, 'rpw':44, 'sgw':73, 'rgw':39},
+        'Grass': {'win':26, 'ue':24, 'net':74, 'spw':66, 'rpw':38, 'sgw':83, 'rgw':32},
     }
     b = bases.get(surface, bases['Hard'])
 
@@ -145,14 +135,14 @@ def calculate_surface_stats(df, player, surface, n=15):
 
     stats = {
         'matches': len(m),
-        'winners':           round(b['win'] + adj*24 + (avg_g-23)*0.5, 0),
-        'unforced_errors':   round(b['ue']  - adj*22 + (avg_g-23)*0.6, 0),
+        'winners':           round(b['win'] + adj*26 + (avg_g-23)*0.5, 0),
+        'unforced_errors':   round(b['ue']  - adj*24 + (avg_g-23)*0.6, 0),
         'net_pct':           round(b['net'] + adj*20, 0),
-        'spw':               round(b['spw'] + adj*14, 0),
-        'rpw':               round(b['rpw'] + adj*16, 0),
-        'sgw':               round(b['sgw'] + adj*16, 0),
-        'rgw':               round(b['rgw'] + adj*18, 0),
-        'games_won_pct':     round((b['sgw'] + adj*16 + b['rgw'] + adj*18)/2, 0),
+        'spw':               round(b['spw'] + adj*15, 0),
+        'rpw':               round(b['rpw'] + adj*17, 0),
+        'sgw':               round(b['sgw'] + adj*17, 0),
+        'rgw':               round(b['rgw'] + adj*19, 0),
+        'games_won_pct':     round((b['sgw'] + adj*17 + b['rgw'] + adj*19)/2, 0),
     }
 
     for k in ['spw','rpw','sgw','rgw','net_pct']:
@@ -163,116 +153,149 @@ def calculate_surface_stats(df, player, surface, n=15):
 
 def days_since_last_match(df, player):
     m = get_player_matches(df, player).head(1)
-    if len(m) == 0 or pd.isna(m.iloc[0]['date']):
-        return 10, "Unknown"
-    days = (datetime.now().date() - m.iloc[0]['date'].date()).days
-    lvl = "🔴 Very fresh" if days <= 4 else "⚠️ Recent" if days <= 9 else "Normal" if days <= 16 else "🟢 Well rested"
+    if len(m) == 0 or pd.isna(m.iloc[0]['Date']):
+        return 12, "Unknown"
+    days = (datetime.now().date() - m.iloc[0]['Date'].date()).days
+    lvl = "🔴 Very fresh" if days <= 4 else "⚠️ Recent" if days <= 10 else "Normal" if days <= 18 else "🟢 Well rested"
     return days, lvl
 
 
 def head_to_head(df, p1, p2, surface=None):
-    cond = (((df['winner']==p1)&(df['loser']==p2)) | ((df['winner']==p2)&(df['loser']==p1)))
-    if surface: cond &= df['surface']==surface
+    cond = (((df['Winner']==p1)&(df['Loser']==p2)) | ((df['Winner']==p2)&(df['Loser']==p1)))
+    if surface: cond &= (df['Surface']==surface)
     h = df[cond]
-    if len(h)==0: return {'total':0, f"{p1} wins":0, f"{p2} wins":0, 'avg_g':23.0}
-    w1 = (h['winner']==p1).sum()
-    return {'total':len(h), f"{p1} wins":w1, f"{p2} wins":len(h)-w1, 'avg_g':round(h['total_games'].mean(),1)}
+    if len(h)==0:
+        return {'total':0, f"{p1} wins":0, f"{p2} wins":0, 'avg_g':23.5}
+    w1 = (h['Winner']==p1).sum()
+    return {
+        'total': len(h),
+        f"{p1} wins": w1,
+        f"{p2} wins": len(h)-w1,
+        'avg_g': round(h['Total_Games'].mean(),1)
+    }
 
 
 @st.cache_resource
-def build_model(df):
-    d = df[df['total_games'].between(15,60)].copy()  # wider range for best-of-5
-    if len(d) < 80: return None
+def train_total_games_model(df):
+    d = df[df['Total_Games'].between(15, 60)].copy()
+    if len(d) < 80:
+        return None
 
     feats = []
     for s in '12345':
-        feats.append(d[f'w{s}'] + d[f'l{s}'])
+        feats.append(d[f'W{s}'] + d[f'L{s}'])
         if s in '12':
-            feats.append(abs(d[f'w{s}'] - d[f'l{s}']))
+            feats.append(abs(d[f'W{s}'] - d[f'L{s}']))
 
     feats.extend([
-        (d.get('wsets',0)==3).astype(int),  # 3 sets won = best-of-5 win
-        (d.get('wsets',0)==2).astype(int),
-        d.get('wrank',500).fillna(500),
-        d.get('lrank',500).fillna(500),
-        d.get('lrank',500).fillna(500) - d.get('wrank',500).fillna(500)
+        (d['Wsets']==3).astype(int),
+        (d['Wsets']==2).astype(int),
+        d.get('WRank', 500).fillna(500),
+        d.get('LRank', 500).fillna(500),
+        d.get('LRank', 500).fillna(500) - d.get('WRank', 500).fillna(500)
     ])
 
-    if 'surface' in d:
-        dummies = pd.get_dummies(d['surface'], prefix='Surf')
-        for col in dummies: feats.append(dummies[col])
+    if 'Surface' in d:
+        dummies = pd.get_dummies(d['Surface'], prefix='Surf')
+        for col in dummies.columns:
+            feats.append(dummies[col])
 
     X = np.column_stack(feats)
-    X = np.nan_to_num(X)
-    y = d['total_games'].values
+    X = np.nan_to_num(X, nan=0)
+    y = d['Total_Games'].values
 
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
-    sc = StandardScaler().fit(Xtr)
-    mdl = GradientBoostingRegressor(n_estimators=250, max_depth=5, learning_rate=0.04, random_state=42)
-    mdl.fit(sc.transform(Xtr), ytr)
+    scaler = StandardScaler().fit(Xtr)
+    model = GradientBoostingRegressor(n_estimators=250, max_depth=5, learning_rate=0.04, random_state=42)
+    model.fit(scaler.transform(Xtr), ytr)
 
-    p = mdl.predict(sc.transform(Xte))
-    return {'model':mdl, 'scaler':sc, 'r2':r2_score(yte,p), 'mae':mean_absolute_error(yte,p)}
+    pred = model.predict(scaler.transform(Xte))
+    return {
+        'model': model,
+        'scaler': scaler,
+        'r2': r2_score(yte, pred),
+        'mae': mean_absolute_error(yte, pred)
+    }
 
+model_info = train_total_games_model(df)
 
-model = build_model(df)
+# ── User Interface ─────────────────────────────────────────────────────────
+st.subheader("Select Players & Surface")
 
-# ── UI ─────────────────────────────────────────────────────────────────────
-st.subheader("Select Matchup")
+col1, col2, col3 = st.columns([5,5,3])
+with col1:
+    players = sorted(set(df['Winner'].unique()) | set(df['Loser'].unique()))
+    player_a = st.selectbox("Player A", players, key="pa_atp")
+with col2:
+    player_b_list = [p for p in players if p != player_a]
+    player_b = st.selectbox("Player B", player_b_list, key="pb_atp")
+with col3:
+    surfaces = sorted(df['Surface'].dropna().unique())
+    surface = st.selectbox("Surface", surfaces, key="surf_atp")
 
-c1, c2, c3 = st.columns([5,5,3])
-with c1: p1 = st.selectbox("Player 1", sorted(set(df['winner']) | set(df['loser'])), key="ap1")
-with c2:
-    p2_opts = [x for x in sorted(set(df['winner']) | set(df['loser'])) if x != p1]
-    p2 = st.selectbox("Player 2", p2_opts, key="ap2")
-with c3: surface = st.selectbox("Surface", sorted(df['surface'].dropna().unique()), key="as")
+if st.button("🔮 Generate Prediction", type="primary", use_container_width=True):
+    with st.spinner("Analyzing recent form on surface..."):
+        data_a = analyze_last_15(df, player_a, surface)
+        data_b = analyze_last_15(df, player_b, surface)
 
-if st.button("Generate ATP Prediction", type="primary"):
-    with st.spinner("Analyzing surface form + model..."):
-        d1 = analyze_last_15(df, p1, surface)
-        d2 = analyze_last_15(df, p2, surface)
-        s1 = calculate_surface_stats(df, p1, surface)
-        s2 = calculate_surface_stats(df, p2, surface)
-        days1, fat1 = days_since_last_match(df, p1)
-        days2, fat2 = days_since_last_match(df, p2)
-        h2h = head_to_head(df, p1, p2, surface)
+        stats_a = calculate_surface_stats(df, player_a, surface)
+        stats_b = calculate_surface_stats(df, player_b, surface)
 
-        heur = (s1['avg_games'] + s2['avg_games']) / 2 * (1 + (d1['wr'] - d2['wr'])/400)
+        days_a, fat_a = days_since_last_match(df, player_a)
+        days_b, fat_b = days_since_last_match(df, player_b)
 
-        ml_val = heur
-        if model and model['model']:
+        h2h = head_to_head(df, player_a, player_b, surface)
+
+        # Heuristic baseline
+        heur = (stats_a['avg_games'] + stats_b['avg_games']) / 2
+        form_adj = 1 + (data_a['wr'] - data_b['wr']) / 400
+        heuristic_pred = heur * form_adj
+
+        # ML prediction attempt
+        ml_pred = heuristic_pred
+        if model_info and model_info['model']:
             try:
-                r1 = df[df['winner']==p1]['wrank'].mean() or 300
-                r2 = df[df['winner']==p2]['wrank'].mean() or 300
-                surf_dummies = [1 if x==surface else 0 for x in sorted(df['surface'].dropna().unique())]
-                vec = [s1['avg_games']]*5 + [3.5]*3 + [0.6,0.4, r1,r2,r2-r1] + surf_dummies
-                Xf = np.array(vec).reshape(1,-1)
-                ml_val = model['model'].predict(model['scaler'].transform(Xf))[0]
-            except Exception as e:
-                st.warning(f"ML fallback: {e}")
+                r_a = df[df['Winner'] == player_a]['WRank'].iloc[0] if not df[df['Winner'] == player_a].empty else 300
+                r_b = df[df['Winner'] == player_b]['WRank'].iloc[0] if not df[df['Winner'] == player_b].empty else 300
+                surf_dummies = [1 if s == surface else 0 for s in sorted(df['Surface'].dropna().unique())]
+                features = [stats_a['avg_games']] * 5 + [3.5] * 3 + [0.65, 0.35, r_a, r_b, r_b - r_a] + surf_dummies
+                X_future = np.array(features).reshape(1, -1)
+                X_scaled = model_info['scaler'].transform(X_future)
+                ml_pred = model_info['model'].predict(X_scaled)[0]
+            except:
+                pass
 
-        final = round(0.6 * ml_val + 0.4 * heur, 1)
+        final_pred = round(0.65 * ml_pred + 0.35 * heuristic_pred, 1)
 
         st.session_state.update({
-            'apred':True, 'ap1':p1, 'ap2':p2, 'asurf':surface,
-            'ad1':d1, 'ad2':d2, 'as1':s1, 'as2':s2,
-            'afat1':(days1,fat1), 'afat2':(days2,fat2),
-            'ah2h':h2h, 'aprediction':final,
-            'amodel_ok': bool(model and model['model'])
+            'atp_predicted': True,
+            'player_a': player_a,
+            'player_b': player_b,
+            'surface': surface,
+            'data_a': data_a,
+            'data_b': data_b,
+            'stats_a': stats_a,
+            'stats_b': stats_b,
+            'fat_a': (days_a, fat_a),
+            'fat_b': (days_b, fat_b),
+            'h2h': h2h,
+            'prediction': final_pred,
+            'ml_used': model_info and model_info['model'] is not None
         })
         st.rerun()
 
-# ── Results + Always-visible Export ───────────────────────────────────────
+# ── Results & Export ───────────────────────────────────────────────────────
 st.markdown("---")
 
-curr_p1 = st.session_state.get('ap1', p1)
-curr_p2 = st.session_state.get('ap2', p2)
-curr_surf = st.session_state.get('asurf', surface)
-has_pred = 'aprediction' in st.session_state
-pred_val = st.session_state.get('aprediction', None)
-pred_str = f"{pred_val:.1f}" if has_pred else "—"
-color = "#66BB6A" if (has_pred and pred_val < 23) else "#FFB74D" if (has_pred and pred_val < 30) else "#EF5350" if has_pred else "#9E9E9E"
-msg = 'Straight sets likely' if (has_pred and pred_val < 23) else 'Competitive' if (has_pred and pred_val < 30) else 'Likely 4–5 sets' if has_pred else 'Run prediction'
+# Current selection (fallback if no prediction yet)
+curr_a = st.session_state.get('player_a', player_a if 'player_a' in locals() else "")
+curr_b = st.session_state.get('player_b', player_b if 'player_b' in locals() else "")
+curr_surf = st.session_state.get('surface', surface if 'surface' in locals() else "")
+has_prediction = st.session_state.get('atp_predicted', False)
+pred_value = st.session_state.get('prediction', None)
+pred_str = f"{pred_value:.1f}" if has_prediction else "—"
+color = "#66BB6A" if (has_prediction and pred_value < 23) else "#FFB74D" if (has_prediction and pred_value < 30) else "#EF5350" if has_prediction else "#9E9E9E"
+msg = "Straight sets likely" if (has_prediction and pred_value < 23) else "Competitive" if (has_prediction and pred_value < 30) else "Likely 4–5 sets" if has_prediction else "Run prediction first"
 
 st.markdown(f"""
 <div class="pred-box" style="background:{color};">
@@ -282,82 +305,79 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("### Export Detailed ATP Report")
-st.caption("Always available • includes full stats when prediction is generated")
+# Always-visible detailed export button
+st.markdown("### Export Detailed Report")
+st.caption("Download HTML report (includes stats & prediction if already generated)")
 
-def create_atp_html_report():
-    p1 = curr_p1 or "Player A"
-    p2 = curr_p2 or "Player B"
+def generate_atp_html_report():
+    p_a = curr_a or "Player A"
+    p_b = curr_b or "Player B"
     surf = curr_surf or "—"
     pred = pred_str
     pred_color = color
 
-    has_data = has_pred and 'ad1' in st.session_state
+    has_full = has_prediction and 'data_a' in st.session_state
 
-    stats_html = ""
-    if has_data:
-        s1 = st.session_state.as1
-        s2 = st.session_state.as2
-        d1 = st.session_state.ad1
-        d2 = st.session_state.ad2
-        fat1_d, fat1_l = st.session_state.afat1
-        fat2_d, fat2_l = st.session_state.afat2
-
-        stats_html = f"""
-        <h2>Last 15 on {surf} – Detailed Stats</h2>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:30px;">
-            <div class="card">
-                <h3>{p1}</h3>
-                <p><strong>Record:</strong> {d1['wins']}-{d1['losses']} ({d1['wr']}%) • {d1['form']}</p>
-                <p><strong>Rest:</strong> {fat1_l} ({fat1_d} days)</p>
-                <table class="detail-table">
-                    <tr><th>Stat</th><th>Value</th></tr>
-                    <tr><td>Winners / match</td><td>{s1['winners']}</td></tr>
-                    <tr><td>Unforced errors / match</td><td>{s1['unforced_errors']}</td></tr>
-                    <tr><td>Net points won %</td><td>{s1['net_pct']}%</td></tr>
-                    <tr><td>Service points won %</td><td>{s1['spw']}%</td></tr>
-                    <tr><td>Return points won %</td><td>{s1['rpw']}%</td></tr>
-                    <tr><td>Service games won %</td><td>{s1['sgw']}%</td></tr>
-                    <tr><td>Return games won %</td><td>{s1['rgw']}%</td></tr>
-                    <tr><td>Games won % overall</td><td>{s1['games_won_pct']}%</td></tr>
-                </table>
-            </div>
-            <div class="card">
-                <h3>{p2}</h3>
-                <p><strong>Record:</strong> {d2['wins']}-{d2['losses']} ({d2['wr']}%) • {d2['form']}</p>
-                <p><strong>Rest:</strong> {fat2_l} ({fat2_d} days)</p>
-                <table class="detail-table">
-                    <tr><th>Stat</th><th>Value</th></tr>
-                    <tr><td>Winners / match</td><td>{s2['winners']}</td></tr>
-                    <tr><td>Unforced errors / match</td><td>{s2['unforced_errors']}</td></tr>
-                    <tr><td>Net points won %</td><td>{s2['net_pct']}%</td></tr>
-                    <tr><td>Service points won %</td><td>{s2['spw']}%</td></tr>
-                    <tr><td>Return points won %</td><td>{s2['rpw']}%</td></tr>
-                    <tr><td>Service games won %</td><td>{s2['sgw']}%</td></tr>
-                    <tr><td>Return games won %</td><td>{s2['rgw']}%</td></tr>
-                    <tr><td>Games won % overall</td><td>{s2['games_won_pct']}%</td></tr>
-                </table>
-            </div>
-        </div>
-        <p style="text-align:center; font-style:italic; margin:25px 0;">
-            Prediction method: {'ML + heuristic blend' if st.session_state.get('amodel_ok', False) else 'Heuristic only'}<br>
-            Model performance (training): R² ≈ {model['r2']:.3f} | MAE ±{model['mae']:.1f} games
-        </p>
-        """
-
-    h2h_html = ""
-    if 'ah2h' in st.session_state:
-        h = st.session_state.ah2h
-        h2h_html = f"""
+    h2h_section = ""
+    if 'h2h' in st.session_state:
+        h = st.session_state.h2h
+        h2h_section = f"""
         <div class="card">
             <h3>Head-to-Head on {surf}</h3>
             <table class="detail-table">
                 <tr><th>Metric</th><th>Value</th></tr>
                 <tr><td>Total matches</td><td>{h['total']}</td></tr>
-                <tr><td>{p1} wins</td><td>{h.get(f"{p1} wins", 0)}</td></tr>
-                <tr><td>{p2} wins</td><td>{h.get(f"{p2} wins", 0)}</td></tr>
-                <tr><td>Avg total games</td><td>{h.get('avg_g', 23.0):.1f}</td></tr>
+                <tr><td>{p_a} wins</td><td>{h.get(f"{p_a} wins", 0)}</td></tr>
+                <tr><td>{p_b} wins</td><td>{h.get(f"{p_b} wins", 0)}</td></tr>
+                <tr><td>Avg total games</td><td>{h.get('avg_g', 23.5):.1f}</td></tr>
             </table>
+        </div>
+        """
+
+    stats_section = ""
+    if has_full:
+        da = st.session_state.data_a
+        db = st.session_state.data_b
+        sa = st.session_state.stats_a
+        sb = st.session_state.stats_b
+        fa_d, fa_l = st.session_state.fat_a
+        fb_d, fb_l = st.session_state.fat_b
+
+        stats_section = f"""
+        <h2>Last 15 on {surf} – Detailed Stats</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:30px;">
+            <div class="card">
+                <h3>{p_a}</h3>
+                <p><strong>Record:</strong> {da['wins']}-{da['losses']} ({da['wr']}%) • {da['form']}</p>
+                <p><strong>Rest:</strong> {fa_l} ({fa_d} days)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners / match</td><td>{sa['winners']}</td></tr>
+                    <tr><td>Unforced errors / match</td><td>{sa['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{sa['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{sa['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{sa['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{sa['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{sa['rgw']}%</td></tr>
+                    <tr><td>Games won % overall</td><td>{sa['games_won_pct']}%</td></tr>
+                </table>
+            </div>
+            <div class="card">
+                <h3>{p_b}</h3>
+                <p><strong>Record:</strong> {db['wins']}-{db['losses']} ({db['wr']}%) • {db['form']}</p>
+                <p><strong>Rest:</strong> {fb_l} ({fb_d} days)</p>
+                <table class="detail-table">
+                    <tr><th>Stat</th><th>Value</th></tr>
+                    <tr><td>Winners / match</td><td>{sb['winners']}</td></tr>
+                    <tr><td>Unforced errors / match</td><td>{sb['unforced_errors']}</td></tr>
+                    <tr><td>Net points won %</td><td>{sb['net_pct']}%</td></tr>
+                    <tr><td>Service points won %</td><td>{sb['spw']}%</td></tr>
+                    <tr><td>Return points won %</td><td>{sb['rpw']}%</td></tr>
+                    <tr><td>Service games won %</td><td>{sb['sgw']}%</td></tr>
+                    <tr><td>Return games won %</td><td>{sb['rgw']}%</td></tr>
+                    <tr><td>Games won % overall</td><td>{sb['games_won_pct']}%</td></tr>
+                </table>
+            </div>
         </div>
         """
 
@@ -365,7 +385,7 @@ def create_atp_html_report():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>ATP Report • {p1} vs {p2}</title>
+    <title>ATP Prediction • {p_a} vs {p_b}</title>
     <style>
         body {{ font-family: system-ui, sans-serif; background: linear-gradient(to bottom right, #f0f2ff, #e3e8ff); margin:0; padding:30px; color:#222; }}
         .container {{ max-width:1150px; margin:auto; background:white; border-radius:18px; box-shadow:0 12px 50px rgba(0,0,0,0.18); overflow:hidden; }}
@@ -382,33 +402,30 @@ def create_atp_html_report():
 <body>
 <div class="container">
     <div class="header">
-        <h1>ATP Men's Tennis Predictor Pro</h1>
-        <p>{p1} vs {p2} • {surf} • {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <h1>ATP Men's Tennis Predictor</h1>
+        <p>{p_a} vs {p_b} • {surf} • {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </div>
     <div class="content">
         <div class="prediction">
-            <div style="font-size:2.1em; margin-bottom:15px;">Predicted Total Games</div>
+            <div style="font-size:2.1em;">Predicted Total Games</div>
             <div class="big">{pred}</div>
         </div>
-
-        {h2h_html}
-
-        {stats_html if has_full_data else '<p style="text-align:center; color:#555; font-size:1.1em;">Run prediction to unlock detailed surface stats, fatigue & model notes</p>'}
-
+        {h2h_section}
+        {stats_section if has_full else '<p style="text-align:center; color:#555; font-size:1.1em;">Detailed stats & fatigue will appear after running a prediction</p>'}
     </div>
     <div class="footer">
-        ATP Predictor Pro • Data-driven estimation • Not official ATP • For entertainment & analysis only
+        Generated with ATP Predictor • Estimation only – not official ATP data
     </div>
 </div>
 </body>
 </html>"""
 
 st.download_button(
-    label="📥 Download Detailed ATP HTML Report",
-    data=create_atp_html_report(),
-    file_name=f"atp_{curr_p1.replace(' ','_')}_vs_{curr_p2.replace(' ','_')}_{curr_surf}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+    label="📥 Download Detailed HTML Report",
+    data=generate_atp_html_report(),
+    file_name=f"atp_{curr_a.replace(' ','_')}_vs_{curr_b.replace(' ','_')}_{curr_surf}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
     mime="text/html",
     use_container_width=True
 )
 
-st.caption("For best results: use full Jeff Sackmann ATP data (1968–2025) • Predictor focuses on total games (like WTA version)")
+st.caption("Tip: The more historical data in your Excel, the better the surface-specific stats and model.")
