@@ -4,8 +4,6 @@ import numpy as np
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
-from sklearn.preprocessing import StandardScaler, RobustScaler
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -309,7 +307,7 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                         'Set 2': f"{w2}-{l2}",
                         'Set 3': f"{w3}-{l3}" if is_3set else "—",
                         'Total Games': total_games,
-                        'Confidence': confidence  # Store as integer, not string
+                        'Confidence': confidence  # Store as integer
                     })
             
             if best_predictions:
@@ -327,10 +325,10 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             st.markdown(f"## 🎯 PREDICTIONS READY")
             st.markdown(f"### {len(predictions_df)} MATCHES WITH 22-25 GAMES")
             
-            # Display with proper formatting
+            # Create display dataframe
             display_df = predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']].copy()
             
-            # Use column config for better display
+            # Display with custom column config
             st.dataframe(
                 display_df,
                 use_container_width=True,
@@ -347,6 +345,9 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             )
             
             # Statistics
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("Total Matches", len(predictions_df))
@@ -363,19 +364,46 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                 avg_confidence = predictions_df['Confidence'].mean()
                 st.metric("Avg Confidence", f"{avg_confidence:.1f}%")
             
-            # Show distribution of games
+            # Simple games distribution
             st.markdown("---")
             st.markdown("### 📊 Games Distribution")
             
-            # Create bins for games distribution
-            games_bins = [18, 20, 22, 23, 24, 25, 27, 30]
-            games_labels = ['<20', '20-21', '22', '23', '24', '25', '26-27', '>27']
+            # Create simple distribution manually to avoid pandas cut issues
+            ranges = {
+                '20-21': 0,
+                '22': 0,
+                '23': 0,
+                '24': 0,
+                '25': 0,
+                '26-27': 0,
+                '28+': 0
+            }
             
-            predictions_df['Games Range'] = pd.cut(predictions_df['Total Games'], bins=games_bins, labels=games_labels)
-            dist_data = predictions_df['Games Range'].value_counts().sort_index()
+            for games in predictions_df['Total Games']:
+                if games <= 21:
+                    ranges['20-21'] += 1
+                elif games == 22:
+                    ranges['22'] += 1
+                elif games == 23:
+                    ranges['23'] += 1
+                elif games == 24:
+                    ranges['24'] += 1
+                elif games == 25:
+                    ranges['25'] += 1
+                elif games <= 27:
+                    ranges['26-27'] += 1
+                else:
+                    ranges['28+'] += 1
             
-            # Display distribution as bar chart
-            st.bar_chart(dist_data)
+            # Convert to dataframe for display
+            dist_df = pd.DataFrame(list(ranges.items()), columns=['Games Range', 'Count'])
+            dist_df = dist_df[dist_df['Count'] > 0]  # Only show ranges with counts
+            
+            # Display distribution
+            st.dataframe(dist_df, use_container_width=True, hide_index=True)
+            
+            # Simple bar chart
+            st.bar_chart(dist_df.set_index('Games Range')['Count'])
             
             # Export options
             st.markdown("---")
@@ -384,7 +412,7 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             col1, col2 = st.columns(2)
             
             with col1:
-                # Prepare export data (without the range column)
+                # Prepare export data
                 export_df = predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']].copy()
                 csv = export_df.to_csv(index=False)
                 st.download_button(
@@ -432,7 +460,7 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             
             st.success("✅ Predictions generated successfully!")
             
-            # Add some insights
+            # Add insights
             st.markdown("---")
             st.markdown("### 💡 Key Insights")
             
@@ -440,60 +468,19 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             if len(high_confidence) > 0:
                 st.info(f"🔍 {len(high_confidence)} matches have high confidence (≥85%) predictions")
                 
-                # Show top high confidence matches
                 st.markdown("**Top High Confidence Matches:**")
                 top_matches = high_confidence.nlargest(3, 'Confidence')[['Player 1', 'Player 2', 'Total Games', 'Confidence %']]
                 for _, match in top_matches.iterrows():
-                    st.write(f"• {match['Player 1']} vs {match['Player 2']}: {match['Total Games']} games ({match['Confidence %']} confidence)")
+                    st.write(f"• **{match['Player 1']} vs {match['Player 2']}**: {match['Total Games']} games ({match['Confidence %']} confidence)")
+            
+            # Most likely game total
+            most_common_games = predictions_df['Total Games'].mode()
+            if len(most_common_games) > 0:
+                st.info(f"🎯 Most likely game total: **{most_common_games[0]:.0f} games**")
             
         else:
-            st.warning("⚠️ No matches found in the 22-25 game range. Running more simulations...")
-            
-            # Run additional simulations with wider range
-            st.info("Expanding search range to 21-26 games...")
-            
-            expanded_predictions = []
-            for match in st.session_state.confirmed_matches[:5]:  # Try first 5 matches
-                for _ in range(300):
-                    is_3set = np.random.random() < 0.32
-                    
-                    if is_3set:
-                        w1, l1 = np.random.randint(5, 8), np.random.randint(3, 7)
-                        w2, l2 = np.random.randint(4, 8), np.random.randint(3, 7)
-                        w3, l3 = np.random.randint(6, 8), np.random.randint(2, 6)
-                    else:
-                        w1, l1 = np.random.randint(6, 8), np.random.randint(2, 6)
-                        w2, l2 = np.random.randint(6, 8), np.random.randint(2, 6)
-                        w3, l3 = 0, 0
-                    
-                    total_games = w1 + l1 + w2 + l2 + w3 + l3
-                    
-                    if 21 <= total_games <= 26:
-                        confidence = int(75 + (5 * (1 - abs(total_games - 23.5) / 3)))
-                        expanded_predictions.append({
-                            'Player 1': match['Player 1'],
-                            'Player 2': match['Player 2'],
-                            'Tour': match['Tour'],
-                            'Round': match.get('Round', 'Scheduled'),
-                            'Set 1': f"{w1}-{l1}",
-                            'Set 2': f"{w2}-{l2}",
-                            'Set 3': f"{w3}-{l3}" if is_3set else "—",
-                            'Total Games': total_games,
-                            'Confidence': confidence
-                        })
-            
-            if expanded_predictions:
-                expanded_df = pd.DataFrame(expanded_predictions)
-                expanded_df['Confidence %'] = expanded_df['Confidence'].astype(str) + '%'
-                
-                st.success(f"✅ Found {len(expanded_df)} matches in expanded range (21-26 games)")
-                st.dataframe(
-                    expanded_df[['Player 1', 'Player 2', 'Tour', 'Set 1', 'Set 2', 'Total Games', 'Confidence %']],
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.info("💡 Tip: Try loading different matches or use manual entry for specific matchups")
+            st.warning("⚠️ No matches found in the 22-25 game range.")
+            st.info("💡 Tip: Try loading different matches or use the 'Load All Matches' button to get more variety")
 
 # Footer
 st.markdown("---")
@@ -504,6 +491,7 @@ st.markdown("""
 - **Target**: Matches with 22-25 total games
 - **Simulation**: 200+ Monte Carlo simulations per match
 - **Confidence**: Based on game total proximity to ideal range (22-25)
+- **Players**: Top ATP and WTA players scheduled for Miami Open 2026
 """)
 
 # Display current date
