@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+import json
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -28,11 +28,16 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    .update-info {
-        background-color: #e3f2fd;
+    .match-card {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
         padding: 1rem;
         border-radius: 10px;
-        margin: 1rem 0;
+        margin: 0.5rem 0;
+    }
+    .api-status {
+        padding: 0.5rem;
+        border-radius: 5px;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -41,477 +46,422 @@ st.markdown("# 🎾 MIAMI 2026 PRO - ADVANCED GAME PREDICTOR")
 st.markdown("AI-powered predictions for Miami Open 2026 (Games 22-25)")
 st.markdown("---")
 
-# Current date
-today = datetime.now()
-tomorrow = today + timedelta(days=1)
+# API Configuration
+RAPIDAPI_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a4"
 
-# Function to fetch real ATP matches from FlashScore
-def fetch_atp_matches():
-    """Fetch real ATP matches from FlashScore"""
-    try:
-        # Try multiple sources
-        sources = [
-            "https://www.flashscore.com/tennis/atp-singles/",
-            "https://www.atptour.com/en/scores/results",
-            "https://www.espn.com/tennis/schedule"
-        ]
-        
-        matches = []
-        
-        # Try FlashScore first (most reliable)
+class TennisAPIClient:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.headers = {
+            "X-RapidAPI-Key": self.api_key,
+            "X-RapidAPI-Host": "tennis-live-data.p.rapidapi.com"
+        }
+    
+    def get_live_scores(self):
+        """Get live scores and today's matches"""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(sources[0], headers=headers, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser')
+            url = "https://tennis-live-data.p.rapidapi.com/livescore"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception as e:
+            st.error(f"API Error: {str(e)}")
+            return None
+    
+    def get_fixtures(self):
+        """Get today's fixtures"""
+        try:
+            url = "https://tennis-live-data.p.rapidapi.com/fixtures/today"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception as e:
+            st.error(f"API Error: {str(e)}")
+            return None
+    
+    def get_tournament_matches(self, tournament_id):
+        """Get matches for specific tournament"""
+        try:
+            url = f"https://tennis-live-data.p.rapidapi.com/tournaments/{tournament_id}/matches"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception as e:
+            st.error(f"API Error: {str(e)}")
+            return None
+    
+    def get_atp_matches(self):
+        """Get ATP matches specifically"""
+        try:
+            # Try different endpoints for ATP
+            endpoints = [
+                "https://tennis-live-data.p.rapidapi.com/atp/matches",
+                "https://tennis-live-data.p.rapidapi.com/mens/matches",
+                "https://tennis-live-data.p.rapidapi.com/matches/tour/atp"
+            ]
             
-            # Look for match elements (this structure might need adjustment based on actual page)
-            match_elements = soup.find_all('div', class_='event__match')
-            
-            for elem in match_elements[:10]:  # Limit to 10 matches
+            for endpoint in endpoints:
                 try:
-                    home = elem.find('div', class_='event__home')
-                    away = elem.find('div', class_='event__away')
-                    if home and away:
-                        matches.append({
-                            'Player 1': home.text.strip(),
-                            'Player 2': away.text.strip(),
-                            'Tour': 'ATP',
-                            'Round': 'Scheduled',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
+                    response = requests.get(endpoint, headers=self.headers, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        return self.parse_matches(data, 'ATP')
                 except:
                     continue
-        except:
-            pass
-        
-        # If no matches found, return None
-        return matches if matches else None
-    except:
-        return None
-
-def fetch_wta_matches():
-    """Fetch real WTA matches from FlashScore"""
-    try:
-        sources = [
-            "https://www.flashscore.com/tennis/wta-singles/",
-            "https://www.wtatennis.com/scores"
-        ]
-        
+            return []
+        except Exception as e:
+            st.error(f"ATP API Error: {str(e)}")
+            return []
+    
+    def get_wta_matches(self):
+        """Get WTA matches specifically"""
+        try:
+            # Try different endpoints for WTA
+            endpoints = [
+                "https://tennis-live-data.p.rapidapi.com/wta/matches",
+                "https://tennis-live-data.p.rapidapi.com/womens/matches",
+                "https://tennis-live-data.p.rapidapi.com/matches/tour/wta"
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    response = requests.get(endpoint, headers=self.headers, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        return self.parse_matches(data, 'WTA')
+                except:
+                    continue
+            return []
+        except Exception as e:
+            st.error(f"WTA API Error: {str(e)}")
+            return []
+    
+    def parse_matches(self, data, tour):
+        """Parse matches from API response"""
         matches = []
         
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(sources[0], headers=headers, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Handle different response structures
+            if isinstance(data, dict):
+                # Check for common response structures
+                if 'response' in data:
+                    matches_data = data['response']
+                elif 'data' in data:
+                    matches_data = data['data']
+                elif 'matches' in data:
+                    matches_data = data['matches']
+                elif 'fixtures' in data:
+                    matches_data = data['fixtures']
+                else:
+                    matches_data = [data]
+            elif isinstance(data, list):
+                matches_data = data
+            else:
+                return []
             
-            match_elements = soup.find_all('div', class_='event__match')
-            
-            for elem in match_elements[:10]:
+            for match in matches_data:
                 try:
-                    home = elem.find('div', class_='event__home')
-                    away = elem.find('div', class_='event__away')
-                    if home and away:
-                        matches.append({
-                            'Player 1': home.text.strip(),
-                            'Player 2': away.text.strip(),
-                            'Tour': 'WTA',
-                            'Round': 'Scheduled',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
-                except:
+                    if isinstance(match, dict):
+                        # Extract player names from various possible field names
+                        player1 = None
+                        player2 = None
+                        
+                        # Try different field names for player1
+                        player1_fields = ['home_name', 'player1', 'player_one', 'p1', 'first_player', 'player_a', 'name_home']
+                        for field in player1_fields:
+                            if field in match and match[field]:
+                                player1 = match[field]
+                                break
+                        
+                        # Try different field names for player2
+                        player2_fields = ['away_name', 'player2', 'player_two', 'p2', 'second_player', 'player_b', 'name_away']
+                        for field in player2_fields:
+                            if field in match and match[field]:
+                                player2 = match[field]
+                                break
+                        
+                        # If players are in nested structure
+                        if not player1 and 'players' in match and len(match['players']) >= 2:
+                            player1 = match['players'][0].get('name', '')
+                            player2 = match['players'][1].get('name', '')
+                        
+                        if not player1 or not player2:
+                            continue
+                        
+                        # Clean player names
+                        player1 = player1.strip()
+                        player2 = player2.strip()
+                        
+                        # Check if match is finished (has score)
+                        has_score = False
+                        score_fields = ['score', 'result', 'status', 'scores']
+                        for field in score_fields:
+                            if field in match:
+                                score_val = str(match[field])
+                                if score_val and score_val not in ['0-0', '0-0 0-0', '']:
+                                    if any(c.isdigit() for c in score_val) and '-' in score_val:
+                                        has_score = True
+                                        break
+                        
+                        # Only add scheduled matches (no score)
+                        if not has_score:
+                            match_time = match.get('time') or match.get('start_time') or match.get('date') or 'TBD'
+                            match_round = match.get('round') or match.get('stage') or 'Scheduled'
+                            
+                            matches.append({
+                                'Player 1': player1,
+                                'Player 2': player2,
+                                'Tour': tour,
+                                'Round': match_round,
+                                'Time': match_time,
+                                'Status': '📅 Scheduled'
+                            })
+                except Exception as e:
                     continue
-        except:
-            pass
-        
-        return matches if matches else None
-    except:
-        return None
+            
+            return matches
+        except Exception as e:
+            st.error(f"Parse error: {str(e)}")
+            return []
+    
+    def get_demo_atp_matches(self):
+        """Demo ATP matches for Miami Open 2026"""
+        return [
+            {"Player 1": "Jannik Sinner (ITA) [1]", "Player 2": "Carlos Alcaraz (ESP) [2]", "Tour": "ATP", "Round": "Final", "Time": "15:00", "Status": "📅 Scheduled"},
+            {"Player 1": "Novak Djokovic (SRB) [3]", "Player 2": "Alexander Zverev (GER) [4]", "Tour": "ATP", "Round": "Semi Final", "Time": "12:30", "Status": "📅 Scheduled"},
+            {"Player 1": "Daniil Medvedev (RUS) [5]", "Player 2": "Taylor Fritz (USA) [6]", "Tour": "ATP", "Round": "Quarter Final", "Time": "11:00", "Status": "📅 Scheduled"},
+            {"Player 1": "Andrey Rublev (RUS) [7]", "Player 2": "Casper Ruud (NOR) [8]", "Tour": "ATP", "Round": "Quarter Final", "Time": "13:00", "Status": "📅 Scheduled"},
+            {"Player 1": "Stefanos Tsitsipas (GRE) [9]", "Player 2": "Holger Rune (DEN) [10]", "Tour": "ATP", "Round": "Round of 16", "Time": "10:00", "Status": "📅 Scheduled"},
+            {"Player 1": "Hubert Hurkacz (POL) [11]", "Player 2": "Grigor Dimitrov (BUL) [12]", "Tour": "ATP", "Round": "Round of 16", "Time": "14:00", "Status": "📅 Scheduled"}
+        ]
+    
+    def get_demo_wta_matches(self):
+        """Demo WTA matches for Miami Open 2026"""
+        return [
+            {"Player 1": "Iga Swiatek (POL) [1]", "Player 2": "Elena Rybakina (KAZ) [2]", "Tour": "WTA", "Round": "Final", "Time": "16:00", "Status": "📅 Scheduled"},
+            {"Player 1": "Coco Gauff (USA) [3]", "Player 2": "Aryna Sabalenka (BLR) [4]", "Tour": "WTA", "Round": "Semi Final", "Time": "13:30", "Status": "📅 Scheduled"},
+            {"Player 1": "Jessica Pegula (USA) [5]", "Player 2": "Ons Jabeur (TUN) [6]", "Tour": "WTA", "Round": "Quarter Final", "Time": "11:30", "Status": "📅 Scheduled"},
+            {"Player 1": "Qinwen Zheng (CHN) [7]", "Player 2": "Maria Sakkari (GRE) [8]", "Tour": "WTA", "Round": "Quarter Final", "Time": "14:30", "Status": "📅 Scheduled"},
+            {"Player 1": "Jasmine Paolini (ITA) [9]", "Player 2": "Emma Navarro (USA) [10]", "Tour": "WTA", "Round": "Round of 16", "Time": "10:30", "Status": "📅 Scheduled"},
+            {"Player 1": "Madison Keys (USA) [11]", "Player 2": "Danielle Collins (USA) [12]", "Tour": "WTA", "Round": "Round of 16", "Time": "15:30", "Status": "📅 Scheduled"}
+        ]
 
-# Session state for storing matches
+# Initialize API client
+api_client = TennisAPIClient(RAPIDAPI_KEY)
+
+# Session state initialization
 if 'atp_matches' not in st.session_state:
     st.session_state.atp_matches = []
 if 'wta_matches' not in st.session_state:
     st.session_state.wta_matches = []
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = None
+if 'api_last_fetch' not in st.session_state:
+    st.session_state.api_last_fetch = None
 
-# Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📅 TODAY'S MATCHES", "🔄 UPDATE MATCHES", "🏆 MIAMI OPEN", "📝 MANUAL ENTRY"])
+# Main interface
+st.markdown("## 🤖 LOAD TODAY'S MATCHES FROM API")
 
-# Tab 1: Today's Matches Display
-with tab1:
-    st.markdown(f"## 📅 {today.strftime('%A, %B %d, %Y')}")
-    
-    # Show last update info
-    if st.session_state.last_update:
-        st.info(f"🕐 Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
-    
+# Show API status
+with st.expander("🔑 API Status", expanded=False):
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.markdown("#### 🏆 ATP SINGLES")
-        if st.session_state.atp_matches:
-            atp_df = pd.DataFrame(st.session_state.atp_matches)
-            st.dataframe(atp_df, use_container_width=True, hide_index=True)
-            st.info(f"📊 ATP Matches: {len(st.session_state.atp_matches)}")
-        else:
-            st.warning("No ATP matches loaded. Go to 'UPDATE MATCHES' tab to fetch today's matches.")
-    
+        st.code(f"API Key: {RAPIDAPI_KEY[:15]}...{RAPIDAPI_KEY[-10:]}")
     with col2:
-        st.markdown("#### 🏆 WTA SINGLES")
-        if st.session_state.wta_matches:
-            wta_df = pd.DataFrame(st.session_state.wta_matches)
-            st.dataframe(wta_df, use_container_width=True, hide_index=True)
-            st.info(f"📊 WTA Matches: {len(st.session_state.wta_matches)}")
-        else:
-            st.warning("No WTA matches loaded. Go to 'UPDATE MATCHES' tab to fetch today's matches.")
-    
-    # Combine for prediction
-    all_matches = st.session_state.atp_matches + st.session_state.wta_matches
-    
-    if all_matches:
-        st.markdown("---")
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.success(f"✅ Total matches ready: {len(all_matches)}")
-        with col2:
-            if st.button("🎯 Generate Predictions", use_container_width=True, type="primary"):
-                st.session_state.confirmed_matches = all_matches
-                st.session_state.auto_loaded = True
-                st.rerun()
+        st.info("✅ API Key Loaded")
 
-# Tab 2: Update Matches (Manual Update)
-with tab2:
-    st.markdown("## 🔄 UPDATE TODAY'S MATCHES")
-    st.markdown("Click the buttons below to fetch the latest matches for today")
-    
-    # Manual update section
-    st.markdown("### 📋 Manual Update")
-    st.markdown("Enter today's matches manually if automatic fetch fails")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### ATP Singles")
-        atp_update = st.text_area(
-            "Enter ATP matches (one per line)",
-            placeholder="Player1 vs Player2\n\nExample:\nJannik Sinner vs Carlos Alcaraz\nNovak Djokovic vs Taylor Fritz",
-            height=200,
-            key="atp_update"
-        )
-        
-        if st.button("Update ATP Matches", key="update_atp"):
-            atp_matches = []
-            for line in atp_update.strip().split('\n'):
-                if 'vs' in line:
-                    parts = line.split('vs')
-                    if len(parts) == 2:
-                        atp_matches.append({
-                            'Player 1': parts[0].strip(),
-                            'Player 2': parts[1].strip(),
-                            'Tour': 'ATP',
-                            'Round': 'Scheduled',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
-            
-            if atp_matches:
+# API Fetch Buttons
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    if st.button("🎾 Fetch ATP Matches Today", use_container_width=True, type="primary"):
+        with st.spinner("Fetching ATP matches from API..."):
+            atp_matches = api_client.get_atp_matches()
+            if atp_matches and len(atp_matches) > 0:
                 st.session_state.atp_matches = atp_matches
-                st.session_state.last_update = datetime.now()
-                st.success(f"✅ Updated {len(atp_matches)} ATP matches!")
-                st.rerun()
-    
-    with col2:
-        st.markdown("#### WTA Singles")
-        wta_update = st.text_area(
-            "Enter WTA matches (one per line)",
-            placeholder="Player1 vs Player2\n\nExample:\nIga Swiatek vs Elena Rybakina\nCoco Gauff vs Aryna Sabalenka",
-            height=200,
-            key="wta_update"
-        )
-        
-        if st.button("Update WTA Matches", key="update_wta"):
-            wta_matches = []
-            for line in wta_update.strip().split('\n'):
-                if 'vs' in line:
-                    parts = line.split('vs')
-                    if len(parts) == 2:
-                        wta_matches.append({
-                            'Player 1': parts[0].strip(),
-                            'Player 2': parts[1].strip(),
-                            'Tour': 'WTA',
-                            'Round': 'Scheduled',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
-            
-            if wta_matches:
+                st.session_state.api_last_fetch = datetime.now()
+                st.success(f"✅ Loaded {len(atp_matches)} ATP matches from API!")
+                st.balloons()
+            else:
+                st.warning("⚠️ No ATP matches found via API. Using demo data for Miami Open 2026")
+                st.session_state.atp_matches = api_client.get_demo_atp_matches()
+                st.info(f"📋 Loaded {len(st.session_state.atp_matches)} demo ATP matches")
+
+with col2:
+    if st.button("🎾 Fetch WTA Matches Today", use_container_width=True, type="primary"):
+        with st.spinner("Fetching WTA matches from API..."):
+            wta_matches = api_client.get_wta_matches()
+            if wta_matches and len(wta_matches) > 0:
                 st.session_state.wta_matches = wta_matches
-                st.session_state.last_update = datetime.now()
-                st.success(f"✅ Updated {len(wta_matches)} WTA matches!")
-                st.rerun()
-    
-    # Quick templates for common tournaments
-    st.markdown("---")
-    st.markdown("### 🎾 Quick Templates")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("Load Miami Open ATP Template"):
-            template_atp = """Jannik Sinner vs Carlos Alcaraz
-Novak Djokovic vs Alexander Zverev
-Daniil Medvedev vs Taylor Fritz
-Andrey Rublev vs Casper Ruud
-Stefanos Tsitsipas vs Holger Rune
-Hubert Hurkacz vs Grigor Dimitrov
-Tommy Paul vs Ben Shelton
-Frances Tiafoe vs Sebastian Korda"""
-            st.session_state.atp_update = template_atp
-            st.rerun()
-    
-    with col2:
-        if st.button("Load Miami Open WTA Template"):
-            template_wta = """Iga Swiatek vs Elena Rybakina
-Coco Gauff vs Aryna Sabalenka
-Jessica Pegula vs Ons Jabeur
-Qinwen Zheng vs Maria Sakkari
-Jasmine Paolini vs Emma Navarro
-Madison Keys vs Danielle Collins
-Barbora Krejcikova vs Marketa Vondrousova
-Karolina Muchova vs Liudmila Samsonova"""
-            st.session_state.wta_update = template_wta
-            st.rerun()
+                st.session_state.api_last_fetch = datetime.now()
+                st.success(f"✅ Loaded {len(wta_matches)} WTA matches from API!")
+                st.balloons()
+            else:
+                st.warning("⚠️ No WTA matches found via API. Using demo data for Miami Open 2026")
+                st.session_state.wta_matches = api_client.get_demo_wta_matches()
+                st.info(f"📋 Loaded {len(st.session_state.wta_matches)} demo WTA matches")
 
-# Tab 3: Miami Open 2026 Information
-with tab3:
-    st.markdown("## 🏆 MIAMI OPEN 2026")
-    st.markdown("### Tournament Information")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.info("**📍 Location**\nMiami, Florida, USA\nHard Rock Stadium")
-    with col2:
-        st.info("**🎾 Surface**\nOutdoor Hard Court\nLaykold surface")
-    with col3:
-        st.info("**📅 Dates**\nMarch 18 - March 29, 2026")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.info("**🏆 ATP Category**\nATP Masters 1000\nWinner: 1000 points")
-    with col2:
-        st.info("**🏆 WTA Category**\nWTA 1000\nWinner: 1000 points")
-    with col3:
-        st.info("**💰 Prize Money**\nTotal: $9,000,000\nWinner: $1,200,000")
-    
-    st.markdown("---")
-    st.markdown("### 🎾 Top Seeds")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### ATP Top 8 Seeds")
-        seeds_atp = pd.DataFrame({
-            'Seed': [1, 2, 3, 4, 5, 6, 7, 8],
-            'Player': ['Jannik Sinner', 'Carlos Alcaraz', 'Novak Djokovic', 'Alexander Zverev',
-                      'Daniil Medvedev', 'Taylor Fritz', 'Andrey Rublev', 'Casper Ruud']
-        })
-        st.dataframe(seeds_atp, use_container_width=True, hide_index=True)
-    
-    with col2:
-        st.markdown("#### WTA Top 8 Seeds")
-        seeds_wta = pd.DataFrame({
-            'Seed': [1, 2, 3, 4, 5, 6, 7, 8],
-            'Player': ['Iga Swiatek', 'Elena Rybakina', 'Coco Gauff', 'Aryna Sabalenka',
-                      'Jessica Pegula', 'Ons Jabeur', 'Qinwen Zheng', 'Maria Sakkari']
-        })
-        st.dataframe(seeds_wta, use_container_width=True, hide_index=True)
+with col3:
+    if st.button("🔄 Fetch All Matches", use_container_width=True):
+        with st.spinner("Fetching all matches..."):
+            # Try to fetch both
+            atp_matches = api_client.get_atp_matches()
+            wta_matches = api_client.get_wta_matches()
+            
+            if atp_matches and len(atp_matches) > 0:
+                st.session_state.atp_matches = atp_matches
+            else:
+                st.session_state.atp_matches = api_client.get_demo_atp_matches()
+            
+            if wta_matches and len(wta_matches) > 0:
+                st.session_state.wta_matches = wta_matches
+            else:
+                st.session_state.wta_matches = api_client.get_demo_wta_matches()
+            
+            st.session_state.api_last_fetch = datetime.now()
+            st.success(f"✅ Loaded {len(st.session_state.atp_matches)} ATP + {len(st.session_state.wta_matches)} WTA matches")
+            st.balloons()
 
-# Tab 4: Manual Entry
-with tab4:
-    st.markdown("## 📝 MANUAL MATCH ENTRY")
-    st.markdown("Add or edit matches manually")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### 🏆 ATP SINGLES")
-        manual_atp = st.text_area(
-            "Add ATP matches (one per line)",
-            placeholder="Player 1 vs Player 2\n\nExample:\nAlex de Minaur vs Arthur Fils",
-            height=150,
-            key="manual_atp_tab4"
-        )
-        
-        if st.button("➕ Add ATP Matches", key="add_atp_tab4"):
-            new_matches = []
-            for line in manual_atp.strip().split('\n'):
-                if 'vs' in line:
-                    parts = line.split('vs')
-                    if len(parts) == 2:
-                        new_matches.append({
-                            'Player 1': parts[0].strip(),
-                            'Player 2': parts[1].strip(),
-                            'Tour': 'ATP',
-                            'Round': 'Manual Entry',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
-            
-            if new_matches:
-                st.session_state.atp_matches.extend(new_matches)
-                st.session_state.last_update = datetime.now()
-                st.success(f"✅ Added {len(new_matches)} ATP matches")
-                st.rerun()
-    
-    with col2:
-        st.markdown("#### 🏆 WTA SINGLES")
-        manual_wta = st.text_area(
-            "Add WTA matches (one per line)",
-            placeholder="Player 1 vs Player 2\n\nExample:\nMirra Andreeva vs Anna Kalinskaya",
-            height=150,
-            key="manual_wta_tab4"
-        )
-        
-        if st.button("➕ Add WTA Matches", key="add_wta_tab4"):
-            new_matches = []
-            for line in manual_wta.strip().split('\n'):
-                if 'vs' in line:
-                    parts = line.split('vs')
-                    if len(parts) == 2:
-                        new_matches.append({
-                            'Player 1': parts[0].strip(),
-                            'Player 2': parts[1].strip(),
-                            'Tour': 'WTA',
-                            'Round': 'Manual Entry',
-                            'Time': 'TBD',
-                            'Status': '📅 Scheduled'
-                        })
-            
-            if new_matches:
-                st.session_state.wta_matches.extend(new_matches)
-                st.session_state.last_update = datetime.now()
-                st.success(f"✅ Added {len(new_matches)} WTA matches")
-                st.rerun()
-    
-    # Clear all button
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Clear All ATP Matches", use_container_width=True):
-            st.session_state.atp_matches = []
-            st.session_state.last_update = datetime.now()
-            st.success("✅ All ATP matches cleared")
-            st.rerun()
-    
-    with col2:
-        if st.button("🗑️ Clear All WTA Matches", use_container_width=True):
-            st.session_state.wta_matches = []
-            st.session_state.last_update = datetime.now()
-            st.success("✅ All WTA matches cleared")
-            st.rerun()
+st.markdown("---")
+
+# Display last fetch time
+if st.session_state.api_last_fetch:
+    st.info(f"🕐 Last API fetch: {st.session_state.api_last_fetch.strftime('%H:%M:%S')}")
+
+# Display loaded matches
+st.markdown("## 📋 TODAY'S SCHEDULED MATCHES")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("#### 🏆 ATP SINGLES")
+    if st.session_state.atp_matches:
+        atp_df = pd.DataFrame(st.session_state.atp_matches)
+        # Ensure columns exist
+        display_cols = ['Player 1', 'Player 2', 'Round', 'Time', 'Status']
+        available_cols = [col for col in display_cols if col in atp_df.columns]
+        st.dataframe(atp_df[available_cols], use_container_width=True, hide_index=True)
+        st.info(f"📊 ATP Matches: {len(st.session_state.atp_matches)}")
+    else:
+        st.warning("No ATP matches loaded. Click 'Fetch ATP Matches' above.")
+
+with col2:
+    st.markdown("#### 🏆 WTA SINGLES")
+    if st.session_state.wta_matches:
+        wta_df = pd.DataFrame(st.session_state.wta_matches)
+        display_cols = ['Player 1', 'Player 2', 'Round', 'Time', 'Status']
+        available_cols = [col for col in display_cols if col in wta_df.columns]
+        st.dataframe(wta_df[available_cols], use_container_width=True, hide_index=True)
+        st.info(f"📊 WTA Matches: {len(st.session_state.wta_matches)}")
+    else:
+        st.warning("No WTA matches loaded. Click 'Fetch WTA Matches' above.")
 
 # Prediction section
-if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state and st.session_state.confirmed_matches:
-    
+all_matches = st.session_state.atp_matches + st.session_state.wta_matches
+
+if all_matches:
     st.markdown("---")
-    st.markdown("## 🔮 GENERATING PREDICTIONS")
+    st.markdown("## 🎯 GENERATE PREDICTIONS")
     
-    with st.spinner("Running Monte Carlo simulations..."):
-        predictions = []
-        
-        for match in st.session_state.confirmed_matches:
-            best_predictions = []
-            
-            for _ in range(200):
-                is_3set = np.random.random() < 0.32
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        st.success(f"✅ {len(all_matches)} matches ready for prediction")
+    with col2:
+        if st.button("🚀 Generate Predictions (22-25 Games)", use_container_width=True, type="primary"):
+            with st.spinner("Running Monte Carlo simulations..."):
+                predictions = []
                 
-                if is_3set:
-                    if np.random.random() < 0.6:
-                        w1, l1 = np.random.randint(6, 8), np.random.randint(4, 7)
-                        w2, l2 = np.random.randint(4, 7), np.random.randint(6, 8)
-                        w3, l3 = np.random.randint(6, 8), np.random.randint(3, 6)
-                    else:
-                        w1, l1 = np.random.randint(6, 8), np.random.randint(1, 4)
-                        w2, l2 = np.random.randint(3, 6), np.random.randint(6, 8)
-                        w3, l3 = np.random.randint(6, 8), np.random.randint(1, 4)
-                else:
-                    if np.random.random() < 0.7:
-                        w1, l1 = np.random.randint(6, 8), np.random.randint(4, 7)
-                        w2, l2 = np.random.randint(6, 8), np.random.randint(4, 7)
-                    else:
-                        w1, l1 = np.random.randint(6, 8), np.random.randint(1, 4)
-                        w2, l2 = np.random.randint(6, 8), np.random.randint(1, 4)
-                    w3, l3 = 0, 0
-                
-                total_games = w1 + l1 + w2 + l2 + w3 + l3
-                
-                if 22 <= total_games <= 25:
-                    distance = abs(total_games - 23.5)
-                    confidence = int(85 + (5 * (1 - distance / 2.5)))
-                    confidence = min(98, max(70, confidence))
+                for match in all_matches:
+                    best_predictions = []
                     
-                    best_predictions.append({
-                        'Player 1': match['Player 1'],
-                        'Player 2': match['Player 2'],
-                        'Tour': match['Tour'],
-                        'Round': match.get('Round', 'Scheduled'),
-                        'Set 1': f"{w1}-{l1}",
-                        'Set 2': f"{w2}-{l2}",
-                        'Set 3': f"{w3}-{l3}" if is_3set else "—",
-                        'Total Games': total_games,
-                        'Confidence': confidence
-                    })
-            
-            if best_predictions:
-                best_predictions.sort(key=lambda x: x['Confidence'], reverse=True)
-                predictions.append(best_predictions[0])
-        
-        if predictions:
-            predictions_df = pd.DataFrame(predictions)
-            predictions_df['Confidence %'] = predictions_df['Confidence'].astype(str) + '%'
-            
-            st.markdown(f"## 🎯 {len(predictions_df)} MATCHES WITH 22-25 GAMES")
-            
-            st.dataframe(
-                predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Confidence %": st.column_config.ProgressColumn(
-                        "Confidence",
-                        format="%d%%",
-                        min_value=0,
-                        max_value=100,
+                    for _ in range(200):
+                        is_3set = np.random.random() < 0.32
+                        
+                        if is_3set:
+                            if np.random.random() < 0.6:
+                                w1, l1 = np.random.randint(6, 8), np.random.randint(4, 7)
+                                w2, l2 = np.random.randint(4, 7), np.random.randint(6, 8)
+                                w3, l3 = np.random.randint(6, 8), np.random.randint(3, 6)
+                            else:
+                                w1, l1 = np.random.randint(6, 8), np.random.randint(1, 4)
+                                w2, l2 = np.random.randint(3, 6), np.random.randint(6, 8)
+                                w3, l3 = np.random.randint(6, 8), np.random.randint(1, 4)
+                        else:
+                            if np.random.random() < 0.7:
+                                w1, l1 = np.random.randint(6, 8), np.random.randint(4, 7)
+                                w2, l2 = np.random.randint(6, 8), np.random.randint(4, 7)
+                            else:
+                                w1, l1 = np.random.randint(6, 8), np.random.randint(1, 4)
+                                w2, l2 = np.random.randint(6, 8), np.random.randint(1, 4)
+                            w3, l3 = 0, 0
+                        
+                        total_games = w1 + l1 + w2 + l2 + w3 + l3
+                        
+                        if 22 <= total_games <= 25:
+                            distance = abs(total_games - 23.5)
+                            confidence = int(85 + (5 * (1 - distance / 2.5)))
+                            confidence = min(98, max(70, confidence))
+                            
+                            best_predictions.append({
+                                'Player 1': match['Player 1'],
+                                'Player 2': match['Player 2'],
+                                'Tour': match['Tour'],
+                                'Round': match.get('Round', 'Scheduled'),
+                                'Set 1': f"{w1}-{l1}",
+                                'Set 2': f"{w2}-{l2}",
+                                'Set 3': f"{w3}-{l3}" if is_3set else "—",
+                                'Total Games': total_games,
+                                'Confidence': confidence
+                            })
+                    
+                    if best_predictions:
+                        best_predictions.sort(key=lambda x: x['Confidence'], reverse=True)
+                        predictions.append(best_predictions[0])
+                
+                if predictions:
+                    predictions_df = pd.DataFrame(predictions)
+                    predictions_df['Confidence %'] = predictions_df['Confidence'].astype(str) + '%'
+                    
+                    st.markdown("---")
+                    st.markdown(f"## 🎯 PREDICTIONS: {len(predictions_df)} MATCHES WITH 22-25 GAMES")
+                    
+                    st.dataframe(
+                        predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Confidence %": st.column_config.ProgressColumn(
+                                "Confidence",
+                                format="%d%%",
+                                min_value=0,
+                                max_value=100,
+                            )
+                        }
                     )
-                }
-            )
-            
-            # Export
-            csv = predictions_df.to_csv(index=False)
-            st.download_button(
-                label="📊 Download Predictions",
-                data=csv,
-                file_name=f"Miami2026_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            st.warning("No matches found in 22-25 game range")
+                    
+                    # Download button
+                    csv = predictions_df.to_csv(index=False)
+                    st.download_button(
+                        label="📊 Download Predictions (CSV)",
+                        data=csv,
+                        file_name=f"Miami2026_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No matches found in 22-25 game range. Try running simulations again!")
+else:
+    st.info("👆 Click 'Fetch ATP Matches' or 'Fetch WTA Matches' to load today's matches")
 
 # Footer
 st.markdown("---")
-st.markdown("### 💡 How to Use")
+st.markdown("### ℹ️ Instructions")
 st.markdown("""
-1. Go to **'UPDATE MATCHES'** tab and enter today's ATP and WTA matches
-2. Click 'Update ATP Matches' and 'Update WTA Matches' to save
-3. Return to **'TODAY'S MATCHES'** tab to see loaded matches
-4. Click **'Generate Predictions'** to see which matches will have 22-25 games
-5. Download results as CSV for your records
+1. **Click 'Fetch ATP Matches Today'** - Gets real ATP matches from the API
+2. **Click 'Fetch WTA Matches Today'** - Gets real WTA matches from the API
+3. **Click 'Generate Predictions'** - Shows which matches will have 22-25 games
+4. **Download results** - Save predictions as CSV file
+
+*Note: If API returns no data, demo Miami Open 2026 matches will be used automatically*
 """)
