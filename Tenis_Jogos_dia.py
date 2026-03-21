@@ -156,12 +156,20 @@ filtered_matches = competitive_matches[
 ].copy()
 
 # Apply date filter if date column exists
+date_filtered = False
 if 'Date' in filtered_matches.columns:
     try:
         filtered_matches['Date_parsed'] = pd.to_datetime(filtered_matches['Date'], errors='coerce')
-        filtered_matches = filtered_matches[filtered_matches['Date_parsed'].dt.date == selected_date]
-    except:
-        st.info("ℹ️ Date column exists but could not parse. Showing all matches.")
+        filtered_matches_by_date = filtered_matches[filtered_matches['Date_parsed'].dt.date == selected_date]
+        
+        if len(filtered_matches_by_date) > 0:
+            filtered_matches = filtered_matches_by_date
+            date_filtered = True
+            st.info(f"📅 Showing matches from {selected_date.strftime('%d/%m/%Y')}")
+        else:
+            st.warning(f"⚠️ No matches found for {selected_date.strftime('%d/%m/%Y')}. Showing all matches matching other criteria.")
+    except Exception as e:
+        st.info("ℹ️ Could not filter by date. Showing all matches.")
 else:
     st.info("ℹ️ Date column not found in data. Showing all matches.")
 
@@ -190,7 +198,8 @@ if len(filtered_matches) > 0:
             'Surface': match['Surface'],
             'Score': f"{w1}-{l1} {w2}-{l2}",
             'Games': int(match['Total_Games']),
-            'Competitiveness': f"{match['Competitiveness']*100:.1f}%"
+            'Competitiveness': f"{match['Competitiveness']*100:.1f}%",
+            'Date': str(match.get('Date', 'N/A'))
         })
     
     display_df = pd.DataFrame(display_data)
@@ -336,10 +345,12 @@ if len(filtered_matches) > 0:
                             <h2 style="margin-top: 0; color: #667eea;">📊 Report Summary</h2>
                             <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
                             <p><strong>Total Matches Analyzed:</strong> {len(df_analysis):,}</p>
-                            <p><strong>Competitive Matches Found:</strong> {len(filtered_matches):,}</p>
+                            <p><strong>Competitive Matches Found:</strong> {len(competitive_matches):,}</p>
+                            <p><strong>Filtered Results:</strong> {len(filtered_matches):,}</p>
                             <p><strong>Games Range:</strong> {min_games}-{max_games}</p>
                             <p><strong>Min Competitiveness:</strong> {min_competitiveness}%</p>
                             <p><strong>Tours:</strong> {', '.join(tour_filter)}</p>
+                            <p><strong>Date Selected:</strong> {selected_date.strftime("%d/%m/%Y")}</p>
                         </div>
                         
                         <h2 style="color: #667eea; border-bottom: 3px solid #667eea; padding-bottom: 10px;">🏆 TOP {len(top_matches)} MOST COMPETITIVE MATCHES</h2>
@@ -354,6 +365,7 @@ if len(filtered_matches) > 0:
                                 <th>Score</th>
                                 <th>Games</th>
                                 <th>Competitiveness</th>
+                                <th>Date</th>
                             </tr>
             """
             
@@ -374,6 +386,7 @@ if len(filtered_matches) > 0:
                                 <td>{w1}-{l1} {w2}-{l2}</td>
                                 <td><strong>{int(match['Total_Games'])}</strong></td>
                                 <td>{match['Competitiveness']*100:.1f}%</td>
+                                <td>{match.get('Date', 'N/A')}</td>
                             </tr>
                 """
             
@@ -463,5 +476,4 @@ col4.metric("Avg Competitiveness", f"{competitive_matches['Competitiveness'].mea
 
 if 'Tour' in competitive_matches.columns:
     atp_count = len(competitive_matches[competitive_matches['Tour'] == 'ATP'])
-    wta_count = len(competitive_matches[competitive_matches['Tour'] == 'WTA'])
-    st.metric("ATP Competitive", f"{atp_count:,}")
+    col5.metric("ATP Competitive", f"{atp_count:,}")
