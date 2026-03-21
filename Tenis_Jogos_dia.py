@@ -129,7 +129,7 @@ st.markdown("---")
 # DISPLAY OPTIONS
 st.markdown("### 🔍 FILTER & ANALYZE")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     min_games = st.slider("Minimum Games", 20, 26, 21, key="min_games")
@@ -143,6 +143,10 @@ with col3:
 with col4:
     tour_filter = st.multiselect("Tours", ['ATP', 'WTA'], default=['ATP', 'WTA'], key="tour")
 
+with col5:
+    st.markdown("**📅 Date**")
+    selected_date = st.date_input("Select match date", value=datetime.now().date(), key="date", label_visibility="collapsed")
+
 # Filter based on selections
 filtered_matches = competitive_matches[
     (competitive_matches['Total_Games'] >= min_games) &
@@ -150,6 +154,16 @@ filtered_matches = competitive_matches[
     (competitive_matches['Competitiveness'] >= min_competitiveness/100) &
     (competitive_matches['Tour'].isin(tour_filter))
 ].copy()
+
+# Apply date filter if date column exists
+if 'Date' in filtered_matches.columns:
+    try:
+        filtered_matches['Date_parsed'] = pd.to_datetime(filtered_matches['Date'], errors='coerce')
+        filtered_matches = filtered_matches[filtered_matches['Date_parsed'].dt.date == selected_date]
+    except:
+        st.info("ℹ️ Date column exists but could not parse. Showing all matches.")
+else:
+    st.info("ℹ️ Date column not found in data. Showing all matches.")
 
 st.markdown(f"### 📊 Showing {len(filtered_matches):,} matches matching criteria")
 
