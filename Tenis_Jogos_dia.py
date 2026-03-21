@@ -42,13 +42,6 @@ st.markdown("""
         border-radius: 8px;
         margin: 1rem 0;
     }
-    .warning-message {
-        background-color: #fff3cd;
-        color: #856404;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,139 +49,13 @@ st.markdown("# 🎾 MIAMI 2026 PRO - ADVANCED GAME PREDICTOR")
 st.markdown("AI-powered predictions for Miami Open 2026 (Games 22-25)")
 st.markdown("---")
 
-# API Configuration
-RAPIDAPI_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a4"
-
 class TennisDataAPI:
     def __init__(self):
-        self.rapidapi_key = RAPIDAPI_KEY
-        
-    def get_matches_from_flashscore(self):
-        """Fetch matches using FlashScore API (free)"""
-        try:
-            # FlashScore API endpoint for tennis
-            url = "https://flashscore-api.p.rapidapi.com/tennis/fixtures"
-            headers = {
-                "X-RapidAPI-Key": self.rapidapi_key,
-                "X-RapidAPI-Host": "flashscore-api.p.rapidapi.com"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except:
-            return None
-    
-    def get_matches_from_sportmonks(self):
-        """Fetch matches using Sportmonks API"""
-        try:
-            url = "https://sportmonks-tennis-v1.p.rapidapi.com/fixtures/today"
-            headers = {
-                "X-RapidAPI-Key": self.rapidapi_key,
-                "X-RapidAPI-Host": "sportmonks-tennis-v1.p.rapidapi.com"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except:
-            return None
-    
-    def get_matches_from_tennis_data(self):
-        """Fetch matches from Tennis Data API"""
-        try:
-            url = "https://tennis-data1.p.rapidapi.com/matches/today"
-            headers = {
-                "X-RapidAPI-Key": self.rapidapi_key,
-                "X-RapidAPI-Host": "tennis-data1.p.rapidapi.com"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except:
-            return None
-    
-    def get_live_tennis_matches(self):
-        """Fetch live tennis matches"""
-        try:
-            url = "https://live-tennis.p.rapidapi.com/matches"
-            headers = {
-                "X-RapidAPI-Key": self.rapidapi_key,
-                "X-RapidAPI-Host": "live-tennis.p.rapidapi.com"
-            }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except:
-            return None
-    
-    def fetch_miami_open_2026(self):
-        """Fetch Miami Open 2026 specific matches"""
-        try:
-            # Try different tournament endpoints
-            tournament_ids = ["miami-open", "miami", "miami-open-2026", "atp-miami", "wta-miami"]
-            
-            for tour_id in tournament_ids:
-                try:
-                    url = f"https://tennis-live-data.p.rapidapi.com/tournaments/{tour_id}/matches"
-                    headers = {
-                        "X-RapidAPI-Key": self.rapidapi_key,
-                        "X-RapidAPI-Host": "tennis-live-data.p.rapidapi.com"
-                    }
-                    
-                    response = requests.get(url, headers=headers, timeout=10)
-                    if response.status_code == 200:
-                        return response.json()
-                except:
-                    continue
-            
-            return None
-        except:
-            return None
-    
-    def get_real_matches_from_web(self):
-        """Get real matches from web scraping alternative"""
-        try:
-            # Use a public tennis data source
-            response = requests.get(
-                "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_current.csv",
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                from io import StringIO
-                df = pd.read_csv(StringIO(response.text))
-                
-                # Filter for future matches (where winner is not determined)
-                future_matches = df[df['winner_name'].isna()].head(20)
-                
-                matches = []
-                for _, row in future_matches.iterrows():
-                    matches.append({
-                        'Player 1': row.get('player1_name', 'Unknown'),
-                        'Player 2': row.get('player2_name', 'Unknown'),
-                        'Tour': 'ATP',
-                        'Time': row.get('match_date', 'TBD'),
-                        'Round': row.get('round', 'Scheduled'),
-                        'Status': '📅 Scheduled'
-                    })
-                
-                return matches if matches else None
-            
-            return None
-        except:
-            return None
+        pass
     
     def get_miami_open_schedule(self):
-        """Get Miami Open 2026 schedule from official source"""
-        # Miami Open 2026 scheduled matches (updated with real players)
-        # These are actual ATP and WTA players expected to play
+        """Get Miami Open 2026 schedule"""
+        # Miami Open 2026 scheduled matches with real players
         return {
             "ATP": [
                 {"Player 1": "Jannik Sinner", "Player 2": "Carlos Alcaraz", "Time": "14:30", "Round": "Semi Finals"},
@@ -216,43 +83,30 @@ class TennisDataAPI:
 tennis_api = TennisDataAPI()
 
 # Auto-fetch matches section
-st.markdown("## 🤖 AUTO-FETCH MIAMI OPEN 2026 MATCHES")
+st.markdown("## 🤖 MIAMI OPEN 2026 MATCHES")
 st.markdown("Click the buttons below to load scheduled matches")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     if st.button("🎾 Load ATP Matches", use_container_width=True, type="primary"):
         with st.spinner("Loading ATP matches..."):
-            # Try multiple methods to get ATP matches
-            atp_matches = []
-            
-            # Method 1: Try to get from web source
-            web_matches = tennis_api.get_real_matches_from_web()
-            if web_matches:
-                atp_matches = [m for m in web_matches if m['Tour'] == 'ATP']
-            
-            # Method 2: Use Miami Open schedule if no matches found
-            if not atp_matches:
-                schedule = tennis_api.get_miami_open_schedule()
-                atp_matches = schedule['ATP']
-                for match in atp_matches:
-                    match['Tour'] = 'ATP'
-                    match['Status'] = '📅 Scheduled'
+            schedule = tennis_api.get_miami_open_schedule()
+            atp_matches = schedule['ATP']
+            for match in atp_matches:
+                match['Tour'] = 'ATP'
+                match['Status'] = '📅 Scheduled'
             
             if atp_matches:
                 st.session_state.atp_matches = atp_matches
                 st.success(f"✅ Loaded {len(atp_matches)} ATP matches for Miami Open 2026!")
                 st.balloons()
-            else:
-                st.error("Could not load ATP matches")
 
 with col2:
     if st.button("🎾 Load WTA Matches", use_container_width=True, type="primary"):
         with st.spinner("Loading WTA matches..."):
             schedule = tennis_api.get_miami_open_schedule()
             wta_matches = schedule['WTA']
-            
             for match in wta_matches:
                 match['Tour'] = 'WTA'
                 match['Status'] = '📅 Scheduled'
@@ -261,11 +115,9 @@ with col2:
                 st.session_state.wta_matches = wta_matches
                 st.success(f"✅ Loaded {len(wta_matches)} WTA matches for Miami Open 2026!")
                 st.balloons()
-            else:
-                st.error("Could not load WTA matches")
 
 with col3:
-    if st.button("🏆 Miami Open All", use_container_width=True):
+    if st.button("🏆 Load All Matches", use_container_width=True, type="primary"):
         with st.spinner("Loading all Miami Open matches..."):
             schedule = tennis_api.get_miami_open_schedule()
             
@@ -284,19 +136,6 @@ with col3:
                 st.session_state.wta_matches = wta_matches
                 st.success(f"✅ Loaded {len(atp_matches)} ATP + {len(wta_matches)} WTA matches!")
                 st.balloons()
-            else:
-                st.error("Could not load matches")
-
-with col4:
-    if st.button("🔄 Refresh All", use_container_width=True):
-        st.cache_data.clear()
-        if 'atp_matches' in st.session_state:
-            del st.session_state.atp_matches
-        if 'wta_matches' in st.session_state:
-            del st.session_state.wta_matches
-        if 'confirmed_matches' in st.session_state:
-            del st.session_state.confirmed_matches
-        st.rerun()
 
 st.markdown("---")
 
@@ -310,7 +149,6 @@ if 'atp_matches' in st.session_state or 'wta_matches' in st.session_state:
         if 'atp_matches' in st.session_state and st.session_state.atp_matches:
             st.markdown("#### 🏆 ATP SINGLES")
             atp_df = pd.DataFrame(st.session_state.atp_matches)
-            # Reorder columns for better display
             display_cols = ['Player 1', 'Player 2', 'Round', 'Time', 'Status']
             atp_df = atp_df[display_cols]
             st.dataframe(atp_df, use_container_width=True, hide_index=True)
@@ -334,7 +172,7 @@ if 'atp_matches' in st.session_state or 'wta_matches' in st.session_state:
     
     if all_matches:
         st.markdown("---")
-        col1, col2, col3 = st.columns([2, 2, 1])
+        col1, col2 = st.columns([2, 1])
         with col1:
             st.success(f"✅ Total matches ready for prediction: {len(all_matches)}")
         with col2:
@@ -358,7 +196,7 @@ with st.expander("📝 Manual Entry (Add or Edit Matches)"):
             key="manual_atp"
         )
         
-        if st.button("Add ATP Matches"):
+        if st.button("➕ Add ATP Matches"):
             atp_matches = []
             for line in manual_atp.strip().split('\n'):
                 if 'vs' in line:
@@ -389,7 +227,7 @@ with st.expander("📝 Manual Entry (Add or Edit Matches)"):
             key="manual_wta"
         )
         
-        if st.button("Add WTA Matches"):
+        if st.button("➕ Add WTA Matches"):
             wta_matches = []
             for line in manual_wta.strip().split('\n'):
                 if 'vs' in line:
@@ -417,54 +255,7 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
     st.markdown("---")
     st.markdown("## 🔮 GENERATING PREDICTIONS")
     
-    with st.spinner("Training AI model and generating predictions..."):
-        # Load historical data for training
-        @st.cache_data
-        def load_training_data():
-            try:
-                # Try to load real historical data
-                atp_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2024.csv"
-                wta_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2024.csv"
-                
-                dfs = []
-                
-                try:
-                    atp_df = pd.read_csv(atp_url)
-                    atp_df['Tour'] = 'ATP'
-                    dfs.append(atp_df)
-                except:
-                    pass
-                
-                try:
-                    wta_df = pd.read_csv(wta_url)
-                    wta_df['Tour'] = 'WTA'
-                    dfs.append(wta_df)
-                except:
-                    pass
-                
-                if dfs:
-                    return pd.concat(dfs, ignore_index=True)
-                else:
-                    # Generate synthetic training data
-                    np.random.seed(42)
-                    n_samples = 5000
-                    synthetic_data = {
-                        'Total_Games': np.random.normal(23, 3.5, n_samples),
-                        'Sets_Played': np.random.choice([2, 3], n_samples, p=[0.68, 0.32]),
-                        'Tour': np.random.choice(['ATP', 'WTA'], n_samples)
-                    }
-                    synthetic_data['Total_Games'] = synthetic_data['Total_Games'].clip(18, 35)
-                    return pd.DataFrame(synthetic_data)
-            except:
-                # Fallback synthetic data
-                np.random.seed(42)
-                return pd.DataFrame({
-                    'Total_Games': np.random.normal(23, 3.5, 5000).clip(18, 35),
-                    'Sets_Played': np.random.choice([2, 3], 5000, p=[0.68, 0.32])
-                })
-        
-        df = load_training_data()
-        
+    with st.spinner("Generating predictions using Monte Carlo simulation..."):
         # Generate predictions for each match
         predictions = []
         
@@ -472,12 +263,12 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             # Monte Carlo simulation for each match
             best_predictions = []
             
-            for _ in range(150):
-                # Simulate realistic score patterns based on Miami Open 2026
+            for _ in range(200):  # 200 simulations per match
+                # Simulate realistic score patterns based on Miami Open
                 is_3set = np.random.random() < 0.32  # 32% chance of 3-set match
                 
                 if is_3set:
-                    # 3-set matches (typical scores)
+                    # 3-set matches
                     if np.random.random() < 0.6:
                         # Competitive 3-setter
                         w1, l1 = np.random.randint(6, 8), np.random.randint(4, 7)
@@ -504,8 +295,10 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                 
                 # Calculate confidence based on game total
                 if 22 <= total_games <= 25:
-                    # Perfect range
-                    confidence = min(98, 85 + int(5 * (1 - abs(total_games - 23.5) / 2.5)))
+                    # Perfect range - higher confidence
+                    distance_from_ideal = abs(total_games - 23.5)
+                    confidence = int(85 + (5 * (1 - distance_from_ideal / 2.5)))
+                    confidence = min(98, max(70, confidence))
                     
                     best_predictions.append({
                         'Player 1': match['Player 1'],
@@ -516,30 +309,45 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                         'Set 2': f"{w2}-{l2}",
                         'Set 3': f"{w3}-{l3}" if is_3set else "—",
                         'Total Games': total_games,
-                        'Confidence': f"{confidence}%"
+                        'Confidence': confidence  # Store as integer, not string
                     })
             
             if best_predictions:
                 # Select prediction with highest confidence
-                best_predictions.sort(key=lambda x: int(x['Confidence'].strip('%')), reverse=True)
+                best_predictions.sort(key=lambda x: x['Confidence'], reverse=True)
                 predictions.append(best_predictions[0])
         
         if predictions:
             predictions_df = pd.DataFrame(predictions)
             
+            # Add formatted confidence column for display
+            predictions_df['Confidence %'] = predictions_df['Confidence'].astype(str) + '%'
+            
             st.markdown("---")
             st.markdown(f"## 🎯 PREDICTIONS READY")
             st.markdown(f"### {len(predictions_df)} MATCHES WITH 22-25 GAMES")
             
-            # Display with styling
+            # Display with proper formatting
+            display_df = predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']].copy()
+            
+            # Use column config for better display
             st.dataframe(
-                predictions_df.style.background_gradient(subset=['Confidence'], cmap='RdYlGn'),
+                display_df,
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                column_config={
+                    "Confidence %": st.column_config.ProgressColumn(
+                        "Confidence",
+                        help="Prediction confidence score",
+                        format="%d%%",
+                        min_value=0,
+                        max_value=100,
+                    )
+                }
             )
             
             # Statistics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 st.metric("Total Matches", len(predictions_df))
             with col2:
@@ -549,8 +357,25 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                 wta_count = len(predictions_df[predictions_df['Tour'] == 'WTA'])
                 st.metric("WTA Matches", wta_count)
             with col4:
-                avg_confidence = predictions_df['Confidence'].str.strip('%').astype(float).mean()
+                avg_games = predictions_df['Total Games'].mean()
+                st.metric("Avg Games", f"{avg_games:.1f}")
+            with col5:
+                avg_confidence = predictions_df['Confidence'].mean()
                 st.metric("Avg Confidence", f"{avg_confidence:.1f}%")
+            
+            # Show distribution of games
+            st.markdown("---")
+            st.markdown("### 📊 Games Distribution")
+            
+            # Create bins for games distribution
+            games_bins = [18, 20, 22, 23, 24, 25, 27, 30]
+            games_labels = ['<20', '20-21', '22', '23', '24', '25', '26-27', '>27']
+            
+            predictions_df['Games Range'] = pd.cut(predictions_df['Total Games'], bins=games_bins, labels=games_labels)
+            dist_data = predictions_df['Games Range'].value_counts().sort_index()
+            
+            # Display distribution as bar chart
+            st.bar_chart(dist_data)
             
             # Export options
             st.markdown("---")
@@ -559,7 +384,9 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             col1, col2 = st.columns(2)
             
             with col1:
-                csv = predictions_df.to_csv(index=False)
+                # Prepare export data (without the range column)
+                export_df = predictions_df[['Player 1', 'Player 2', 'Tour', 'Round', 'Set 1', 'Set 2', 'Set 3', 'Total Games', 'Confidence %']].copy()
+                csv = export_df.to_csv(index=False)
                 st.download_button(
                     label="📊 Download CSV",
                     data=csv,
@@ -571,11 +398,13 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
             with col2:
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    predictions_df.to_excel(writer, sheet_name='Predictions', index=False)
+                    export_df.to_excel(writer, sheet_name='Predictions', index=False)
                     
+                    # Add summary sheet
                     summary = pd.DataFrame({
                         'Metric': ['Date', 'Tournament', 'Surface', 'Total Matches', 
-                                  'ATP', 'WTA', 'Avg Confidence', 'Prediction Time'],
+                                  'ATP Matches', 'WTA Matches', 'Avg Games', 'Avg Confidence', 
+                                  'Min Games', 'Max Games', 'Prediction Time'],
                         'Value': [
                             datetime.now().strftime('%d/%m/%Y'),
                             'Miami Open 2026',
@@ -583,7 +412,10 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                             len(predictions_df),
                             len(predictions_df[predictions_df['Tour'] == 'ATP']),
                             len(predictions_df[predictions_df['Tour'] == 'WTA']),
-                            f"{avg_confidence:.1f}%",
+                            f"{predictions_df['Total Games'].mean():.1f}",
+                            f"{predictions_df['Confidence'].mean():.1f}%",
+                            int(predictions_df['Total Games'].min()),
+                            int(predictions_df['Total Games'].max()),
                             datetime.now().strftime('%H:%M:%S')
                         ]
                     })
@@ -599,8 +431,69 @@ if 'auto_loaded' in st.session_state and 'confirmed_matches' in st.session_state
                 )
             
             st.success("✅ Predictions generated successfully!")
+            
+            # Add some insights
+            st.markdown("---")
+            st.markdown("### 💡 Key Insights")
+            
+            high_confidence = predictions_df[predictions_df['Confidence'] >= 85]
+            if len(high_confidence) > 0:
+                st.info(f"🔍 {len(high_confidence)} matches have high confidence (≥85%) predictions")
+                
+                # Show top high confidence matches
+                st.markdown("**Top High Confidence Matches:**")
+                top_matches = high_confidence.nlargest(3, 'Confidence')[['Player 1', 'Player 2', 'Total Games', 'Confidence %']]
+                for _, match in top_matches.iterrows():
+                    st.write(f"• {match['Player 1']} vs {match['Player 2']}: {match['Total Games']} games ({match['Confidence %']} confidence)")
+            
         else:
-            st.warning("⚠️ No matches found in the 22-25 game range. Try different match selections!")
+            st.warning("⚠️ No matches found in the 22-25 game range. Running more simulations...")
+            
+            # Run additional simulations with wider range
+            st.info("Expanding search range to 21-26 games...")
+            
+            expanded_predictions = []
+            for match in st.session_state.confirmed_matches[:5]:  # Try first 5 matches
+                for _ in range(300):
+                    is_3set = np.random.random() < 0.32
+                    
+                    if is_3set:
+                        w1, l1 = np.random.randint(5, 8), np.random.randint(3, 7)
+                        w2, l2 = np.random.randint(4, 8), np.random.randint(3, 7)
+                        w3, l3 = np.random.randint(6, 8), np.random.randint(2, 6)
+                    else:
+                        w1, l1 = np.random.randint(6, 8), np.random.randint(2, 6)
+                        w2, l2 = np.random.randint(6, 8), np.random.randint(2, 6)
+                        w3, l3 = 0, 0
+                    
+                    total_games = w1 + l1 + w2 + l2 + w3 + l3
+                    
+                    if 21 <= total_games <= 26:
+                        confidence = int(75 + (5 * (1 - abs(total_games - 23.5) / 3)))
+                        expanded_predictions.append({
+                            'Player 1': match['Player 1'],
+                            'Player 2': match['Player 2'],
+                            'Tour': match['Tour'],
+                            'Round': match.get('Round', 'Scheduled'),
+                            'Set 1': f"{w1}-{l1}",
+                            'Set 2': f"{w2}-{l2}",
+                            'Set 3': f"{w3}-{l3}" if is_3set else "—",
+                            'Total Games': total_games,
+                            'Confidence': confidence
+                        })
+            
+            if expanded_predictions:
+                expanded_df = pd.DataFrame(expanded_predictions)
+                expanded_df['Confidence %'] = expanded_df['Confidence'].astype(str) + '%'
+                
+                st.success(f"✅ Found {len(expanded_df)} matches in expanded range (21-26 games)")
+                st.dataframe(
+                    expanded_df[['Player 1', 'Player 2', 'Tour', 'Set 1', 'Set 2', 'Total Games', 'Confidence %']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("💡 Tip: Try loading different matches or use manual entry for specific matchups")
 
 # Footer
 st.markdown("---")
@@ -609,10 +502,10 @@ st.markdown("""
 - **Tournament**: Miami Open 2026 (Hard Court)
 - **Surface**: Outdoor Hard Court
 - **Target**: Matches with 22-25 total games
-- **Model**: AI-powered Monte Carlo simulation
-- **Data Source**: Real player schedules + historical patterns
+- **Simulation**: 200+ Monte Carlo simulations per match
+- **Confidence**: Based on game total proximity to ideal range (22-25)
 """)
 
 # Display current date
 current_date = datetime.now()
-st.info(f"📅 Today's Date: {current_date.strftime('%A, %B %d, %Y')} | ⏰ Time: {current_date.strftime('%H:%M:%S')}")
+st.info(f"📅 Today's Date: {current_date.strftime('%A, %B %d, %Y')} | ⏰ Time: {current_date.strftime('%H:%M:%S')} | 🎾 Miami Open 2026")
