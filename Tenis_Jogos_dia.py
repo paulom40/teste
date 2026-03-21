@@ -330,17 +330,141 @@ if len(filtered_matches) > 0:
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
+    st.markdown("## 📥 EXPORT OPTIONS")
     
-    if st.button("📥 Download as CSV", use_container_width=True):
-        csv = display_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download CSV",
-            data=csv,
-            file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-        st.success("✅ CSV ready to download!")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📊 Download as Excel", use_container_width=True, key="export_excel"):
+            try:
+                from io import BytesIO
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+                from openpyxl.utils.dataframe import dataframe_to_rows
+                
+                # Create Excel file in memory
+                output = BytesIO()
+                
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Sheet 1: Summary
+                    summary_data = {
+                        'Metric': [
+                            'Generated',
+                            'Total Analyzed',
+                            'Competitive Found',
+                            'Filtered Results',
+                            'Games Range',
+                            'Min Competitiveness',
+                            'Tours Included',
+                            'Date Range Start',
+                            'Date Range End'
+                        ],
+                        'Value': [
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            str(len(df_analysis)),
+                            str(len(competitive_matches)),
+                            str(len(filtered_matches)),
+                            f"{min_games}-{max_games}",
+                            f"{min_competitiveness}%",
+                            ', '.join(tour_filter),
+                            str(date_range[0]) if isinstance(date_range, tuple) else 'N/A',
+                            str(date_range[1]) if isinstance(date_range, tuple) else 'N/A'
+                        ]
+                    }
+                    summary_df = pd.DataFrame(summary_data)
+                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                    
+                    # Sheet 2: Top Matches
+                    top_matches_export = filtered_matches.head(top_n).copy()
+                    top_matches_export['Rank'] = range(1, len(top_matches_export) + 1)
+                    export_cols = ['Rank', 'Tour', 'Winner', 'Loser', 'Surface', 'W1', 'L1', 'W2', 'L2', 'W3', 'L3', 'Total_Games', 'Competitiveness', 'Date']
+                    available_cols = [col for col in export_cols if col in top_matches_export.columns]
+                    top_matches_export[available_cols].to_excel(writer, sheet_name='Top Matches', index=False)
+                    
+                    # Sheet 3: All Filtered Matches
+                    all_filtered = filtered_matches.copy()
+                    all_filtered['Rank'] = range(1, len(all_filtered) + 1)
+                    export_cols_all = ['Rank', 'Tour', 'Winner', 'Loser', 'Surface', 'W1', 'L1', 'W2', 'L2', 'W3', 'L3', 'Total_Games', 'Competitiveness', 'Date']
+                    available_cols_all = [col for col in export_cols_all if col in all_filtered.columns]
+                    all_filtered[available_cols_all].to_excel(writer, sheet_name='All Filtered', index=False)
+                    
+                    # Format sheets
+                    workbook = writer.book
+                    
+                    for sheet_name in workbook.sheetnames:
+                        worksheet = workbook[sheet_name]
+                        
+                        # Header styling
+                        header_fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
+                        header_font = Font(bold=True, color="FFFFFF")
+                        
+                        for cell in worksheet[1]:
+                            if cell.value:
+                                cell.fill = header_fill
+                                cell.font = header_font
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                        
+                        # Auto-adjust column widths
+                        for column in worksheet.columns:
+                            max_length = 0
+                            column_letter = column[0].column_letter
+                            for cell in column:
+                                try:
+                                    if len(str(cell.value)) > max_length:
+                                        max_length = len(str(cell.value))
+                                except:
+                                    pass
+                            adjusted_width = min(max_length + 2, 50)
+                            worksheet.column_dimensions[column_letter].width = adjusted_width
+                        
+                        # Border styling
+                        thin_border = Border(
+                            left=Side(style='thin'),
+                            right=Side(style='thin'),
+                            top=Side(style='thin'),
+                            bottom=Side(style='thin')
+                        )
+                        
+                        for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+                            for cell in row:
+                                cell.border = thin_border
+                                if cell.row > 1:
+                                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                
+                output.seek(0)
+                
+                st.download_button(
+                    label="📊 Download Excel Report",
+                    data=output.getvalue(),
+                    file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                st.success("✅ Excel report ready to download!")
+            except ImportError:
+                st.error("❌ openpyxl not installed. Using CSV instead.")
+                csv = display_df.to_csv(index=False)
+                st.download_button(
+                    label="📊 Download CSV",
+                    data=csv,
+                    file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"❌ Error creating Excel: {str(e)}")
+    
+    with col2:
+        if st.button("📄 Download as CSV", use_container_width=True, key="export_csv"):
+            csv = display_df.to_csv(index=False)
+            st.download_button(
+                label="📄 Download CSV",
+                data=csv,
+                file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            st.success("✅ CSV ready to download!")
 
 else:
     st.warning("No matches found. Try adjusting filters.")
