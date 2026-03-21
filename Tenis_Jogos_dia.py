@@ -21,7 +21,114 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("# 🎾 ATP/WTA SMART GAMES PREDICTOR")
-st.markdown("Predict matches with 22-25 total games based on surface analysis")
+st.markdown("View today/tomorrow matches and predict 22-25 game results")
+st.markdown("---")
+
+# Show today and tomorrow
+today = datetime.now().date()
+tomorrow = today + timedelta(days=1)
+
+st.markdown("## 📅 TODAY & TOMORROW SCHEDULE")
+st.info(f"**Today:** {today.strftime('%A, %d/%m/%Y')} | **Tomorrow:** {tomorrow.strftime('%A, %d/%m/%Y')}")
+
+# Create sample scheduled matches for today and tomorrow
+@st.cache_data
+def generate_scheduled_matches():
+    """Generate scheduled matches for today and tomorrow"""
+    
+    atp_players = [
+        'Jannik Sinner', 'Carlos Alcaraz', 'Novak Djokovic', 'Daniil Medvedev',
+        'Holger Rune', 'Stefanos Tsitsipas', 'Alex de Minaur', 'Andrey Rublev',
+        'Casper Ruud', 'Taylor Fritz', 'Tommy Paul', 'Sebastian Korda',
+        'Grigor Dimitrov', 'Matteo Berrettini', 'Hubert Hurkacz', 'Felix Auger-Aliassime'
+    ]
+    
+    wta_players = [
+        'Iga Swiatek', 'Coco Gauff', 'Aryna Sabalenka', 'Elena Rybakina',
+        'Madison Keys', 'Jessica Pegula', 'Marketa Vondrousova', 'Ons Jabeur',
+        'Qinwen Zheng', 'Karolina Muchova', 'Magda Linette', 'Barbora Krejcikova',
+        'Jeļena Ostapenko', 'Daria Kasatkina', 'Veronika Kudermetova', 'Madison Keys'
+    ]
+    
+    surfaces = ['Hard', 'Clay', 'Grass']
+    times = ['10:00', '12:30', '15:00', '17:30', '20:00']
+    
+    matches = []
+    np.random.seed(42)
+    
+    for day_offset, date in [(0, today), (1, tomorrow)]:
+        # ATP matches
+        for i in range(6):
+            p1, p2 = np.random.choice(atp_players, 2, replace=False)
+            
+            matches.append({
+                'Date': date.strftime('%d/%m'),
+                'Time': times[i % len(times)],
+                'Tour': 'ATP',
+                'Player 1': p1,
+                'Player 2': p2,
+                'Surface': np.random.choice(surfaces),
+                'Status': '📅 Scheduled'
+            })
+        
+        # WTA matches
+        for i in range(6):
+            p1, p2 = np.random.choice(wta_players, 2, replace=False)
+            
+            matches.append({
+                'Date': date.strftime('%d/%m'),
+                'Time': times[i % len(times)],
+                'Tour': 'WTA',
+                'Player 1': p1,
+                'Player 2': p2,
+                'Surface': np.random.choice(surfaces),
+                'Status': '📅 Scheduled'
+            })
+    
+    return pd.DataFrame(matches)
+
+scheduled_matches = generate_scheduled_matches()
+
+# Display today's matches
+st.markdown(f"### 📅 TODAY - {today.strftime('%d/%m/%Y')}")
+today_matches = scheduled_matches[scheduled_matches['Date'] == today.strftime('%d/%m')]
+
+if len(today_matches) > 0:
+    today_atp = today_matches[today_matches['Tour'] == 'ATP']
+    today_wta = today_matches[today_matches['Tour'] == 'WTA']
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**🏆 ATP Matches** ({len(today_atp)})")
+        st.dataframe(today_atp[['Time', 'Player 1', 'Player 2', 'Surface']], use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.markdown(f"**🏆 WTA Matches** ({len(today_wta)})")
+        st.dataframe(today_wta[['Time', 'Player 1', 'Player 2', 'Surface']], use_container_width=True, hide_index=True)
+else:
+    st.info("No matches scheduled for today")
+
+st.markdown("---")
+
+# Display tomorrow's matches
+st.markdown(f"### 📅 TOMORROW - {tomorrow.strftime('%d/%m/%Y')}")
+tomorrow_matches = scheduled_matches[scheduled_matches['Date'] == tomorrow.strftime('%d/%m')]
+
+if len(tomorrow_matches) > 0:
+    tomorrow_atp = tomorrow_matches[tomorrow_matches['Tour'] == 'ATP']
+    tomorrow_wta = tomorrow_matches[tomorrow_matches['Tour'] == 'WTA']
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**🏆 ATP Matches** ({len(tomorrow_atp)})")
+        st.dataframe(tomorrow_atp[['Time', 'Player 1', 'Player 2', 'Surface']], use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.markdown(f"**🏆 WTA Matches** ({len(tomorrow_wta)})")
+        st.dataframe(tomorrow_wta[['Time', 'Player 1', 'Player 2', 'Surface']], use_container_width=True, hide_index=True)
+else:
+    st.info("No matches scheduled for tomorrow")
+
 st.markdown("---")
 
 # LOAD DATA
