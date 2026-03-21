@@ -249,6 +249,32 @@ competitive_matches = df_analysis[
 
 competitive_matches = competitive_matches.sort_values('Competitiveness', ascending=False)
 
+st.markdown("---")
+
+# Quick date filters
+st.markdown("### ⚡ QUICK DATE FILTERS")
+col1, col2, col3 = st.columns(3)
+
+today = datetime.now().date()
+tomorrow = today + timedelta(days=1)
+
+with col1:
+    if st.button("📅 TODAY ONLY", use_container_width=True, key="today_only"):
+        st.session_state.quick_date = today
+        st.rerun()
+
+with col2:
+    if st.button("📅 TOMORROW ONLY", use_container_width=True, key="tomorrow_only"):
+        st.session_state.quick_date = tomorrow
+        st.rerun()
+
+with col3:
+    if st.button("📅 TODAY + TOMORROW", use_container_width=True, key="today_tomorrow"):
+        st.session_state.quick_date = None
+        st.rerun()
+
+st.markdown("---")
+
 st.markdown("## 🎯 COMPETITIVE MATCHES")
 st.markdown(f"Found **{len(competitive_matches):,} matches** (20-26 games, 50%+ competitiveness)")
 st.markdown("---")
@@ -272,9 +298,13 @@ with col4:
 
 with col5:
     st.markdown("**📅 Date Range**")
+    # Set default to today and tomorrow
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+    
     date_range = st.date_input(
         "Select date range",
-        value=(datetime.now().date() - timedelta(days=30), datetime.now().date()),
+        value=(today, tomorrow),
         key="date_range"
     )
 
@@ -296,7 +326,19 @@ if 'Date' in filtered_matches.columns:
                 (filtered_matches['Date_parsed'].dt.date >= start_date) &
                 (filtered_matches['Date_parsed'].dt.date <= end_date)
             ]
-            st.info(f"📅 {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
+            
+            # Show date range info
+            today = datetime.now().date()
+            tomorrow = today + timedelta(days=1)
+            
+            if start_date == today and end_date == today:
+                st.info(f"📅 TODAY ({today.strftime('%d/%m/%Y')})")
+            elif start_date == today and end_date == tomorrow:
+                st.info(f"📅 TODAY ({today.strftime('%d/%m/%Y')}) + TOMORROW ({tomorrow.strftime('%d/%m/%Y')})")
+            elif start_date == tomorrow and end_date == tomorrow:
+                st.info(f"📅 TOMORROW ({tomorrow.strftime('%d/%m/%Y')})")
+            else:
+                st.info(f"📅 {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}")
     except:
         pass
 
