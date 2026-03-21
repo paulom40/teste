@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+from bs4 import BeautifulSoup
 from io import BytesIO
 from datetime import datetime, timedelta
 from sklearn.ensemble import GradientBoostingRegressor
@@ -10,7 +11,7 @@ from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Miami 2026 Predictor", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Miami 2026 Auto Scraper", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -20,8 +21,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("# 🎾 MIAMI 2026 MATCH PREDICTOR")
-st.markdown("ATP & WTA Singles - Hard Court - Game Predictions (22-25)")
+st.markdown("# 🎾 MIAMI 2026 - AUTO SCRAPER & PREDICTOR")
+st.markdown("Automatically gets real match data and predicts games (22-25)")
 st.markdown("---")
 
 today = datetime.now().date()
@@ -37,195 +38,181 @@ col3.metric("🌍 Tomorrow", tomorrow.strftime('%A, %d/%m/%Y'))
 
 st.markdown("---")
 
-# CHECK IF THERE ARE MATCHES TODAY
-st.markdown("## 🔍 CHECKING FOR MATCHES TODAY")
-st.info(f"⏳ Checking what matches are scheduled for TODAY ({today.strftime('%d/%m/%Y')})...")
-@st.cache_data
-def get_miami_matches():
-    """Real Miami 2026 ATP and WTA singles matches"""
+# AUTO SCRAPE FLASHSCORE
+st.markdown("## 🌐 STEP 1: SCRAPING REAL MATCH DATA FROM FLASHSCORE")
+st.info("⏳ Automatically fetching real Miami 2026 matches...")
+
+@st.cache_data(ttl=1800)
+def scrape_flashscore_miami():
+    """Scrape Miami 2026 matches from FlashScore"""
     
-    # ATP SINGLES - Miami Hard Court
-    atp_today = """Jannik Sinner vs Marko Milic - Hard
-Novak Djokovic vs Sebastian Korda - Hard
-Carlos Alcaraz vs Jaume Munar - Hard
-Daniil Medvedev vs Holger Rune - Hard
-Stefanos Tsitsipas vs Gregoire Barrere - Hard
-Alex de Minaur vs Gael Monfils - Hard
-Andrey Rublev vs Casper Ruud - Hard
-Taylor Fritz vs Tommy Paul - Hard
-Felix Auger-Aliassime vs Cameron Norrie - Hard
-Lorenzo Musetti vs Grigor Dimitrov - Hard"""
-
-    atp_tomorrow = """Matteo Berrettini vs Hubert Hurkacz - Hard
-Sebastian Korda vs Jannik Sinner - Hard
-Daniil Medvedev vs Taylor Fritz - Hard
-Alex de Minaur vs Andrey Rublev - Hard
-Cameron Norrie vs Felix Auger-Aliassime - Hard
-Jaume Munar vs Carlos Alcaraz - Hard
-Gael Monfils vs Tommy Paul - Hard
-Marko Milic vs Casper Ruud - Hard
-Gregoire Barrere vs Lorenzo Musetti - Hard
-Grigor Dimitrov vs Matteo Berrettini - Hard"""
-
-    # WTA SINGLES - Miami Hard Court
-    wta_today = """Iga Swiatek vs Magdalena Fręch - Hard
-Aryna Sabalenka vs Clara Tauson - Hard
-Elena Rybakina vs Magdalena Fręch - Hard
-Madison Keys vs Jule Niemeier - Hard
-Jessica Pegula vs Victoria Azarenka - Hard
-Marketa Vondrousova vs Magda Linette - Hard
-Ons Jabeur vs Daria Kasatkina - Hard
-Qinwen Zheng vs Barbora Krejcikova - Hard
-Karolina Muchova vs Jeļena Ostapenko - Hard
-Coco Gauff vs Emma Raducanu - Hard"""
-
-    wta_tomorrow = """Aryna Sabalenka vs Coco Gauff - Hard
-Iga Swiatek vs Elena Rybakina - Hard
-Madison Keys vs Jessica Pegula - Hard
-Marketa Vondrousova vs Ons Jabeur - Hard
-Qinwen Zheng vs Karolina Muchova - Hard
-Magdalena Fręch vs Jule Niemeier - Hard
-Clara Tauson vs Victoria Azarenka - Hard
-Daria Kasatkina vs Barbora Krejcikova - Hard
-Magda Linette vs Jeļena Ostapenko - Hard
-Emma Raducanu vs Ekaterina Alexandrova - Hard"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     
-    return atp_today, atp_tomorrow, wta_today, wta_tomorrow
-
-# Get Miami matches
-atp_today_matches, atp_tomorrow_matches, wta_today_matches, wta_tomorrow_matches = get_miami_matches()
-
-# DETERMINE WHICH MATCHES TO SHOW
-@st.cache_data
-def get_matches_for_display():
-    """Get matches based on current date"""
-    current_hour = datetime.now().hour
+    all_matches = {
+        'ATP': {'today': [], 'tomorrow': []},
+        'WTA': {'today': [], 'tomorrow': []}
+    }
     
-    # If before 23:00, show today and tomorrow
-    # If after 23:00, show tomorrow (next day schedule)
-    if current_hour < 23:
-        return {
-            'today_label': f"TODAY - {today.strftime('%A, %d/%m/%Y')}",
-            'tomorrow_label': f"TOMORROW - {tomorrow.strftime('%A, %d/%m/%Y')}",
-            'atp_today': atp_today_matches,
-            'wta_today': wta_today_matches,
-            'atp_tomorrow': atp_tomorrow_matches,
-            'wta_tomorrow': wta_tomorrow_matches,
-            'show_today': True
-        }
-    else:
-        # After 23:00, tomorrow becomes today
-        next_day = tomorrow + timedelta(days=1)
-        return {
-            'today_label': f"TODAY - {tomorrow.strftime('%A, %d/%m/%Y')}",
-            'tomorrow_label': f"TOMORROW - {next_day.strftime('%A, %d/%m/%Y')}",
-            'atp_today': atp_tomorrow_matches,
-            'wta_today': wta_tomorrow_matches,
-            'atp_tomorrow': atp_today_matches,
-            'wta_tomorrow': wta_today_matches,
-            'show_today': True
-        }
+    try:
+        # Try ATP matches
+        st.markdown("### 🔍 Scraping ATP matches...")
+        atp_url = 'https://www.flashscore.com/tennis/atp/'
+        response = requests.get(atp_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for match data
+        matches = soup.find_all('div', {'class': 'event__match'})
+        
+        if matches:
+            for match in matches[:20]:
+                try:
+                    teams = match.find_all('span', {'class': 'event__participant'})
+                    if len(teams) >= 2:
+                        p1 = teams[0].text.strip()
+                        p2 = teams[1].text.strip()
+                        
+                        if p1 and p2 and len(p1) > 2 and len(p2) > 2:
+                            all_matches['ATP']['today'].append(f"{p1} vs {p2}")
+                except:
+                    continue
+        
+        if all_matches['ATP']['today']:
+            st.success(f"✅ ATP: Found {len(all_matches['ATP']['today'])} matches")
+        else:
+            st.warning("⚠️ ATP: Could not scrape live data, using alternative method...")
+    
+    except Exception as e:
+        st.warning(f"ATP scraping error: {str(e)}")
+    
+    try:
+        # Try WTA matches
+        st.markdown("### 🔍 Scraping WTA matches...")
+        wta_url = 'https://www.flashscore.com/tennis/wta/'
+        response = requests.get(wta_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for match data
+        matches = soup.find_all('div', {'class': 'event__match'})
+        
+        if matches:
+            for match in matches[:20]:
+                try:
+                    teams = match.find_all('span', {'class': 'event__participant'})
+                    if len(teams) >= 2:
+                        p1 = teams[0].text.strip()
+                        p2 = teams[1].text.strip()
+                        
+                        if p1 and p2 and len(p1) > 2 and len(p2) > 2:
+                            all_matches['WTA']['today'].append(f"{p1} vs {p2}")
+                except:
+                    continue
+        
+        if all_matches['WTA']['today']:
+            st.success(f"✅ WTA: Found {len(all_matches['WTA']['today'])} matches")
+        else:
+            st.warning("⚠️ WTA: Could not scrape live data, using sample data...")
+    
+    except Exception as e:
+        st.warning(f"WTA scraping error: {str(e)}")
+    
+    # If no data scraped, use sample Miami data
+    if not all_matches['ATP']['today'] and not all_matches['WTA']['today']:
+        st.warning("⚠️ Using sample Miami 2026 data...")
+        
+        all_matches['ATP']['today'] = [
+            "Jannik Sinner vs Marko Milic",
+            "Novak Djokovic vs Sebastian Korda",
+            "Carlos Alcaraz vs Jaume Munar",
+            "Daniil Medvedev vs Holger Rune",
+            "Stefanos Tsitsipas vs Gregoire Barrere",
+            "Alex de Minaur vs Gael Monfils",
+            "Andrey Rublev vs Casper Ruud",
+            "Taylor Fritz vs Tommy Paul"
+        ]
+        
+        all_matches['WTA']['today'] = [
+            "Qinwen Zheng vs Sloane Stephens",
+            "Iga Swiatek vs Clara Tauson",
+            "Aryna Sabalenka vs Magdalena Fręch",
+            "Madison Keys vs Jule Niemeier",
+            "Jessica Pegula vs Victoria Azarenka",
+            "Marketa Vondrousova vs Magda Linette",
+            "Ons Jabeur vs Daria Kasatkina",
+            "Karolina Muchova vs Jeļena Ostapenko"
+        ]
+        
+        all_matches['ATP']['tomorrow'] = [
+            "Matteo Berrettini vs Hubert Hurkacz",
+            "Lorenzo Musetti vs Sebastian Korda",
+            "Cameron Norrie vs Felix Auger-Aliassime"
+        ]
+        
+        all_matches['WTA']['tomorrow'] = [
+            "Coco Gauff vs Emma Raducanu",
+            "Aryna Sabalenka vs Coco Gauff",
+            "Madison Keys vs Jessica Pegula"
+        ]
+        
+        st.success("✅ Using sample Miami 2026 data")
+    
+    return all_matches
 
-display_config = get_matches_for_display()
-
-st.success(f"✅ Showing matches for: {display_config['today_label']}")
-
-# SECTION 1: DISPLAY MIAMI SCHEDULE
-st.markdown("## 🏆 MIAMI 2026 SCHEDULE")
-st.markdown(f"**Tournament:** Miami Open | **Surface:** Hard Court (USA)")
-st.info(f"**Active Day:** {display_config['today_label']} | **Next Day:** {display_config['tomorrow_label']}")
+# Scrape data
+with st.spinner("🌐 Fetching match data from FlashScore..."):
+    scraped_matches = scrape_flashscore_miami()
 
 st.markdown("---")
 
-# TODAY'S MATCHES
-st.markdown(f"### 📅 {display_config['today_label']}")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("#### 🏆 ATP SINGLES")
-    st.text_area(
-        "ATP Singles matches",
-        value=display_config['atp_today'],
-        height=200,
-        disabled=True,
-        key="atp_today_display"
-    )
-
-with col2:
-    st.markdown("#### 🏆 WTA SINGLES")
-    st.text_area(
-        "WTA Singles matches",
-        value=display_config['wta_today'],
-        height=200,
-        disabled=True,
-        key="wta_today_display"
-    )
-
-st.markdown("---")
-
-# TOMORROW'S MATCHES
-st.markdown(f"### 📅 {display_config['tomorrow_label']}")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("#### 🏆 ATP SINGLES")
-    st.text_area(
-        "ATP Singles matches",
-        value=display_config['atp_tomorrow'],
-        height=200,
-        disabled=True,
-        key="atp_tomorrow_display"
-    )
-
-with col2:
-    st.markdown("#### 🏆 WTA SINGLES")
-    st.text_area(
-        "WTA Singles matches",
-        value=display_config['wta_tomorrow'],
-        height=200,
-        disabled=True,
-        key="wta_tomorrow_display"
-    )
-
-st.markdown("---")
-
-# Parse all matches
-def parse_matches(text, date):
-    """Parse match text into dataframe"""
+# Parse matches
+def parse_match_list(matches_list, date, tour):
+    """Convert match list to dataframe"""
     matches = []
     
-    if not text.strip():
-        return pd.DataFrame()
-    
-    for line in text.strip().split('\n'):
-        if ' vs ' in line and ' - ' in line:
+    for match_text in matches_list:
+        if ' vs ' in match_text:
             try:
-                players_part, surface = line.rsplit(' - ', 1)
-                p1, p2 = players_part.split(' vs ')
+                parts = match_text.split(' vs ')
+                p1 = parts[0].strip()
+                p2 = parts[1].strip()
                 
-                matches.append({
-                    'Date': date.strftime('%d/%m'),
-                    'Player 1': p1.strip(),
-                    'Player 2': p2.strip(),
-                    'Surface': surface.strip(),
-                    'Status': '📅 Scheduled'
-                })
+                if p1 and p2:
+                    matches.append({
+                        'Date': date.strftime('%d/%m'),
+                        'Player 1': p1,
+                        'Player 2': p2,
+                        'Tour': tour,
+                        'Surface': 'Hard (Miami)',
+                        'Status': '📅 Scheduled'
+                    })
             except:
                 continue
     
     return pd.DataFrame(matches)
 
-# Combine all matches - use display_config dates
-all_matches = pd.concat([
-    parse_matches(display_config['atp_today'], today),
-    parse_matches(display_config['wta_today'], today),
-    parse_matches(display_config['atp_tomorrow'], tomorrow),
-    parse_matches(display_config['wta_tomorrow'], tomorrow)
+# Combine all matches
+all_matches_df = pd.concat([
+    parse_match_list(scraped_matches['ATP']['today'], today, 'ATP'),
+    parse_match_list(scraped_matches['WTA']['today'], today, 'WTA'),
+    parse_match_list(scraped_matches['ATP']['tomorrow'], tomorrow, 'ATP'),
+    parse_match_list(scraped_matches['WTA']['tomorrow'], tomorrow, 'WTA')
 ], ignore_index=True)
 
-st.markdown("## 📊 STEP 1: LOAD HISTORICAL DATA")
+st.markdown("## ✅ LOADED MATCHES")
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Matches", len(all_matches_df))
+col2.metric("ATP Matches", len(all_matches_df[all_matches_df['Tour'] == 'ATP']))
+col3.metric("WTA Matches", len(all_matches_df[all_matches_df['Tour'] == 'WTA']))
+col4.metric("Today Matches", len(all_matches_df[all_matches_df['Date'] == today.strftime('%d/%m')]))
+
+st.dataframe(all_matches_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+# LOAD HISTORICAL DATA
+st.markdown("## 📥 STEP 2: LOAD HISTORICAL DATA")
 
 @st.cache_data(ttl=3600)
 def load_github_data():
@@ -270,7 +257,7 @@ st.info(f"📊 Historical matches loaded: {len(df):,}")
 st.markdown("---")
 
 # ANALYSIS
-st.markdown("## 🔍 STEP 2: ANALYZE & PREDICT GAMES")
+st.markdown("## 🔍 STEP 3: ANALYZE & PREDICT GAMES")
 
 def calculate_total_games(row):
     """Calculate total games"""
@@ -300,9 +287,9 @@ if len(hard_court_data) > 50:
     col4.metric("Data Points", len(hard_court_data))
     
     st.markdown("---")
-    st.markdown("## 🔮 STEP 3: GENERATE PREDICTIONS")
+    st.markdown("## 🔮 STEP 4: GENERATE PREDICTIONS")
     
-    if st.button("🎯 Predict Games (22-25 Range)", use_container_width=True, key="predict"):
+    if st.button("🎯 Predict Games (22-25 Range) for All Scraped Matches", use_container_width=True, key="predict"):
         with st.spinner("Training model and generating predictions..."):
             
             # Train model on hard court data
@@ -341,18 +328,18 @@ if len(hard_court_data) > 50:
             
             model, scaler = train_hard_court_model()
             
-            # Generate predictions
+            # Generate predictions for each match
             predictions = []
             
-            for idx, match in all_matches.iterrows():
-                # Generate scenarios
-                for _ in range(15):
+            for idx, match in all_matches_df.iterrows():
+                # Generate 25 scenarios per match
+                for scenario_num in range(25):
                     w1 = np.random.randint(4, 7)
                     l1 = np.random.randint(2, 7)
                     w2 = np.random.randint(4, 7)
                     l2 = np.random.randint(2, 7)
                     
-                    is_3set = np.random.random() < 0.2
+                    is_3set = np.random.random() < 0.25
                     w3 = np.random.randint(6, 8) if is_3set else 0
                     l3 = np.random.randint(2, 6) if is_3set else 0
                     
@@ -371,9 +358,10 @@ if len(hard_court_data) > 50:
                         actual = w1 + l1 + w2 + l2 + (w3 + l3 if is_3set else 0)
                         predictions.append({
                             'Date': match['Date'],
+                            'Tour': match['Tour'],
                             'Player 1': match['Player 1'],
                             'Player 2': match['Player 2'],
-                            'Surface': 'Hard (Miami)',
+                            'Surface': match['Surface'],
                             'Set 1': f"{w1}-{l1}",
                             'Set 2': f"{w2}-{l2}",
                             'Set 3': f"{w3}-{l3}" if is_3set else "—",
@@ -399,7 +387,7 @@ if len(hard_court_data) > 50:
                     st.download_button(
                         label="📊 Download as CSV",
                         data=csv,
-                        file_name=f"Miami_2026_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"Miami_2026_Auto_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
                         use_container_width=True
                     )
@@ -408,25 +396,29 @@ if len(hard_court_data) > 50:
                     if st.button("📊 Download as Excel", use_container_width=True):
                         try:
                             import openpyxl
-                            from openpyxl.styles import Font, PatternFill, Alignment
+                            from openpyxl.styles import Font, PatternFill
                             
                             output = BytesIO()
                             
                             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                                # Summary sheet
                                 summary = pd.DataFrame({
-                                    'Metric': ['Tournament', 'Surface', 'Date Range', 'Total Predictions', 'Avg Predicted Games'],
-                                    'Value': ['Miami 2026', 'Hard Court', f"{today} - {tomorrow}", len(predictions_df), f"{predictions_df['Predicted Games'].mean():.1f}"]
+                                    'Metric': ['Source', 'Tournament', 'Surface', 'Total Predictions', 'WTA', 'ATP', 'Avg Games'],
+                                    'Value': [
+                                        'FlashScore Auto Scraper',
+                                        'Miami 2026',
+                                        'Hard Court',
+                                        len(predictions_df),
+                                        len(predictions_df[predictions_df['Tour'] == 'WTA']),
+                                        len(predictions_df[predictions_df['Tour'] == 'ATP']),
+                                        f"{predictions_df['Predicted Games'].mean():.1f}"
+                                    ]
                                 })
                                 summary.to_excel(writer, sheet_name='Summary', index=False)
-                                
-                                # Predictions sheet
                                 predictions_df.to_excel(writer, sheet_name='Predictions', index=False)
                                 
                                 workbook = writer.book
                                 for sheet in workbook.sheetnames:
-                                    ws = workbook[sheet]
-                                    for cell in ws[1]:
+                                    for cell in workbook[sheet][1]:
                                         if cell.value:
                                             cell.fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
                                             cell.font = Font(bold=True, color="FFFFFF")
@@ -435,7 +427,7 @@ if len(hard_court_data) > 50:
                             st.download_button(
                                 label="✅ Download Excel",
                                 data=output.getvalue(),
-                                file_name=f"Miami_2026_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                file_name=f"Miami_2026_Auto_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
@@ -444,11 +436,12 @@ if len(hard_court_data) > 50:
                 
                 st.markdown("---")
                 st.markdown("### 📊 STATISTICS")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("Total Predictions", len(predictions_df))
-                col2.metric("Avg Predicted Games", f"{predictions_df['Predicted Games'].mean():.1f}")
+                col2.metric("Avg Games", f"{predictions_df['Predicted Games'].mean():.1f}")
                 col3.metric("Min Games", f"{predictions_df['Predicted Games'].min():.1f}")
                 col4.metric("Max Games", f"{predictions_df['Predicted Games'].max():.1f}")
+                col5.metric("WTA Count", len(predictions_df[predictions_df['Tour'] == 'WTA']))
             
             else:
                 st.warning("⚠️ No predictions found in 22-25 games range")
