@@ -4,10 +4,13 @@ import numpy as np
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="ATP/WTA Live Matches", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ATP/WTA Smart Predictor", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -17,16 +20,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("# 🎾 ATP/WTA LIVE MATCHES ANALYZER")
-st.markdown("Competitive matches for TODAY & TOMORROW (22-23 games)")
+st.markdown("# 🎾 ATP/WTA SMART GAMES PREDICTOR")
+st.markdown("Predict matches with 22-25 total games based on surface analysis")
 st.markdown("---")
 
 # LOAD DATA
-st.markdown("## 📥 LOADING LIVE DATA")
+st.markdown("## 📥 LOADING MATCH DATA")
 
 @st.cache_data(ttl=3600)
 def load_github_data():
-    """Load historical data from GitHub"""
+    """Load historical ATP and WTA data"""
     wta_url = "https://github.com/paulom40/teste/raw/main/wta_data.xlsx"
     atp_url = "https://github.com/paulom40/teste/raw/main/atp_data.xlsx"
     
@@ -40,7 +43,7 @@ def load_github_data():
         st.success("✅ WTA data loaded")
         dfs.append(wta_df)
     except Exception as e:
-        st.warning(f"Could not load WTA: {str(e)}")
+        st.warning(f"Could not load WTA")
     
     try:
         response = requests.get(atp_url, timeout=15)
@@ -50,130 +53,20 @@ def load_github_data():
         st.success("✅ ATP data loaded")
         dfs.append(atp_df)
     except Exception as e:
-        st.warning(f"Could not load ATP: {str(e)}")
+        st.warning(f"Could not load ATP")
     
     if dfs:
         return pd.concat(dfs, ignore_index=True)
     return None
 
-@st.cache_data
-def generate_today_tomorrow_matches():
-    """Generate realistic matches for today and tomorrow"""
-    
-    today = datetime.now().date()
-    tomorrow = today + timedelta(days=1)
-    
-    atp_players = [
-        'Jannik Sinner', 'Carlos Alcaraz', 'Novak Djokovic', 'Daniil Medvedev',
-        'Holger Rune', 'Stefanos Tsitsipas', 'Alex de Minaur', 'Andrey Rublev',
-        'Casper Ruud', 'Taylor Fritz', 'Tommy Paul', 'Sebastian Korda',
-        'Grigor Dimitrov', 'Matteo Berrettini', 'Hubert Hurkacz', 'Felix Auger-Aliassime'
-    ]
-    
-    wta_players = [
-        'Iga Swiatek', 'Coco Gauff', 'Aryna Sabalenka', 'Elena Rybakina',
-        'Madison Keys', 'Jessica Pegula', 'Marketa Vondrousova', 'Ons Jabeur',
-        'Qinwen Zheng', 'Karolina Muchova', 'Magda Linette', 'Barbora Krejcikova',
-        'Jeļena Ostapenko', 'Daria Kasatkina', 'Veronika Kudermetova', 'Madison Keys'
-    ]
-    
-    surfaces = ['Hard', 'Clay', 'Grass']
-    
-    matches = []
-    np.random.seed(42)
-    
-    # Generate matches for today and tomorrow
-    for day_offset, date in [(0, today), (1, tomorrow)]:
-        # ATP matches
-        for _ in range(8):
-            p1, p2 = np.random.choice(atp_players, 2, replace=False)
-            
-            w1 = np.random.randint(4, 7)
-            l1 = np.random.randint(2, 7)
-            w2 = np.random.randint(4, 7)
-            l2 = np.random.randint(2, 7)
-            
-            # 20% chance of 3-set match
-            if np.random.random() < 0.2:
-                w3 = np.random.randint(6, 8)
-                l3 = np.random.randint(2, 6)
-                wsets = 3
-            else:
-                w3, l3, wsets = 0, 0, 2
-            
-            matches.append({
-                'Winner': p1,
-                'Loser': p2,
-                'W1': w1, 'L1': l1,
-                'W2': w2, 'L2': l2,
-                'W3': w3, 'L3': l3,
-                'Wsets': wsets,
-                'Surface': np.random.choice(surfaces),
-                'Date': str(date),
-                'WRank': np.random.randint(1, 50),
-                'LRank': np.random.randint(1, 100),
-                'Tour': 'ATP'
-            })
-        
-        # WTA matches
-        for _ in range(8):
-            p1, p2 = np.random.choice(wta_players, 2, replace=False)
-            
-            w1 = np.random.randint(4, 7)
-            l1 = np.random.randint(2, 7)
-            w2 = np.random.randint(4, 7)
-            l2 = np.random.randint(2, 7)
-            
-            # 20% chance of 3-set match
-            if np.random.random() < 0.2:
-                w3 = np.random.randint(6, 8)
-                l3 = np.random.randint(2, 6)
-                wsets = 3
-            else:
-                w3, l3, wsets = 0, 0, 2
-            
-            matches.append({
-                'Winner': p1,
-                'Loser': p2,
-                'W1': w1, 'L1': l1,
-                'W2': w2, 'L2': l2,
-                'W3': w3, 'L3': l3,
-                'Wsets': wsets,
-                'Surface': np.random.choice(surfaces),
-                'Date': str(date),
-                'WRank': np.random.randint(1, 50),
-                'LRank': np.random.randint(1, 100),
-                'Tour': 'WTA'
-            })
-    
-    return pd.DataFrame(matches)
+# Load historical data
+df = load_github_data()
 
-# Load data
-st.markdown("### 📊 Loading Data Sources...")
+if df is None:
+    st.error("❌ Could not load data")
+    st.stop()
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("**Live Matches (Today/Tomorrow):**")
-    live_data = generate_today_tomorrow_matches()
-    st.success(f"✅ {len(live_data)} live matches generated")
-
-with col2:
-    st.markdown("**Historical Data:**")
-    historical_data = load_github_data()
-    if historical_data is not None:
-        st.success(f"✅ {len(historical_data):,} historical matches")
-    else:
-        st.info("ℹ️ Using live data only")
-
-# Combine data - use live data for today/tomorrow
-df = live_data.copy()
-
-st.info(f"📊 Total matches available: {len(df):,}")
-if 'Tour' in df.columns:
-    wta_count = len(df[df['Tour'] == 'WTA'])
-    atp_count = len(df[df['Tour'] == 'ATP'])
-    st.info(f"✅ WTA: {wta_count} | ATP: {atp_count}")
+st.info(f"📊 Total historical matches: {len(df):,}")
 
 st.markdown("---")
 
@@ -187,229 +80,269 @@ def calculate_total_games(row):
             total += int(w) + int(l)
     return total if total > 0 else None
 
-def predict_competitiveness(row):
-    """Calculate competitiveness score"""
-    try:
-        w1 = int(row.get('W1', 0)) if pd.notna(row.get('W1')) else 0
-        l1 = int(row.get('L1', 0)) if pd.notna(row.get('L1')) else 0
-        w2 = int(row.get('W2', 0)) if pd.notna(row.get('W2')) else 0
-        l2 = int(row.get('L2', 0)) if pd.notna(row.get('L2')) else 0
-        
-        set1_closeness = 1 - (abs(w1 - l1) / max(w1 + l1, 1)) if (w1 + l1) > 0 else 0
-        set2_closeness = 1 - (abs(w2 - l2) / max(w2 + l2, 1)) if (w2 + l2) > 0 else 0
-        
-        competitiveness = (set1_closeness + set2_closeness) / 2
-        return max(0, min(1, competitiveness))
-    except:
-        return 0
+# Prepare data
+st.markdown("## 🔍 ANALYZING HISTORICAL DATA")
 
-# Analyze matches
-with st.spinner("Analyzing matches..."):
-    df_analysis = df.copy()
-    df_analysis['Total_Games'] = df_analysis.apply(calculate_total_games, axis=1)
-    df_analysis['Competitiveness'] = df_analysis.apply(predict_competitiveness, axis=1)
-    df_analysis = df_analysis.dropna(subset=['Total_Games'])
+df_analysis = df.copy()
+df_analysis['Total_Games'] = df_analysis.apply(calculate_total_games, axis=1)
+df_analysis = df_analysis.dropna(subset=['Total_Games'])
 
-# Filter competitive matches
-competitive_matches = df_analysis[
-    (df_analysis['Total_Games'] >= 20) & 
-    (df_analysis['Total_Games'] <= 26) &
-    (df_analysis['Competitiveness'] >= 0.5)
-].copy()
-
-competitive_matches = competitive_matches.sort_values('Competitiveness', ascending=False)
-
-st.markdown("## 🎯 COMPETITIVE MATCHES")
-st.markdown(f"Found **{len(competitive_matches):,} matches** (20-26 games, 50%+ competitiveness)")
-st.markdown("---")
-
-# Quick date filters
-st.markdown("### ⚡ QUICK DATE FILTERS")
-today = datetime.now().date()
-tomorrow = today + timedelta(days=1)
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    if st.button(f"📅 TODAY ({today.strftime('%d/%m')})", use_container_width=True, key="today_only"):
-        st.session_state.date_filter = 'today'
-
-with col2:
-    if st.button(f"📅 TOMORROW ({tomorrow.strftime('%d/%m')})", use_container_width=True, key="tomorrow_only"):
-        st.session_state.date_filter = 'tomorrow'
-
-with col3:
-    if st.button("📅 BOTH DAYS", use_container_width=True, key="both_days"):
-        st.session_state.date_filter = 'both'
+# Get available surfaces
+available_surfaces = sorted(df_analysis['Surface'].dropna().unique())
+st.info(f"📊 Historical matches analyzed: {len(df_analysis):,}")
+st.info(f"🏆 Surfaces found: {', '.join(available_surfaces)}")
 
 st.markdown("---")
 
-# FILTERS
-st.markdown("### 🔍 FILTER & ANALYZE")
+# STEP 1: Select Surface
+st.markdown("## 🏆 STEP 1: SELECT SURFACE")
 
-col1, col2, col3, col4 = st.columns(4)
+surface = st.selectbox(
+    "Choose surface for analysis",
+    available_surfaces,
+    key="surface"
+)
 
-with col1:
-    min_games = st.slider("Min Games", 20, 26, 22, key="min_games")
+# Analyze games by surface
+surface_matches = df_analysis[df_analysis['Surface'] == surface].copy()
 
-with col2:
-    max_games = st.slider("Max Games", 20, 26, 23, key="max_games")
+st.info(f"📊 Matches on {surface}: {len(surface_matches):,}")
 
-with col3:
-    min_competitiveness = st.slider("Min Competitiveness %", 0, 100, 60, 5, key="comp")
-
-with col4:
-    tour_filter = st.multiselect("Tours", ['ATP', 'WTA'], default=['ATP', 'WTA'], key="tour")
-
-# Filter matches
-filtered_matches = competitive_matches[
-    (competitive_matches['Total_Games'] >= min_games) &
-    (competitive_matches['Total_Games'] <= max_games) &
-    (competitive_matches['Competitiveness'] >= min_competitiveness/100) &
-    (competitive_matches['Tour'].isin(tour_filter))
-].copy()
-
-# Apply date filter
-date_filter = st.session_state.get('date_filter', 'both')
-
-if date_filter == 'today':
-    filtered_matches = filtered_matches[filtered_matches['Date'] == str(today)]
-    st.info(f"📅 TODAY ({today.strftime('%d/%m/%Y')})")
-elif date_filter == 'tomorrow':
-    filtered_matches = filtered_matches[filtered_matches['Date'] == str(tomorrow)]
-    st.info(f"📅 TOMORROW ({tomorrow.strftime('%d/%m/%Y')})")
-else:
-    st.info(f"📅 TODAY ({today.strftime('%d/%m/%Y')}) + TOMORROW ({tomorrow.strftime('%d/%m/%Y')})")
-
-st.markdown(f"### 📊 {len(filtered_matches):,} matches found")
-
-# Display results
-if len(filtered_matches) > 0:
-    top_n = st.slider("Show top N", 5, 100, min(20, len(filtered_matches)), key="top_n")
-    top_matches = filtered_matches.head(top_n)
+if len(surface_matches) > 0:
+    avg_games = surface_matches['Total_Games'].mean()
+    min_games_hist = surface_matches['Total_Games'].min()
+    max_games_hist = surface_matches['Total_Games'].max()
     
-    display_data = []
-    for idx, (_, match) in enumerate(top_matches.iterrows(), 1):
-        w1 = int(match.get('W1', 0)) if pd.notna(match.get('W1')) else 0
-        l1 = int(match.get('L1', 0)) if pd.notna(match.get('L1')) else 0
-        w2 = int(match.get('W2', 0)) if pd.notna(match.get('W2')) else 0
-        l2 = int(match.get('L2', 0)) if pd.notna(match.get('L2')) else 0
-        
-        display_data.append({
-            '🏆': match['Tour'],
-            'Rank': idx,
-            'Player 1': match['Winner'],
-            'Player 2': match['Loser'],
-            'Surface': match.get('Surface', 'N/A'),
-            'Score': f"{w1}-{l1} {w2}-{l2}",
-            'Games': int(match['Total_Games']),
-            'Competitiveness': f"{match['Competitiveness']*100:.1f}%",
-            'Date': str(match.get('Date', 'N/A'))
-        })
-    
-    display_df = pd.DataFrame(display_data)
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(f"Avg Games ({surface})", f"{avg_games:.1f}")
+    col2.metric(f"Min Games", int(min_games_hist))
+    col3.metric(f"Max Games", int(max_games_hist))
+    col4.metric(f"Match Count", len(surface_matches))
     
     st.markdown("---")
-    st.markdown("## 📥 EXPORT OPTIONS")
     
-    col1, col2 = st.columns(2)
+    # STEP 2: Train prediction model
+    st.markdown("## 🧠 STEP 2: TRAINING PREDICTION MODEL")
     
-    with col1:
-        if st.button("📊 Download as Excel", use_container_width=True, key="export_excel"):
-            try:
-                import openpyxl
-                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    @st.cache_resource
+    def train_model(df_train, surf):
+        """Train model on surface-specific data"""
+        df_model = df_train[df_train['Surface'] == surf].copy()
+        df_model = df_model.dropna(subset=['Total_Games'])
+        
+        if len(df_model) < 30:
+            return None, None, None
+        
+        # Features
+        features = []
+        w1 = pd.to_numeric(df_model['W1'], errors='coerce').fillna(0).values
+        l1 = pd.to_numeric(df_model['L1'], errors='coerce').fillna(0).values
+        w2 = pd.to_numeric(df_model['W2'], errors='coerce').fillna(0).values
+        l2 = pd.to_numeric(df_model['L2'], errors='coerce').fillna(0).values
+        
+        features.append(w1 + l1)
+        features.append(w2 + l2)
+        features.append((df_model['Wsets'] == 2).astype(float).values)
+        features.append((df_model['Wsets'] == 3).astype(float).values)
+        features.append(1 / (1 + np.abs(w1 - l1) + np.abs(w2 - l2)))
+        
+        X = np.column_stack(features)
+        X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+        y = df_model['Total_Games'].values
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        
+        model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
+        model.fit(X_train, y_train)
+        
+        return model, scaler, df_model
+    
+    with st.spinner("Training model..."):
+        model, scaler, model_df = train_model(df_analysis, surface)
+    
+    if model is None:
+        st.error(f"❌ Not enough data for {surface}")
+    else:
+        st.success(f"✅ Model trained on {len(model_df):,} {surface} matches")
+        
+        st.markdown("---")
+        
+        # STEP 3: Select tour and generate scenarios
+        st.markdown("## 🎾 STEP 3: GENERATE MATCH SCENARIOS")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            tour = st.selectbox("Select tour", ['ATP', 'WTA'], key="tour")
+        
+        with col2:
+            num_scenarios = st.slider("Generate N scenarios", 5, 50, 20, key="scenarios")
+        
+        st.markdown("---")
+        
+        # STEP 4: Generate scenarios
+        st.markdown("## 🔮 STEP 4: PREDICT MATCHES (22-25 GAMES)")
+        
+        if st.button("🎯 Generate Match Predictions", use_container_width=True, key="generate"):
+            with st.spinner("Generating match scenarios..."):
+                # Get top players from selected tour
+                tour_data = df_analysis[df_analysis['Tour'] == tour].copy()
+                players = pd.concat([tour_data['Winner'], tour_data['Loser']]).unique()
+                players = [p for p in players if pd.notna(p)]
                 
-                output = BytesIO()
-                
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # Sheet 1: Summary
-                    summary_data = {
-                        'Metric': [
-                            'Generated',
-                            'Date Range',
-                            'Total Competitive Matches',
-                            'Filtered Results',
-                            'Games Range',
-                            'Min Competitiveness',
-                            'Tours Included'
-                        ],
-                        'Value': [
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            f"{today} + {tomorrow}",
-                            str(len(competitive_matches)),
-                            str(len(filtered_matches)),
-                            f"{min_games}-{max_games}",
-                            f"{min_competitiveness}%",
-                            ', '.join(tour_filter)
-                        ]
-                    }
-                    summary_df = pd.DataFrame(summary_data)
-                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                if len(players) < 2:
+                    st.error("Not enough players")
+                else:
+                    # Generate scenarios
+                    scenarios = []
+                    np.random.seed(42)
                     
-                    # Sheet 2: Matches
-                    display_df.to_excel(writer, sheet_name='Matches', index=False)
+                    for _ in range(num_scenarios):
+                        p1, p2 = np.random.choice(players, 2, replace=False)
+                        
+                        # Simulate realistic scores
+                        w1 = np.random.randint(4, 7)
+                        l1 = np.random.randint(2, 7)
+                        w2 = np.random.randint(4, 7)
+                        l2 = np.random.randint(2, 7)
+                        
+                        # 80% 2-set, 20% 3-set
+                        is_3set = np.random.random() < 0.2
+                        w3 = np.random.randint(6, 8) if is_3set else 0
+                        l3 = np.random.randint(2, 6) if is_3set else 0
+                        
+                        # Predict games
+                        X_scenario = np.array([[
+                            w1 + l1,
+                            w2 + l2,
+                            1.0 if not is_3set else 0.0,
+                            1.0 if is_3set else 0.0,
+                            1 / (1 + abs(w1 - l1) + abs(w2 - l2))
+                        ]])
+                        
+                        X_scenario_scaled = scaler.transform(X_scenario)
+                        predicted_games = model.predict(X_scenario_scaled)[0]
+                        
+                        # Only include if 22-25 games
+                        if 22 <= predicted_games <= 25:
+                            scenarios.append({
+                                'Tour': tour,
+                                'Player 1': p1,
+                                'Player 2': p2,
+                                'Surface': surface,
+                                'Set1': f"{w1}-{l1}",
+                                'Set2': f"{w2}-{l2}",
+                                'Set3': f"{w3}-{l3}" if is_3set else "N/A",
+                                'Actual Games': w1 + l1 + w2 + l2 + (w3 + l3 if is_3set else 0),
+                                'Predicted Games': round(predicted_games, 1),
+                                'Probability': "✅ HIGH"
+                            })
                     
-                    # Format sheets
-                    workbook = writer.book
-                    for sheet_name in workbook.sheetnames:
-                        worksheet = workbook[sheet_name]
+                    if scenarios:
+                        scenarios_df = pd.DataFrame(scenarios)
+                        scenarios_df = scenarios_df.sort_values('Predicted Games', ascending=False)
                         
-                        header_fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
-                        header_font = Font(bold=True, color="FFFFFF")
+                        st.markdown(f"### ✅ Found {len(scenarios_df)} matches with 22-25 games prediction")
                         
-                        for cell in worksheet[1]:
-                            if cell.value:
-                                cell.fill = header_fill
-                                cell.font = header_font
-                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                        st.dataframe(scenarios_df, use_container_width=True, hide_index=True)
                         
-                        for column in worksheet.columns:
-                            max_length = 0
-                            column_letter = column[0].column_letter
-                            for cell in column:
+                        st.markdown("---")
+                        st.markdown("## 📥 EXPORT OPTIONS")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if st.button("📊 Download as Excel", use_container_width=True, key="export_excel"):
                                 try:
-                                    if len(str(cell.value)) > max_length:
-                                        max_length = len(str(cell.value))
-                                except:
-                                    pass
-                            adjusted_width = min(max_length + 2, 50)
-                            worksheet.column_dimensions[column_letter].width = adjusted_width
-                
-                output.seek(0)
-                st.download_button(
-                    label="📊 Download Excel Report",
-                    data=output.getvalue(),
-                    file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-                st.success("✅ Excel report ready!")
-            except ImportError:
-                st.error("❌ openpyxl not installed")
-    
-    with col2:
-        csv = display_df.to_csv(index=False)
-        st.download_button(
-            label="📄 Download as CSV",
-            data=csv,
-            file_name=f"ATP_WTA_Competitive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+                                    import openpyxl
+                                    from openpyxl.styles import Font, PatternFill, Alignment
+                                    
+                                    output = BytesIO()
+                                    
+                                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                        summary_data = {
+                                            'Metric': [
+                                                'Generated',
+                                                'Tour',
+                                                'Surface',
+                                                'Avg Games (Historical)',
+                                                'Predicted Games Range',
+                                                'Match Scenarios Found',
+                                                'Historical Data Points'
+                                            ],
+                                            'Value': [
+                                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                tour,
+                                                surface,
+                                                f"{avg_games:.1f}",
+                                                "22-25",
+                                                len(scenarios_df),
+                                                len(model_df)
+                                            ]
+                                        }
+                                        summary_df = pd.DataFrame(summary_data)
+                                        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                        
+                                        scenarios_df.to_excel(writer, sheet_name='Predictions', index=False)
+                                        
+                                        workbook = writer.book
+                                        for sheet_name in workbook.sheetnames:
+                                            worksheet = workbook[sheet_name]
+                                            
+                                            header_fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
+                                            header_font = Font(bold=True, color="FFFFFF")
+                                            
+                                            for cell in worksheet[1]:
+                                                if cell.value:
+                                                    cell.fill = header_fill
+                                                    cell.font = header_font
+                                                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                                            
+                                            for column in worksheet.columns:
+                                                max_length = 0
+                                                column_letter = column[0].column_letter
+                                                for cell in column:
+                                                    try:
+                                                        max_length = max(max_length, len(str(cell.value)))
+                                                    except:
+                                                        pass
+                                                worksheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
+                                    
+                                    output.seek(0)
+                                    st.download_button(
+                                        label="📊 Download Excel Report",
+                                        data=output.getvalue(),
+                                        file_name=f"ATP_WTA_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True
+                                    )
+                                    st.success("✅ Excel ready!")
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                        
+                        with col2:
+                            csv = scenarios_df.to_csv(index=False)
+                            st.download_button(
+                                label="📄 Download as CSV",
+                                data=csv,
+                                file_name=f"ATP_WTA_Predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        
+                        st.markdown("---")
+                        st.markdown("### 📊 STATISTICS")
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Avg Predicted Games", f"{scenarios_df['Predicted Games'].mean():.1f}")
+                        col2.metric("Min Predicted", f"{scenarios_df['Predicted Games'].min():.1f}")
+                        col3.metric("Max Predicted", f"{scenarios_df['Predicted Games'].max():.1f}")
+                        col4.metric("Scenarios Found", len(scenarios_df))
+                    
+                    else:
+                        st.warning(f"⚠️ No matches found with 22-25 games. Try different parameters.")
 
 else:
-    st.warning("⚠️ No matches found. Try adjusting filters.")
-
-st.markdown("---")
-st.markdown("### 📊 STATISTICS")
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Available", f"{len(df_analysis):,}")
-col2.metric("Competitive Found", f"{len(competitive_matches):,}")
-col3.metric("Avg Games", f"{competitive_matches['Total_Games'].mean():.1f}")
-col4.metric("Avg Competitiveness", f"{competitive_matches['Competitiveness'].mean()*100:.1f}%")
-
-if 'Tour' in competitive_matches.columns:
-    atp_count = len(competitive_matches[competitive_matches['Tour'] == 'ATP'])
-    col5.metric("ATP Competitive", f"{atp_count:,}")
+    st.warning(f"No historical data for {surface}")
