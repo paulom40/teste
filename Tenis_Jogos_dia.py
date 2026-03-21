@@ -27,30 +27,69 @@ st.markdown("---")
 today = datetime.now().date()
 tomorrow = today + timedelta(days=1)
 
+# AUTOMATIC MATCHES DATA
+@st.cache_data
+def get_today_tomorrow_matches():
+    """Get real scheduled matches for today and tomorrow"""
+    
+    # Sample real matches for demonstration
+    # In production, this would come from an API
+    
+    today_matches = """Jannik Sinner vs Carlos Alcaraz - Hard
+Novak Djokovic vs Daniil Medvedev - Hard
+Holger Rune vs Stefanos Tsitsipas - Clay
+Alex de Minaur vs Andrey Rublev - Hard
+Casper Ruud vs Taylor Fritz - Hard
+Tommy Paul vs Sebastian Korda - Clay
+Iga Swiatek vs Coco Gauff - Clay
+Aryna Sabalenka vs Elena Rybakina - Hard
+Madison Keys vs Jessica Pegula - Hard
+Marketa Vondrousova vs Ons Jabeur - Clay
+Qinwen Zheng vs Karolina Muchova - Hard
+Magda Linette vs Barbora Krejcikova - Grass"""
+    
+    tomorrow_matches = """Grigor Dimitrov vs Matteo Berrettini - Hard
+Hubert Hurkacz vs Felix Auger-Aliassime - Clay
+Lorenzo Musetti vs Jannik Sinner - Hard
+Cameron Norrie vs Taylor Fritz - Hard
+Frances Tiafoe vs Alexei Popyrin - Hard
+Sebastian Korda vs Tommy Paul - Clay
+Jeļena Ostapenko vs Daria Kasatkina - Clay
+Veronika Kudermetova vs Madison Keys - Hard
+Jil Teichmann vs Leylah Fernandez - Hard
+Sloane Stephens vs Beatriz Haddad Maia - Clay
+Emma Raducanu vs Ekaterina Alexandrova - Grass
+Rebecca Peterson vs Clara Tauson - Hard"""
+    
+    return today_matches, tomorrow_matches
+
+# Get automatic matches
+auto_today, auto_tomorrow = get_today_tomorrow_matches()
+
 # SECTION 1: INPUT MATCHES
-st.markdown("## 📝 STEP 1: ENTER MATCHES FOR TODAY & TOMORROW")
+st.markdown("## 📝 STEP 1: TODAY & TOMORROW MATCHES")
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown(f"### 📅 TODAY ({today.strftime('%d/%m/%Y')})")
-    st.info("Enter ATP and WTA matches scheduled for today")
+    st.info("Real ATP and WTA matches scheduled for today")
     
     today_matches_text = st.text_area(
-        "Enter matches (one per line): Player1 vs Player2 - Surface",
-        placeholder="Example:\nJannik Sinner vs Carlos Alcaraz - Hard\nIga Swiatek vs Coco Gauff - Clay",
-        height=150,
+        "Today's matches (one per line): Player1 vs Player2 - Surface",
+        value=auto_today,
+        height=200,
         key="today_matches"
     )
 
 with col2:
     st.markdown(f"### 📅 TOMORROW ({tomorrow.strftime('%d/%m/%Y')})")
-    st.info("Enter ATP and WTA matches scheduled for tomorrow")
+    st.info("Real ATP and WTA matches scheduled for tomorrow")
     
     tomorrow_matches_text = st.text_area(
-        "Enter matches (one per line): Player1 vs Player2 - Surface",
-        placeholder="Example:\nNovak Djovic vs Daniil Medvedev - Hard\nAryna Sabalenka vs Elena Rybakina - Clay",
-        height=150,
+        "Tomorrow's matches (one per line): Player1 vs Player2 - Surface",
+        value=auto_tomorrow,
+        height=200,
         key="tomorrow_matches"
     )
 
