@@ -158,51 +158,264 @@ def safe_skill(value, lo=0.01, hi=0.99):
         return 0.5
     return float(np.clip(value, lo, hi))
 
+# ─── percentile normaliser ────────────────────────────────────────────────────
+# Pre-built reference ranges derived from ATP Challenger tour averages.
+# Each tuple is (realistic_min, realistic_max) for a typical Challenger player.
+# Values outside range are clipped so the bar always makes sense visually.
+_SKILL_RANGES = {
+    'first_serve_pct':       (0.50, 0.75),   # % of 1st serves in
+    'first_serve_won_pct':   (0.60, 0.85),   # % of 1st-serve points won
+    'second_serve_won_pct':  (0.40, 0.65),   # % of 2nd-serve points won
+    'hold_pct':              (0.55, 0.95),   # % of service games held
+    'bp_saved_pct':          (0.45, 0.80),   # % of break points saved
+    'ace_per_svgm':          (0.00, 1.20),   # aces per service game
+    'df_per_svgm':           (0.00, 0.80),   # double faults per service game (inverted → lower = better)
+    'return_pts_won_pct':    (0.25, 0.55),   # % of return points won
+    'break_conversion_pct':  (0.20, 0.55),   # % of break point opportunities converted
+    'dominance_ratio':       (0.60, 1.80),   # (srv pts won % / return pts won %) — higher → more dominant server
+}
+
+def _norm(value, key, invert=False):
+    """Normalise a raw stat value to [0, 1] within Challenger tour range."""
+    lo, hi = _SKILL_RANGES[key]
+    if hi == lo:
+        return 0.5
+    normed = (value - lo) / (hi - lo)
+    if invert:
+        normed = 1.0 - normed
+    return float(np.clip(normed, 0.01, 0.99))
+
+def _series(df_rows, col):
+    """Safe numeric series from a column."""
+    if col not in df_rows.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(df_rows[col], errors='coerce').dropna()
+
+def _ratio(num_series, den_series, fallback=np.nan):
+    """Element-wise ratio, return mean, avoiding div-by-zero."""
+    den = den_series.replace(0, np.nan)
+    r = (num_series / den).dropna()
+    return float(r.mean()) if len(r) > 0 else fallback
+
 def analyze_player_skills(df, player_name, surface):
+    """
+    Build 10 real skill metrics from actual match stats.
+    Each metric is computed separately when the player is Winner vs Loser
+    (the data stores winner stats as w_* and loser stats as l_*),
+    then merged by weighted average (wins weighted 60 %, losses 40 %
+    to slightly favour form while still using all data).
+    """
     mask = (df['Winner'] == player_name) | (df['Loser'] == player_name)
     if surface != 'All':
         mask &= (df['Surface'] == surface)
-    matches = df[mask].tail(20).copy()
+    recent = df[mask].sort_values('Date', ascending=False).head(25).copy()
 
-    default = {'serve_strength': 0.5, 'consistency': 0.5, 'aggression': 0.5, 'adaptability': 0.5}
-    if len(matches) == 0:
-        return default
+    nan5 = {'first_serve_pct': np.nan, 'first_serve_won_pct': np.nan,
+            'second_serve_won_pct': np.nan, 'hold_pct': np.nan,
+            'bp_saved_pct': np.nan, 'ace_per_svgm': np.nan,
+            'df_per_svgm': np.nan, 'return_pts_won_pct': np.nan,
+            'break_conversion_pct': np.nan, 'dominance_ratio': np.nan}
 
-    wins = matches[matches['Winner'] == player_name]
+    if len(recent) == 0:
+        return {k: 0.5 for k in nan5}
 
-    # Serve strength from real data
-    if 'w_1stIn' in matches.columns and len(wins) > 0:
-        svpt = pd.to_numeric(wins['w_svpt'], errors='coerce').replace(0, np.nan)
-        fs   = pd.to_numeric(wins['w_1stIn'], errors='coerce')
-        ratio = (fs / svpt).dropna()
-        fs_pct = float(ratio.mean()) if len(ratio) > 0 else 0.6
-        bps  = pd.to_numeric(wins['w_bpSaved'], errors='coerce')
-        bpf  = pd.to_numeric(wins['w_bpFaced'], errors='coerce').replace(0, np.nan)
-        bp_r = (bps / bpf).dropna()
-        bp_pct = float(bp_r.mean()) if len(bp_r) > 0 else 0.5
-        serve_strength = fs_pct * 0.6 + bp_pct * 0.4
+    w_rows = recent[recent['Winner'] == player_name]   # player won  → w_* cols
+    l_rows = recent[recent['Loser']  == player_name]   # player lost → l_* cols
+
+    def stat_both(w_col, l_col, fallback=np.nan):
+        """Average a stat across wins (w_col) and losses (l_col)."""
+        vals = []
+        ws = _series(w_rows, w_col)
+        ls = _series(l_rows, l_col)
+        if len(ws) > 0: vals.append((float(ws.mean()), len(ws), 0.6))
+        if len(ls) > 0: vals.append((float(ls.mean()), len(ls), 0.4))
+        if not vals: return fallback
+        total_w = sum(v[1] * v[2] for v in vals)
+        return sum(v[0] * v[1] * v[2] for v in vals) / total_w if total_w > 0 else fallback
+
+    def ratio_both(w_num, w_den, l_num, l_den, fallback=np.nan):
+        """Ratio stat across wins and losses."""
+        vals = []
+        r_w = _ratio(_series(w_rows, w_num), _series(w_rows, w_den))
+        r_l = _ratio(_series(l_rows, l_num), _series(l_rows, l_den))
+        if not np.isnan(r_w): vals.append((r_w, len(w_rows), 0.6))
+        if not np.isnan(r_l): vals.append((r_l, len(l_rows), 0.4))
+        if not vals: return fallback
+        total_w = sum(v[1] * v[2] for v in vals)
+        return sum(v[0] * v[1] * v[2] for v in vals) / total_w if total_w > 0 else fallback
+
+    # ── 1. First Serve % ──────────────────────────────────────────────────────
+    fs_pct = ratio_both('w_1stIn', 'w_svpt', 'l_1stIn', 'l_svpt', fallback=0.62)
+
+    # ── 2. First Serve Won % (of 1st-serve points) ───────────────────────────
+    fs_won_pct = ratio_both('w_1stWon', 'w_1stIn', 'l_1stWon', 'l_1stIn', fallback=0.72)
+
+    # ── 3. Second Serve Won % ────────────────────────────────────────────────
+    # 2nd serve attempts = svpt - 1stIn
+    def second_won(rows, pfx):
+        svpt  = _series(rows, f'{pfx}_svpt').values
+        fs_in = _series(rows, f'{pfx}_1stIn').values
+        s2won = _series(rows, f'{pfx}_2ndWon').values
+        n = min(len(svpt), len(fs_in), len(s2won))
+        if n == 0: return np.nan
+        s2att = (svpt[:n] - fs_in[:n]).clip(1)
+        return float((s2won[:n] / s2att).mean())
+
+    s2w_w = second_won(w_rows, 'w')
+    s2w_l = second_won(l_rows, 'l')
+    vals = [(v, cnt, wt) for v, cnt, wt in [(s2w_w, len(w_rows), 0.6),
+                                              (s2w_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        s2_won_pct = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.52
     else:
-        serve_strength = 0.5
+        s2_won_pct = 0.52
 
-    if len(wins) > 0 and 'Wsets' in wins.columns:
-        ss = int((wins['Wsets'] == 2).sum())
-        consistency = 0.3 + (ss / len(wins)) * 0.65
+    # ── 4. Hold % (service games held / service games played) ────────────────
+    # Proxy: service games held ≈ SvGms - break points faced that weren't saved
+    # Simpler: (SvGms - bpFaced + bpSaved) / SvGms  →  approximation of holds
+    def hold_pct(rows, pfx):
+        svgm = _series(rows, f'{pfx}_SvGms').replace(0, np.nan)
+        bpf  = _series(rows, f'{pfx}_bpFaced')
+        bps  = _series(rows, f'{pfx}_bpSaved')
+        n = min(len(svgm), len(bpf), len(bps))
+        if n == 0: return np.nan
+        breaks_conceded = (bpf.values[:n] - bps.values[:n]).clip(0)
+        held = (svgm.values[:n] - breaks_conceded).clip(0)
+        return float((held / svgm.values[:n]).mean())
+
+    hp_w = hold_pct(w_rows, 'w')
+    hp_l = hold_pct(l_rows, 'l')
+    vals = [(v, cnt, wt) for v, cnt, wt in [(hp_w, len(w_rows), 0.6),
+                                              (hp_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        h_pct = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.75
     else:
-        consistency = 0.5
+        h_pct = 0.75
 
-    matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    valid_games = matches['Total_Games'].dropna()
-    avg_g = float(valid_games.mean()) if len(valid_games) > 0 else 22.0
-    std_g = float(valid_games.std())  if len(valid_games) > 1 else 5.0
+    # ── 5. Break Points Saved % ───────────────────────────────────────────────
+    bp_saved = ratio_both('w_bpSaved', 'w_bpFaced', 'l_bpSaved', 'l_bpFaced', fallback=0.60)
 
-    aggression   = (avg_g - 15) / 20
-    adaptability = 1.0 - (std_g / 10.0)
+    # ── 6. Aces per Service Game ──────────────────────────────────────────────
+    ace_w = _ratio(_series(w_rows, 'w_ace'), _series(w_rows, 'w_SvGms'))
+    ace_l = _ratio(_series(l_rows, 'l_ace'), _series(l_rows, 'l_SvGms'))
+    vals = [(v, cnt, wt) for v, cnt, wt in [(ace_w, len(w_rows), 0.6),
+                                              (ace_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        ace_pg = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.3
+    else:
+        ace_pg = 0.3
 
+    # ── 7. Double Faults per Service Game (lower is better) ──────────────────
+    df_w = _ratio(_series(w_rows, 'w_df'), _series(w_rows, 'w_SvGms'))
+    df_l = _ratio(_series(l_rows, 'l_df'), _series(l_rows, 'l_SvGms'))
+    vals = [(v, cnt, wt) for v, cnt, wt in [(df_w, len(w_rows), 0.6),
+                                              (df_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        df_pg = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.25
+    else:
+        df_pg = 0.25
+
+    # ── 8. Return Points Won % ───────────────────────────────────────────────
+    # When player WINS:   opponent's l_svpt and player earns = l_svpt - l_1stWon - l_2ndWon
+    # When player LOSES:  opponent's w_svpt and player earns = w_svpt - w_1stWon - w_2ndWon
+    def ret_won(rows, opp_pfx):
+        svpt  = _series(rows, f'{opp_pfx}_svpt').values
+        fw    = _series(rows, f'{opp_pfx}_1stWon').values
+        sw    = _series(rows, f'{opp_pfx}_2ndWon').values
+        n = min(len(svpt), len(fw), len(sw))
+        if n == 0: return np.nan
+        ret_won_pts = (svpt[:n] - fw[:n] - sw[:n]).clip(0)
+        return float((ret_won_pts / svpt[:n].clip(1)).mean())
+
+    rw_w = ret_won(w_rows, 'l')   # when player wins, opp is loser → l_* cols
+    rw_l = ret_won(l_rows, 'w')   # when player loses, opp is winner → w_* cols
+    vals = [(v, cnt, wt) for v, cnt, wt in [(rw_w, len(w_rows), 0.6),
+                                              (rw_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        ret_pct = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.38
+    else:
+        ret_pct = 0.38
+
+    # ── 9. Break Point Conversion % (return side) ────────────────────────────
+    # BPs converted = opp bpFaced - opp bpSaved
+    def bp_conv(rows, opp_pfx):
+        bpf = _series(rows, f'{opp_pfx}_bpFaced').replace(0, np.nan)
+        bps = _series(rows, f'{opp_pfx}_bpSaved')
+        n = min(len(bpf), len(bps))
+        if n == 0: return np.nan
+        converted = (bpf.values[:n] - bps.values[:n]).clip(0)
+        return float((converted / bpf.values[:n]).mean())
+
+    bc_w = bp_conv(w_rows, 'l')
+    bc_l = bp_conv(l_rows, 'w')
+    vals = [(v, cnt, wt) for v, cnt, wt in [(bc_w, len(w_rows), 0.6),
+                                              (bc_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        bk_conv = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.35
+    else:
+        bk_conv = 0.35
+
+    # ── 10. Dominance Ratio = srv pts won % / return pts won % ───────────────
+    # srv pts won when winner: (w_1stWon + w_2ndWon) / w_svpt
+    def srv_pts_won(rows, pfx):
+        svpt = _series(rows, f'{pfx}_svpt').replace(0, np.nan)
+        fw   = _series(rows, f'{pfx}_1stWon')
+        sw   = _series(rows, f'{pfx}_2ndWon')
+        n = min(len(svpt), len(fw), len(sw))
+        if n == 0: return np.nan
+        return float(((fw.values[:n] + sw.values[:n]) / svpt.values[:n]).mean())
+
+    spw_w = srv_pts_won(w_rows, 'w')
+    spw_l = srv_pts_won(l_rows, 'l')
+    vals = [(v, cnt, wt) for v, cnt, wt in [(spw_w, len(w_rows), 0.6),
+                                              (spw_l, len(l_rows), 0.4)]
+            if not np.isnan(v)]
+    if vals:
+        tw = sum(v[1]*v[2] for v in vals)
+        spw = sum(v[0]*v[1]*v[2] for v in vals) / tw if tw > 0 else 0.62
+    else:
+        spw = 0.62
+
+    dom_ratio = spw / max(ret_pct, 0.01)
+
+    # ── Normalise everything to [0.01, 0.99] using tour reference ranges ─────
     return {
-        'serve_strength': safe_skill(serve_strength),
-        'consistency':    safe_skill(consistency),
-        'aggression':     safe_skill(aggression),
-        'adaptability':   safe_skill(adaptability),
+        # label                  raw value       range key                invert?
+        'first_serve_pct':       _norm(fs_pct,        'first_serve_pct'),
+        'first_serve_won_pct':   _norm(fs_won_pct,    'first_serve_won_pct'),
+        'second_serve_won_pct':  _norm(s2_won_pct,    'second_serve_won_pct'),
+        'hold_pct':              _norm(h_pct,          'hold_pct'),
+        'bp_saved_pct':          _norm(bp_saved,       'bp_saved_pct'),
+        'ace_per_svgm':          _norm(ace_pg,         'ace_per_svgm'),
+        'df_per_svgm':           _norm(df_pg,          'df_per_svgm',   invert=True),  # fewer = better
+        'return_pts_won_pct':    _norm(ret_pct,        'return_pts_won_pct'),
+        'break_conversion_pct':  _norm(bk_conv,        'break_conversion_pct'),
+        'dominance_ratio':       _norm(dom_ratio,      'dominance_ratio'),
+        # raw values for display labels
+        '_raw': {
+            'first_serve_pct':      fs_pct,
+            'first_serve_won_pct':  fs_won_pct,
+            'second_serve_won_pct': s2_won_pct,
+            'hold_pct':             h_pct,
+            'bp_saved_pct':         bp_saved,
+            'ace_per_svgm':         ace_pg,
+            'df_per_svgm':          df_pg,
+            'return_pts_won_pct':   ret_pct,
+            'break_conversion_pct': bk_conv,
+            'dominance_ratio':      dom_ratio,
+        }
     }
 
 def get_real_stats(df, player_name):
@@ -392,6 +605,12 @@ def generate_html_report(player_a, player_b, surface, an_a, an_b,
 
     def pcard(name, an, rs):
         s, l, f = an['skills'], an['last15'], an['fatigue']
+        raw = s.get('_raw', {})
+
+        def r(key, fmt='.1%'):
+            v = raw.get(key, 0) or 0
+            return format(v, fmt)
+
         return f"""<div class="pc"><h3>{name}</h3>
         <div class="ss"><h4>📈 Last 15 · {surface}</h4>
           <div class="st"><span>Record</span><span>{l['wins']}-{l['losses']}</span></div>
@@ -409,11 +628,19 @@ def generate_html_report(player_a, player_b, surface, an_a, an_b,
           <div class="st"><span>Days Rest</span><span>{f['days_rest']}</span></div>
           <div class="st"><span>Matches (7d)</span><span>{f['matches_last_7']}</span></div>
           <div class="st"><span>Status</span><span>{f['fatigue_level']}</span></div></div>
-        <div class="ss"><h4>⚡ Skills</h4>
-          {bar(s['serve_strength'],'SERVE STRENGTH')}
-          {bar(s['consistency'],'CONSISTENCY')}
-          {bar(s['aggression'],'AGGRESSION')}
-          {bar(s['adaptability'],'ADAPTABILITY')}</div></div>"""
+        <div class="ss"><h4>⚡ Serve Skill Ratings</h4>
+          {bar(s['first_serve_pct'],      f'1ST SERVE IN · {r("first_serve_pct")}')}
+          {bar(s['first_serve_won_pct'],  f'1ST SERVE WON · {r("first_serve_won_pct")}')}
+          {bar(s['second_serve_won_pct'], f'2ND SERVE WON · {r("second_serve_won_pct")}')}
+          {bar(s['hold_pct'],             f'SERVICE HOLD · {r("hold_pct")}')}
+          {bar(s['bp_saved_pct'],         f'BP SAVED · {r("bp_saved_pct")}')}
+          {bar(s['ace_per_svgm'],         f'ACES/GAME · {r("ace_per_svgm", ".2f")}')}
+          {bar(s['df_per_svgm'],          f'DF CONTROL · {r("df_per_svgm", ".2f")}/gm')}</div>
+        <div class="ss"><h4>🔄 Return Skill Ratings</h4>
+          {bar(s['return_pts_won_pct'],   f'RETURN PTS WON · {r("return_pts_won_pct")}')}
+          {bar(s['break_conversion_pct'], f'BREAK CONVERSION · {r("break_conversion_pct")}')}
+          {bar(s['dominance_ratio'],      f'DOMINANCE RATIO · {r("dominance_ratio", ".2f")}')}
+        </div></div>"""
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Challenger Prediction</title>
@@ -554,11 +781,31 @@ def main():
                     st.write(f"Days rest: **{f['days_rest']}**  ·  Matches last 7d: **{f['matches_last_7']}**")
                     st.write(f"Status: **{f['fatigue_level']}**")
 
-                with st.expander("⚡ Skills", expanded=True):
-                    st.progress(safe_skill(s['serve_strength']), text=f"Serve Strength {s['serve_strength']:.0%}")
-                    st.progress(safe_skill(s['consistency']),    text=f"Consistency    {s['consistency']:.0%}")
-                    st.progress(safe_skill(s['aggression']),     text=f"Aggression     {s['aggression']:.0%}")
-                    st.progress(safe_skill(s['adaptability']),   text=f"Adaptability   {s['adaptability']:.0%}")
+                with st.expander("⚡ Real Skill Ratings", expanded=True):
+                    raw = s.get('_raw', {})
+                    st.caption("📡 Serve Game")
+                    st.progress(safe_skill(s['first_serve_pct']),
+                        text=f"1st Serve In          {raw.get('first_serve_pct', 0):.1%}")
+                    st.progress(safe_skill(s['first_serve_won_pct']),
+                        text=f"1st Serve Won         {raw.get('first_serve_won_pct', 0):.1%}")
+                    st.progress(safe_skill(s['second_serve_won_pct']),
+                        text=f"2nd Serve Won         {raw.get('second_serve_won_pct', 0):.1%}")
+                    st.progress(safe_skill(s['hold_pct']),
+                        text=f"Service Hold          {raw.get('hold_pct', 0):.1%}")
+                    st.progress(safe_skill(s['bp_saved_pct']),
+                        text=f"Break Points Saved    {raw.get('bp_saved_pct', 0):.1%}")
+                    st.progress(safe_skill(s['ace_per_svgm']),
+                        text=f"Aces / Srv Game       {raw.get('ace_per_svgm', 0):.2f}")
+                    st.progress(safe_skill(s['df_per_svgm']),
+                        text=f"DF Control (fewer=better)  {raw.get('df_per_svgm', 0):.2f}/gm")
+                    st.caption("🔄 Return Game")
+                    st.progress(safe_skill(s['return_pts_won_pct']),
+                        text=f"Return Points Won     {raw.get('return_pts_won_pct', 0):.1%}")
+                    st.progress(safe_skill(s['break_conversion_pct']),
+                        text=f"Break Conversion      {raw.get('break_conversion_pct', 0):.1%}")
+                    st.caption("📊 Overall")
+                    st.progress(safe_skill(s['dominance_ratio']),
+                        text=f"Dominance Ratio       {raw.get('dominance_ratio', 0):.2f}")
 
         show(col1, player_a, an_a, rs_a)
         show(col2, player_b, an_b, rs_b)
