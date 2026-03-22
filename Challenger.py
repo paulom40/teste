@@ -152,6 +152,12 @@ def calculate_fatigue(df, player_name):
 
     return {'days_rest': days_rest, 'matches_last_7': m7, 'matches_last_14': m14, 'fatigue_level': level}
 
+def safe_skill(value, lo=0.01, hi=0.99):
+    """Clamp a skill value to strictly (0, 1) for st.progress compatibility"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return 0.5
+    return float(np.clip(value, lo, hi))
+
 def analyze_player_skills(df, player_name, surface):
     mask = (df['Winner'] == player_name) | (df['Loser'] == player_name)
     if surface != 'All':
@@ -168,27 +174,36 @@ def analyze_player_skills(df, player_name, surface):
     if 'w_1stIn' in matches.columns and len(wins) > 0:
         svpt = pd.to_numeric(wins['w_svpt'], errors='coerce').replace(0, np.nan)
         fs   = pd.to_numeric(wins['w_1stIn'], errors='coerce')
-        fs_pct = float((fs / svpt).mean() or 0.6)
+        ratio = (fs / svpt).dropna()
+        fs_pct = float(ratio.mean()) if len(ratio) > 0 else 0.6
         bps  = pd.to_numeric(wins['w_bpSaved'], errors='coerce')
         bpf  = pd.to_numeric(wins['w_bpFaced'], errors='coerce').replace(0, np.nan)
-        bp_pct = float((bps / bpf).mean() or 0.5)
-        serve_strength = np.clip(fs_pct * 0.6 + bp_pct * 0.4, 0.1, 0.95)
+        bp_r = (bps / bpf).dropna()
+        bp_pct = float(bp_r.mean()) if len(bp_r) > 0 else 0.5
+        serve_strength = fs_pct * 0.6 + bp_pct * 0.4
     else:
         serve_strength = 0.5
 
     if len(wins) > 0 and 'Wsets' in wins.columns:
         ss = int((wins['Wsets'] == 2).sum())
-        consistency = np.clip(0.3 + (ss / len(wins)) * 0.65, 0.1, 0.95)
+        consistency = 0.3 + (ss / len(wins)) * 0.65
     else:
         consistency = 0.5
 
     matches['Total_Games'] = matches.apply(calculate_total_games, axis=1)
-    avg_g = matches['Total_Games'].mean() or 22
-    aggression   = float(np.clip((avg_g - 15) / 20, 0.1, 0.9))
-    adaptability = float(np.clip(1 - (matches['Total_Games'].std() or 5) / 10, 0.1, 0.9))
+    valid_games = matches['Total_Games'].dropna()
+    avg_g = float(valid_games.mean()) if len(valid_games) > 0 else 22.0
+    std_g = float(valid_games.std())  if len(valid_games) > 1 else 5.0
 
-    return {'serve_strength': float(serve_strength), 'consistency': float(consistency),
-            'aggression': aggression, 'adaptability': adaptability}
+    aggression   = (avg_g - 15) / 20
+    adaptability = 1.0 - (std_g / 10.0)
+
+    return {
+        'serve_strength': safe_skill(serve_strength),
+        'consistency':    safe_skill(consistency),
+        'aggression':     safe_skill(aggression),
+        'adaptability':   safe_skill(adaptability),
+    }
 
 def get_real_stats(df, player_name):
     rows = df[df['Winner'] == player_name].tail(15)
@@ -232,24 +247,52 @@ def build_model(n_rows, df):
     def col_num(c):
         return pd.to_numeric(df_t[c], errors='coerce').fillna(0).values if c in df_t.columns else np.zeros(len(df_t))
 
-    w1,l1 = col_num('W1'), col_num('L1')
-    w2,l2 = col_num('W2'), col_num('L2')
-    w3,l3 = col_num('W3'), col_num('L3')
+    w1, l1 = col_num('W1'), col_num('L1')
+    w2, l2 = col_num('W2'), col_num('L2')
+    w3, l3 = col_num('W3'), col_num('L3')
 
-    feats = [w1+l1, w2+l2, np.where(w3+l3>0,w3+l3,0)]
+    feats = []
 
+    # Set-level games
+    feats += [w1+l1, w2+l2, np.where(w3+l3>0, w3+l3, 0)]
+
+    # Match structure
     if 'Wsets' in df_t.columns:
         feats += [(df_t['Wsets']==2).astype(float).values,
                   (df_t['Wsets']==3).astype(float).values]
 
-    feats.append((pd.to_numeric(df_t['LRank'],errors='coerce') -
-                  pd.to_numeric(df_t['WRank'],errors='coerce')).fillna(0).values)
+    # Rank features
+    wrank = pd.to_numeric(df_t['WRank'], errors='coerce').fillna(500)
+    lrank = pd.to_numeric(df_t['LRank'], errors='coerce').fillna(500)
+    feats.append((lrank - wrank).values)                          # rank diff
+    feats.append((wrank / (wrank + lrank)).values)                # winner rank ratio
+    feats.append(np.log1p(wrank.values))                          # log rank winner
+    feats.append(np.log1p(lrank.values))                          # log rank loser
+
+    # Competitiveness of each set
     feats.append(1 / (1 + np.abs(w1-l1) + np.abs(w2-l2)))
 
+    # Serve stats (most predictive of match length)
     for c in ['w_ace','w_df','w_svpt','w_1stIn','w_1stWon','w_2ndWon','w_bpSaved','w_bpFaced',
-              'l_ace','l_df','l_svpt','l_1stIn','l_1stWon','l_2ndWon','l_bpSaved','l_bpFaced','Minutes']:
+              'l_ace','l_df','l_svpt','l_1stIn','l_1stWon','l_2ndWon','l_bpSaved','l_bpFaced']:
         feats.append(col_num(c))
 
+    # Derived serve quality features
+    w_svpt = col_num('w_svpt').clip(1)
+    l_svpt = col_num('l_svpt').clip(1)
+    feats.append(col_num('w_1stIn') / w_svpt)   # w 1st serve %
+    feats.append(col_num('w_1stWon') / w_svpt)  # w 1st won %
+    feats.append(col_num('l_1stIn') / l_svpt)   # l 1st serve %
+    feats.append(col_num('l_1stWon') / l_svpt)  # l 1st won %
+    w_bpf = col_num('w_bpFaced').clip(1)
+    l_bpf = col_num('l_bpFaced').clip(1)
+    feats.append(col_num('w_bpSaved') / w_bpf)  # w bp saved %
+    feats.append(col_num('l_bpSaved') / l_bpf)  # l bp saved %
+
+    # Duration if available
+    feats.append(col_num('Minutes'))
+
+    # Surface dummies
     for s in df_t['Surface'].dropna().unique():
         feats.append((df_t['Surface']==s).astype(int).values)
 
@@ -258,34 +301,81 @@ def build_model(n_rows, df):
 
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
     sc = StandardScaler()
-    model = GradientBoostingRegressor(n_estimators=400, learning_rate=0.03, max_depth=5,
-                                       min_samples_split=8, min_samples_leaf=4,
-                                       subsample=0.8, random_state=42)
+
+    # Tuned for better accuracy
+    model = GradientBoostingRegressor(
+        n_estimators=600,
+        learning_rate=0.02,
+        max_depth=4,
+        min_samples_split=6,
+        min_samples_leaf=3,
+        subsample=0.75,
+        max_features=0.8,
+        random_state=42
+    )
     model.fit(sc.fit_transform(X_tr), y_tr)
     y_pred = model.predict(sc.transform(X_te))
 
     return {'model': model, 'scaler': sc,
-            'r2': r2_score(y_te, y_pred), 'mae': mean_absolute_error(y_te, y_pred),
+            'r2': r2_score(y_te, y_pred),
+            'mae': mean_absolute_error(y_te, y_pred),
             'df': df_t, 'y_test': y_te, 'y_pred': y_pred}
 
+
 def predict_games(model_data, player_a, player_b, surface, df):
-    def player_matches(p):
+    """
+    Predict using a weighted blend of:
+    1. Each player's recent median game count on the surface
+    2. Their head-to-head history
+    3. Serve stat quality adjustment
+    """
+    def player_recent(p, surf, n=15):
         m = df[(df['Winner']==p) | (df['Loser']==p)]
-        if surface != 'All':
-            ms = m[m['Surface']==surface].tail(10)
-            if len(ms) >= 3: return ms.copy()
-        return m.tail(10).copy()
+        if surf != 'All':
+            ms = m[m['Surface']==surf]
+            if len(ms) >= 5:
+                m = ms
+        m = m.tail(n).copy()
+        m['Total_Games'] = m.apply(calculate_total_games, axis=1)
+        return m.dropna(subset=['Total_Games'])
 
-    a_m, b_m = player_matches(player_a), player_matches(player_b)
-    if len(a_m) == 0 or len(b_m) == 0:
-        return 22.0
+    a_m = player_recent(player_a, surface)
+    b_m = player_recent(player_b, surface)
 
-    a_m['Total_Games'] = a_m.apply(calculate_total_games, axis=1)
-    b_m['Total_Games'] = b_m.apply(calculate_total_games, axis=1)
+    a_med = float(a_m['Total_Games'].median()) if len(a_m) >= 3 else 22.0
+    b_med = float(b_m['Total_Games'].median()) if len(b_m) >= 3 else 22.0
 
-    a_avg = a_m['Total_Games'].median() or 22
-    b_avg = b_m['Total_Games'].median() or 22
-    return float(np.clip((a_avg + b_avg) / 2, 12, 45))
+    base = (a_med + b_med) / 2.0
+
+    # Head-to-head adjustment
+    h2h = df[
+        ((df['Winner']==player_a) & (df['Loser']==player_b)) |
+        ((df['Winner']==player_b) & (df['Loser']==player_a))
+    ].copy()
+    if len(h2h) >= 2:
+        h2h['Total_Games'] = h2h.apply(calculate_total_games, axis=1)
+        h2h_med = h2h['Total_Games'].dropna().median()
+        if not np.isnan(h2h_med):
+            base = base * 0.65 + h2h_med * 0.35   # blend h2h in
+
+    # Serve quality adjustment: high bp-saved % → shorter matches
+    def avg_bp_saved(p):
+        rows = df[df['Winner']==p].tail(10)
+        if len(rows) == 0 or 'w_bpSaved' not in rows.columns:
+            return 0.5
+        bps = pd.to_numeric(rows['w_bpSaved'], errors='coerce')
+        bpf = pd.to_numeric(rows['w_bpFaced'], errors='coerce').replace(0, np.nan)
+        r = (bps / bpf).dropna()
+        return float(r.mean()) if len(r) > 0 else 0.5
+
+    bp_a = avg_bp_saved(player_a)
+    bp_b = avg_bp_saved(player_b)
+    avg_bp = (bp_a + bp_b) / 2.0
+    # high bp-saved → dominant server → shorter match
+    serve_adj = (0.5 - avg_bp) * 4.0   # range roughly -2 to +2
+
+    prediction = base + serve_adj
+    return float(np.clip(prediction, 12, 45))
 
 # ============= HTML REPORT =============
 
@@ -465,10 +555,10 @@ def main():
                     st.write(f"Status: **{f['fatigue_level']}**")
 
                 with st.expander("⚡ Skills", expanded=True):
-                    st.progress(s['serve_strength'], text=f"Serve Strength {s['serve_strength']:.0%}")
-                    st.progress(s['consistency'],    text=f"Consistency    {s['consistency']:.0%}")
-                    st.progress(s['aggression'],     text=f"Aggression     {s['aggression']:.0%}")
-                    st.progress(s['adaptability'],   text=f"Adaptability   {s['adaptability']:.0%}")
+                    st.progress(safe_skill(s['serve_strength']), text=f"Serve Strength {s['serve_strength']:.0%}")
+                    st.progress(safe_skill(s['consistency']),    text=f"Consistency    {s['consistency']:.0%}")
+                    st.progress(safe_skill(s['aggression']),     text=f"Aggression     {s['aggression']:.0%}")
+                    st.progress(safe_skill(s['adaptability']),   text=f"Adaptability   {s['adaptability']:.0%}")
 
         show(col1, player_a, an_a, rs_a)
         show(col2, player_b, an_b, rs_b)
