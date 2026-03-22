@@ -590,18 +590,237 @@ def predict_games(model_data, player_a, player_b, surface, df):
     prediction = base + serve_adj
     return float(np.clip(prediction, 12, 45))
 
+# ============= MATCH RESULT PREDICTION =============
+
+def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b):
+    """
+    Returns:
+        winner          – predicted winner name
+        win_prob        – probability player_a wins (0-1)
+        predicted_score – e.g. "6-4 6-2" or "6-3 4-6 6-4"
+        confidence      – 'High' / 'Medium' / 'Low'
+        factors         – list of (label, advantage_for) tuples driving the decision
+    """
+
+    def player_stats(p, surf):
+        mask = (df['Winner'] == p) | (df['Loser'] == p)
+        if surf != 'All':
+            ms = df[mask & (df['Surface'] == surf)]
+            if len(ms) >= 5:
+                mask = mask & (df['Surface'] == surf)
+        rows = df[mask].sort_values('Date', ascending=False).head(20)
+        w_rows = rows[rows['Winner'] == p]
+        l_rows = rows[rows['Loser']  == p]
+
+        def full_srv(sub, pfx):
+            if len(sub) == 0: return np.nan
+            s = pd.to_numeric(sub[f'{pfx}_svpt'], errors='coerce').replace(0, np.nan)
+            fw = pd.to_numeric(sub[f'{pfx}_1stWon'], errors='coerce')
+            sw = pd.to_numeric(sub[f'{pfx}_2ndWon'], errors='coerce')
+            n = min(len(s), len(fw), len(sw))
+            if n == 0: return np.nan
+            return float(((fw.values[:n] + sw.values[:n]) / s.values[:n]).mean())
+
+        spw_w = full_srv(w_rows, 'w')
+        spw_l = full_srv(l_rows, 'l')
+        wts = [(spw_w, len(w_rows), 0.6), (spw_l, len(l_rows), 0.4)]
+        tw = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
+        spw = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
+               if tw > 0 else 0.62)
+
+        def ret_won(opp_rows, opp_pfx):
+            if len(opp_rows) == 0: return np.nan
+            s  = pd.to_numeric(opp_rows[f'{opp_pfx}_svpt'], errors='coerce').replace(0, np.nan)
+            fw = pd.to_numeric(opp_rows[f'{opp_pfx}_1stWon'], errors='coerce')
+            sw = pd.to_numeric(opp_rows[f'{opp_pfx}_2ndWon'], errors='coerce')
+            n  = min(len(s), len(fw), len(sw))
+            if n == 0: return np.nan
+            return float(((s.values[:n] - fw.values[:n] - sw.values[:n]).clip(0) / s.values[:n]).mean())
+
+        rw_w = ret_won(w_rows, 'l')
+        rw_l = ret_won(l_rows, 'w')
+        wts  = [(rw_w, len(w_rows), 0.6), (rw_l, len(l_rows), 0.4)]
+        tw   = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
+        rpw  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
+                if tw > 0 else 0.38)
+
+        def bp_saved_avg(sub, pfx):
+            if len(sub) == 0: return np.nan
+            bps = pd.to_numeric(sub[f'{pfx}_bpSaved'], errors='coerce')
+            bpf = pd.to_numeric(sub[f'{pfx}_bpFaced'], errors='coerce').replace(0, np.nan)
+            r   = (bps / bpf).dropna()
+            return float(r.mean()) if len(r) > 0 else np.nan
+
+        bps_w = bp_saved_avg(w_rows, 'w')
+        bps_l = bp_saved_avg(l_rows, 'l')
+        wts   = [(bps_w, len(w_rows), 0.6), (bps_l, len(l_rows), 0.4)]
+        tw    = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
+        bp_s  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
+                 if tw > 0 else 0.60)
+
+        def bp_conv_avg(opp_rows, opp_pfx):
+            if len(opp_rows) == 0: return np.nan
+            bpf = pd.to_numeric(opp_rows[f'{opp_pfx}_bpFaced'], errors='coerce').replace(0, np.nan)
+            bps = pd.to_numeric(opp_rows[f'{opp_pfx}_bpSaved'], errors='coerce')
+            n   = min(len(bpf), len(bps))
+            if n == 0: return np.nan
+            return float(((bpf.values[:n] - bps.values[:n]).clip(0) / bpf.values[:n]).mean())
+
+        bc_w = bp_conv_avg(w_rows, 'l')
+        bc_l = bp_conv_avg(l_rows, 'w')
+        wts  = [(bc_w, len(w_rows), 0.6), (bc_l, len(l_rows), 0.4)]
+        tw   = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
+        bpc  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
+                if tw > 0 else 0.35)
+
+        win_rate = len(w_rows) / max(len(rows), 1)
+        rank_col = df[(df['Winner']==p) | (df['Loser']==p)].apply(
+            lambda r: r['WRank'] if r['Winner'] == p else r['LRank'], axis=1
+        )
+        rank_val = pd.to_numeric(rank_col, errors='coerce').dropna()
+        rank = float(rank_val.median()) if len(rank_val) > 0 else 500
+
+        return {
+            'srv_pts_won': float(spw)  if not np.isnan(spw) else 0.62,
+            'ret_pts_won': float(rpw)  if not np.isnan(rpw) else 0.38,
+            'bp_saved_pct': float(bp_s) if not np.isnan(bp_s) else 0.60,
+            'bp_conv_pct':  float(bpc)  if not np.isnan(bpc) else 0.35,
+            'win_rate':     win_rate,
+            'rank':         rank,
+            'n_matches':    len(rows),
+        }
+
+    sta = player_stats(player_a, surface)
+    stb = player_stats(player_b, surface)
+
+    # Head-to-head
+    h2h = df[
+        ((df['Winner']==player_a) & (df['Loser']==player_b)) |
+        ((df['Winner']==player_b) & (df['Loser']==player_a))
+    ]
+    h2h_a_wins = int((h2h['Winner'] == player_a).sum())
+    h2h_total  = len(h2h)
+    h2h_pct    = h2h_a_wins / h2h_total if h2h_total > 0 else 0.5
+
+    # Win probability: weighted logistic combination of factors
+    factors = []
+
+    srv_adv  = (sta['srv_pts_won'] - stb['srv_pts_won']) * 5.0
+    ret_adv  = (sta['ret_pts_won'] - stb['ret_pts_won']) * 5.0
+    bp_adv   = ((sta['bp_saved_pct'] - stb['bp_saved_pct']) +
+                (sta['bp_conv_pct']  - stb['bp_conv_pct'])) * 2.5
+    form_adv = (sta['win_rate'] - stb['win_rate']) * 2.0
+    rank_adv = (np.log1p(stb['rank']) - np.log1p(sta['rank'])) * 0.4
+    h2h_adv  = (h2h_pct - 0.5) * 2.0
+    sk_a     = skills_a.get('_raw', {}).get('dominance_ratio', 1.0) or 1.0
+    sk_b     = skills_b.get('_raw', {}).get('dominance_ratio', 1.0) or 1.0
+    skill_adv = (sk_a - sk_b) * 0.8
+
+    factors.append(('Serve dominance',     srv_adv,   player_a if srv_adv > 0 else player_b))
+    factors.append(('Return game',         ret_adv,   player_a if ret_adv > 0 else player_b))
+    factors.append(('Break point ability', bp_adv,    player_a if bp_adv > 0 else player_b))
+    factors.append(('Recent form',         form_adv,  player_a if form_adv > 0 else player_b))
+    factors.append(('World ranking',       rank_adv,  player_a if rank_adv > 0 else player_b))
+    if h2h_total >= 2:
+        factors.append(('Head-to-head',    h2h_adv,   player_a if h2h_adv > 0 else player_b))
+    factors.append(('Overall skill',       skill_adv, player_a if skill_adv > 0 else player_b))
+
+    total_score = sum(f[1] for f in factors)
+    win_prob_a  = float(1.0 / (1.0 + np.exp(-total_score)))
+
+    winner   = player_a if win_prob_a >= 0.5 else player_b
+    loser    = player_b if winner == player_a else player_a
+    win_prob = win_prob_a if winner == player_a else (1 - win_prob_a)
+
+    if win_prob >= 0.75:   confidence = 'High'
+    elif win_prob >= 0.62: confidence = 'Medium'
+    else:                  confidence = 'Low'
+
+    # Predicted scoreline
+    margin = abs(total_score)
+
+    def set_score_rng(rng_obj, dominant, close):
+        if close:
+            opts, wts = [(7,6),(7,5),(6,4)], [0.35,0.35,0.30]
+        elif dominant > 1.5:
+            opts, wts = [(6,1),(6,2),(6,3)], [0.25,0.40,0.35]
+        else:
+            opts, wts = [(6,3),(6,4),(7,5)], [0.35,0.40,0.25]
+        idx = rng_obj.choice(len(opts), p=wts)
+        return opts[idx]
+
+    seed = int(abs(hash(player_a + player_b + surface)) % (2**31))
+    rng  = np.random.RandomState(seed)
+
+    p3sets    = float(np.clip(1.0 - (win_prob - 0.5) * 3.5, 0.05, 0.70))
+    three_sets = bool(rng.random() < p3sets)
+    close_set  = margin < 1.0
+
+    s1 = set_score_rng(rng, margin, close_set)
+    s2 = set_score_rng(rng, margin, close_set and three_sets)
+
+    if three_sets:
+        s3 = set_score_rng(rng, margin * 0.5, True)
+        score_parts = [f"{s1[0]}-{s1[1]}", f"{s3[1]}-{s3[0]}", f"{s2[0]}-{s2[1]}"]
+    else:
+        score_parts = [f"{s1[0]}-{s1[1]}", f"{s2[0]}-{s2[1]}"]
+
+    predicted_score = ' '.join(score_parts)
+    factors_sorted  = sorted(factors, key=lambda x: abs(x[1]), reverse=True)
+
+    return {
+        'winner':          winner,
+        'loser':           loser,
+        'win_prob':        win_prob,
+        'win_prob_a':      win_prob_a,
+        'predicted_score': predicted_score,
+        'three_sets':      three_sets,
+        'confidence':      confidence,
+        'factors':         factors_sorted,
+        'h2h_total':       h2h_total,
+        'h2h_a_wins':      h2h_a_wins,
+        'sta':             sta,
+        'stb':             stb,
+    }
+
+
 # ============= HTML REPORT =============
 
 def generate_html_report(player_a, player_b, surface, an_a, an_b,
-                          prediction, model_data, rs_a, rs_b):
+                          prediction, model_data, rs_a, rs_b, result):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if prediction < 23:   mt, col = "⚡ Quick Match",  "#16a34a"
-    elif prediction < 27: mt, col = "⚔️ Competitive",  "#d97706"
-    else:                 mt, col = "🔥 Long Match",    "#dc2626"
+    if prediction < 23:   mt, col = "Quick Match",  "#16a34a"
+    elif prediction < 27: mt, col = "Competitive",  "#d97706"
+    else:                 mt, col = "Long Match",    "#dc2626"
 
-    def bar(val, name):
-        p = int(np.clip(val*100, 0, 100))
-        return f'<div class="skill"><div class="sn">{name}</div><div class="bc"><div class="bf" style="width:{p}%"><div class="bv">{p}%</div></div></div></div>'
+    conf_color = {'High': '#16a34a', 'Medium': '#d97706', 'Low': '#dc2626'}[result['confidence']]
+    prob_a = result['win_prob_a'] * 100
+    prob_b = (1 - result['win_prob_a']) * 100
+
+    factor_rows = ''
+    for label, score, adv in result['factors']:
+        pct = min(100, int(abs(score) / 3.0 * 100))
+        bar_col = '#c8ff00' if adv == player_a else '#ff5555'
+        side = f'&larr; {player_a}' if adv == player_a else f'{player_b} &rarr;'
+        factor_rows += (
+            f'<div class="frow"><div class="flabel">{label}</div>'
+            f'<div class="fbar-wrap"><div class="fbar" style="width:{pct}%;background:{bar_col}"></div></div>'
+            f'<div class="fside" style="color:{bar_col}">{side}</div></div>'
+        )
+
+    h2h_note = (
+        f"H2H: {result['h2h_a_wins']}-{result['h2h_total']-result['h2h_a_wins']} in {result['h2h_total']} meetings"
+        if result['h2h_total'] > 0 else "No previous H2H matches"
+    )
+
+    def skill_bar(val, name):
+        p = int(np.clip(val * 100, 0, 100))
+        return (
+            f'<div class="skill">'
+            f'<div class="sn">{name}</div>'
+            f'<div class="bc"><div class="bf" style="width:{p}%">'
+            f'<div class="bv">{p}%</div></div></div></div>'
+        )
 
     def pcard(name, an, rs):
         s, l, f = an['skills'], an['last15'], an['fatigue']
@@ -611,41 +830,43 @@ def generate_html_report(player_a, player_b, surface, an_a, an_b,
             v = raw.get(key, 0) or 0
             return format(v, fmt)
 
-        return f"""<div class="pc"><h3>{name}</h3>
-        <div class="ss"><h4>📈 Last 15 · {surface}</h4>
-          <div class="st"><span>Record</span><span>{l['wins']}-{l['losses']}</span></div>
-          <div class="st"><span>Win Rate</span><span>{l['win_rate']:.1%}</span></div>
-          <div class="st"><span>Avg Games</span><span>{l['avg_games']:.1f}</span></div>
-          <div class="st"><span>Form</span><span>{l['form']}</span></div></div>
-        <div class="ss"><h4>🎯 Serve Stats</h4>
-          <div class="st"><span>1st Serve %</span><span>{rs['first_serve_pct']:.1f}%</span></div>
-          <div class="st"><span>1st Serve Won %</span><span>{rs['first_serve_won_pct']:.1f}%</span></div>
-          <div class="st"><span>2nd Serve Won %</span><span>{rs['second_serve_won_pct']:.1f}%</span></div>
-          <div class="st"><span>Avg Aces</span><span>{rs['avg_aces']:.1f}</span></div>
-          <div class="st"><span>Avg DFs</span><span>{rs['avg_df']:.1f}</span></div>
-          <div class="st"><span>BP Saved %</span><span>{rs['bp_saved_pct']:.1f}%</span></div></div>
-        <div class="ss"><h4>😓 Fatigue</h4>
-          <div class="st"><span>Days Rest</span><span>{f['days_rest']}</span></div>
-          <div class="st"><span>Matches (7d)</span><span>{f['matches_last_7']}</span></div>
-          <div class="st"><span>Status</span><span>{f['fatigue_level']}</span></div></div>
-        <div class="ss"><h4>⚡ Serve Skill Ratings</h4>
-          {bar(s['first_serve_pct'],      f'1ST SERVE IN · {r("first_serve_pct")}')}
-          {bar(s['first_serve_won_pct'],  f'1ST SERVE WON · {r("first_serve_won_pct")}')}
-          {bar(s['second_serve_won_pct'], f'2ND SERVE WON · {r("second_serve_won_pct")}')}
-          {bar(s['hold_pct'],             f'SERVICE HOLD · {r("hold_pct")}')}
-          {bar(s['bp_saved_pct'],         f'BP SAVED · {r("bp_saved_pct")}')}
-          {bar(s['ace_per_svgm'],         f'ACES/GAME · {r("ace_per_svgm", ".2f")}')}
-          {bar(s['df_per_svgm'],          f'DF CONTROL · {r("df_per_svgm", ".2f")}/gm')}</div>
-        <div class="ss"><h4>🔄 Return Skill Ratings</h4>
-          {bar(s['return_pts_won_pct'],   f'RETURN PTS WON · {r("return_pts_won_pct")}')}
-          {bar(s['break_conversion_pct'], f'BREAK CONVERSION · {r("break_conversion_pct")}')}
-          {bar(s['dominance_ratio'],      f'DOMINANCE RATIO · {r("dominance_ratio", ".2f")}')}
-        </div></div>"""
+        return (
+            f'<div class="pc"><h3>{name}</h3>'
+            f'<div class="ss"><h4>Last 15 - {surface}</h4>'
+            f'<div class="st"><span>Record</span><span>{l["wins"]}-{l["losses"]}</span></div>'
+            f'<div class="st"><span>Win Rate</span><span>{l["win_rate"]:.1%}</span></div>'
+            f'<div class="st"><span>Avg Games</span><span>{l["avg_games"]:.1f}</span></div>'
+            f'<div class="st"><span>Form</span><span>{l["form"]}</span></div></div>'
+            f'<div class="ss"><h4>Serve Stats</h4>'
+            f'<div class="st"><span>1st Serve %</span><span>{rs["first_serve_pct"]:.1f}%</span></div>'
+            f'<div class="st"><span>1st Serve Won %</span><span>{rs["first_serve_won_pct"]:.1f}%</span></div>'
+            f'<div class="st"><span>2nd Serve Won %</span><span>{rs["second_serve_won_pct"]:.1f}%</span></div>'
+            f'<div class="st"><span>Avg Aces</span><span>{rs["avg_aces"]:.1f}</span></div>'
+            f'<div class="st"><span>Avg DFs</span><span>{rs["avg_df"]:.1f}</span></div>'
+            f'<div class="st"><span>BP Saved %</span><span>{rs["bp_saved_pct"]:.1f}%</span></div></div>'
+            f'<div class="ss"><h4>Fatigue</h4>'
+            f'<div class="st"><span>Days Rest</span><span>{f["days_rest"]}</span></div>'
+            f'<div class="st"><span>Matches (7d)</span><span>{f["matches_last_7"]}</span></div>'
+            f'<div class="st"><span>Status</span><span>{f["fatigue_level"]}</span></div></div>'
+            f'<div class="ss"><h4>Serve Skills</h4>'
+            + skill_bar(s['first_serve_pct'],      f'1ST SERVE IN - {r("first_serve_pct")}')
+            + skill_bar(s['first_serve_won_pct'],  f'1ST SERVE WON - {r("first_serve_won_pct")}')
+            + skill_bar(s['second_serve_won_pct'], f'2ND SERVE WON - {r("second_serve_won_pct")}')
+            + skill_bar(s['hold_pct'],             f'SERVICE HOLD - {r("hold_pct")}')
+            + skill_bar(s['bp_saved_pct'],         f'BP SAVED - {r("bp_saved_pct")}')
+            + skill_bar(s['ace_per_svgm'],         f'ACES/GAME - {r("ace_per_svgm", ".2f")}')
+            + skill_bar(s['df_per_svgm'],          f'DF CONTROL - {r("df_per_svgm", ".2f")}/gm')
+            + f'</div><div class="ss"><h4>Return Skills</h4>'
+            + skill_bar(s['return_pts_won_pct'],   f'RETURN PTS WON - {r("return_pts_won_pct")}')
+            + skill_bar(s['break_conversion_pct'], f'BREAK CONVERSION - {r("break_conversion_pct")}')
+            + skill_bar(s['dominance_ratio'],      f'DOMINANCE RATIO - {r("dominance_ratio", ".2f")}')
+            + '</div></div>'
+        )
 
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>Challenger Prediction</title>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
-<style>
+    pa_pct = f"{prob_a:.1f}"
+    pb_pct = f"{prob_b:.1f}"
+
+    css = f"""
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:'IBM Plex Sans',sans-serif;background:#0a0a0a;color:#e0e0e0;padding:20px}}
 .wrap{{max-width:1100px;margin:0 auto;background:#111;border:1px solid #2a2a2a;border-radius:4px;overflow:hidden}}
@@ -654,10 +875,24 @@ body{{font-family:'IBM Plex Sans',sans-serif;background:#0a0a0a;color:#e0e0e0;pa
 .hdr p{{font-family:'IBM Plex Mono',monospace;font-size:0.75em;color:#666;margin-top:8px;letter-spacing:2px}}
 .body{{padding:40px}}
 .mt{{font-family:'Bebas Neue',sans-serif;font-size:2.6em;letter-spacing:4px;color:#fff;text-align:center;margin:20px 0 5px}}
-.sb{{text-align:center;margin-bottom:30px;font-family:'IBM Plex Mono',monospace;font-size:0.85em;color:#c8ff00;letter-spacing:3px}}
-.pb{{background:{col};padding:35px;text-align:center;margin:30px 0;border-radius:2px}}
+.sb{{text-align:center;margin-bottom:20px;font-family:'IBM Plex Mono',monospace;font-size:0.85em;color:#c8ff00;letter-spacing:3px}}
+.result-box{{background:#0d0d0d;border:1px solid #2a2a2a;border-top:4px solid #c8ff00;padding:30px;margin:20px 0}}
+.result-winner{{font-family:'Bebas Neue',sans-serif;font-size:2.2em;letter-spacing:4px;color:#c8ff00;text-align:center}}
+.result-score{{font-family:'Bebas Neue',sans-serif;font-size:3em;letter-spacing:6px;color:#fff;text-align:center;margin:10px 0}}
+.result-conf{{text-align:center;font-family:'IBM Plex Mono',monospace;font-size:0.8em;letter-spacing:2px;color:{conf_color};margin-bottom:20px}}
+.prob-wrap{{display:flex;height:36px;border:1px solid #333;overflow:hidden;margin:16px 0}}
+.prob-a{{background:#c8ff00;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:0.82em;font-weight:700;color:#000;width:{pa_pct}%}}
+.prob-b{{background:#ff5555;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:0.82em;font-weight:700;color:#fff;flex:1}}
+.prob-labels{{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:0.75em;color:#888;margin-top:4px}}
+.factors{{margin-top:18px}}
+.frow{{display:flex;align-items:center;gap:10px;margin:8px 0}}
+.flabel{{font-family:'IBM Plex Mono',monospace;font-size:0.75em;color:#aaa;width:180px;flex-shrink:0}}
+.fbar-wrap{{flex:1;height:18px;background:#1a1a1a;border:1px solid #222;overflow:hidden}}
+.fbar{{height:100%}}
+.fside{{font-family:'IBM Plex Mono',monospace;font-size:0.72em;width:130px;text-align:right;flex-shrink:0}}
+.pb{{background:{col};padding:28px;text-align:center;margin:20px 0}}
 .pb .lbl{{font-family:'IBM Plex Mono',monospace;font-size:0.82em;letter-spacing:3px;color:rgba(255,255,255,.8)}}
-.pb .num{{font-family:'Bebas Neue',sans-serif;font-size:5em;letter-spacing:4px;color:#fff;line-height:1}}
+.pb .num{{font-family:'Bebas Neue',sans-serif;font-size:4em;letter-spacing:4px;color:#fff;line-height:1}}
 .stitle{{font-family:'Bebas Neue',sans-serif;color:#c8ff00;font-size:1.8em;letter-spacing:4px;border-bottom:1px solid #2a2a2a;padding-bottom:8px;margin:35px 0 20px}}
 .grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}}
 .pc{{background:#0d0d0d;padding:25px;border:1px solid #222;border-top:3px solid #c8ff00}}
@@ -672,19 +907,43 @@ body{{font-family:'IBM Plex Sans',sans-serif;background:#0a0a0a;color:#e0e0e0;pa
 .bv{{color:#000;font-weight:700;font-size:.8em;font-family:'IBM Plex Mono',monospace}}
 .info{{background:#0d0d0d;border:1px solid #222;border-left:3px solid #c8ff00;padding:14px 18px;margin:20px 0;font-family:'IBM Plex Mono',monospace;font-size:.76em;color:#888;letter-spacing:1px}}
 .ftr{{background:#0a0a0a;border-top:1px solid #222;padding:18px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:.7em;color:#444;letter-spacing:2px}}
-</style></head><body>
-<div class="wrap">
-<div class="hdr"><h1>🎾 CHALLENGER PREDICTOR</h1><p>REAL SERVE STATS · LAST 15 MATCHES · FATIGUE · SKILL RATINGS</p></div>
-<div class="body">
-  <div class="mt">{player_a} VS {player_b}</div>
-  <div class="sb">⬡ SURFACE: {surface}</div>
-  <div class="pb"><div class="lbl">{mt} — PREDICTED TOTAL GAMES</div><div class="num">{prediction:.1f}</div></div>
-  <div class="stitle">PLAYER ANALYSIS</div>
-  <div class="grid">{pcard(player_a,an_a,rs_a)}{pcard(player_b,an_b,rs_b)}</div>
-  <div class="info">MODEL · R² = {model_data['r2']:.3f} · MAE = ±{model_data['mae']:.2f} GAMES · {len(model_data['df'])} MATCHES</div>
-</div>
-<div class="ftr">GENERATED: {ts} · ATP CHALLENGER PREDICTOR · ±{model_data['mae']:.2f} GAMES</div>
-</div></body></html>"""
+"""
+
+    html = (
+        f'<!DOCTYPE html><html><head><meta charset="UTF-8">'
+        f'<title>Challenger Prediction</title>'
+        f'<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">'
+        f'<style>{css}</style></head><body>'
+        f'<div class="wrap">'
+        f'<div class="hdr"><h1>CHALLENGER PREDICTOR</h1>'
+        f'<p>MATCH RESULT - REAL SERVE STATS - LAST 15 MATCHES - SKILL RATINGS</p></div>'
+        f'<div class="body">'
+        f'<div class="mt">{player_a} VS {player_b}</div>'
+        f'<div class="sb">SURFACE: {surface} &nbsp;-&nbsp; {h2h_note}</div>'
+        f'<div class="result-box">'
+        f'<div class="result-winner">PREDICTED WINNER: {result["winner"]}</div>'
+        f'<div class="result-score">{result["winner"]} {result["predicted_score"]}</div>'
+        f'<div class="result-conf">CONFIDENCE: {result["confidence"]} - WIN PROBABILITY: {result["win_prob"]:.1%}</div>'
+        f'<div class="prob-wrap">'
+        f'<div class="prob-a">{prob_a:.0f}% {player_a}</div>'
+        f'<div class="prob-b">{player_b} {prob_b:.0f}%</div>'
+        f'</div>'
+        f'<div class="prob-labels"><span>{player_a}</span><span>{player_b}</span></div>'
+        f'<div class="factors">'
+        f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.75em;color:#666;letter-spacing:2px;margin-bottom:10px">DECISIVE FACTORS</div>'
+        f'{factor_rows}'
+        f'</div></div>'
+        f'<div class="pb"><div class="lbl">{mt} - PREDICTED TOTAL GAMES</div>'
+        f'<div class="num">{prediction:.1f}</div></div>'
+        f'<div class="stitle">PLAYER ANALYSIS</div>'
+        f'<div class="grid">{pcard(player_a,an_a,rs_a)}{pcard(player_b,an_b,rs_b)}</div>'
+        f'<div class="info">MODEL - R2 = {model_data["r2"]:.3f} - MAE = +/-{model_data["mae"]:.2f} GAMES - {len(model_data["df"])} MATCHES</div>'
+        f'</div>'
+        f'<div class="ftr">GENERATED: {ts} - ATP CHALLENGER PREDICTOR - +/-{model_data["mae"]:.2f} GAMES</div>'
+        f'</div></body></html>'
+    )
+    return html
+
 
 # ============= MAIN =============
 
@@ -755,8 +1014,84 @@ def main():
                     'skills':  analyze_player_skills(df, player_b, surface)}
             rs_a = get_real_stats(df, player_a)
             rs_b = get_real_stats(df, player_b)
-            pred = predict_games(model_data, player_a, player_b, surface, df)
+            pred   = predict_games(model_data, player_a, player_b, surface, df)
+            result = predict_match_result(
+                player_a, player_b, surface, df,
+                an_a['skills'], an_b['skills']
+            )
 
+        # ── MATCH RESULT ──────────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("🏆 MATCH PREDICTION")
+
+        conf_colors = {'High': 'green', 'Medium': 'orange', 'Low': 'red'}
+        conf_emoji  = {'High': '🟢', 'Medium': '🟡', 'Low': '🔴'}
+
+        win_col, lose_col = st.columns(2)
+        with win_col:
+            st.success(f"### 🏆 {result['winner']}")
+            st.metric("Win Probability", f"{result['win_prob']:.1%}")
+        with lose_col:
+            loser = result['loser']
+            loss_prob = 1 - result['win_prob']
+            st.error(f"### {loser}")
+            st.metric("Win Probability", f"{loss_prob:.1%}")
+
+        # Big score display
+        st.markdown(
+            f"<div style='text-align:center;padding:20px;background:#0d0d0d;border:1px solid #333;"
+            f"border-top:3px solid #c8ff00;margin:10px 0;border-radius:4px;'>"
+            f"<div style='font-size:0.8em;color:#888;letter-spacing:3px;font-family:monospace'>PREDICTED SCORE</div>"
+            f"<div style='font-size:2.8em;font-weight:900;color:#fff;letter-spacing:6px;margin:8px 0'>"
+            f"{result['winner']}  {result['predicted_score']}</div>"
+            f"<div style='font-size:0.85em;color:#aaa;font-family:monospace'>"
+            f"{'3 sets' if result['three_sets'] else '2 sets'} &nbsp;·&nbsp; "
+            f"Confidence: {conf_emoji[result['confidence']]} {result['confidence']}</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        # Win probability bar
+        prob_a = result['win_prob_a']
+        prob_b = 1 - prob_a
+        st.markdown(
+            f"<div style='margin:12px 0'>"
+            f"<div style='display:flex;height:32px;border-radius:4px;overflow:hidden;border:1px solid #333'>"
+            f"<div style='width:{prob_a*100:.1f}%;background:#c8ff00;display:flex;align-items:center;"
+            f"justify-content:center;font-size:0.8em;font-weight:700;color:#000;font-family:monospace'>"
+            f"{player_a} {prob_a:.0%}</div>"
+            f"<div style='flex:1;background:#ff5555;display:flex;align-items:center;"
+            f"justify-content:center;font-size:0.8em;font-weight:700;color:#fff;font-family:monospace'>"
+            f"{player_b} {prob_b:.0%}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # H2H note
+        if result['h2h_total'] > 0:
+            st.caption(f"Head-to-head: {result['h2h_a_wins']}-{result['h2h_total']-result['h2h_a_wins']} in favour of {player_a} ({result['h2h_total']} meetings)")
+        else:
+            st.caption("No previous head-to-head matches found in dataset")
+
+        # Factor breakdown
+        with st.expander("📊 Why this prediction?", expanded=True):
+            for label, score, adv in result['factors']:
+                strength = min(1.0, abs(score) / 2.5)
+                arrow = f"← **{adv}**" if score != 0 else "Even"
+                st.progress(float(np.clip(strength, 0.01, 0.99)),
+                    text=f"{label:<28} {arrow}")
+
+        st.markdown("---")
+        st.subheader("📈 GAME TOTAL FORECAST")
+        _, c, _ = st.columns([1,2,1])
+        with c:
+            st.metric("Expected Total Games", f"{pred:.1f}")
+            if   pred < 23: st.info("⚡ Quick Match — 2 sets likely")
+            elif pred < 27: st.info("⚔️ Competitive Match")
+            else:           st.warning("🔥 Long Match — 3 sets likely")
+
+        st.markdown("---")
+        st.subheader("📊 PLAYER ANALYSIS")
         col1, col2 = st.columns(2)
 
         def show(col, name, an, rs):
@@ -811,16 +1146,8 @@ def main():
         show(col2, player_b, an_b, rs_b)
 
         st.markdown("---")
-        _, c, _ = st.columns([1,2,1])
-        with c:
-            st.metric("🎯 Predicted Total Games", f"{pred:.1f}")
-            if   pred < 23: st.info("⚡ Quick Match — 2 sets likely")
-            elif pred < 27: st.info("⚔️ Competitive Match")
-            else:           st.warning("🔥 Long Match — 3 sets likely")
-
-        st.markdown("---")
         html = generate_html_report(player_a, player_b, surface,
-                                     an_a, an_b, pred, model_data, rs_a, rs_b)
+                                     an_a, an_b, pred, model_data, rs_a, rs_b, result)
         st.download_button(
             "📥 Download HTML Report", data=html,
             file_name=f"Challenger_{player_a}_vs_{player_b}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
