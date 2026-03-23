@@ -143,27 +143,35 @@ def analyze_last_15_surface_games(df, player_name, surface):
 
 def calculate_fatigue(df, player_name):
     matches = df[(df['Winner'] == player_name) | (df['Loser'] == player_name)].sort_values('Date', ascending=False)
-    now = pd.Timestamp.now()
 
     if len(matches) == 0:
-        return {'days_rest': 0, 'matches_last_7': 0, 'matches_last_14': 0, 'fatigue_level': 'Unknown'}
+        return {'days_rest': None, 'matches_last_7': 0, 'matches_last_14': 0, 'fatigue_level': '❓ No Data'}
 
+    # Use dataset max date as reference (avoids inflating "days_rest" due to data cutoff)
+    dataset_end = pd.to_datetime(df['Date'].max())
     try:
-        days_rest = int((now - pd.to_datetime(matches.iloc[0]['Date'])).days)
+        last_match_date = pd.to_datetime(matches.iloc[0]['Date'])
+        days_rest = int((dataset_end - last_match_date).days)
     except:
-        days_rest = 0
+        days_rest = None
 
     try:
-        diff = (now - pd.to_datetime(matches['Date'])).dt.days
+        diff = (dataset_end - pd.to_datetime(matches['Date'])).dt.days
         m7  = int((diff <= 7).sum())
         m14 = int((diff <= 14).sum())
     except:
         m7 = m14 = 0
 
-    if   days_rest >= 7:                  level = "✓ Fresh"
-    elif days_rest >= 4:                  level = "⚔️ Normal"
-    elif days_rest >= 2 and m7 <= 2:      level = "⚠️ Tired"
-    else:                                 level = "🔴 Exhausted"
+    if days_rest is None:
+        level = "❓ No Data"
+    elif days_rest >= 7:
+        level = "✅ Fresh"
+    elif days_rest >= 4:
+        level = "⚔️ Normal"
+    elif days_rest >= 2 and m7 <= 2:
+        level = "⚠️ Tired"
+    else:
+        level = "🔴 Fatigued"
 
     return {'days_rest': days_rest, 'matches_last_7': m7, 'matches_last_14': m14, 'fatigue_level': level}
 
@@ -1033,6 +1041,8 @@ def build_model(n_rows, df):
         wrank  = float(pd.to_numeric(row.get('WRank', 300), errors='coerce') or 300)
         lrank  = float(pd.to_numeric(row.get('LRank', 300), errors='coerce') or 300)
 
+        # surface win rate in training: approximate using overall win rate
+        # (surface-specific not available in training loop, use win_rate as proxy)
         def fv(a, b, ea, eb, ra, rb):
             return [
                 a['srv_won']  - b['srv_won'],
@@ -1049,6 +1059,7 @@ def build_model(n_rows, df):
                 b['srv_won'] + b['ret_won'],
                 (a['srv_won']-b['srv_won']) * (a['ret_won']-b['ret_won']),
                 ((ea-eb)/400) * (np.log1p(rb)-np.log1p(ra)),
+                a['win_rate'] - b['win_rate'],   # index 14: surface proxy (overall WR in training)
             ]
 
         X_clf_rows.append(fv(sw, sl, elo_w, elo_l, wrank, lrank));  y_clf.append(1)
@@ -1080,54 +1091,61 @@ def build_model(n_rows, df):
     cv_acc = clf_acc
     cv_std = 0.02   # typical std from prior runs
 
-    # ── Step 5: Games regressor ────────────────────────────────────────────────
-    def col_num(c):
-        return pd.to_numeric(df_elo[c], errors='coerce').fillna(0).values if c in df_elo.columns else np.zeros(len(df_elo))
+    # ── Step 5: Games regressor — pre-match features ONLY (no leakage) ─────────
+    # Uses rolling stats already computed above, plus rank + elo (all pre-match)
+    reg_rows = []
+    reg_y    = []
+    wrank_arr = pd.to_numeric(df_elo['WRank'], errors='coerce').fillna(300).values
+    lrank_arr = pd.to_numeric(df_elo['LRank'], errors='coerce').fillna(300).values
 
-    w1, l1 = col_num('W1'), col_num('L1')
-    w2, l2 = col_num('W2'), col_num('L2')
-    w3, l3 = col_num('W3'), col_num('L3')
-    wrank_v = pd.to_numeric(df_elo['WRank'], errors='coerce').fillna(300).values
-    lrank_v = pd.to_numeric(df_elo['LRank'], errors='coerce').fillna(300).values
+    for idx in range(len(df_elo)):
+        sw = winner_stats[idx]
+        sl = loser_stats[idx]
+        if sw is None or sl is None: continue
+        tg = df_elo.iloc[idx]['Total_Games']
+        if np.isnan(tg): continue
+        ew = float(df_elo.iloc[idx]['elo_winner_pre'])
+        el = float(df_elo.iloc[idx]['elo_loser_pre'])
+        rw = float(wrank_arr[idx]); rl = float(lrank_arr[idx])
+        surf_v = 1.0 if str(df_elo.iloc[idx].get('Surface','Hard')) == 'Clay' else 0.0
+        row_feats = [
+            # Serve quality of both players (pre-match rolling)
+            sw['srv_won'], sl['srv_won'],
+            sw['ret_won'], sl['ret_won'],
+            sw['bp_saved'], sl['bp_saved'],
+            sw['bp_conv'],  sl['bp_conv'],
+            sw['fs_pct'],   sl['fs_pct'],
+            sw['ace_rate'], sl['ace_rate'],
+            sw['df_rate'],  sl['df_rate'],
+            sw['win_rate'], sl['win_rate'],
+            # Combined stats — predict match competitiveness
+            sw['srv_won'] + sl['srv_won'],   # total serve dominance (high = fewer breaks = more games)
+            sw['ret_won'] + sl['ret_won'],   # total return quality
+            abs(sw['srv_won'] - sl['srv_won']),   # mismatch → dominant player → fewer games
+            abs(sw['win_rate'] - sl['win_rate']), # form gap → fewer games
+            # Elo gap (large gap = dominant player = fewer games)
+            abs(ew - el) / 400,
+            (ew - el) / 400,
+            # Rank features
+            np.log1p(rw), np.log1p(rl),
+            abs(np.log1p(rw) - np.log1p(rl)),
+            # Surface
+            surf_v,
+        ]
+        reg_rows.append(row_feats)
+        reg_y.append(tg)
 
-    reg_feats = [
-        w1+l1, w2+l2, np.where(w3+l3>0, w3+l3, 0),
-        (df_elo['Wsets']==2).astype(float).values if 'Wsets' in df_elo.columns else np.zeros(len(df_elo)),
-        (df_elo['Wsets']==3).astype(float).values if 'Wsets' in df_elo.columns else np.zeros(len(df_elo)),
-        lrank_v - wrank_v,
-        wrank_v / (wrank_v + lrank_v + 1),
-        np.log1p(wrank_v), np.log1p(lrank_v),
-        1 / (1 + np.abs(w1-l1) + np.abs(w2-l2)),
-        df_elo['elo_winner_pre'].values, df_elo['elo_loser_pre'].values,
-        (df_elo['elo_winner_pre'] - df_elo['elo_loser_pre']).values,
-    ]
-    w_svpt = col_num('w_svpt').clip(1); l_svpt = col_num('l_svpt').clip(1)
-    w_bpf  = col_num('w_bpFaced').clip(1); l_bpf = col_num('l_bpFaced').clip(1)
-    for c in ['w_ace','w_df','w_svpt','w_1stIn','w_1stWon','w_2ndWon','w_bpSaved','w_bpFaced',
-              'l_ace','l_df','l_svpt','l_1stIn','l_1stWon','l_2ndWon','l_bpSaved','l_bpFaced']:
-        reg_feats.append(col_num(c))
-    reg_feats += [
-        col_num('w_1stIn')/w_svpt, col_num('w_1stWon')/w_svpt,
-        (col_num('w_1stWon')+col_num('w_2ndWon'))/w_svpt,
-        col_num('l_1stIn')/l_svpt, col_num('l_1stWon')/l_svpt,
-        (col_num('l_1stWon')+col_num('l_2ndWon'))/l_svpt,
-        col_num('w_bpSaved')/w_bpf, col_num('l_bpSaved')/l_bpf,
-        col_num('Minutes'),
-    ]
-    for surf in df_elo['Surface'].dropna().unique():
-        reg_feats.append((df_elo['Surface']==surf).astype(int).values)
-
-    X_reg = np.nan_to_num(np.column_stack(reg_feats), nan=0, posinf=0, neginf=0)
-    y_reg = df_elo['Total_Games'].values
+    X_reg = np.nan_to_num(np.array(reg_rows, dtype=float), nan=0, posinf=0, neginf=0)
+    y_reg = np.array(reg_y)
 
     Xr_tr, Xr_te, yr_tr, yr_te = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
     sc_reg = StandardScaler()
     reg = GradientBoostingRegressor(
-        n_estimators=200,       # was 600
+        n_estimators=200,
         learning_rate=0.05,
-        max_depth=4,
-        min_samples_split=6,
-        min_samples_leaf=3,
+        max_depth=3,
+        min_samples_split=8,
+        min_samples_leaf=4,
         subsample=0.75,
         max_features=0.8,
         random_state=42
@@ -1147,42 +1165,86 @@ def build_model(n_rows, df):
     }
 
 def predict_games(model_data, player_a, player_b, surface, df):
-    """Predict total games using each player's recent median + h2h + serve quality."""
-    def player_recent(p, surf, n=15):
-        m = df[(df['Winner']==p) | (df['Loser']==p)]
+    """
+    Predict total games using:
+    1. Trained regressor (pre-match features, no leakage)
+    2. Blended with surface-specific historical median for grounding
+    """
+    df_elo = model_data['df']
+    reg    = model_data['reg']
+    sc_reg = model_data['sc_reg']
+    elo    = model_data['elo_ratings']
+
+    n = len(df_elo)
+    sa = rolling_player_stats(df_elo, player_a, n, window=20, surface=surface)
+    sb = rolling_player_stats(df_elo, player_b, n, window=20, surface=surface)
+    if sa is None: sa = {'srv_won':0.62,'ret_won':0.38,'bp_saved':0.60,'bp_conv':0.35,
+                         'fs_pct':0.62,'ace_rate':0.05,'df_rate':0.05,'win_rate':0.5,'n':0}
+    if sb is None: sb = {'srv_won':0.62,'ret_won':0.38,'bp_saved':0.60,'bp_conv':0.35,
+                         'fs_pct':0.62,'ace_rate':0.05,'df_rate':0.05,'win_rate':0.5,'n':0}
+
+    elo_a = elo.get(player_a, 1500); elo_b = elo.get(player_b, 1500)
+
+    def get_rank(p):
+        wr = pd.to_numeric(df_elo.loc[df_elo['Winner']==p,'WRank'], errors='coerce')
+        lr = pd.to_numeric(df_elo.loc[df_elo['Loser']==p, 'LRank'], errors='coerce')
+        v  = pd.concat([wr,lr]).dropna()
+        return float(v.median()) if len(v)>0 else 300.0
+
+    rank_a = get_rank(player_a); rank_b = get_rank(player_b)
+    surf_v = 1.0 if surface == 'Clay' else 0.0
+
+    fv = [
+        sa['srv_won'], sb['srv_won'], sa['ret_won'], sb['ret_won'],
+        sa['bp_saved'], sb['bp_saved'], sa['bp_conv'], sb['bp_conv'],
+        sa['fs_pct'],  sb['fs_pct'],  sa['ace_rate'],sb['ace_rate'],
+        sa['df_rate'], sb['df_rate'], sa['win_rate'], sb['win_rate'],
+        sa['srv_won'] + sb['srv_won'], sa['ret_won'] + sb['ret_won'],
+        abs(sa['srv_won'] - sb['srv_won']),
+        abs(sa['win_rate']- sb['win_rate']),
+        abs(elo_a - elo_b) / 400,
+        (elo_a - elo_b) / 400,
+        np.log1p(rank_a), np.log1p(rank_b),
+        abs(np.log1p(rank_a) - np.log1p(rank_b)),
+        surf_v,
+    ]
+
+    X = np.nan_to_num(np.array([fv], dtype=float), nan=0, posinf=0, neginf=0)
+    ml_pred = float(reg.predict(sc_reg.transform(X))[0])
+
+    # Surface-specific historical median as grounding anchor
+    def surface_median(p, surf):
+        m = df[(df['Winner']==p)|(df['Loser']==p)]
         if surf != 'All':
             ms = m[m['Surface']==surf]
             if len(ms) >= 5: m = ms
-        m = m.tail(n).copy()
+        m = m.tail(20).copy()
         m['Total_Games'] = add_total_games_col(m)
-        return m.dropna(subset=['Total_Games'])
+        vals = m['Total_Games'].dropna()
+        return float(vals.median()) if len(vals) >= 3 else None
 
-    a_m = player_recent(player_a, surface)
-    b_m = player_recent(player_b, surface)
-    a_med = float(a_m['Total_Games'].median()) if len(a_m) >= 3 else 22.0
-    b_med = float(b_m['Total_Games'].median()) if len(b_m) >= 3 else 22.0
-    base  = (a_med + b_med) / 2.0
+    med_a = surface_median(player_a, surface)
+    med_b = surface_median(player_b, surface)
 
+    if med_a is not None and med_b is not None:
+        hist_anchor = (med_a + med_b) / 2.0
+        # Blend: 55% ML (pre-match features), 45% surface historical avg
+        pred = ml_pred * 0.55 + hist_anchor * 0.45
+    else:
+        pred = ml_pred
+
+    # H2H anchor
     h2h = df[
-        ((df['Winner']==player_a) & (df['Loser']==player_b)) |
-        ((df['Winner']==player_b) & (df['Loser']==player_a))
+        ((df['Winner']==player_a)&(df['Loser']==player_b)) |
+        ((df['Winner']==player_b)&(df['Loser']==player_a))
     ].copy()
     if len(h2h) >= 2:
         h2h['Total_Games'] = add_total_games_col(h2h)
         h2h_med = h2h['Total_Games'].dropna().median()
         if not np.isnan(h2h_med):
-            base = base * 0.65 + h2h_med * 0.35
+            pred = pred * 0.80 + h2h_med * 0.20
 
-    def avg_bp_saved(p):
-        rows = df[df['Winner']==p].tail(10)
-        if len(rows) == 0 or 'w_bpSaved' not in rows.columns: return 0.5
-        bps = pd.to_numeric(rows['w_bpSaved'], errors='coerce')
-        bpf = pd.to_numeric(rows['w_bpFaced'], errors='coerce').replace(0, np.nan)
-        r = (bps / bpf).dropna()
-        return float(r.mean()) if len(r) > 0 else 0.5
-
-    serve_adj = (0.5 - (avg_bp_saved(player_a) + avg_bp_saved(player_b)) / 2) * 4.0
-    return float(np.clip(base + serve_adj, 12, 45))
+    return float(np.clip(pred, 12, 45))
 
 # ============= MATCH RESULT PREDICTION =============
 
@@ -1217,6 +1279,19 @@ def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b, mo
     if sb is None: sb = {'srv_won':0.62,'ret_won':0.38,'bp_saved':0.60,'bp_conv':0.35,
                          'fs_pct':0.62,'ace_rate':0.05,'df_rate':0.05,'win_rate':0.5,'n':0}
 
+    # Surface-specific win rate (most predictive single feature for clay/grass)
+    def surf_win_rate(p, surf):
+        m = df[(df['Winner']==p)|(df['Loser']==p)]
+        if surf != 'All':
+            ms = m[m['Surface']==surf]
+            if len(ms) >= 5: m = ms
+        m = m.tail(20)
+        wins = int((m['Winner']==p).sum())
+        return wins / max(len(m), 1)
+
+    swr_a = surf_win_rate(player_a, surface)
+    swr_b = surf_win_rate(player_b, surface)
+
     fv = [
         sa['srv_won']  - sb['srv_won'],
         sa['ret_won']  - sb['ret_won'],
@@ -1232,6 +1307,7 @@ def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b, mo
         sb['srv_won'] + sb['ret_won'],
         (sa['srv_won'] - sb['srv_won']) * (sa['ret_won'] - sb['ret_won']),
         ((elo_a - elo_b) / 400) * (np.log1p(rank_b) - np.log1p(rank_a)),
+        swr_a - swr_b,   # surface-specific win rate differential
     ]
 
     X = np.nan_to_num(np.array([fv]), nan=0, posinf=0, neginf=0)
@@ -1256,16 +1332,17 @@ def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b, mo
 
     # Factor contributions (signed, positive = favours A)
     factor_defs = [
-        ('Serve dominance',       fv[0] * 5),
-        ('Return game',           fv[1] * 5),
-        ('Break pts saved',       fv[2] * 3),
-        ('Break conversion',      fv[3] * 3),
-        ('1st Serve %',           fv[4] * 2),
-        ('Ace rate',              fv[5] * 2),
-        ('DF control',            fv[6] * 2),
-        ('Recent form',           fv[7] * 3),
-        ('Elo rating',            fv[8] * 4),
-        ('World ranking',         fv[9] * 3),
+        ('Surface win rate',      fv[14] * 6),   # most important for clay/grass
+        ('Elo rating',            fv[8]  * 5),
+        ('World ranking',         fv[9]  * 4),
+        ('Recent form',           fv[7]  * 4),
+        ('Break pts saved',       fv[2]  * 3),
+        ('Break conversion',      fv[3]  * 3),
+        ('Serve dominance',       fv[0]  * 3),
+        ('Return game',           fv[1]  * 3),
+        ('1st Serve %',           fv[4]  * 2),
+        ('Ace rate',              fv[5]  * 2),
+        ('DF control',            fv[6]  * 2),
     ]
     if h2h_total >= 2:
         h2h_pct   = h2h_a_wins / h2h_total
