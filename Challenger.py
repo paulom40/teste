@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import mean_absolute_error, r2_score, accuracy_score
 import requests
 from io import BytesIO
 from datetime import datetime
@@ -447,8 +448,406 @@ def get_real_stats(df, player_name):
 
 # ============= MODEL =============
 
+# ============= ELO RATING SYSTEM =============
+
+def compute_elo_ratings(df, k=32, initial=1500):
+    """
+    Compute Elo ratings for every player by replaying matches in date order.
+    Returns a dict {player_name: elo} reflecting each player's rating
+    BEFORE their last match (so it's usable as a pre-match feature).
+    Also returns a per-match elo series for feature building.
+    """
+    df_sorted = df.sort_values('Date').reset_index(drop=True)
+    elo = {}
+    # Store elo BEFORE each match for each row
+    elo_winner_pre = []
+    elo_loser_pre  = []
+
+    for _, row in df_sorted.iterrows():
+        w = row['Winner']
+        l = row['Loser']
+        ew = elo.get(w, initial)
+        el = elo.get(l, initial)
+        elo_winner_pre.append(ew)
+        elo_loser_pre.append(el)
+        # Expected scores
+        exp_w = 1 / (1 + 10**((el - ew) / 400))
+        exp_l = 1 - exp_w
+        # Update
+        elo[w] = ew + k * (1 - exp_w)
+        elo[l] = el + k * (0 - exp_l)
+
+    df_sorted['elo_winner_pre'] = elo_winner_pre
+    df_sorted['elo_loser_pre']  = elo_loser_pre
+    return elo, df_sorted
+
+
+
+def compute_rolling30_elo(df, k=40, initial=1500, window=30):
+    """
+    Rolling Elo that re-computes each player's rating using only their
+    last `window` matches. Highly responsive to recent form.
+    Returns: elo_final, history {player: [(date,elo)]}, df_out
+    """
+    from collections import deque
+    df_s = df.sort_values('Date').reset_index(drop=True)
+    player_results = {}
+    elo = {}
+    history = {}
+    pre_w_list, pre_l_list = [], []
+
+    def recalc(results_deque):
+        rating = initial
+        for outcome, opp_elo in results_deque:
+            exp = 1 / (1 + 10 ** ((opp_elo - rating) / 400))
+            rating += k * (outcome - exp)
+        return rating
+
+    for _, row in df_s.iterrows():
+        w, l = row['Winner'], row['Loser']
+        date = row['Date']
+        ew = elo.get(w, initial)
+        el = elo.get(l, initial)
+        pre_w_list.append(ew)
+        pre_l_list.append(el)
+        for player, outcome, opp_pre in [(w, 1, el), (l, 0, ew)]:
+            if player not in player_results:
+                player_results[player] = deque()
+            player_results[player].append((outcome, opp_pre))
+            if len(player_results[player]) > window:
+                player_results[player].popleft()
+            new_elo = recalc(player_results[player])
+            elo[player] = new_elo
+            if player not in history:
+                history[player] = []
+            history[player].append((date, new_elo))
+
+    df_s['elo30_winner'] = pre_w_list
+    df_s['elo30_loser']  = pre_l_list
+    return elo, history, df_s
+
+
+def get_player_elo30_stats(player, elo_final, history, df, window=30):
+    """Rich stats dict for a player based on rolling-30 Elo."""
+    current_elo = elo_final.get(player, 1500)
+    if player in history and len(history[player]) > 0:
+        hist_df = pd.DataFrame(history[player], columns=['Date', 'Elo'])
+        hist_df['Date'] = pd.to_datetime(hist_df['Date'])
+        hist_df = hist_df.sort_values('Date').drop_duplicates('Date', keep='last')
+    else:
+        hist_df = pd.DataFrame(columns=['Date', 'Elo'])
+    recent_hist = hist_df.tail(window)
+    peak_elo   = float(recent_hist['Elo'].max()) if len(recent_hist) > 0 else current_elo
+    trough_elo = float(recent_hist['Elo'].min()) if len(recent_hist) > 0 else current_elo
+    last10 = hist_df.tail(10)
+    if len(last10) >= 3:
+        slope = float(np.polyfit(np.arange(len(last10)), last10['Elo'].values, 1)[0])
+    else:
+        slope = 0.0
+    if   slope >  8: trend = ('Rising',  'green')
+    elif slope < -8: trend = ('Falling', 'red')
+    else:            trend = ('Stable',  'gray')
+    matches = df[(df['Winner']==player)|(df['Loser']==player)].sort_values('Date').tail(window)
+    wins   = int((matches['Winner']==player).sum())
+    losses = int((matches['Loser']==player).sum())
+    surf_stats = {}
+    for surf, grp in matches.groupby('Surface'):
+        sw = int((grp['Winner']==player).sum())
+        sl = int((grp['Loser']==player).sum())
+        surf_stats[surf] = {'wins': sw, 'losses': sl, 'win_rate': sw/max(sw+sl,1)}
+    return {
+        'current_elo': current_elo, 'peak_elo': peak_elo, 'trough_elo': trough_elo,
+        'slope': slope, 'trend': trend,
+        'wins': wins, 'losses': losses,
+        'win_rate': wins / max(wins+losses, 1),
+        'hist_df': hist_df, 'surf_stats': surf_stats, 'n_matches': wins+losses,
+    }
+
+
+def render_elo_tab(df, model_data, player_a, player_b, surface, all_players):
+    """Render the full Rolling-30 Elo tab."""
+    import plotly.graph_objects as go
+
+    st.subheader("📡 Rolling-30 Elo System")
+    st.caption(
+        "Each player's Elo is recalculated using only their **last 30 matches**. "
+        "K-factor = 40. Highly responsive to current form vs career history."
+    )
+
+    with st.spinner("Computing rolling-30 Elo..."):
+        elo_final, history, df_elo30 = compute_rolling30_elo(df)
+
+    pa_stats = get_player_elo30_stats(player_a, elo_final, history, df)
+    pb_stats = get_player_elo30_stats(player_b, elo_final, history, df)
+
+    # ── Player comparison ─────────────────────────────────────────────────────
+    st.markdown("### 🆚 Head-to-Head Elo Comparison")
+    col_a, col_mid, col_b = st.columns([5, 2, 5])
+
+    def elo_card(col, name, stats, color):
+        with col:
+            delta = stats['current_elo'] - 1500
+            delta_str = f"+{delta:.0f}" if delta >= 0 else f"{delta:.0f}"
+            trend_icons = {'Rising': '📈', 'Falling': '📉', 'Stable': '➡️'}
+            ti = trend_icons.get(stats['trend'][0], '➡️')
+            st.markdown(
+                f"<div style='background:#0d0d0d;border:1px solid #2a2a2a;"
+                f"border-top:4px solid {color};padding:20px;border-radius:4px;text-align:center'>"
+                f"<div style='font-size:0.7em;color:#888;letter-spacing:3px;font-family:monospace'>"
+                f"ROLLING-30 ELO</div>"
+                f"<div style='font-size:3em;font-weight:900;color:{color};margin:6px 0'>"
+                f"{stats['current_elo']:.0f}</div>"
+                f"<div style='font-size:0.82em;color:#aaa;font-family:monospace'>"
+                f"{delta_str} vs baseline</div>"
+                f"<div style='font-size:1em;margin-top:10px;color:{color}'>"
+                f"{ti} {stats['trend'][0]}</div>"
+                f"</div>", unsafe_allow_html=True
+            )
+            st.markdown(f"**{name}**")
+            c1, c2 = st.columns(2)
+            c1.metric("Record (30)",   f"{stats['wins']}-{stats['losses']}")
+            c2.metric("Win Rate",      f"{stats['win_rate']:.1%}")
+            c1.metric("Peak Elo",      f"{stats['peak_elo']:.0f}")
+            c2.metric("Trough Elo",    f"{stats['trough_elo']:.0f}")
+            c1.metric("Trend /match",  f"{stats['slope']:+.1f}")
+            c2.metric("Matches used",  f"{stats['n_matches']}")
+
+    elo_card(col_a, player_a, pa_stats, '#c8ff00')
+    elo_card(col_b, player_b, pb_stats, '#ff7043')
+
+    with col_mid:
+        st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+        elo_diff = pa_stats['current_elo'] - pb_stats['current_elo']
+        exp_a    = 1 / (1 + 10**(-elo_diff / 400))
+        fav      = player_a if elo_diff >= 0 else player_b
+        fav_prob = max(exp_a, 1-exp_a)
+        st.markdown(
+            f"<div style='text-align:center;padding:18px;background:#111;"
+            f"border:1px solid #333;border-radius:4px'>"
+            f"<div style='font-size:0.68em;color:#888;letter-spacing:2px;font-family:monospace'>ELO EDGE</div>"
+            f"<div style='font-size:1.1em;font-weight:700;color:#fff;margin:6px 0'>{fav}</div>"
+            f"<div style='font-size:2em;font-weight:900;color:#c8ff00'>{fav_prob:.1%}</div>"
+            f"<div style='font-size:0.68em;color:#666;font-family:monospace'>WIN PROB</div>"
+            f"<div style='font-size:0.75em;color:#555;margin-top:8px;font-family:monospace'>"
+            f"Gap: {abs(elo_diff):.0f} pts</div>"
+            f"</div>", unsafe_allow_html=True
+        )
+
+    # ── Trajectory chart ──────────────────────────────────────────────────────
+    st.markdown("### 📈 Elo Trajectory (Last 30 Matches Each)")
+    fig = go.Figure()
+    for name, stats, color, dash in [
+        (player_a, pa_stats, '#c8ff00', 'solid'),
+        (player_b, pb_stats, '#ff7043', 'dash'),
+    ]:
+        hdf = stats['hist_df'].tail(30)
+        if len(hdf) == 0:
+            continue
+        # Add shaded area under line
+        fig.add_trace(go.Scatter(
+            x=list(hdf['Date']) + list(hdf['Date'])[::-1],
+            y=list(hdf['Elo']) + [1500]*len(hdf),
+            fill='toself', fillcolor=color.replace('#','rgba(').replace('c8ff00','200,255,0,0.06)').replace('ff7043','255,112,67,0.06)'),
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig.add_trace(go.Scatter(
+            x=hdf['Date'], y=hdf['Elo'],
+            mode='lines+markers', name=name,
+            line=dict(color=color, width=2.5, dash=dash),
+            marker=dict(size=5, color=color, line=dict(color='#111',width=1)),
+            hovertemplate=f"<b>{name}</b><br>%{{x|%Y-%m-%d}}<br>Elo: %{{y:.0f}}<extra></extra>"
+        ))
+    fig.add_hline(y=1500, line_dash='dot', line_color='#333',
+                  annotation_text='1500 baseline', annotation_font_color='#555',
+                  annotation_position='bottom right')
+    fig.update_layout(
+        template='plotly_dark', paper_bgcolor='#0a0a0a', plot_bgcolor='#0d0d0d',
+        font=dict(family='IBM Plex Mono', size=11, color='#aaa'),
+        legend=dict(bgcolor='#111', bordercolor='#333', borderwidth=1,
+                    orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        xaxis=dict(gridcolor='#1a1a1a', title=''), yaxis=dict(gridcolor='#1a1a1a', title='Rolling-30 Elo'),
+        margin=dict(l=40, r=20, t=40, b=30), height=380,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Surface breakdown ─────────────────────────────────────────────────────
+    st.markdown("### 🏟️ Surface Performance (Last 30 Matches)")
+    s_col_a, s_col_b = st.columns(2)
+    def surface_table(col, name, stats):
+        with col:
+            st.markdown(f"**{name}**")
+            if not stats['surf_stats']:
+                st.caption("No data"); return
+            rows = []
+            for surf, s in sorted(stats['surf_stats'].items()):
+                wr = s['win_rate']
+                bar = '█' * int(wr*10) + '░' * (10-int(wr*10))
+                rows.append({'Surface': surf, 'W-L': f"{s['wins']}-{s['losses']}",
+                             'Win%': f"{wr:.0%}", 'Form': bar})
+            st.dataframe(pd.DataFrame(rows).set_index('Surface'), use_container_width=True)
+    surface_table(s_col_a, player_a, pa_stats)
+    surface_table(s_col_b, player_b, pb_stats)
+
+    # ── Leaderboard ───────────────────────────────────────────────────────────
+    st.markdown("### 🏆 Player Leaderboard — Rolling-30 Elo")
+    leaderboard = []
+    for p in all_players:
+        if p not in elo_final: continue
+        matches = df[(df['Winner']==p)|(df['Loser']==p)].tail(30)
+        if len(matches) < 3: continue
+        wins   = int((matches['Winner']==p).sum())
+        losses = int((matches['Loser']==p).sum())
+        elo_v  = elo_final[p]
+        if p in history and len(history[p]) >= 10:
+            h     = [e for _, e in history[p]]
+            trend_pt = np.mean(h[-5:]) - np.mean(h[-10:-5])
+            ti = '📈' if trend_pt > 15 else ('📉' if trend_pt < -15 else '➡️')
+        else:
+            trend_pt, ti = 0.0, '➡️'
+        leaderboard.append({
+            'Player':  p,
+            'Elo':     round(elo_v),
+            'W-L':     f"{wins}-{losses}",
+            'Win%':    f"{wins/max(wins+losses,1):.0%}",
+            'Trend':   ti,
+            'Δ(5gm)':  f"{trend_pt:+.0f}",
+        })
+    if leaderboard:
+        lb_df = (pd.DataFrame(leaderboard)
+                   .sort_values('Elo', ascending=False)
+                   .reset_index(drop=True))
+        lb_df.index += 1; lb_df.index.name = 'Rank'
+
+        def highlight(row):
+            if row['Player'] == player_a: return ['background-color:#1a2a00;color:#c8ff00']*len(row)
+            if row['Player'] == player_b: return ['background-color:#2a0d00;color:#ff7043']*len(row)
+            return ['']*len(row)
+
+        st.dataframe(lb_df.style.apply(highlight, axis=1),
+                     use_container_width=True,
+                     height=min(650, 45 + len(lb_df)*35))
+        st.caption(f"🟡 {player_a}   🟠 {player_b}   ·   {len(lb_df)} ranked players")
+
+    # ── H2H history ───────────────────────────────────────────────────────────
+    h2h = df[
+        ((df['Winner']==player_a)&(df['Loser']==player_b)) |
+        ((df['Winner']==player_b)&(df['Loser']==player_a))
+    ].sort_values('Date', ascending=False)
+    if len(h2h) > 0:
+        st.markdown(f"### ⚔️ Head-to-Head: {player_a} vs {player_b}")
+        h2h_show = h2h.copy()
+        h2h_show['Date']   = pd.to_datetime(h2h_show['Date']).dt.strftime('%Y-%m-%d')
+        h2h_show['Result'] = h2h_show.apply(lambda r: f"✅ {r['Winner']} def. {r['Loser']}", axis=1)
+        st.dataframe(h2h_show[['Date','Result','Score','Surface']].reset_index(drop=True),
+                     use_container_width=True)
+        a_w = int((h2h['Winner']==player_a).sum())
+        b_w = len(h2h) - a_w
+        st.info(f"Overall H2H: **{player_a} {a_w} – {b_w} {player_b}** ({len(h2h)} matches)")
+    else:
+        st.info(f"No H2H matches between {player_a} and {player_b} in the dataset.")
+
+
+def rolling_player_stats(df_sorted, player, before_idx, window=20, surface=None):
+    """
+    Compute rolling stats for a player using only matches BEFORE before_idx.
+    This is the key to avoiding data leakage.
+    """
+    mask = ((df_sorted['Winner'] == player) | (df_sorted['Loser'] == player))
+    mask &= (df_sorted.index < before_idx)
+    if surface and surface != 'All':
+        surf_mask = mask & (df_sorted['Surface'] == surface)
+        if surf_mask.sum() >= 5:
+            mask = surf_mask
+    hist = df_sorted[mask].tail(window)
+
+    if len(hist) == 0:
+        return None
+
+    w_rows = hist[hist['Winner'] == player]
+    l_rows = hist[hist['Loser']  == player]
+
+    def ratio(num_col, den_col, rows, pfx):
+        if len(rows) == 0: return np.nan
+        num = pd.to_numeric(rows.get(f'{pfx}_{num_col}', pd.Series()), errors='coerce')
+        den = pd.to_numeric(rows.get(f'{pfx}_{den_col}', pd.Series()), errors='coerce').replace(0, np.nan)
+        r = (num / den).dropna()
+        return float(r.mean()) if len(r) > 0 else np.nan
+
+    def merge(v_w, v_l, nw, nl):
+        vals = [(v, n, w) for v, n, w in [(v_w,nw,0.6),(v_l,nl,0.4)] if not (v is None or np.isnan(v))]
+        if not vals: return np.nan
+        tw = sum(x[1]*x[2] for x in vals)
+        return sum(x[0]*x[1]*x[2] for x in vals)/tw if tw > 0 else np.nan
+
+    nw, nl = len(w_rows), len(l_rows)
+
+    # Serve pts won = (1stWon + 2ndWon) / svpt
+    def srv_won(rows, pfx):
+        s  = pd.to_numeric(rows.get(f'{pfx}_svpt', pd.Series()), errors='coerce').replace(0,np.nan)
+        fw = pd.to_numeric(rows.get(f'{pfx}_1stWon', pd.Series()), errors='coerce')
+        sw = pd.to_numeric(rows.get(f'{pfx}_2ndWon', pd.Series()), errors='coerce')
+        n  = min(len(s), len(fw), len(sw))
+        if n == 0: return np.nan
+        return float(((fw.values[:n]+sw.values[:n])/s.values[:n]).mean())
+
+    spw = merge(srv_won(w_rows,'w'), srv_won(l_rows,'l'), nw, nl)
+
+    # Return pts won = (opp_svpt - opp_1stWon - opp_2ndWon) / opp_svpt
+    def ret_won(opp_rows, pfx):
+        s  = pd.to_numeric(opp_rows.get(f'{pfx}_svpt', pd.Series()), errors='coerce').replace(0,np.nan)
+        fw = pd.to_numeric(opp_rows.get(f'{pfx}_1stWon', pd.Series()), errors='coerce')
+        sw = pd.to_numeric(opp_rows.get(f'{pfx}_2ndWon', pd.Series()), errors='coerce')
+        n  = min(len(s), len(fw), len(sw))
+        if n == 0: return np.nan
+        return float(((s.values[:n]-fw.values[:n]-sw.values[:n]).clip(0)/s.values[:n]).mean())
+
+    rpw = merge(ret_won(w_rows,'l'), ret_won(l_rows,'w'), nw, nl)
+
+    # BP saved %
+    bps_v = merge(ratio('bpSaved','bpFaced',w_rows,'w'), ratio('bpSaved','bpFaced',l_rows,'l'), nw, nl)
+
+    # BP converted %
+    def bp_conv(opp_rows, pfx):
+        bpf = pd.to_numeric(opp_rows.get(f'{pfx}_bpFaced', pd.Series()), errors='coerce').replace(0,np.nan)
+        bps_c = pd.to_numeric(opp_rows.get(f'{pfx}_bpSaved', pd.Series()), errors='coerce')
+        n = min(len(bpf), len(bps_c))
+        if n == 0: return np.nan
+        return float(((bpf.values[:n]-bps_c.values[:n]).clip(0)/bpf.values[:n]).mean())
+
+    bpc_v = merge(bp_conv(w_rows,'l'), bp_conv(l_rows,'w'), nw, nl)
+
+    # 1st serve %
+    fs_pct = merge(ratio('1stIn','svpt',w_rows,'w'), ratio('1stIn','svpt',l_rows,'l'), nw, nl)
+
+    # Ace rate
+    ace_r = merge(ratio('ace','svpt',w_rows,'w'), ratio('ace','svpt',l_rows,'l'), nw, nl)
+
+    # DF rate (lower = better)
+    df_r  = merge(ratio('df','svpt',w_rows,'w'),  ratio('df','svpt',l_rows,'l'),  nw, nl)
+
+    win_rate = nw / max(nw+nl, 1)
+
+    return {
+        'srv_won':  spw  if spw  is not None and not np.isnan(spw)  else 0.62,
+        'ret_won':  rpw  if rpw  is not None and not np.isnan(rpw)  else 0.38,
+        'bp_saved': bps_v if bps_v is not None and not np.isnan(bps_v) else 0.60,
+        'bp_conv':  bpc_v if bpc_v is not None and not np.isnan(bpc_v) else 0.35,
+        'fs_pct':   fs_pct if fs_pct is not None and not np.isnan(fs_pct) else 0.62,
+        'ace_rate': ace_r if ace_r is not None and not np.isnan(ace_r) else 0.05,
+        'df_rate':  df_r  if df_r  is not None and not np.isnan(df_r)  else 0.05,
+        'win_rate': win_rate,
+        'n':        nw+nl,
+    }
+
+
 @st.cache_resource
 def build_model(n_rows, df):
+    """
+    Train two models:
+    1. Winner classifier  — GBM trained on rolling pre-match differential features
+    2. Games regressor   — GBM trained on match stats to predict total games
+    Uses rolling features (no data leakage) and symmetric mirrored rows for balance.
+    """
     df_t = df.copy()
     df_t['Total_Games'] = df_t.apply(calculate_total_games, axis=1)
     df_t = df_t.dropna(subset=['Total_Games'])
@@ -457,110 +856,176 @@ def build_model(n_rows, df):
     if len(df_t) < 50:
         return None
 
+    # ── Step 1: Compute Elo ratings in temporal order ─────────────────────────
+    _, df_elo = compute_elo_ratings(df_t)
+    df_elo = df_elo.reset_index(drop=True)
+
+    # ── Step 2: Build rolling pre-match features for every match ──────────────
+    X_clf_rows, y_clf = [], []
+
+    for idx, row in df_elo.iterrows():
+        w = row['Winner']
+        l = row['Loser']
+        surf = row.get('Surface', 'Hard')
+
+        sw = rolling_player_stats(df_elo, w, idx, window=20, surface=surf)
+        sl = rolling_player_stats(df_elo, l, idx, window=20, surface=surf)
+
+        if sw is None or sl is None:
+            continue
+
+        elo_w = row['elo_winner_pre']
+        elo_l = row['elo_loser_pre']
+
+        wrank = float(pd.to_numeric(row.get('WRank', 300), errors='coerce') or 300)
+        lrank = float(pd.to_numeric(row.get('LRank', 300), errors='coerce') or 300)
+
+        def feat_vec(s_a, s_b, elo_a, elo_b, rank_a, rank_b):
+            """Differential feature vector: positive = favours player A."""
+            return [
+                s_a['srv_won']  - s_b['srv_won'],        # serve dominance diff
+                s_a['ret_won']  - s_b['ret_won'],        # return dominance diff
+                s_a['bp_saved'] - s_b['bp_saved'],       # bp saved diff
+                s_a['bp_conv']  - s_b['bp_conv'],        # bp converted diff
+                s_a['fs_pct']   - s_b['fs_pct'],         # 1st serve % diff
+                s_a['ace_rate'] - s_b['ace_rate'],       # ace rate diff
+                s_b['df_rate']  - s_a['df_rate'],        # df rate diff (inverted)
+                s_a['win_rate'] - s_b['win_rate'],       # form diff
+                (elo_a - elo_b) / 400,                   # elo diff (normalised)
+                np.log1p(rank_b) - np.log1p(rank_a),    # rank diff (log, inverted)
+                s_a['srv_won'] + s_a['ret_won'],         # A total dominance
+                s_b['srv_won'] + s_b['ret_won'],         # B total dominance
+                # Interaction: serve + return combo
+                (s_a['srv_won'] - s_b['srv_won']) * (s_a['ret_won'] - s_b['ret_won']),
+                # Elo × rank combined signal
+                ((elo_a - elo_b) / 400) * (np.log1p(rank_b) - np.log1p(rank_a)),
+            ]
+
+        # Original row: winner=A → label 1
+        fv = feat_vec(sw, sl, elo_w, elo_l, wrank, lrank)
+        X_clf_rows.append(fv)
+        y_clf.append(1)
+
+        # Mirrored row: winner=B → label 0  (balances the dataset perfectly)
+        fv_mirror = feat_vec(sl, sw, elo_l, elo_w, lrank, wrank)
+        X_clf_rows.append(fv_mirror)
+        y_clf.append(0)
+
+    if len(X_clf_rows) < 80:
+        return None
+
+    X_clf = np.nan_to_num(np.array(X_clf_rows, dtype=float), nan=0, posinf=0, neginf=0)
+    y_clf = np.array(y_clf)
+
+    # ── Step 3: Train classifier ──────────────────────────────────────────────
+    X_tr, X_te, y_tr, y_te = train_test_split(X_clf, y_clf, test_size=0.2,
+                                               random_state=42, stratify=y_clf)
+    sc_clf = StandardScaler()
+    X_tr_s = sc_clf.fit_transform(X_tr)
+    X_te_s  = sc_clf.transform(X_te)
+
+    clf = GradientBoostingClassifier(
+        n_estimators=500,
+        learning_rate=0.03,
+        max_depth=3,
+        min_samples_split=8,
+        min_samples_leaf=4,
+        subsample=0.8,
+        max_features=0.8,
+        random_state=42
+    )
+    clf.fit(X_tr_s, y_tr)
+    clf_acc = accuracy_score(y_te, clf.predict(X_te_s))
+
+    # Cross-val for robustness estimate
+    cv_scores = cross_val_score(clf, sc_clf.transform(X_clf), y_clf, cv=5, scoring='accuracy')
+
+    # ── Step 4: Build games regressor (uses match stats, no leakage issue) ────
     def col_num(c):
-        return pd.to_numeric(df_t[c], errors='coerce').fillna(0).values if c in df_t.columns else np.zeros(len(df_t))
+        return pd.to_numeric(df_elo[c], errors='coerce').fillna(0).values if c in df_elo.columns else np.zeros(len(df_elo))
 
     w1, l1 = col_num('W1'), col_num('L1')
     w2, l2 = col_num('W2'), col_num('L2')
     w3, l3 = col_num('W3'), col_num('L3')
+    wrank_v = pd.to_numeric(df_elo['WRank'], errors='coerce').fillna(300).values
+    lrank_v = pd.to_numeric(df_elo['LRank'], errors='coerce').fillna(300).values
 
-    feats = []
-
-    # Set-level games
-    feats += [w1+l1, w2+l2, np.where(w3+l3>0, w3+l3, 0)]
-
-    # Match structure
-    if 'Wsets' in df_t.columns:
-        feats += [(df_t['Wsets']==2).astype(float).values,
-                  (df_t['Wsets']==3).astype(float).values]
-
-    # Rank features
-    wrank = pd.to_numeric(df_t['WRank'], errors='coerce').fillna(500)
-    lrank = pd.to_numeric(df_t['LRank'], errors='coerce').fillna(500)
-    feats.append((lrank - wrank).values)                          # rank diff
-    feats.append((wrank / (wrank + lrank)).values)                # winner rank ratio
-    feats.append(np.log1p(wrank.values))                          # log rank winner
-    feats.append(np.log1p(lrank.values))                          # log rank loser
-
-    # Competitiveness of each set
-    feats.append(1 / (1 + np.abs(w1-l1) + np.abs(w2-l2)))
-
-    # Serve stats (most predictive of match length)
-    for c in ['w_ace','w_df','w_svpt','w_1stIn','w_1stWon','w_2ndWon','w_bpSaved','w_bpFaced',
-              'l_ace','l_df','l_svpt','l_1stIn','l_1stWon','l_2ndWon','l_bpSaved','l_bpFaced']:
-        feats.append(col_num(c))
-
-    # Derived serve quality features
+    reg_feats = [
+        w1+l1, w2+l2, np.where(w3+l3>0, w3+l3, 0),
+        (df_elo['Wsets']==2).astype(float).values if 'Wsets' in df_elo.columns else np.zeros(len(df_elo)),
+        (df_elo['Wsets']==3).astype(float).values if 'Wsets' in df_elo.columns else np.zeros(len(df_elo)),
+        lrank_v - wrank_v,
+        wrank_v / (wrank_v + lrank_v + 1),
+        np.log1p(wrank_v), np.log1p(lrank_v),
+        1 / (1 + np.abs(w1-l1) + np.abs(w2-l2)),
+        df_elo['elo_winner_pre'].values, df_elo['elo_loser_pre'].values,
+        (df_elo['elo_winner_pre'] - df_elo['elo_loser_pre']).values,
+    ]
     w_svpt = col_num('w_svpt').clip(1)
     l_svpt = col_num('l_svpt').clip(1)
-    feats.append(col_num('w_1stIn') / w_svpt)   # w 1st serve %
-    feats.append(col_num('w_1stWon') / w_svpt)  # w 1st won %
-    feats.append(col_num('l_1stIn') / l_svpt)   # l 1st serve %
-    feats.append(col_num('l_1stWon') / l_svpt)  # l 1st won %
-    w_bpf = col_num('w_bpFaced').clip(1)
-    l_bpf = col_num('l_bpFaced').clip(1)
-    feats.append(col_num('w_bpSaved') / w_bpf)  # w bp saved %
-    feats.append(col_num('l_bpSaved') / l_bpf)  # l bp saved %
+    w_bpf  = col_num('w_bpFaced').clip(1)
+    l_bpf  = col_num('l_bpFaced').clip(1)
+    for c in ['w_ace','w_df','w_svpt','w_1stIn','w_1stWon','w_2ndWon','w_bpSaved','w_bpFaced',
+              'l_ace','l_df','l_svpt','l_1stIn','l_1stWon','l_2ndWon','l_bpSaved','l_bpFaced']:
+        reg_feats.append(col_num(c))
+    reg_feats += [
+        col_num('w_1stIn')/w_svpt, col_num('w_1stWon')/w_svpt,
+        (col_num('w_1stWon')+col_num('w_2ndWon'))/w_svpt,
+        col_num('l_1stIn')/l_svpt, col_num('l_1stWon')/l_svpt,
+        (col_num('l_1stWon')+col_num('l_2ndWon'))/l_svpt,
+        col_num('w_bpSaved')/w_bpf, col_num('l_bpSaved')/l_bpf,
+        col_num('Minutes'),
+    ]
+    for surf in df_elo['Surface'].dropna().unique():
+        reg_feats.append((df_elo['Surface']==surf).astype(int).values)
 
-    # Duration if available
-    feats.append(col_num('Minutes'))
+    X_reg = np.nan_to_num(np.column_stack(reg_feats), nan=0, posinf=0, neginf=0)
+    y_reg = df_elo['Total_Games'].values
 
-    # Surface dummies
-    for s in df_t['Surface'].dropna().unique():
-        feats.append((df_t['Surface']==s).astype(int).values)
-
-    X = np.nan_to_num(np.column_stack(feats), nan=0, posinf=0, neginf=0)
-    y = df_t['Total_Games'].values
-
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
-    sc = StandardScaler()
-
-    # Tuned for better accuracy
-    model = GradientBoostingRegressor(
-        n_estimators=600,
-        learning_rate=0.02,
-        max_depth=4,
-        min_samples_split=6,
-        min_samples_leaf=3,
-        subsample=0.75,
-        max_features=0.8,
-        random_state=42
+    Xr_tr, Xr_te, yr_tr, yr_te = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
+    sc_reg = StandardScaler()
+    reg = GradientBoostingRegressor(
+        n_estimators=600, learning_rate=0.02, max_depth=4,
+        min_samples_split=6, min_samples_leaf=3,
+        subsample=0.75, max_features=0.8, random_state=42
     )
-    model.fit(sc.fit_transform(X_tr), y_tr)
-    y_pred = model.predict(sc.transform(X_te))
+    reg.fit(sc_reg.fit_transform(Xr_tr), yr_tr)
+    yr_pred = reg.predict(sc_reg.transform(Xr_te))
 
-    return {'model': model, 'scaler': sc,
-            'r2': r2_score(y_te, y_pred),
-            'mae': mean_absolute_error(y_te, y_pred),
-            'df': df_t, 'y_test': y_te, 'y_pred': y_pred}
+    return {
+        'clf':          clf,
+        'sc_clf':       sc_clf,
+        'clf_acc':      clf_acc,
+        'cv_acc':       float(cv_scores.mean()),
+        'cv_std':       float(cv_scores.std()),
+        'reg':          reg,
+        'sc_reg':       sc_reg,
+        'r2':           r2_score(yr_te, yr_pred),
+        'mae':          mean_absolute_error(yr_te, yr_pred),
+        'df':           df_elo,
+        'y_test':       yr_te,
+        'y_pred':       yr_pred,
+        'elo_ratings':  compute_elo_ratings(df_elo)[0],  # final ratings
+    }
 
 
 def predict_games(model_data, player_a, player_b, surface, df):
-    """
-    Predict using a weighted blend of:
-    1. Each player's recent median game count on the surface
-    2. Their head-to-head history
-    3. Serve stat quality adjustment
-    """
+    """Predict total games using each player's recent median + h2h + serve quality."""
     def player_recent(p, surf, n=15):
         m = df[(df['Winner']==p) | (df['Loser']==p)]
         if surf != 'All':
             ms = m[m['Surface']==surf]
-            if len(ms) >= 5:
-                m = ms
+            if len(ms) >= 5: m = ms
         m = m.tail(n).copy()
         m['Total_Games'] = m.apply(calculate_total_games, axis=1)
         return m.dropna(subset=['Total_Games'])
 
     a_m = player_recent(player_a, surface)
     b_m = player_recent(player_b, surface)
-
     a_med = float(a_m['Total_Games'].median()) if len(a_m) >= 3 else 22.0
     b_med = float(b_m['Total_Games'].median()) if len(b_m) >= 3 else 22.0
+    base  = (a_med + b_med) / 2.0
 
-    base = (a_med + b_med) / 2.0
-
-    # Head-to-head adjustment
     h2h = df[
         ((df['Winner']==player_a) & (df['Loser']==player_b)) |
         ((df['Winner']==player_b) & (df['Loser']==player_a))
@@ -569,129 +1034,81 @@ def predict_games(model_data, player_a, player_b, surface, df):
         h2h['Total_Games'] = h2h.apply(calculate_total_games, axis=1)
         h2h_med = h2h['Total_Games'].dropna().median()
         if not np.isnan(h2h_med):
-            base = base * 0.65 + h2h_med * 0.35   # blend h2h in
+            base = base * 0.65 + h2h_med * 0.35
 
-    # Serve quality adjustment: high bp-saved % → shorter matches
     def avg_bp_saved(p):
         rows = df[df['Winner']==p].tail(10)
-        if len(rows) == 0 or 'w_bpSaved' not in rows.columns:
-            return 0.5
+        if len(rows) == 0 or 'w_bpSaved' not in rows.columns: return 0.5
         bps = pd.to_numeric(rows['w_bpSaved'], errors='coerce')
         bpf = pd.to_numeric(rows['w_bpFaced'], errors='coerce').replace(0, np.nan)
         r = (bps / bpf).dropna()
         return float(r.mean()) if len(r) > 0 else 0.5
 
-    bp_a = avg_bp_saved(player_a)
-    bp_b = avg_bp_saved(player_b)
-    avg_bp = (bp_a + bp_b) / 2.0
-    # high bp-saved → dominant server → shorter match
-    serve_adj = (0.5 - avg_bp) * 4.0   # range roughly -2 to +2
-
-    prediction = base + serve_adj
-    return float(np.clip(prediction, 12, 45))
+    serve_adj = (0.5 - (avg_bp_saved(player_a) + avg_bp_saved(player_b)) / 2) * 4.0
+    return float(np.clip(base + serve_adj, 12, 45))
 
 # ============= MATCH RESULT PREDICTION =============
 
-def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b):
+def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b, model_data):
     """
-    Returns:
-        winner          – predicted winner name
-        win_prob        – probability player_a wins (0-1)
-        predicted_score – e.g. "6-4 6-2" or "6-3 4-6 6-4"
-        confidence      – 'High' / 'Medium' / 'Low'
-        factors         – list of (label, advantage_for) tuples driving the decision
+    Uses the trained GBM classifier with rolling pre-match differential features.
+    Falls back to a rule-based approach if not enough history for either player.
     """
+    df_elo = model_data['df']
+    clf    = model_data['clf']
+    sc_clf = model_data['sc_clf']
+    elo    = model_data['elo_ratings']
 
-    def player_stats(p, surf):
-        mask = (df['Winner'] == p) | (df['Loser'] == p)
-        if surf != 'All':
-            ms = df[mask & (df['Surface'] == surf)]
-            if len(ms) >= 5:
-                mask = mask & (df['Surface'] == surf)
-        rows = df[mask].sort_values('Date', ascending=False).head(20)
-        w_rows = rows[rows['Winner'] == p]
-        l_rows = rows[rows['Loser']  == p]
+    n_matches = len(df_elo)
 
-        def full_srv(sub, pfx):
-            if len(sub) == 0: return np.nan
-            s = pd.to_numeric(sub[f'{pfx}_svpt'], errors='coerce').replace(0, np.nan)
-            fw = pd.to_numeric(sub[f'{pfx}_1stWon'], errors='coerce')
-            sw = pd.to_numeric(sub[f'{pfx}_2ndWon'], errors='coerce')
-            n = min(len(s), len(fw), len(sw))
-            if n == 0: return np.nan
-            return float(((fw.values[:n] + sw.values[:n]) / s.values[:n]).mean())
+    sa = rolling_player_stats(df_elo, player_a, n_matches, window=20, surface=surface)
+    sb = rolling_player_stats(df_elo, player_b, n_matches, window=20, surface=surface)
 
-        spw_w = full_srv(w_rows, 'w')
-        spw_l = full_srv(l_rows, 'l')
-        wts = [(spw_w, len(w_rows), 0.6), (spw_l, len(l_rows), 0.4)]
-        tw = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
-        spw = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
-               if tw > 0 else 0.62)
+    elo_a = elo.get(player_a, 1500)
+    elo_b = elo.get(player_b, 1500)
 
-        def ret_won(opp_rows, opp_pfx):
-            if len(opp_rows) == 0: return np.nan
-            s  = pd.to_numeric(opp_rows[f'{opp_pfx}_svpt'], errors='coerce').replace(0, np.nan)
-            fw = pd.to_numeric(opp_rows[f'{opp_pfx}_1stWon'], errors='coerce')
-            sw = pd.to_numeric(opp_rows[f'{opp_pfx}_2ndWon'], errors='coerce')
-            n  = min(len(s), len(fw), len(sw))
-            if n == 0: return np.nan
-            return float(((s.values[:n] - fw.values[:n] - sw.values[:n]).clip(0) / s.values[:n]).mean())
+    rank_a = float(pd.to_numeric(
+        df_elo[(df_elo['Winner']==player_a)|(df_elo['Loser']==player_a)].apply(
+            lambda r: r['WRank'] if r['Winner']==player_a else r['LRank'], axis=1
+        ), errors='coerce').dropna().median() or 300)
+    rank_b = float(pd.to_numeric(
+        df_elo[(df_elo['Winner']==player_b)|(df_elo['Loser']==player_b)].apply(
+            lambda r: r['WRank'] if r['Winner']==player_b else r['LRank'], axis=1
+        ), errors='coerce').dropna().median() or 300)
 
-        rw_w = ret_won(w_rows, 'l')
-        rw_l = ret_won(l_rows, 'w')
-        wts  = [(rw_w, len(w_rows), 0.6), (rw_l, len(l_rows), 0.4)]
-        tw   = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
-        rpw  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
-                if tw > 0 else 0.38)
+    if sa is None: sa = {'srv_won':0.62,'ret_won':0.38,'bp_saved':0.60,'bp_conv':0.35,
+                         'fs_pct':0.62,'ace_rate':0.05,'df_rate':0.05,'win_rate':0.5,'n':0}
+    if sb is None: sb = {'srv_won':0.62,'ret_won':0.38,'bp_saved':0.60,'bp_conv':0.35,
+                         'fs_pct':0.62,'ace_rate':0.05,'df_rate':0.05,'win_rate':0.5,'n':0}
 
-        def bp_saved_avg(sub, pfx):
-            if len(sub) == 0: return np.nan
-            bps = pd.to_numeric(sub[f'{pfx}_bpSaved'], errors='coerce')
-            bpf = pd.to_numeric(sub[f'{pfx}_bpFaced'], errors='coerce').replace(0, np.nan)
-            r   = (bps / bpf).dropna()
-            return float(r.mean()) if len(r) > 0 else np.nan
+    fv = [
+        sa['srv_won']  - sb['srv_won'],
+        sa['ret_won']  - sb['ret_won'],
+        sa['bp_saved'] - sb['bp_saved'],
+        sa['bp_conv']  - sb['bp_conv'],
+        sa['fs_pct']   - sb['fs_pct'],
+        sa['ace_rate'] - sb['ace_rate'],
+        sb['df_rate']  - sa['df_rate'],
+        sa['win_rate'] - sb['win_rate'],
+        (elo_a - elo_b) / 400,
+        np.log1p(rank_b) - np.log1p(rank_a),
+        sa['srv_won'] + sa['ret_won'],
+        sb['srv_won'] + sb['ret_won'],
+        (sa['srv_won'] - sb['srv_won']) * (sa['ret_won'] - sb['ret_won']),
+        ((elo_a - elo_b) / 400) * (np.log1p(rank_b) - np.log1p(rank_a)),
+    ]
 
-        bps_w = bp_saved_avg(w_rows, 'w')
-        bps_l = bp_saved_avg(l_rows, 'l')
-        wts   = [(bps_w, len(w_rows), 0.6), (bps_l, len(l_rows), 0.4)]
-        tw    = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
-        bp_s  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
-                 if tw > 0 else 0.60)
+    X = np.nan_to_num(np.array([fv]), nan=0, posinf=0, neginf=0)
+    prob_a = float(clf.predict_proba(sc_clf.transform(X))[0][1])
+    prob_b = 1.0 - prob_a
 
-        def bp_conv_avg(opp_rows, opp_pfx):
-            if len(opp_rows) == 0: return np.nan
-            bpf = pd.to_numeric(opp_rows[f'{opp_pfx}_bpFaced'], errors='coerce').replace(0, np.nan)
-            bps = pd.to_numeric(opp_rows[f'{opp_pfx}_bpSaved'], errors='coerce')
-            n   = min(len(bpf), len(bps))
-            if n == 0: return np.nan
-            return float(((bpf.values[:n] - bps.values[:n]).clip(0) / bpf.values[:n]).mean())
+    winner   = player_a if prob_a >= 0.5 else player_b
+    loser    = player_b if winner == player_a else player_a
+    win_prob = prob_a   if winner == player_a else prob_b
 
-        bc_w = bp_conv_avg(w_rows, 'l')
-        bc_l = bp_conv_avg(l_rows, 'w')
-        wts  = [(bc_w, len(w_rows), 0.6), (bc_l, len(l_rows), 0.4)]
-        tw   = sum(v[1]*v[2] for v in wts if not np.isnan(v[0]))
-        bpc  = (sum(v[0]*v[1]*v[2] for v in wts if not np.isnan(v[0])) / tw
-                if tw > 0 else 0.35)
-
-        win_rate = len(w_rows) / max(len(rows), 1)
-        rank_col = df[(df['Winner']==p) | (df['Loser']==p)].apply(
-            lambda r: r['WRank'] if r['Winner'] == p else r['LRank'], axis=1
-        )
-        rank_val = pd.to_numeric(rank_col, errors='coerce').dropna()
-        rank = float(rank_val.median()) if len(rank_val) > 0 else 500
-
-        return {
-            'srv_pts_won': float(spw)  if not np.isnan(spw) else 0.62,
-            'ret_pts_won': float(rpw)  if not np.isnan(rpw) else 0.38,
-            'bp_saved_pct': float(bp_s) if not np.isnan(bp_s) else 0.60,
-            'bp_conv_pct':  float(bpc)  if not np.isnan(bpc) else 0.35,
-            'win_rate':     win_rate,
-            'rank':         rank,
-            'n_matches':    len(rows),
-        }
-
-    sta = player_stats(player_a, surface)
-    stb = player_stats(player_b, surface)
+    if win_prob >= 0.72:   confidence = 'High'
+    elif win_prob >= 0.60: confidence = 'Medium'
+    else:                  confidence = 'Low'
 
     # Head-to-head
     h2h = df[
@@ -700,87 +1117,66 @@ def predict_match_result(player_a, player_b, surface, df, skills_a, skills_b):
     ]
     h2h_a_wins = int((h2h['Winner'] == player_a).sum())
     h2h_total  = len(h2h)
-    h2h_pct    = h2h_a_wins / h2h_total if h2h_total > 0 else 0.5
 
-    # Win probability: weighted logistic combination of factors
-    factors = []
-
-    srv_adv  = (sta['srv_pts_won'] - stb['srv_pts_won']) * 5.0
-    ret_adv  = (sta['ret_pts_won'] - stb['ret_pts_won']) * 5.0
-    bp_adv   = ((sta['bp_saved_pct'] - stb['bp_saved_pct']) +
-                (sta['bp_conv_pct']  - stb['bp_conv_pct'])) * 2.5
-    form_adv = (sta['win_rate'] - stb['win_rate']) * 2.0
-    rank_adv = (np.log1p(stb['rank']) - np.log1p(sta['rank'])) * 0.4
-    h2h_adv  = (h2h_pct - 0.5) * 2.0
-    sk_a     = skills_a.get('_raw', {}).get('dominance_ratio', 1.0) or 1.0
-    sk_b     = skills_b.get('_raw', {}).get('dominance_ratio', 1.0) or 1.0
-    skill_adv = (sk_a - sk_b) * 0.8
-
-    factors.append(('Serve dominance',     srv_adv,   player_a if srv_adv > 0 else player_b))
-    factors.append(('Return game',         ret_adv,   player_a if ret_adv > 0 else player_b))
-    factors.append(('Break point ability', bp_adv,    player_a if bp_adv > 0 else player_b))
-    factors.append(('Recent form',         form_adv,  player_a if form_adv > 0 else player_b))
-    factors.append(('World ranking',       rank_adv,  player_a if rank_adv > 0 else player_b))
+    # Factor contributions (signed, positive = favours A)
+    factor_defs = [
+        ('Serve dominance',       fv[0] * 5),
+        ('Return game',           fv[1] * 5),
+        ('Break pts saved',       fv[2] * 3),
+        ('Break conversion',      fv[3] * 3),
+        ('1st Serve %',           fv[4] * 2),
+        ('Ace rate',              fv[5] * 2),
+        ('DF control',            fv[6] * 2),
+        ('Recent form',           fv[7] * 3),
+        ('Elo rating',            fv[8] * 4),
+        ('World ranking',         fv[9] * 3),
+    ]
     if h2h_total >= 2:
-        factors.append(('Head-to-head',    h2h_adv,   player_a if h2h_adv > 0 else player_b))
-    factors.append(('Overall skill',       skill_adv, player_a if skill_adv > 0 else player_b))
+        h2h_pct   = h2h_a_wins / h2h_total
+        h2h_score = (h2h_pct - 0.5) * 4
+        factor_defs.append(('Head-to-head', h2h_score))
 
-    total_score = sum(f[1] for f in factors)
-    win_prob_a  = float(1.0 / (1.0 + np.exp(-total_score)))
+    factors = [(label, score, player_a if score > 0 else player_b)
+               for label, score in factor_defs if abs(score) > 0.01]
+    factors  = sorted(factors, key=lambda x: abs(x[1]), reverse=True)
 
-    winner   = player_a if win_prob_a >= 0.5 else player_b
-    loser    = player_b if winner == player_a else player_a
-    win_prob = win_prob_a if winner == player_a else (1 - win_prob_a)
-
-    if win_prob >= 0.75:   confidence = 'High'
-    elif win_prob >= 0.62: confidence = 'Medium'
-    else:                  confidence = 'Low'
-
-    # Predicted scoreline
-    margin = abs(total_score)
-
-    def set_score_rng(rng_obj, dominant, close):
-        if close:
-            opts, wts = [(7,6),(7,5),(6,4)], [0.35,0.35,0.30]
-        elif dominant > 1.5:
-            opts, wts = [(6,1),(6,2),(6,3)], [0.25,0.40,0.35]
-        else:
-            opts, wts = [(6,3),(6,4),(7,5)], [0.35,0.40,0.25]
-        idx = rng_obj.choice(len(opts), p=wts)
-        return opts[idx]
-
-    seed = int(abs(hash(player_a + player_b + surface)) % (2**31))
-    rng  = np.random.RandomState(seed)
-
-    p3sets    = float(np.clip(1.0 - (win_prob - 0.5) * 3.5, 0.05, 0.70))
+    # Scoreline generation
+    margin    = abs(prob_a - 0.5) * 2   # 0..1
+    p3sets    = float(np.clip(1.0 - margin * 2.5, 0.05, 0.70))
+    seed      = int(abs(hash(player_a + player_b + surface)) % (2**31))
+    rng       = np.random.RandomState(seed)
     three_sets = bool(rng.random() < p3sets)
-    close_set  = margin < 1.0
 
-    s1 = set_score_rng(rng, margin, close_set)
-    s2 = set_score_rng(rng, margin, close_set and three_sets)
+    def set_sc(dominant, close):
+        if close:            opts, wts = [(7,6),(7,5),(6,4)], [0.35,0.35,0.30]
+        elif dominant > 0.5: opts, wts = [(6,1),(6,2),(6,3)], [0.20,0.45,0.35]
+        else:                opts, wts = [(6,3),(6,4),(7,5)], [0.35,0.40,0.25]
+        return opts[rng.choice(len(opts), p=wts)]
 
+    close = margin < 0.15
+    s1 = set_sc(margin, close)
+    s2 = set_sc(margin, close and three_sets)
     if three_sets:
-        s3 = set_score_rng(rng, margin * 0.5, True)
+        s3 = set_sc(margin * 0.4, True)
         score_parts = [f"{s1[0]}-{s1[1]}", f"{s3[1]}-{s3[0]}", f"{s2[0]}-{s2[1]}"]
     else:
         score_parts = [f"{s1[0]}-{s1[1]}", f"{s2[0]}-{s2[1]}"]
-
-    predicted_score = ' '.join(score_parts)
-    factors_sorted  = sorted(factors, key=lambda x: abs(x[1]), reverse=True)
 
     return {
         'winner':          winner,
         'loser':           loser,
         'win_prob':        win_prob,
-        'win_prob_a':      win_prob_a,
-        'predicted_score': predicted_score,
+        'win_prob_a':      prob_a,
+        'predicted_score': ' '.join(score_parts),
         'three_sets':      three_sets,
         'confidence':      confidence,
-        'factors':         factors_sorted,
+        'factors':         factors,
         'h2h_total':       h2h_total,
         'h2h_a_wins':      h2h_a_wins,
-        'sta':             sta,
-        'stb':             stb,
+        'elo_a':           elo_a,
+        'elo_b':           elo_b,
+        'sta':             sa,
+        'stb':             sb,
     }
 
 
@@ -937,7 +1333,7 @@ body{{font-family:'IBM Plex Sans',sans-serif;background:#0a0a0a;color:#e0e0e0;pa
         f'<div class="num">{prediction:.1f}</div></div>'
         f'<div class="stitle">PLAYER ANALYSIS</div>'
         f'<div class="grid">{pcard(player_a,an_a,rs_a)}{pcard(player_b,an_b,rs_b)}</div>'
-        f'<div class="info">MODEL - R2 = {model_data["r2"]:.3f} - MAE = +/-{model_data["mae"]:.2f} GAMES - {len(model_data["df"])} MATCHES</div>'
+        f'<div class="info">WINNER ACCURACY = {model_data["clf_acc"]:.1%} - CV ACCURACY = {model_data["cv_acc"]:.1%} - GAMES MAE = +/-{model_data["mae"]:.2f} - {len(model_data["df"])} MATCHES</div>'
         f'</div>'
         f'<div class="ftr">GENERATED: {ts} - ATP CHALLENGER PREDICTOR - +/-{model_data["mae"]:.2f} GAMES</div>'
         f'</div></body></html>'
@@ -986,12 +1382,13 @@ def main():
         return
 
     st.sidebar.success("✅ Model ready!")
-    st.sidebar.metric("R²",       f"{model_data['r2']:.3f}")
-    st.sidebar.metric("MAE ±",    f"{model_data['mae']:.2f} games")
-    st.sidebar.metric("Training", f"{len(model_data['df'])} matches")
+    st.sidebar.metric("Winner Accuracy",  f"{model_data['clf_acc']:.1%}")
+    st.sidebar.metric("CV Accuracy",      f"{model_data['cv_acc']:.1%} ±{model_data['cv_std']:.2f}")
+    st.sidebar.metric("Games MAE ±",      f"{model_data['mae']:.2f}")
+    st.sidebar.metric("Training matches", f"{len(model_data['df'])}")
 
     st.header("🎾 ATP Challenger Advanced Match Predictor")
-    st.caption(f"Source: **{source_name}** · Real Serve/Return Stats · Last 15 Matches · Fatigue Analysis")
+    st.caption(f"Source: **{source_name}** · ML Winner Prediction · Rolling-30 Elo · Real Serve Stats")
     st.markdown("---")
 
     all_players = sorted(set(df['Winner'].dropna()) | set(df['Loser'].dropna()))
@@ -1004,155 +1401,176 @@ def main():
 
     st.markdown("---")
 
-    if st.button("🔮 PREDICT MATCH", use_container_width=True):
-        with st.spinner("Analysing..."):
-            an_a = {'last15': analyze_last_15_surface_games(df, player_a, surface),
-                    'fatigue': calculate_fatigue(df, player_a),
-                    'skills':  analyze_player_skills(df, player_a, surface)}
-            an_b = {'last15': analyze_last_15_surface_games(df, player_b, surface),
-                    'fatigue': calculate_fatigue(df, player_b),
-                    'skills':  analyze_player_skills(df, player_b, surface)}
-            rs_a = get_real_stats(df, player_a)
-            rs_b = get_real_stats(df, player_b)
-            pred   = predict_games(model_data, player_a, player_b, surface, df)
-            result = predict_match_result(
-                player_a, player_b, surface, df,
-                an_a['skills'], an_b['skills']
+    # ── TABS ──────────────────────────────────────────────────────────────────
+    tab_predict, tab_elo = st.tabs(["🔮 Match Prediction", "📡 Rolling-30 Elo"])
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — MATCH PREDICTION
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab_predict:
+        if st.button("🔮 PREDICT MATCH", use_container_width=True):
+            with st.spinner("Analysing..."):
+                an_a = {'last15': analyze_last_15_surface_games(df, player_a, surface),
+                        'fatigue': calculate_fatigue(df, player_a),
+                        'skills':  analyze_player_skills(df, player_a, surface)}
+                an_b = {'last15': analyze_last_15_surface_games(df, player_b, surface),
+                        'fatigue': calculate_fatigue(df, player_b),
+                        'skills':  analyze_player_skills(df, player_b, surface)}
+                rs_a = get_real_stats(df, player_a)
+                rs_b = get_real_stats(df, player_b)
+                pred   = predict_games(model_data, player_a, player_b, surface, df)
+                result = predict_match_result(
+                    player_a, player_b, surface, df,
+                    an_a['skills'], an_b['skills'], model_data
+                )
+
+            # ── MATCH RESULT ──────────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("🏆 MATCH PREDICTION")
+
+            conf_emoji = {'High': '🟢', 'Medium': '🟡', 'Low': '🔴'}
+            prob_a = result['win_prob_a']
+            prob_b = 1.0 - prob_a
+
+            win_col, lose_col = st.columns(2)
+            with win_col:
+                elo_w = int(result.get('elo_a', 1500) if result['winner'] == player_a else result.get('elo_b', 1500))
+                st.success(f"### 🏆 {result['winner']}")
+                ca, cb = st.columns(2)
+                ca.metric("Win Probability", f"{result['win_prob']:.1%}")
+                cb.metric("Elo Rating", f"{elo_w:.0f}")
+            with lose_col:
+                elo_l = int(result.get('elo_b', 1500) if result['loser'] == player_b else result.get('elo_a', 1500))
+                st.error(f"### {result['loser']}")
+                ca, cb = st.columns(2)
+                ca.metric("Win Probability", f"{1-result['win_prob']:.1%}")
+                cb.metric("Elo Rating", f"{elo_l:.0f}")
+
+            st.markdown(
+                f"<div style='text-align:center;padding:22px;background:#0d0d0d;border:1px solid #333;"
+                f"border-top:3px solid #c8ff00;margin:12px 0;border-radius:4px;'>"
+                f"<div style='font-size:0.75em;color:#888;letter-spacing:3px;font-family:monospace;"
+                f"text-transform:uppercase'>Predicted Score</div>"
+                f"<div style='font-size:2.6em;font-weight:900;color:#fff;letter-spacing:6px;margin:8px 0'>"
+                f"{result['winner']}  {result['predicted_score']}</div>"
+                f"<div style='font-size:0.82em;color:#aaa;font-family:monospace'>"
+                f"{'3 sets' if result['three_sets'] else '2 sets'} &nbsp;·&nbsp; "
+                f"Confidence: {conf_emoji[result['confidence']]} <strong>{result['confidence']}</strong>"
+                f"&nbsp;·&nbsp; Model accuracy: {model_data['cv_acc']:.1%}</div>"
+                f"</div>",
+                unsafe_allow_html=True
             )
 
-        # ── MATCH RESULT ──────────────────────────────────────────────────────
-        st.markdown("---")
-        st.subheader("🏆 MATCH PREDICTION")
+            min_pct = 8
+            pa_show = max(min_pct, prob_a * 100)
+            st.markdown(
+                f"<div style='margin:12px 0'>"
+                f"<div style='display:flex;height:34px;border-radius:4px;overflow:hidden;border:1px solid #333'>"
+                f"<div style='width:{pa_show:.1f}%;background:#c8ff00;display:flex;align-items:center;"
+                f"justify-content:center;font-size:0.8em;font-weight:700;color:#000;font-family:monospace;"
+                f"white-space:nowrap;padding:0 6px'>{player_a} {prob_a:.0%}</div>"
+                f"<div style='flex:1;background:#ff5555;display:flex;align-items:center;"
+                f"justify-content:center;font-size:0.8em;font-weight:700;color:#fff;font-family:monospace;"
+                f"white-space:nowrap;padding:0 6px'>{player_b} {prob_b:.0%}</div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
 
-        conf_colors = {'High': 'green', 'Medium': 'orange', 'Low': 'red'}
-        conf_emoji  = {'High': '🟢', 'Medium': '🟡', 'Low': '🔴'}
+            h2h_str = (
+                f"H2H: **{result['h2h_a_wins']}-{result['h2h_total']-result['h2h_a_wins']}** "
+                f"in favour of {player_a} ({result['h2h_total']} meetings)"
+                if result['h2h_total'] > 0 else "No previous H2H in dataset"
+            )
+            elo_diff = int(result.get('elo_a', 1500) - result.get('elo_b', 1500))
+            elo_lead = player_a if elo_diff >= 0 else player_b
+            st.caption(f"{h2h_str}  ·  Elo gap: **{abs(elo_diff)} pts** in favour of {elo_lead}")
 
-        win_col, lose_col = st.columns(2)
-        with win_col:
-            st.success(f"### 🏆 {result['winner']}")
-            st.metric("Win Probability", f"{result['win_prob']:.1%}")
-        with lose_col:
-            loser = result['loser']
-            loss_prob = 1 - result['win_prob']
-            st.error(f"### {loser}")
-            st.metric("Win Probability", f"{loss_prob:.1%}")
+            with st.expander("📊 Why this prediction? (factor breakdown)", expanded=True):
+                st.caption("Bar length = factor strength. Direction = favoured player.")
+                for label, score, adv in result['factors']:
+                    strength = float(np.clip(abs(score) / 5.0, 0.02, 0.99))
+                    favour   = f"← **{adv}**" if score != 0 else "Even"
+                    icon = "🟢" if adv == player_a else "🔴"
+                    st.progress(strength, text=f"{icon} {label:<26} {favour}")
 
-        # Big score display
-        st.markdown(
-            f"<div style='text-align:center;padding:20px;background:#0d0d0d;border:1px solid #333;"
-            f"border-top:3px solid #c8ff00;margin:10px 0;border-radius:4px;'>"
-            f"<div style='font-size:0.8em;color:#888;letter-spacing:3px;font-family:monospace'>PREDICTED SCORE</div>"
-            f"<div style='font-size:2.8em;font-weight:900;color:#fff;letter-spacing:6px;margin:8px 0'>"
-            f"{result['winner']}  {result['predicted_score']}</div>"
-            f"<div style='font-size:0.85em;color:#aaa;font-family:monospace'>"
-            f"{'3 sets' if result['three_sets'] else '2 sets'} &nbsp;·&nbsp; "
-            f"Confidence: {conf_emoji[result['confidence']]} {result['confidence']}</div>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
+            st.markdown("---")
+            st.subheader("📈 GAME TOTAL FORECAST")
+            _, c, _ = st.columns([1,2,1])
+            with c:
+                st.metric("Expected Total Games", f"{pred:.1f}")
+                if   pred < 23: st.info("⚡ Quick Match — 2 sets likely")
+                elif pred < 27: st.info("⚔️ Competitive Match")
+                else:           st.warning("🔥 Long Match — 3 sets likely")
 
-        # Win probability bar
-        prob_a = result['win_prob_a']
-        prob_b = 1 - prob_a
-        st.markdown(
-            f"<div style='margin:12px 0'>"
-            f"<div style='display:flex;height:32px;border-radius:4px;overflow:hidden;border:1px solid #333'>"
-            f"<div style='width:{prob_a*100:.1f}%;background:#c8ff00;display:flex;align-items:center;"
-            f"justify-content:center;font-size:0.8em;font-weight:700;color:#000;font-family:monospace'>"
-            f"{player_a} {prob_a:.0%}</div>"
-            f"<div style='flex:1;background:#ff5555;display:flex;align-items:center;"
-            f"justify-content:center;font-size:0.8em;font-weight:700;color:#fff;font-family:monospace'>"
-            f"{player_b} {prob_b:.0%}</div>"
-            f"</div></div>",
-            unsafe_allow_html=True
-        )
+            st.markdown("---")
+            st.subheader("📊 PLAYER ANALYSIS")
+            col1, col2 = st.columns(2)
 
-        # H2H note
-        if result['h2h_total'] > 0:
-            st.caption(f"Head-to-head: {result['h2h_a_wins']}-{result['h2h_total']-result['h2h_a_wins']} in favour of {player_a} ({result['h2h_total']} meetings)")
-        else:
-            st.caption("No previous head-to-head matches found in dataset")
+            def show(col, name, an, rs):
+                with col:
+                    st.subheader(f"🎾 {name}")
+                    l, f, s = an['last15'], an['fatigue'], an['skills']
 
-        # Factor breakdown
-        with st.expander("📊 Why this prediction?", expanded=True):
-            for label, score, adv in result['factors']:
-                strength = min(1.0, abs(score) / 2.5)
-                arrow = f"← **{adv}**" if score != 0 else "Even"
-                st.progress(float(np.clip(strength, 0.01, 0.99)),
-                    text=f"{label:<28} {arrow}")
+                    with st.expander(f"📈 Last 15 · {surface}", expanded=True):
+                        st.write(f"**{l['wins']}-{l['losses']}**  ·  Win rate: **{l['win_rate']:.1%}**  ·  Form: **{l['form']}**")
+                        st.write(f"Avg games per match: **{l['avg_games']:.1f}**")
 
-        st.markdown("---")
-        st.subheader("📈 GAME TOTAL FORECAST")
-        _, c, _ = st.columns([1,2,1])
-        with c:
-            st.metric("Expected Total Games", f"{pred:.1f}")
-            if   pred < 23: st.info("⚡ Quick Match — 2 sets likely")
-            elif pred < 27: st.info("⚔️ Competitive Match")
-            else:           st.warning("🔥 Long Match — 3 sets likely")
+                    with st.expander("🎯 Serve Stats (real data)", expanded=True):
+                        a, b = st.columns(2)
+                        a.metric("1st Serve %",      f"{rs['first_serve_pct']:.1f}%")
+                        b.metric("1st Serve Won %",  f"{rs['first_serve_won_pct']:.1f}%")
+                        a.metric("2nd Serve Won %",  f"{rs['second_serve_won_pct']:.1f}%")
+                        b.metric("BP Saved %",       f"{rs['bp_saved_pct']:.1f}%")
+                        a.metric("Avg Aces",         f"{rs['avg_aces']:.1f}")
+                        b.metric("Avg DFs",          f"{rs['avg_df']:.1f}")
 
-        st.markdown("---")
-        st.subheader("📊 PLAYER ANALYSIS")
-        col1, col2 = st.columns(2)
+                    with st.expander("😓 Fatigue", expanded=True):
+                        st.write(f"Days rest: **{f['days_rest']}**  ·  Matches last 7d: **{f['matches_last_7']}**")
+                        st.write(f"Status: **{f['fatigue_level']}**")
 
-        def show(col, name, an, rs):
-            with col:
-                st.subheader(f"🎾 {name}")
-                l, f, s = an['last15'], an['fatigue'], an['skills']
+                    with st.expander("⚡ Real Skill Ratings", expanded=True):
+                        raw = s.get('_raw', {})
+                        st.caption("📡 Serve Game")
+                        st.progress(safe_skill(s['first_serve_pct']),
+                            text=f"1st Serve In          {raw.get('first_serve_pct', 0):.1%}")
+                        st.progress(safe_skill(s['first_serve_won_pct']),
+                            text=f"1st Serve Won         {raw.get('first_serve_won_pct', 0):.1%}")
+                        st.progress(safe_skill(s['second_serve_won_pct']),
+                            text=f"2nd Serve Won         {raw.get('second_serve_won_pct', 0):.1%}")
+                        st.progress(safe_skill(s['hold_pct']),
+                            text=f"Service Hold          {raw.get('hold_pct', 0):.1%}")
+                        st.progress(safe_skill(s['bp_saved_pct']),
+                            text=f"Break Points Saved    {raw.get('bp_saved_pct', 0):.1%}")
+                        st.progress(safe_skill(s['ace_per_svgm']),
+                            text=f"Aces / Srv Game       {raw.get('ace_per_svgm', 0):.2f}")
+                        st.progress(safe_skill(s['df_per_svgm']),
+                            text=f"DF Control (fewer=better)  {raw.get('df_per_svgm', 0):.2f}/gm")
+                        st.caption("🔄 Return Game")
+                        st.progress(safe_skill(s['return_pts_won_pct']),
+                            text=f"Return Points Won     {raw.get('return_pts_won_pct', 0):.1%}")
+                        st.progress(safe_skill(s['break_conversion_pct']),
+                            text=f"Break Conversion      {raw.get('break_conversion_pct', 0):.1%}")
+                        st.caption("📊 Overall")
+                        st.progress(safe_skill(s['dominance_ratio']),
+                            text=f"Dominance Ratio       {raw.get('dominance_ratio', 0):.2f}")
 
-                with st.expander(f"📈 Last 15 · {surface}", expanded=True):
-                    st.write(f"**{l['wins']}-{l['losses']}**  ·  Win rate: **{l['win_rate']:.1%}**  ·  Form: **{l['form']}**")
-                    st.write(f"Avg games per match: **{l['avg_games']:.1f}**")
+            show(col1, player_a, an_a, rs_a)
+            show(col2, player_b, an_b, rs_b)
 
-                with st.expander("🎯 Serve Stats (real data)", expanded=True):
-                    a, b = st.columns(2)
-                    a.metric("1st Serve %",      f"{rs['first_serve_pct']:.1f}%")
-                    b.metric("1st Serve Won %",  f"{rs['first_serve_won_pct']:.1f}%")
-                    a.metric("2nd Serve Won %",  f"{rs['second_serve_won_pct']:.1f}%")
-                    b.metric("BP Saved %",       f"{rs['bp_saved_pct']:.1f}%")
-                    a.metric("Avg Aces",         f"{rs['avg_aces']:.1f}")
-                    b.metric("Avg DFs",          f"{rs['avg_df']:.1f}")
+            st.markdown("---")
+            html = generate_html_report(player_a, player_b, surface,
+                                         an_a, an_b, pred, model_data, rs_a, rs_b, result)
+            st.download_button(
+                "📥 Download HTML Report", data=html,
+                file_name=f"Challenger_{player_a}_vs_{player_b}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                mime="text/html"
+            )
 
-                with st.expander("😓 Fatigue", expanded=True):
-                    st.write(f"Days rest: **{f['days_rest']}**  ·  Matches last 7d: **{f['matches_last_7']}**")
-                    st.write(f"Status: **{f['fatigue_level']}**")
-
-                with st.expander("⚡ Real Skill Ratings", expanded=True):
-                    raw = s.get('_raw', {})
-                    st.caption("📡 Serve Game")
-                    st.progress(safe_skill(s['first_serve_pct']),
-                        text=f"1st Serve In          {raw.get('first_serve_pct', 0):.1%}")
-                    st.progress(safe_skill(s['first_serve_won_pct']),
-                        text=f"1st Serve Won         {raw.get('first_serve_won_pct', 0):.1%}")
-                    st.progress(safe_skill(s['second_serve_won_pct']),
-                        text=f"2nd Serve Won         {raw.get('second_serve_won_pct', 0):.1%}")
-                    st.progress(safe_skill(s['hold_pct']),
-                        text=f"Service Hold          {raw.get('hold_pct', 0):.1%}")
-                    st.progress(safe_skill(s['bp_saved_pct']),
-                        text=f"Break Points Saved    {raw.get('bp_saved_pct', 0):.1%}")
-                    st.progress(safe_skill(s['ace_per_svgm']),
-                        text=f"Aces / Srv Game       {raw.get('ace_per_svgm', 0):.2f}")
-                    st.progress(safe_skill(s['df_per_svgm']),
-                        text=f"DF Control (fewer=better)  {raw.get('df_per_svgm', 0):.2f}/gm")
-                    st.caption("🔄 Return Game")
-                    st.progress(safe_skill(s['return_pts_won_pct']),
-                        text=f"Return Points Won     {raw.get('return_pts_won_pct', 0):.1%}")
-                    st.progress(safe_skill(s['break_conversion_pct']),
-                        text=f"Break Conversion      {raw.get('break_conversion_pct', 0):.1%}")
-                    st.caption("📊 Overall")
-                    st.progress(safe_skill(s['dominance_ratio']),
-                        text=f"Dominance Ratio       {raw.get('dominance_ratio', 0):.2f}")
-
-        show(col1, player_a, an_a, rs_a)
-        show(col2, player_b, an_b, rs_b)
-
-        st.markdown("---")
-        html = generate_html_report(player_a, player_b, surface,
-                                     an_a, an_b, pred, model_data, rs_a, rs_b, result)
-        st.download_button(
-            "📥 Download HTML Report", data=html,
-            file_name=f"Challenger_{player_a}_vs_{player_b}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-            mime="text/html"
-        )
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — ROLLING-30 ELO
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab_elo:
+        render_elo_tab(df, model_data, player_a, player_b, surface, all_players)
 
 if __name__ == "__main__":
     main()
