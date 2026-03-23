@@ -49,20 +49,34 @@ def train_three_sets_model(df_hist):
 
 def fetch_matches_from_api():
     """
-    
+    Vai buscar os jogos à tua API e devolve um DataFrame com:
+    Date, Winner, Loser, Surface
     """
-
-    # Exemplo de estrutura (tu substituis pela tua API real):
     url = "https://api-tennis.com/admin"
-    headers = {"Authorization": f"Bearer {7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"}
+
+    # A API key TEM de ser string
+    api_key = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}"
+    }
+
     r = requests.get(url, headers=headers, timeout=10)
+    r.raise_for_status()
     data = r.json()
+
     df = pd.DataFrame(data)
+
+    # Ajusta estes nomes às chaves reais do teu JSON
     df["Date"] = pd.to_datetime(df["date"]).dt.normalize()
-    df = df.rename(columns={"player1": "Winner", "player2": "Loser"})
+    df = df.rename(columns={
+        "player1": "Winner",
+        "player2": "Loser",
+        "surface": "Surface",   # se existir
+    })
+
     return df
 
-    return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
 
 
 # ============================================================
