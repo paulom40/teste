@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -111,18 +110,6 @@ def extract_surface_from_tournament(tournament_name):
         return "Hard"
 
 
-def encode_surface(surface):
-    """
-    Codifica a superfície em variáveis dummy
-    """
-    if surface == "Clay":
-        return [1, 0, 0]
-    elif surface == "Grass":
-        return [0, 1, 0]
-    else:  # Hard
-        return [0, 0, 1]
-
-
 # ============================================================
 # 2. CARREGAR HISTÓRICO (GitHub ou Excel)
 # ============================================================
@@ -157,7 +144,7 @@ def load_custom_excel(uploaded_file):
 
 def fetch_matches_from_api():
     """
-    Busca os jogos da API Tennis com tratamento de erros melhorado.
+    Busca os jogos da API Tennis
     """
     
     API_URL = "https://api.api-tennis.com/tennis/"
@@ -192,7 +179,7 @@ def fetch_matches_from_api():
                 return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
         if data.get("success") != 1:
-            st.error(f"API retornou erro: {data.get('error', 'Erro desconhecido')}")
+            st.error(f"API retornou erro")
             return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
         matches = data.get("result", [])
@@ -313,7 +300,7 @@ def train_over_games_model(df_hist, threshold=22):
     
     if dfm["Total_Games"].isna().all():
         st.error("Não foi possível calcular total de games dos jogos históricos.")
-        return None
+        return None, 0, 0
     
     dfm["over_threshold"] = (dfm["Total_Games"] > threshold).astype(int)
     
@@ -323,14 +310,14 @@ def train_over_games_model(df_hist, threshold=22):
     missing_features = [f for f in features if f not in dfm.columns]
     if missing_features:
         st.error(f"Features em falta: {missing_features}")
-        return None
+        return None, 0, 0
     
     # Remover linhas com valores nulos
     dfm = dfm.dropna(subset=features + ["over_threshold", "Total_Games"])
     
     if len(dfm) < 30:
         st.warning(f"Apenas {len(dfm)} jogos com dados completos. Mínimo: 30")
-        return None
+        return None, 0, 0
     
     X = dfm[features]
     y = dfm["over_threshold"]
@@ -356,7 +343,6 @@ def train_over_games_model(df_hist, threshold=22):
     
     st.sidebar.success(f"✅ Modelo Over {threshold} Games treinado com {len(dfm)} jogos")
     st.sidebar.info(f"📊 Média de games: {avg_games:.1f} | Over {threshold}: {over_percentage:.1f}%")
-    st.sidebar.info(f"📊 Acurácia - Treino: {train_score:.1%} | Teste: {test_score:.1%}")
     
     return model, avg_games, over_percentage
 
@@ -404,6 +390,93 @@ def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshol
     )
     
     return df_up.sort_values("prob_competitive_match", ascending=False)
+
+
+def export_to_excel(predictions_df, threshold_games):
+    """
+    Exporta as previsões para um ficheiro Excel
+    """
+    # Preparar dados para exportação
+    export_df = predictions_df.copy()
+    
+    # Renomear colunas para português
+    export_df = export_df.rename(columns={
+        "Date": "Data",
+        "Winner": "Vencedor",
+        "Loser": "Derrotado",
+        "Surface": "Superfície",
+        "prob_3_sets": "Probabilidade_3_Sets",
+        f"prob_over_{threshold_games}_games": f"Probabilidade_Over_{threshold_games}_Games",
+        "prob_competitive_match": "Probabilidade_Jogo_Competitivo"
+    })
+    
+    # Formatar datas
+    export_df["Data"] = pd.to_datetime(export_df["Data"]).dt.strftime("%Y-%m-%d")
+    
+    # Reordenar colunas
+    column_order = [
+        "Data", "Vencedor", "Derrotado", "Superfície", 
+        "Probabilidade_3_Sets", f"Probabilidade_Over_{threshold_games}_Games",
+        "Probabilidade_Jogo_Competitivo"
+    ]
+    
+    export_df = export_df[column_order]
+    
+    # Formatar percentagens
+    for col in ["Probabilidade_3_Sets", f"Probabilidade_Over_{threshold_games}_Games", "Probabilidade_Jogo_Competitivo"]:
+        export_df[col] = export_df[col].apply(lambda x: f"{x:.1%}")
+    
+    # Criar ficheiro Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Sheet principal com previsões
+        export_df.to_excel(writer, sheet_name='Previsões', index=False)
+        
+        # Sheet com resumo estatístico
+        summary_df = pd.DataFrame({
+            "Métrica": [
+                "Data de Geração",
+                "Total de Jogos Analisados",
+                f"Média Probabilidade 3+ Sets",
+                f"Média Probabilidade Over {threshold_games} Games",
+                "Média Probabilidade Jogo Competitivo",
+                f"Jogos com >60% Competitivo",
+                f"Jogos com >70% Competitivo",
+                f"Jogos com >80% Competitivo"
+            ],
+            "Valor": [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                len(predictions_df),
+                f"{predictions_df['prob_3_sets'].mean():.1%}",
+                f"{predictions_df[f'prob_over_{threshold_games}_games'].mean():.1%}",
+                f"{predictions_df['prob_competitive_match'].mean():.1%}",
+                len(predictions_df[predictions_df['prob_competitive_match'] > 0.6]),
+                len(predictions_df[predictions_df['prob_competitive_match'] > 0.7]),
+                len(predictions_df[predictions_df['prob_competitive_match'] > 0.8])
+            ]
+        })
+        summary_df.to_excel(writer, sheet_name='Resumo', index=False)
+        
+        # Sheet com TOP 10 jogos
+        top10_df = export_df.head(10).copy()
+        top10_df.to_excel(writer, sheet_name='TOP_10_Jogos', index=False)
+        
+        # Ajustar largura das colunas
+        for sheet in writer.sheets.values():
+            for column in sheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                sheet.column_dimensions[column_letter].width = adjusted_width
+    
+    output.seek(0)
+    return output
 
 
 # ============================================================
@@ -526,25 +599,102 @@ st.dataframe(
         "3+ Sets": "{:.1%}",
         f"Over {threshold_games} Games": "{:.1%}",
         "Competitivo": "{:.1%}"
-    })
+    }),
+    use_container_width=True
 )
 
+# ============================================================
+# BOTÃO DE EXPORTAÇÃO PARA EXCEL (CORRIGIDO)
+# ============================================================
+
+st.markdown("---")
+st.subheader("📊 Exportar Resultados")
+
+# Criar 3 colunas para centralizar o botão
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    # Botão de exportação bem visível
+    export_clicked = st.button(
+        "📥 Exportar para Excel",
+        type="primary",
+        use_container_width=True,
+        help="Clique para exportar todos os resultados para um ficheiro Excel"
+    )
+
+# Se o botão for clicado, gerar e disponibilizar o download
+if export_clicked:
+    with st.spinner("🔄 A gerar ficheiro Excel com as previsões..."):
+        try:
+            # Gerar ficheiro Excel
+            excel_file = export_to_excel(preds, threshold_games)
+            
+            # Nome do ficheiro com timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"previsoes_tenis_{timestamp}.xlsx"
+            
+            # Mostrar mensagem de sucesso
+            st.success(f"✅ Ficheiro Excel gerado com sucesso! ({len(preds)} jogos exportados)")
+            
+            # Botão de download
+            st.download_button(
+                label="💾 Descarregar Ficheiro Excel",
+                data=excel_file,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_excel"
+            )
+            
+            # Mostrar informação sobre o conteúdo do ficheiro
+            with st.expander("ℹ️ Informações sobre o ficheiro exportado"):
+                st.markdown(f"""
+                **Ficheiro:** `{filename}`  
+                **Data de geração:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}  
+                **Total de jogos exportados:** {len(preds)}  
+                
+                **O ficheiro contém 3 sheets:**
+                
+                1. **Previsões** - Todos os {len(preds)} jogos com probabilidades detalhadas
+                2. **Resumo** - Estatísticas gerais e métricas agregadas
+                3. **TOP 10 Jogos** - Os 10 jogos com maior probabilidade de serem competitivos
+                
+                **Colunas incluídas:**
+                - Data do jogo
+                - Nome dos jogadores
+                - Superfície
+                - Probabilidade de 3+ Sets
+                - Probabilidade de Over {threshold_games} Games
+                - Probabilidade de jogo competitivo (combinação)
+                """)
+                
+        except Exception as e:
+            st.error(f"❌ Erro ao gerar ficheiro Excel: {e}")
+
+# ============================================================
+# TOP jogos e estatísticas (restante do código)
+# ============================================================
+
 # TOP jogos
+st.markdown("---")
 st.subheader(f"🔥 TOP 5 jogos mais prováveis de serem competitivos")
 top_n = min(5, len(preds))
 
-for _, row in preds.head(top_n).iterrows():
-    st.markdown(f"""
-    ---
-    **{row['Winner']} vs {row['Loser']}**  
-    📅 {row['Date'].date()} | 🎾 {row['Surface']}
-    
-    | Probabilidade | Valor |
-    |--------------|-------|
-    | 🎯 3+ Sets | **{row['prob_3_sets']:.1%}** |
-    | 📊 Over {threshold_games} Games | **{row[f'prob_over_{threshold_games}_games']:.1%}** |
-    | ⭐ Competitivo | **{row['prob_competitive_match']:.1%}** |
-    """)
+for idx, (_, row) in enumerate(preds.head(top_n).iterrows(), 1):
+    with st.container():
+        st.markdown(f"""
+        **{idx}. {row['Winner']} vs {row['Loser']}**  
+        📅 {row['Date'].date()} | 🎾 {row['Surface']}
+        
+        | Probabilidade | Valor |
+        |--------------|-------|
+        | 🎯 3+ Sets | **{row['prob_3_sets']:.1%}** |
+        | 📊 Over {threshold_games} Games | **{row[f'prob_over_{threshold_games}_games']:.1%}** |
+        | ⭐ Competitivo | **{row['prob_competitive_match']:.1%}** |
+        """)
+        
+        # Adicionar barra de progresso visual
+        st.progress(row['prob_competitive_match'], text="Probabilidade de jogo competitivo")
 
 # Estatísticas
 st.markdown("---")
@@ -578,11 +728,17 @@ st.markdown("---")
 st.subheader("💡 Recomendações")
 
 high_value_matches = preds[preds["prob_competitive_match"] > 0.6]
+very_high_value_matches = preds[preds["prob_competitive_match"] > 0.7]
+
 if len(high_value_matches) > 0:
     st.success(f"🎯 Encontrados {len(high_value_matches)} jogos com alta probabilidade de serem competitivos!")
+    
+    if len(very_high_value_matches) > 0:
+        st.info(f"🔥 Destes, {len(very_high_value_matches)} jogos têm probabilidade >70% - são os mais promissores!")
+    
     st.markdown("**Estes jogos têm maior probabilidade de:**")
-    st.markdown("- Irem a 3 sets")
-    st.markdown(f"- Terem mais de {threshold_games} games no total")
-    st.markdown("- Serem emocionantes e equilibrados")
+    st.markdown("- ✅ Irem a 3 sets")
+    st.markdown(f"- ✅ Terem mais de {threshold_games} games no total")
+    st.markdown("- ✅ Serem emocionantes e equilibrados")
 else:
     st.info("Nenhum jogo com probabilidade > 60% de ser competitivo no momento.")
