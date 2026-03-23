@@ -58,10 +58,14 @@ def parse_score(df):
         sets = re.findall(r"(\d+)-(\d+)(?:\(\d+\))?", str(score))
         w = [int(s[0]) for s in sets]
         l = [int(s[1]) for s in sets]
-        while len(w) < 5: w.append(np.nan)
-        while len(l) < 5: l.append(np.nan)
-        wsets = sum(1 for a, b in zip(w[:5], l[:5])
-                    if not (pd.isna(a) or pd.isna(b)) and a > b)
+        while len(w) < 5:
+            w.append(np.nan)
+        while len(l) < 5:
+            l.append(np.nan)
+        wsets = sum(
+            1 for a, b in zip(w[:5], l[:5])
+            if not (pd.isna(a) or pd.isna(b)) and a > b
+        )
         return w[:5] + l[:5] + [wsets]
 
     parsed = df["Score"].apply(_parse)
@@ -173,13 +177,16 @@ def train_three_sets_model(df_hist):
 
 def fetch_matches_from_api():
     """
-    Ajusta esta função à tua API real.
-    Tem de devolver colunas: Date, Winner, Loser, Surface
+    Vai buscar os jogos da tua API e devolve:
+    Date, Winner, Loser, Surface
     """
-    API_URL = "COLOCA_AQUI_A_TUA_URL"
-    API_KEY = "COLOCA_AQUI_A_TUA_API_KEY"
 
-    headers = {"Authorization": f"Bearer {API_KEY}"}
+    API_URL = "https://api-tennis.com/admin"
+    API_KEY = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}"
+    }
 
     try:
         r = requests.get(API_URL, headers=headers, timeout=10)
@@ -191,14 +198,19 @@ def fetch_matches_from_api():
 
     df_api = pd.DataFrame(data)
 
-    # Ajustar nomes conforme JSON real
-    if "date" in df_api.columns:
-        df_api["Date"] = pd.to_datetime(df_api["date"]).dt.normalize()
+    if "date" not in df_api.columns:
+        st.error("A API não devolveu a coluna 'date'.")
+        return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+    df_api["Date"] = pd.to_datetime(df_api["date"]).dt.normalize()
 
     rename_map = {}
-    if "player1" in df_api.columns: rename_map["player1"] = "Winner"
-    if "player2" in df_api.columns: rename_map["player2"] = "Loser"
-    if "surface" in df_api.columns: rename_map["surface"] = "Surface"
+    if "player1" in df_api.columns:
+        rename_map["player1"] = "Winner"
+    if "player2" in df_api.columns:
+        rename_map["player2"] = "Loser"
+    if "surface" in df_api.columns:
+        rename_map["surface"] = "Surface"
 
     df_api = df_api.rename(columns=rename_map)
 
