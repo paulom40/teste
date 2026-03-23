@@ -44,17 +44,12 @@ def train_three_sets_model(df_hist):
 
 
 # ============================================================
-# 2. Buscar jogos da API (tu adicionas a tua API aqui)
+# 2. Buscar jogos da API (corrigido)
 # ============================================================
 
 def fetch_matches_from_api():
-    """
-    Vai buscar os jogos à tua API e devolve um DataFrame com:
-    Date, Winner, Loser, Surface
-    """
     url = "https://api-tennis.com/admin"
 
-    # A API key TEM de ser string
     api_key = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
 
     headers = {
@@ -67,16 +62,15 @@ def fetch_matches_from_api():
 
     df = pd.DataFrame(data)
 
-    # Ajusta estes nomes às chaves reais do teu JSON
+    # Ajusta estes nomes conforme o JSON real da tua API
     df["Date"] = pd.to_datetime(df["date"]).dt.normalize()
     df = df.rename(columns={
         "player1": "Winner",
         "player2": "Loser",
-        "surface": "Surface",   # se existir
+        "surface": "Surface"
     })
 
     return df
-
 
 
 # ============================================================
@@ -103,7 +97,6 @@ def get_today_and_tomorrow_matches(df_matches):
 def predict_three_sets_for_upcoming(upcoming_df, hist_df, model):
     df_up = upcoming_df.copy()
 
-    # Obter último ranking e pontos conhecidos
     hist_sorted = hist_df.sort_values("Date")
 
     w_rank_map = hist_sorted.groupby("Winner")["WRank"].last()
@@ -116,7 +109,6 @@ def predict_three_sets_for_upcoming(upcoming_df, hist_df, model):
     df_up["WPts"]  = df_up["Winner"].map(w_pts_map).fillna(50)
     df_up["LPts"]  = df_up["Loser"].map(l_pts_map).fillna(50)
 
-    # Média típica de jogos por encontro
     df_up["Total_Games"] = 22
 
     features = ["WRank", "LRank", "WPts", "LPts", "Total_Games"]
@@ -132,14 +124,8 @@ def predict_three_sets_for_upcoming(upcoming_df, hist_df, model):
 st.markdown("---")
 st.header("🎾 Jogos de Hoje e Amanhã — Probabilidade de 3+ Sets")
 
-# ⚠️ Aqui assumimos que o teu dataset principal já está carregado em df
-if "df" not in globals():
-    st.error("Erro: o DataFrame histórico 'df' não existe. Carrega-o antes deste bloco.")
-    st.stop()
-
 df_hist = df.copy()
 
-# Treinar modelo
 with st.spinner("A treinar modelo de 3+ sets..."):
     model_3sets = train_three_sets_model(df_hist)
 
@@ -147,31 +133,26 @@ if model_3sets is None:
     st.error("Não foi possível treinar o modelo.")
     st.stop()
 
-# Buscar jogos da API
 api_matches = fetch_matches_from_api()
 
 if api_matches.empty:
-    st.warning("Nenhum jogo obtido da API. Liga a tua API na função fetch_matches_from_api().")
+    st.warning("Nenhum jogo obtido da API.")
     st.stop()
 
-# Filtrar hoje + amanhã
 upcoming = get_today_and_tomorrow_matches(api_matches)
 
 if upcoming.empty:
     st.info("A API não devolveu jogos para hoje ou amanhã.")
     st.stop()
 
-# Prever probabilidades
 preds = predict_three_sets_for_upcoming(upcoming, df_hist, model_3sets)
 
-# Mostrar tabela
 st.subheader("📋 Jogos ordenados por probabilidade de 3+ sets")
 st.dataframe(
     preds[["Date", "Winner", "Loser", "Surface", "prob_3_sets"]]
     .style.format({"prob_3_sets": "{:.1%}"})
 )
 
-# TOP 5
 st.subheader("🔥 TOP 5 jogos mais prováveis de irem a 3+ sets")
 for _, row in preds.head(5).iterrows():
     st.markdown(
