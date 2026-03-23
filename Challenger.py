@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -145,7 +144,7 @@ def load_custom_excel(uploaded_file):
 
 def fetch_matches_from_api():
     """
-    Busca os jogos da API Tennis com tratamento de erros melhorado.
+    Busca os jogos da API Tennis
     """
     
     API_URL = "https://api.api-tennis.com/tennis/"
@@ -180,7 +179,7 @@ def fetch_matches_from_api():
                 return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
         if data.get("success") != 1:
-            st.error(f"API retornou erro: {data.get('error', 'Erro desconhecido')}")
+            st.error(f"API retornou erro")
             return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
         matches = data.get("result", [])
@@ -344,7 +343,6 @@ def train_over_games_model(df_hist, threshold=22):
     
     st.sidebar.success(f"✅ Modelo Over {threshold} Games treinado com {len(dfm)} jogos")
     st.sidebar.info(f"📊 Média de games: {avg_games:.1f} | Over {threshold}: {over_percentage:.1f}%")
-    st.sidebar.info(f"📊 Acurácia - Treino: {train_score:.1%} | Teste: {test_score:.1%}")
     
     return model, avg_games, over_percentage
 
@@ -415,19 +413,10 @@ def export_to_excel(predictions_df, threshold_games):
     # Formatar datas
     export_df["Data"] = pd.to_datetime(export_df["Data"]).dt.strftime("%Y-%m-%d")
     
-    # Adicionar colunas adicionais com informações
-    export_df["Ranking_Vencedor"] = export_df["Vencedor"].map(
-        predictions_df.groupby("Winner")["WRank"].first() if "WRank" in predictions_df.columns else pd.Series()
-    ).fillna("N/A")
-    
-    export_df["Ranking_Derrotado"] = export_df["Derrotado"].map(
-        predictions_df.groupby("Loser")["LRank"].first() if "LRank" in predictions_df.columns else pd.Series()
-    ).fillna("N/A")
-    
     # Reordenar colunas
     column_order = [
-        "Data", "Vencedor", "Derrotado", "Ranking_Vencedor", "Ranking_Derrotado",
-        "Superfície", "Probabilidade_3_Sets", f"Probabilidade_Over_{threshold_games}_Games",
+        "Data", "Vencedor", "Derrotado", "Superfície", 
+        "Probabilidade_3_Sets", f"Probabilidade_Over_{threshold_games}_Games",
         "Probabilidade_Jogo_Competitivo"
     ]
     
@@ -446,20 +435,24 @@ def export_to_excel(predictions_df, threshold_games):
         # Sheet com resumo estatístico
         summary_df = pd.DataFrame({
             "Métrica": [
+                "Data de Geração",
                 "Total de Jogos Analisados",
                 f"Média Probabilidade 3+ Sets",
                 f"Média Probabilidade Over {threshold_games} Games",
                 "Média Probabilidade Jogo Competitivo",
                 f"Jogos com >60% Competitivo",
-                f"Jogos com >70% Competitivo"
+                f"Jogos com >70% Competitivo",
+                f"Jogos com >80% Competitivo"
             ],
             "Valor": [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 len(predictions_df),
                 f"{predictions_df['prob_3_sets'].mean():.1%}",
                 f"{predictions_df[f'prob_over_{threshold_games}_games'].mean():.1%}",
                 f"{predictions_df['prob_competitive_match'].mean():.1%}",
                 len(predictions_df[predictions_df['prob_competitive_match'] > 0.6]),
-                len(predictions_df[predictions_df['prob_competitive_match'] > 0.7])
+                len(predictions_df[predictions_df['prob_competitive_match'] > 0.7]),
+                len(predictions_df[predictions_df['prob_competitive_match'] > 0.8])
             ]
         })
         summary_df.to_excel(writer, sheet_name='Resumo', index=False)
@@ -606,37 +599,81 @@ st.dataframe(
         "3+ Sets": "{:.1%}",
         f"Over {threshold_games} Games": "{:.1%}",
         "Competitivo": "{:.1%}"
-    })
+    }),
+    use_container_width=True
 )
 
-# Botão para exportar para Excel
+# ============================================================
+# BOTÃO DE EXPORTAÇÃO PARA EXCEL (CORRIGIDO)
+# ============================================================
+
 st.markdown("---")
+st.subheader("📊 Exportar Resultados")
+
+# Criar 3 colunas para centralizar o botão
 col1, col2, col3 = st.columns([1, 2, 1])
+
 with col2:
-    export_button = st.button(
-        "📊 Exportar para Excel",
+    # Botão de exportação bem visível
+    export_clicked = st.button(
+        "📥 Exportar para Excel",
         type="primary",
         use_container_width=True,
-        help="Exporta as previsões para um ficheiro Excel com múltiplas sheets"
+        help="Clique para exportar todos os resultados para um ficheiro Excel"
     )
 
-if export_button:
-    with st.spinner("A gerar ficheiro Excel..."):
-        excel_file = export_to_excel(preds, threshold_games)
-        
-        # Nome do ficheiro com timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"previsoes_tenis_{timestamp}.xlsx"
-        
-        st.success("✅ Ficheiro Excel gerado com sucesso!")
-        
-        st.download_button(
-            label="📥 Descarregar Excel",
-            data=excel_file,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+# Se o botão for clicado, gerar e disponibilizar o download
+if export_clicked:
+    with st.spinner("🔄 A gerar ficheiro Excel com as previsões..."):
+        try:
+            # Gerar ficheiro Excel
+            excel_file = export_to_excel(preds, threshold_games)
+            
+            # Nome do ficheiro com timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"previsoes_tenis_{timestamp}.xlsx"
+            
+            # Mostrar mensagem de sucesso
+            st.success(f"✅ Ficheiro Excel gerado com sucesso! ({len(preds)} jogos exportados)")
+            
+            # Botão de download
+            st.download_button(
+                label="💾 Descarregar Ficheiro Excel",
+                data=excel_file,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_excel"
+            )
+            
+            # Mostrar informação sobre o conteúdo do ficheiro
+            with st.expander("ℹ️ Informações sobre o ficheiro exportado"):
+                st.markdown(f"""
+                **Ficheiro:** `{filename}`  
+                **Data de geração:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}  
+                **Total de jogos exportados:** {len(preds)}  
+                
+                **O ficheiro contém 3 sheets:**
+                
+                1. **Previsões** - Todos os {len(preds)} jogos com probabilidades detalhadas
+                2. **Resumo** - Estatísticas gerais e métricas agregadas
+                3. **TOP 10 Jogos** - Os 10 jogos com maior probabilidade de serem competitivos
+                
+                **Colunas incluídas:**
+                - Data do jogo
+                - Nome dos jogadores
+                - Superfície
+                - Probabilidade de 3+ Sets
+                - Probabilidade de Over {threshold_games} Games
+                - Probabilidade de jogo competitivo (combinação)
+                """)
+                
+        except Exception as e:
+            st.error(f"❌ Erro ao gerar ficheiro Excel: {e}")
+
+# ============================================================
+# TOP jogos e estatísticas (restante do código)
+# ============================================================
 
 # TOP jogos
 st.markdown("---")
@@ -705,23 +742,3 @@ if len(high_value_matches) > 0:
     st.markdown("- ✅ Serem emocionantes e equilibrados")
 else:
     st.info("Nenhum jogo com probabilidade > 60% de ser competitivo no momento.")
-
-# Informação sobre o ficheiro exportado
-st.markdown("---")
-with st.expander("ℹ️ Sobre o ficheiro Excel exportado"):
-    st.markdown("""
-    O ficheiro Excel exportado contém 3 sheets:
-    
-    1. **Previsões** - Todos os jogos com as probabilidades detalhadas
-    2. **Resumo** - Estatísticas gerais das previsões
-    3. **TOP 10 Jogos** - Os 10 jogos com maior probabilidade de serem competitivos
-    
-    **Colunas incluídas:**
-    - Data do jogo
-    - Nome dos jogadores
-    - Rankings (quando disponíveis)
-    - Superfície
-    - Probabilidade de 3+ Sets
-    - Probabilidade de Over X Games
-    - Probabilidade de jogo competitivo (combinação)
-    """)
