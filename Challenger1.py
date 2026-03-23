@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -13,7 +14,7 @@ import json
 warnings.filterwarnings("ignore")
 
 st.set_page_config(
-    page_title="CHALLENGER 3+ Sets Predictor",
+    page_title="CHALLENGER 3+ Sets & Over 22 Games Predictor",
     page_icon="🎾",
     layout="wide"
 )
@@ -76,7 +77,10 @@ def parse_score(df):
     return df
 
 
-def add_total_games_col(df):
+def calculate_total_games(df):
+    """
+    Calcula o total de games de uma partida baseado nos sets
+    """
     total = pd.Series(0.0, index=df.index)
     for i in range(1, 6):
         wc, lc = f"W{i}", f"L{i}"
@@ -105,6 +109,18 @@ def extract_surface_from_tournament(tournament_name):
         return "Hard"
     else:
         return "Hard"
+
+
+def encode_surface(surface):
+    """
+    Codifica a superfície em variáveis dummy
+    """
+    if surface == "Clay":
+        return [1, 0, 0]
+    elif surface == "Grass":
+        return [0, 1, 0]
+    else:  # Hard
+        return [0, 0, 1]
 
 
 # ============================================================
@@ -136,7 +152,7 @@ def load_custom_excel(uploaded_file):
 
 
 # ============================================================
-# 3. API — JOGOS DE HOJE E AMANHÃ (VERSÃO CORRIGIDA)
+# 3. API — JOGOS DE HOJE E AMANHÃ
 # ============================================================
 
 def fetch_matches_from_api():
@@ -144,15 +160,12 @@ def fetch_matches_from_api():
     Busca os jogos da API Tennis com tratamento de erros melhorado.
     """
     
-    # Configuração da API
     API_URL = "https://api.api-tennis.com/tennis/"
     API_KEY = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
     
-    # Datas para buscar (hoje e amanhã)
     today = datetime.now().strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # Parâmetros da API
     params = {
         "method": "get_fixtures",
         "APIkey": API_KEY,
@@ -164,27 +177,20 @@ def fetch_matches_from_api():
         with st.spinner(f"A buscar jogos de {today} a {tomorrow}..."):
             response = requests.get(API_URL, params=params, timeout=15)
             
-            # Verificar status HTTP
             if response.status_code != 200:
                 st.error(f"API retornou status {response.status_code}")
-                st.code(f"Resposta: {response.text[:500]}")
                 return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
             
-            # Verificar se a resposta está vazia
             if not response.text:
                 st.error("API retornou resposta vazia")
                 return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
             
-            # Tentar fazer parse do JSON
             try:
                 data = response.json()
             except json.JSONDecodeError as e:
                 st.error(f"Erro ao decodificar JSON: {e}")
-                st.write("Resposta da API (primeiros 500 caracteres):")
-                st.code(response.text[:500])
                 return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
-        # Verificar se a API retornou sucesso
         if data.get("success") != 1:
             st.error(f"API retornou erro: {data.get('error', 'Erro desconhecido')}")
             return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
@@ -193,55 +199,30 @@ def fetch_matches_from_api():
         
         if not matches:
             st.info(f"Nenhum jogo encontrado para {today} e {tomorrow}.")
-            
-            # Tentar buscar apenas jogos de hoje
-            params_today = {
-                "method": "get_fixtures",
-                "APIkey": API_KEY,
-                "date_start": today,
-                "date_stop": today,
-            }
-            response_today = requests.get(API_URL, params=params_today, timeout=15)
-            data_today = response_today.json()
-            matches_today = data_today.get("result", [])
-            
-            if matches_today:
-                st.info(f"Encontrados {len(matches_today)} jogos apenas para hoje.")
-                matches = matches_today
-            else:
-                return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+            return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
-        # Converter para DataFrame
         df_api = pd.DataFrame(matches)
         
-        # Verificar se as colunas esperadas existem
         required_cols = ["event_date", "event_first_player", "event_second_player"]
         missing_cols = [col for col in required_cols if col not in df_api.columns]
         
         if missing_cols:
             st.error(f"Colunas em falta na resposta da API: {missing_cols}")
-            st.write("Colunas disponíveis:", list(df_api.columns))
             return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
         
-        # Mapear os campos da API
         df_api["Date"] = pd.to_datetime(df_api["event_date"])
         df_api["Winner"] = df_api["event_first_player"]
         df_api["Loser"] = df_api["event_second_player"]
         
-        # Extrair superfície do nome do torneio
         if "tournament_name" in df_api.columns:
             df_api["Surface"] = df_api["tournament_name"].apply(extract_surface_from_tournament)
         else:
             df_api["Surface"] = "Hard"
         
-        # Filtrar apenas jogos que ainda não começaram (se a coluna existir)
         if "event_status" in df_api.columns:
             df_api = df_api[df_api["event_status"] == ""]
         
-        # Selecionar apenas as colunas necessárias
         result_df = df_api[["Date", "Winner", "Loser", "Surface"]].copy()
-        
-        # Remover duplicados e valores nulos
         result_df = result_df.drop_duplicates()
         result_df = result_df.dropna(subset=["Winner", "Loser"])
         
@@ -250,11 +231,8 @@ def fetch_matches_from_api():
         
         return result_df
         
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro de conexão com a API: {e}")
-        return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
     except Exception as e:
-        st.error(f"Erro inesperado: {e}")
+        st.error(f"Erro ao buscar jogos: {e}")
         return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
 
 
@@ -268,48 +246,41 @@ def get_today_and_tomorrow_matches(df_matches):
     today = pd.Timestamp.now().normalize()
     tomorrow = today + pd.Timedelta(days=1)
 
-    filtered = dfm[(dfm["Date"] == today) | (dfm["Date"] == tomorrow)]
-    
-    if len(filtered) == 0:
-        st.info(f"Nenhum jogo para hoje ({today.date()}) ou amanhã ({tomorrow.date()})")
-    
-    return filtered
+    return dfm[(dfm["Date"] == today) | (dfm["Date"] == tomorrow)]
 
 
 # ============================================================
-# 4. MODELO PARA PROBABILIDADE DE 3+ SETS
+# 4. MODELOS PARA PREVISÕES
 # ============================================================
 
 def train_three_sets_model(df_hist):
+    """
+    Treina modelo para prever probabilidade de 3+ sets
+    """
     dfm = df_hist.copy()
 
     if "Wsets" not in dfm.columns:
         st.error("Erro: coluna Wsets não existe.")
         return None
 
-    # Calcular variável alvo: 3+ sets
     dfm["three_sets"] = (dfm["Wsets"] >= 2).astype(int)
     
-    # Features para o modelo
     features = ["WRank", "LRank", "WPts", "LPts"]
     
-    # Verificar se todas as features existem
     missing_features = [f for f in features if f not in dfm.columns]
     if missing_features:
-        st.error(f"Features em falta no dataset: {missing_features}")
+        st.error(f"Features em falta: {missing_features}")
         return None
     
-    # Remover linhas com valores nulos
     dfm = dfm.dropna(subset=features + ["three_sets"])
 
     if len(dfm) < 30:
-        st.warning(f"Apenas {len(dfm)} jogos com dados completos. Mínimo recomendado: 30")
+        st.warning(f"Apenas {len(dfm)} jogos. Mínimo: 30")
         return None
 
     X = dfm[features]
     y = dfm["three_sets"]
 
-    # Treinar modelo
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -322,44 +293,117 @@ def train_three_sets_model(df_hist):
     )
     model.fit(X_train, y_train)
     
-    # Calcular acurácia para feedback
     train_score = model.score(X_train, y_train)
     test_score = model.score(X_test, y_test) if len(X_test) > 0 else 0
     
-    st.sidebar.success(f"✅ Modelo treinado com {len(dfm)} jogos")
+    st.sidebar.success(f"✅ Modelo 3+ Sets treinado com {len(dfm)} jogos")
     st.sidebar.info(f"📊 Acurácia - Treino: {train_score:.1%} | Teste: {test_score:.1%}")
 
     return model
 
 
-def predict_three_sets_for_upcoming(upcoming_df, hist_df, model):
+def train_over_games_model(df_hist, threshold=22):
+    """
+    Treina modelo para prever probabilidade de total de games > threshold
+    """
+    dfm = df_hist.copy()
+
+    # Calcular total de games
+    dfm["Total_Games"] = calculate_total_games(dfm)
+    
+    if dfm["Total_Games"].isna().all():
+        st.error("Não foi possível calcular total de games dos jogos históricos.")
+        return None
+    
+    dfm["over_threshold"] = (dfm["Total_Games"] > threshold).astype(int)
+    
+    # Features para o modelo
+    features = ["WRank", "LRank", "WPts", "LPts"]
+    
+    missing_features = [f for f in features if f not in dfm.columns]
+    if missing_features:
+        st.error(f"Features em falta: {missing_features}")
+        return None
+    
+    # Remover linhas com valores nulos
+    dfm = dfm.dropna(subset=features + ["over_threshold", "Total_Games"])
+    
+    if len(dfm) < 30:
+        st.warning(f"Apenas {len(dfm)} jogos com dados completos. Mínimo: 30")
+        return None
+    
+    X = dfm[features]
+    y = dfm["over_threshold"]
+    
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    
+    model = GradientBoostingClassifier(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=3,
+        random_state=42
+    )
+    model.fit(X_train, y_train)
+    
+    train_score = model.score(X_train, y_train)
+    test_score = model.score(X_test, y_test) if len(X_test) > 0 else 0
+    
+    # Calcular estatísticas adicionais
+    avg_games = dfm["Total_Games"].mean()
+    over_percentage = dfm["over_threshold"].mean() * 100
+    
+    st.sidebar.success(f"✅ Modelo Over {threshold} Games treinado com {len(dfm)} jogos")
+    st.sidebar.info(f"📊 Média de games: {avg_games:.1f} | Over {threshold}: {over_percentage:.1f}%")
+    st.sidebar.info(f"📊 Acurácia - Treino: {train_score:.1%} | Teste: {test_score:.1%}")
+    
+    return model, avg_games, over_percentage
+
+
+def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshold=22):
+    """
+    Faz previsões para os jogos futuros
+    """
     df_up = upcoming_df.copy()
 
-    # Obter últimos rankings conhecidos para cada jogador
+    # Obter últimos rankings conhecidos
     hist_sorted = hist_df.sort_values("Date")
 
-    # Mapear últimos valores conhecidos
     w_rank_map = hist_sorted.groupby("Winner")["WRank"].last().to_dict()
     l_rank_map = hist_sorted.groupby("Loser")["LRank"].last().to_dict()
     w_pts_map  = hist_sorted.groupby("Winner")["WPts"].last().to_dict()
     l_pts_map  = hist_sorted.groupby("Loser")["LPts"].last().to_dict()
 
-    # Preencher features com valores padrão quando não encontrados
+    # Preencher features
     df_up["WRank"] = df_up["Winner"].map(w_rank_map).fillna(300)
     df_up["LRank"] = df_up["Loser"].map(l_rank_map).fillna(300)
     df_up["WPts"]  = df_up["Winner"].map(w_pts_map).fillna(30)
     df_up["LPts"]  = df_up["Loser"].map(l_pts_map).fillna(30)
 
-    # Garantir que os valores são numéricos
     for col in ["WRank", "LRank", "WPts", "LPts"]:
         df_up[col] = pd.to_numeric(df_up[col], errors="coerce").fillna(300)
 
     features = ["WRank", "LRank", "WPts", "LPts"]
     
-    # Prever probabilidades
-    df_up["prob_3_sets"] = model.predict_proba(df_up[features])[:, 1]
-
-    return df_up.sort_values("prob_3_sets", ascending=False)
+    # Previsões
+    if model_3sets is not None:
+        df_up["prob_3_sets"] = model_3sets.predict_proba(df_up[features])[:, 1]
+    else:
+        df_up["prob_3_sets"] = 0.33
+    
+    if model_over is not None:
+        df_up[f"prob_over_{threshold}_games"] = model_over.predict_proba(df_up[features])[:, 1]
+    else:
+        df_up[f"prob_over_{threshold}_games"] = 0.5
+    
+    # Calcular probabilidade combinada (jogo competitivo)
+    df_up["prob_competitive_match"] = (
+        df_up["prob_3_sets"] * 0.6 + 
+        df_up[f"prob_over_{threshold}_games"] * 0.4
+    )
+    
+    return df_up.sort_values("prob_competitive_match", ascending=False)
 
 
 # ============================================================
@@ -385,20 +429,32 @@ if df is None or df.empty:
 st.sidebar.info(f"Fonte atual: {source_name}")
 st.sidebar.write(f"Total de jogos: {len(df)}")
 
+# Configuração do threshold
+st.sidebar.header("⚙️ Configurações")
+threshold_games = st.sidebar.slider(
+    "Threshold para total de games",
+    min_value=15,
+    max_value=30,
+    value=22,
+    step=1,
+    help="Número mínimo de games para considerar 'Over'"
+)
+
 
 # ============================================================
-# 6. UI PRINCIPAL — PREDIÇÃO 3+ SETS
+# 6. UI PRINCIPAL — PREVISÕES
 # ============================================================
 
-st.title("🎾 CHALLENGER — Predição de jogos com 3+ sets")
+st.title("🎾 CHALLENGER — Predição de jogos competitivos")
 st.caption(f"Fonte de dados: {source_name} | Total de jogos históricos: {len(df)}")
 
-# Treinar modelo
-with st.spinner("A treinar modelo de probabilidade de 3+ sets..."):
+# Treinar modelos
+with st.spinner("A treinar modelos de previsão..."):
     model_3sets = train_three_sets_model(df)
+    model_over, avg_games, over_percentage = train_over_games_model(df, threshold_games)
 
-if model_3sets is None:
-    st.error("Não foi possível treinar o modelo de 3+ sets.")
+if model_3sets is None and model_over is None:
+    st.error("Não foi possível treinar os modelos.")
     st.stop()
 
 st.markdown("---")
@@ -410,9 +466,8 @@ api_matches = fetch_matches_from_api()
 if api_matches.empty:
     st.warning("⚠️ Não foi possível obter jogos da API.")
     
-    # Opção para carregar jogos manualmente
     st.subheader("📤 Carrega um ficheiro com jogos para prever")
-    st.markdown("""
+    st.markdown(f"""
     O ficheiro Excel deve conter as colunas:
     - **Date** (data do jogo)
     - **Winner** (nome do jogador favorito)
@@ -433,7 +488,7 @@ if api_matches.empty:
             missing = [col for col in required_cols if col not in manual_df.columns]
             
             if missing:
-                st.error(f"Colunas em falta no ficheiro: {missing}")
+                st.error(f"Colunas em falta: {missing}")
                 st.stop()
             
             manual_df["Date"] = pd.to_datetime(manual_df["Date"])
@@ -454,47 +509,80 @@ else:
     
     if upcoming.empty:
         st.info("📭 Nenhum jogo encontrado para hoje ou amanhã.")
-        
-        # Mostrar todos os jogos disponíveis para debug
-        if len(api_matches) > 0:
-            st.write("Jogos disponíveis na API:")
-            st.dataframe(api_matches)
         st.stop()
 
 # Fazer previsões
-preds = predict_three_sets_for_upcoming(upcoming, df, model_3sets)
+preds = predict_for_upcoming(upcoming, df, model_3sets, model_over, threshold_games)
 
 # Mostrar resultados
-st.subheader("📋 Jogos ordenados por probabilidade de 3+ sets")
+st.subheader(f"📋 Jogos ordenados por probabilidade de ser competitivo")
+
+# Criar dataframe para exibição
+display_df = preds[["Date", "Winner", "Loser", "Surface", "prob_3_sets", f"prob_over_{threshold_games}_games", "prob_competitive_match"]].copy()
+display_df.columns = ["Date", "Winner", "Loser", "Surface", "3+ Sets", f"Over {threshold_games} Games", "Competitivo"]
+
 st.dataframe(
-    preds[["Date", "Winner", "Loser", "Surface", "prob_3_sets"]]
-    .style.format({"prob_3_sets": "{:.1%}"})
+    display_df.style.format({
+        "3+ Sets": "{:.1%}",
+        f"Over {threshold_games} Games": "{:.1%}",
+        "Competitivo": "{:.1%}"
+    })
 )
 
-st.subheader("🔥 TOP 5 jogos mais prováveis de irem a 3+ sets")
+# TOP jogos
+st.subheader(f"🔥 TOP 5 jogos mais prováveis de serem competitivos")
 top_n = min(5, len(preds))
-for _, row in preds.head(top_n).iterrows():
-    prob_percent = row['prob_3_sets'] * 100
-    st.markdown(
-        f"**{row['Winner']} vs {row['Loser']}** — "
-        f"**{prob_percent:.1f}%** probabilidade de 3+ sets "
-        f"({row['Surface']}, {row['Date'].date()})"
-    )
 
-# Estatísticas adicionais
+for _, row in preds.head(top_n).iterrows():
+    st.markdown(f"""
+    ---
+    **{row['Winner']} vs {row['Loser']}**  
+    📅 {row['Date'].date()} | 🎾 {row['Surface']}
+    
+    | Probabilidade | Valor |
+    |--------------|-------|
+    | 🎯 3+ Sets | **{row['prob_3_sets']:.1%}** |
+    | 📊 Over {threshold_games} Games | **{row[f'prob_over_{threshold_games}_games']:.1%}** |
+    | ⭐ Competitivo | **{row['prob_competitive_match']:.1%}** |
+    """)
+
+# Estatísticas
 st.markdown("---")
 st.subheader("📊 Estatísticas")
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Jogos no histórico", len(df))
 with col2:
     st.metric("Jogos para prever", len(preds))
 with col3:
-    prob_media = preds["prob_3_sets"].mean()
-    st.metric("Probabilidade média", f"{prob_media:.1%}")
+    st.metric("Média de games (histórico)", f"{avg_games:.1f}")
+with col4:
+    st.metric(f"Over {threshold_games} (histórico)", f"{over_percentage:.1f}%")
 
-# Mostrar distribuição de probabilidades se houver dados suficientes
+# Distribuição das probabilidades
 if len(preds) > 1:
     st.subheader("📈 Distribuição das probabilidades")
-    st.bar_chart(preds["prob_3_sets"].value_counts(bins=10).sort_index())
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Probabilidade de 3+ Sets**")
+        st.bar_chart(preds["prob_3_sets"].value_counts(bins=10).sort_index())
+    
+    with col2:
+        st.write(f"**Probabilidade de Over {threshold_games} Games**")
+        st.bar_chart(preds[f"prob_over_{threshold_games}_games"].value_counts(bins=10).sort_index())
+
+# Recomendações
+st.markdown("---")
+st.subheader("💡 Recomendações")
+
+high_value_matches = preds[preds["prob_competitive_match"] > 0.6]
+if len(high_value_matches) > 0:
+    st.success(f"🎯 Encontrados {len(high_value_matches)} jogos com alta probabilidade de serem competitivos!")
+    st.markdown("**Estes jogos têm maior probabilidade de:**")
+    st.markdown("- Irem a 3 sets")
+    st.markdown(f"- Terem mais de {threshold_games} games no total")
+    st.markdown("- Serem emocionantes e equilibrados")
+else:
+    st.info("Nenhum jogo com probabilidade > 60% de ser competitivo no momento.")
