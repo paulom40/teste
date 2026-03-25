@@ -40,10 +40,11 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────
 
 ELO_START    = 1500.0
-BASE_K       = 32.0
+DEFAULT_BASE_K = 32.0
 SURFACES     = ["Clay", "Hard", "Grass"]
 SERVE_WINDOW = 15   # rolling window for serve stats
 
+# These will be updated dynamically
 ROUND_K_MULT = {"R32": 0.9, "R16": 1.0, "QF": 1.1, "SF": 1.3, "F": 1.5, "Final": 1.5}
 SURFACE_ENC  = {"Clay": 0, "Hard": 1, "Grass": 2}
 ROUND_ENC    = {"R32": 1, "R16": 2, "QF": 3, "SF": 4, "F": 5, "Final": 5}
@@ -101,7 +102,7 @@ def elo_expected(ra: float, rb: float) -> float:
     return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
 
 
-def dynamic_k(n_matches: int, round_str: str, is_3set: bool) -> float:
+def dynamic_k(n_matches: int, round_str: str, is_3set: bool, base_k: float) -> float:
     """
     K-factor that varies by:
       - Round: Finals count more (better opponents, more context)
@@ -116,18 +117,23 @@ def dynamic_k(n_matches: int, round_str: str, is_3set: bool) -> float:
     else:
         exp_mult = 1.0
     close_mult = 1.2 if is_3set else 1.0
-    return BASE_K * round_mult * exp_mult * close_mult
+    return base_k * round_mult * exp_mult * close_mult
 
 
 class EloSystem:
     """Tracks Elo ratings (overall + surface-specific) for all players."""
 
-    def __init__(self):
+    def __init__(self, base_k: float = DEFAULT_BASE_K):
+        self.base_k = base_k
         self.elo: dict[str, float] = {}
         self.elo_surf: dict[str, dict[str, float]] = {}
         self.n_matches: dict[str, int] = {}
         self.serve_history: dict[str, list] = {}   # player -> list of per-match serve dicts
         self.games_history: dict[str, list] = {}   # player -> list of (surface, total_games)
+
+    def set_base_k(self, base_k: float):
+        """Update base K-factor"""
+        self.base_k = base_k
 
     def get(self, player: str, surface: str | None = None) -> float:
         if surface:
@@ -146,27 +152,33 @@ class EloSystem:
         n_w = self.n_matches.get(winner, 0)
         n_l = self.n_matches.get(loser, 0)
 
-        kw = dynamic_k(n_w, round_str, is_3set)
-        kl = dynamic_k(n_l, round_str, is_3set)
+        kw = dynamic_k(n_w, round_str, is_3set, self.base_k)
+        kl = dynamic_k(n_l, round_str, is_3set, self.base_k)
 
         # Overall Elo
         exp_w = elo_expected(ew, el)
-        self.elo[winner] = ew + kw * (1.0 - exp_w)
-        self.elo[loser]  = el + kl * (0.0 - (1.0 - exp_w))
+        new_ew = ew + kw * (1.0 - exp_w)
+        new_el = el + kl * (0.0 - (1.0 - exp_w))
+        
+        self.elo[winner] = new_ew
+        self.elo[loser] = new_el
 
         # Surface Elo
         exp_w_s = elo_expected(ew_s, el_s)
-        self.elo_surf.setdefault(winner, {})[surface] = ew_s + kw * (1.0 - exp_w_s)
-        self.elo_surf.setdefault(loser, {})[surface]  = el_s + kl * (0.0 - (1.0 - exp_w_s))
+        new_ew_s = ew_s + kw * (1.0 - exp_w_s)
+        new_el_s = el_s + kl * (0.0 - (1.0 - exp_w_s))
+        
+        self.elo_surf.setdefault(winner, {})[surface] = new_ew_s
+        self.elo_surf.setdefault(loser, {})[surface] = new_el_s
 
         # n_matches
         self.n_matches[winner] = n_w + 1
         self.n_matches[loser]  = n_l + 1
 
         # Serve history
-        if w_serve:
+        if w_serve and any(v is not None and not np.isnan(v) for v in w_serve.values()):
             self.serve_history.setdefault(winner, []).append(w_serve)
-        if l_serve:
+        if l_serve and any(v is not None and not np.isnan(v) for v in l_serve.values()):
             self.serve_history.setdefault(loser, []).append(l_serve)
 
         # Games history
@@ -315,17 +327,19 @@ def load_excel(uploaded):
 # ─────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def build_elo_and_features(_df: pd.DataFrame):
+def build_elo_and_features(_df: pd.DataFrame, base_k: float):
     """
     Processes matches chronologically.
     For every match, records PRE-match Elo + serve features, then updates Elo.
     Returns: (EloSystem with final state, feature DataFrame)
     """
     df = _df.copy().sort_values("Date").reset_index(drop=True)
-    sys = EloSystem()
+    sys = EloSystem(base_k=base_k)
     rows = []
+    processed = 0
+    skipped = 0
 
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         winner  = row.get("Winner")
         loser   = row.get("Loser")
         surface = row.get("Surface", "Hard")
@@ -335,6 +349,7 @@ def build_elo_and_features(_df: pd.DataFrame):
         score   = str(row.get("Score", ""))
 
         if pd.isna(winner) or pd.isna(loser):
+            skipped += 1
             continue
 
         is_3set = len(re.findall(r"\d+-\d+", score)) >= 3
@@ -380,6 +395,7 @@ def build_elo_and_features(_df: pd.DataFrame):
             "total_games": tg,
         }
         rows.append(row_feats)
+        processed += 1
 
         # ── Serve stats for this match (to feed into history) ──
         w_serve_this = {
@@ -400,6 +416,12 @@ def build_elo_and_features(_df: pd.DataFrame):
         sys.update(winner, loser, surface, rnd, is_3set,
                    tg if not pd.isna(tg) else 0.0,
                    w_serve_this, l_serve_this)
+
+    # Debug info
+    if processed == 0:
+        st.warning(f"Nenhum jogo processado! Skipped: {skipped}")
+    else:
+        st.sidebar.info(f"Processados: {processed} jogos | Skipped: {skipped}")
 
     return sys, pd.DataFrame(rows)
 
@@ -434,7 +456,7 @@ def train_model(_feat_df: pd.DataFrame, threshold: int):
     df = _feat_df.dropna(subset=["total_games"]).copy()
     df["target"] = (df["total_games"] > threshold).astype(int)
 
-    if len(df) < 100:
+    if len(df) < 50:
         return None, 0.0, 0.0, 0.0, 0.0, None
 
     X = df[FEATURE_COLS].copy()
@@ -782,7 +804,7 @@ st.sidebar.header("⚙️ Configurações")
 threshold_games = st.sidebar.slider("Over/Under threshold (games)", 15, 30, 22, 1)
 
 st.sidebar.header("🔢 Parâmetros do Elo")
-base_k_val = st.sidebar.slider(
+base_k_value = st.sidebar.slider(
     "K base", min_value=16, max_value=64, value=32, step=4,
     help="K-factor base. Valores maiores = Elo muda mais rápido por jogo"
 )
@@ -793,7 +815,6 @@ with st.sidebar.expander("Multiplicadores K por ronda"):
     k_sf   = st.slider("SF",    0.5, 2.0, 1.3, 0.1)
     k_f    = st.slider("Final", 0.5, 2.0, 1.5, 0.1)
     ROUND_K_MULT.update({"R32": k_r32, "R16": k_r16, "QF": k_qf, "SF": k_sf, "F": k_f, "Final": k_f})
-    BASE_K = float(base_k_val)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -803,9 +824,19 @@ with st.sidebar.expander("Multiplicadores K por ronda"):
 st.title("🎾 Challenger Predictor v4 — Dynamic Elo + Serve Stats")
 st.caption(f"Fonte: {source} | {len(df_hist)} jogos | Modelo: Ensemble (GBM + RF + LR)")
 
-# Build Elo + features
+# Build Elo + features (passando o base_k)
 with st.spinner("A processar histórico e construir Elo…"):
-    elo_sys, feat_df = build_elo_and_features(df_hist)
+    elo_sys, feat_df = build_elo_and_features(df_hist, base_k_value)
+
+# Atualizar o base_k do sistema
+elo_sys.set_base_k(base_k_value)
+
+# Debug: mostrar alguns Elos
+if len(elo_sys.elo) > 0:
+    sample_players = list(elo_sys.elo.keys())[:5]
+    st.sidebar.write("**Exemplo de Elos:**")
+    for p in sample_players:
+        st.sidebar.write(f"{p}: {elo_sys.get(p):.0f}")
 
 n_valid = feat_df["total_games"].notna().sum()
 st.sidebar.write(f"Jogos com features: {n_valid}")
@@ -1168,14 +1199,22 @@ with tab_custom:
                             with col1:
                                 st.write(f"**{player1}**")
                                 st.write(f"- Jogos no histórico: {elo_sys.n_matches.get(player1, 0)}")
-                                st.write(f"- Média de games: {global_medians.get('w_avg_games', 'N/A'):.1f}" if 'w_avg_games' in global_medians else "-")
-                                st.write(f"- 1st Serve%: {global_medians.get('w_1w_pct', 'N/A'):.1%}" if 'w_1w_pct' in global_medians else "-")
+                                w_avg = global_medians.get('w_avg_games', np.nan)
+                                if not np.isnan(w_avg):
+                                    st.write(f"- Média de games: {w_avg:.1f}")
+                                w_1w = global_medians.get('w_1w_pct', np.nan)
+                                if not np.isnan(w_1w):
+                                    st.write(f"- 1st Serve%: {w_1w:.1%}")
                             
                             with col2:
                                 st.write(f"**{player2}**")
                                 st.write(f"- Jogos no histórico: {elo_sys.n_matches.get(player2, 0)}")
-                                st.write(f"- Média de games: {global_medians.get('l_avg_games', 'N/A'):.1f}" if 'l_avg_games' in global_medians else "-")
-                                st.write(f"- 1st Serve%: {global_medians.get('l_1w_pct', 'N/A'):.1%}" if 'l_1w_pct' in global_medians else "-")
+                                l_avg = global_medians.get('l_avg_games', np.nan)
+                                if not np.isnan(l_avg):
+                                    st.write(f"- Média de games: {l_avg:.1f}")
+                                l_1w = global_medians.get('l_1w_pct', np.nan)
+                                if not np.isnan(l_1w):
+                                    st.write(f"- 1st Serve%: {l_1w:.1%}")
                             
                             if not p1_in_hist or not p2_in_hist:
                                 st.warning("⚠️ Um dos jogadores tem poucos jogos no histórico - as previsões podem ser menos precisas")
