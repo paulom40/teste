@@ -731,7 +731,7 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
                 f"{predictions_df['prob_competitive_match'].mean():.1%}",
                 f"{predictions_df['confiança_modelo'].mean():.1%}",
                 len(predictions_df[predictions_df['confiança_modelo'] >= 0.6]),
-                len(predictions_df[predictions_df['score_final'] >= 0.7]),
+                len(top_jogos_df[top_jogos_df['score_final'] >= 0.7]),
             ]
         })
         summary_df.to_excel(writer, sheet_name='Resumo', index=False)
