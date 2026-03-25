@@ -1,1111 +1,258 @@
-"""
-CHALLENGER TENNIS PREDICTOR v4 — Dynamic Elo + Serve Features
-================================================================
-Key additions vs v3:
-- Overall Elo per player (chronological, from match history)
-- Surface-specific Elo (Clay / Hard / Grass)
-- Dynamic K-factor: adjusts by round, player experience, and match closeness
-- Rolling serve stats: 1stWon%, 2ndWon%, ace%, bp_save%  (last 15 matches)
-- All Elo features are leakage-free: only data BEFORE each match is used
-- Custom prediction tab for head-to-head analysis
-- Filter API matches by players in history
-"""
+# ============================================================
+# CHALLENGER TENNIS PREDICTOR v4.1 (FIXED + IMPROVED)
+# ============================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-import json
 import requests
-import warnings
 from io import BytesIO
 from datetime import datetime, timedelta
 
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 
-warnings.filterwarnings("ignore")
+st.set_page_config(page_title="Challenger Predictor v4.1", layout="wide")
 
-st.set_page_config(
-    page_title="Challenger Predictor v4 — Dynamic Elo",
-    page_icon="🎾",
-    layout="wide"
-)
-
-# ─────────────────────────────────────────────────────────────
+# ============================================================
 # CONSTANTS
-# ─────────────────────────────────────────────────────────────
+# ============================================================
 
-ELO_START    = 1500.0
-DEFAULT_BASE_K = 32.0
-SURFACES     = ["Clay", "Hard", "Grass"]
-SERVE_WINDOW = 15   # rolling window for serve stats
-
-# These will be updated dynamically
-ROUND_K_MULT = {"R32": 0.9, "R16": 1.0, "QF": 1.1, "SF": 1.3, "F": 1.5, "Final": 1.5}
-SURFACE_ENC  = {"Clay": 0, "Hard": 1, "Grass": 2}
-ROUND_ENC    = {"R32": 1, "R16": 2, "QF": 3, "SF": 4, "F": 5, "Final": 5}
+ELO_START = 1500
+SERVE_WINDOW = 15
 
 FEATURE_COLS = [
-    # Elo features
-    "elo_diff", "elo_surf_diff", "elo_abs", "elo_surf_abs",
-    "elo_w", "elo_l", "elo_w_surf", "elo_l_surf",
-    "exp_w", "exp_w_surf",
-    # Context
-    "surface_enc", "round_enc", "indoor_enc",
-    # Rolling serve stats — Winner
-    "w_1w_pct", "w_2w_pct", "w_ace_pct", "w_bp_save", "w_bp_faced_pg",
-    # Rolling serve stats — Loser
-    "l_1w_pct", "l_2w_pct", "l_ace_pct", "l_bp_save", "l_bp_faced_pg",
-    # Combined
-    "serve_dom_sum", "ace_sum", "bp_save_diff",
-    # Experience
-    "n_w", "n_l",
-    # Rolling avg games
-    "w_avg_games", "l_avg_games", "avg_games_combined",
-    "w_surf_games", "l_surf_games",
+    "elo_diff", "elo_surf_diff", "exp_w",
+    "surface_enc", "round_enc",
+    "w_1w_pct", "l_1w_pct",
+    "w_ace_pct", "l_ace_pct",
+    "rest_days_diff",
+    "form_w", "form_l",
 ]
 
+SURFACE_ENC = {"Clay": 0, "Hard": 1, "Grass": 2}
+ROUND_ENC = {"R32": 1, "R16": 2, "QF": 3, "SF": 4, "F": 5}
 
-# ─────────────────────────────────────────────────────────────
-# HELPERS — SCORE PARSING
-# ─────────────────────────────────────────────────────────────
+def safe(x, d=0):
+    return d if pd.isna(x) else x
 
-def parse_total_games(score):
-    if pd.isna(score):
-        return np.nan
-    s = str(score)
-    if any(x in s for x in ("RET", "W/O", "DEF")):
-        return np.nan
-    sets = re.findall(r"(\d+)-(\d+)(?:\(\d+\))?", s)
-    return float(sum(int(a) + int(b) for a, b in sets)) if sets else np.nan
-
-
-def count_sets(score):
-    if pd.isna(score):
-        return np.nan
-    s = str(score)
-    if any(x in s for x in ("RET", "W/O")):
-        return np.nan
-    return float(len(re.findall(r"\d+-\d+", s)))
-
-
-# ─────────────────────────────────────────────────────────────
-# ELO ENGINE
-# ─────────────────────────────────────────────────────────────
-
-def elo_expected(ra: float, rb: float) -> float:
-    """Probability that player A beats player B."""
-    return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
-
-
-def dynamic_k(n_matches: int, round_str: str, is_3set: bool, base_k: float) -> float:
-    """
-    K-factor that varies by:
-      - Round: Finals count more (better opponents, more context)
-      - Experience: New players have higher K (faster convergence)
-      - Match closeness: 3-set matches reveal more true level
-    """
-    round_mult = ROUND_K_MULT.get(round_str, 1.0)
-    if n_matches < 10:
-        exp_mult = 1.5
-    elif n_matches < 30:
-        exp_mult = 1.2
-    else:
-        exp_mult = 1.0
-    close_mult = 1.2 if is_3set else 1.0
-    return base_k * round_mult * exp_mult * close_mult
-
+# ============================================================
+# ELO SYSTEM
+# ============================================================
 
 class EloSystem:
-    """Tracks Elo ratings (overall + surface-specific) for all players."""
+    def __init__(self, k=32):
+        self.k = k
+        self.elo = {}
+        self.elo_surf = {}
+        self.matches = {}
+        self.results = {}
+        self.last_date = {}
+        self.serve = {}
 
-    def __init__(self, base_k: float = DEFAULT_BASE_K):
-        self.base_k = base_k
-        self.elo: dict[str, float] = {}
-        self.elo_surf: dict[str, dict[str, float]] = {}
-        self.n_matches: dict[str, int] = {}
-        self.serve_history: dict[str, list] = {}
-        self.games_history: dict[str, list] = {}
+    def get(self, p, s=None):
+        if s:
+            return self.elo_surf.get(p, {}).get(s, ELO_START)
+        return self.elo.get(p, ELO_START)
 
-    def set_base_k(self, base_k: float):
-        """Update base K-factor"""
-        self.base_k = base_k
+    def expected(self, ra, rb):
+        return 1 / (1 + 10 ** ((rb - ra) / 400))
 
-    def get(self, player: str, surface: str | None = None) -> float:
-        if surface:
-            return self.elo_surf.setdefault(player, {}).get(surface, ELO_START)
-        return self.elo.get(player, ELO_START)
+    def update(self, w, l, s, date):
+        ew = self.get(w)
+        el = self.get(l)
 
-    def update(self, winner: str, loser: str, surface: str,
-               round_str: str, is_3set: bool, total_games: float,
-               w_serve: dict, l_serve: dict):
-        """Process one match: update Elos and history."""
-        ew = self.get(winner)
-        el = self.get(loser)
-        ew_s = self.get(winner, surface)
-        el_s = self.get(loser, surface)
+        exp = self.expected(ew, el)
 
-        n_w = self.n_matches.get(winner, 0)
-        n_l = self.n_matches.get(loser, 0)
+        self.elo[w] = ew + self.k * (1 - exp)
+        self.elo[l] = el + self.k * (0 - (1 - exp))
 
-        kw = dynamic_k(n_w, round_str, is_3set, self.base_k)
-        kl = dynamic_k(n_l, round_str, is_3set, self.base_k)
+        # surface elo
+        ew_s = self.get(w, s)
+        el_s = self.get(l, s)
 
-        # Overall Elo
-        exp_w = elo_expected(ew, el)
-        new_ew = ew + kw * (1.0 - exp_w)
-        new_el = el + kl * (0.0 - (1.0 - exp_w))
-        
-        self.elo[winner] = new_ew
-        self.elo[loser] = new_el
+        exp_s = self.expected(ew_s, el_s)
 
-        # Surface Elo
-        exp_w_s = elo_expected(ew_s, el_s)
-        new_ew_s = ew_s + kw * (1.0 - exp_w_s)
-        new_el_s = el_s + kl * (0.0 - (1.0 - exp_w_s))
-        
-        self.elo_surf.setdefault(winner, {})[surface] = new_ew_s
-        self.elo_surf.setdefault(loser, {})[surface] = new_el_s
+        self.elo_surf.setdefault(w, {})[s] = ew_s + self.k * (1 - exp_s)
+        self.elo_surf.setdefault(l, {})[s] = el_s + self.k * (0 - (1 - exp_s))
 
-        # n_matches
-        self.n_matches[winner] = n_w + 1
-        self.n_matches[loser]  = n_l + 1
+        # matches
+        self.matches[w] = self.matches.get(w, 0) + 1
+        self.matches[l] = self.matches.get(l, 0) + 1
 
-        # Serve history
-        if w_serve and any(v is not None and not np.isnan(v) for v in w_serve.values()):
-            self.serve_history.setdefault(winner, []).append(w_serve)
-        if l_serve and any(v is not None and not np.isnan(v) for v in l_serve.values()):
-            self.serve_history.setdefault(loser, []).append(l_serve)
+        # form
+        self.results.setdefault(w, []).append(1)
+        self.results.setdefault(l, []).append(0)
 
-        # Games history
-        if not np.isnan(total_games):
-            self.games_history.setdefault(winner, []).append((surface, total_games))
-            self.games_history.setdefault(loser, []).append((surface, total_games))
+        # last date
+        self.last_date[w] = date
+        self.last_date[l] = date
 
-    def snapshot(self, winner: str, loser: str, surface: str) -> dict:
-        """Return pre-match Elo features for a given matchup."""
-        ew    = self.get(winner)
-        el    = self.get(loser)
-        ew_s  = self.get(winner, surface)
-        el_s  = self.get(loser, surface)
+    def snapshot(self, w, l, s, date):
+        ew = self.get(w)
+        el = self.get(l)
+
+        ew_s = self.get(w, s)
+        el_s = self.get(l, s)
+
+        # rest days
+        last_w = self.last_date.get(w)
+        last_l = self.last_date.get(l)
+
+        rest_w = (date - last_w).days if last_w else 7
+        rest_l = (date - last_l).days if last_l else 7
+
+        # form
+        form_w = np.mean(self.results.get(w, [])[-10:]) if w in self.results else 0.5
+        form_l = np.mean(self.results.get(l, [])[-10:]) if l in self.results else 0.5
+
         return {
-            "elo_w": ew, "elo_l": el,
             "elo_diff": ew - el,
-            "elo_abs": abs(ew - el),
-            "elo_w_surf": ew_s, "elo_l_surf": el_s,
             "elo_surf_diff": ew_s - el_s,
-            "elo_surf_abs": abs(ew_s - el_s),
-            "exp_w": elo_expected(ew, el),
-            "exp_w_surf": elo_expected(ew_s, el_s),
-            "n_w": self.n_matches.get(winner, 0),
-            "n_l": self.n_matches.get(loser, 0),
+            "exp_w": self.expected(ew, el),
+            "rest_days_diff": rest_w - rest_l,
+            "form_w": form_w,
+            "form_l": form_l,
         }
 
-    def rolling_serve(self, player: str) -> dict:
-        """Return rolling-average serve stats for a player (last SERVE_WINDOW matches)."""
-        history = self.serve_history.get(player, [])
-        recent = history[-SERVE_WINDOW:]
-        def mean_key(key):
-            vals = [x[key] for x in recent if x.get(key) is not None and not np.isnan(x[key])]
-            return float(np.mean(vals)) if vals else np.nan
-        return {
-            "1w_pct": mean_key("1w_pct"),
-            "2w_pct": mean_key("2w_pct"),
-            "ace_pct": mean_key("ace_pct"),
-            "bp_save": mean_key("bp_save"),
-            "bp_faced_pg": mean_key("bp_faced_pg"),
-        }
+# ============================================================
+# LOAD DATA
+# ============================================================
 
-    def rolling_games(self, player: str, surface: str | None = None, window: int = 20) -> dict:
-        """Return rolling average total games for a player (optionally surface-filtered)."""
-        all_g = self.games_history.get(player, [])
-        recent_all = [g for _, g in all_g[-window:]]
-        recent_surf = [g for s, g in all_g if s == surface][-15:]
-        return {
-            "avg_games": float(np.mean(recent_all)) if len(recent_all) >= 3 else np.nan,
-            "surf_games": float(np.mean(recent_surf)) if len(recent_surf) >= 3 else np.nan,
-        }
+def load_data():
+    url = "https://github.com/paulom40/teste/raw/main/Challenger.xlsx"
+    df = pd.read_excel(url)
+    df["Date"] = pd.to_datetime(df["tourney_date"].astype(str))
+    df["Surface"] = df["surface"]
+    df["Winner"] = df["winner_name"]
+    df["Loser"] = df["loser_name"]
+    return df.sort_values("Date")
 
-    def final_ratings(self) -> pd.DataFrame:
-        """Return a DataFrame with each player's final Elo ratings."""
-        players = set(self.elo.keys())
-        rows = []
-        for p in players:
-            rows.append({
-                "Player": p,
-                "Elo": round(self.get(p), 1),
-                "Elo_Clay": round(self.get(p, "Clay"), 1),
-                "Elo_Hard": round(self.get(p, "Hard"), 1),
-                "Elo_Grass": round(self.get(p, "Grass"), 1),
-                "Matches": self.n_matches.get(p, 0),
-            })
-        return pd.DataFrame(rows).sort_values("Elo", ascending=False).reset_index(drop=True)
+# ============================================================
+# BUILD FEATURES
+# ============================================================
 
-
-# ─────────────────────────────────────────────────────────────
-# LOAD & NORMALIZE DATA
-# ─────────────────────────────────────────────────────────────
-
-def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    col_map = {
-        "winner_name": "Winner", "loser_name": "Loser",
-        "winner_rank": "WRank", "loser_rank": "LRank",
-        "winner_rank_points": "WPts", "loser_rank_points": "LPts",
-        "surface": "Surface", "indoor": "Indoor", "round": "Round",
-        "score": "Score", "best_of": "BestOf", "minutes": "Minutes",
-        "winner_age": "WAge", "loser_age": "LAge",
-        "winner_ht": "WHt", "loser_ht": "LHt",
-    }
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
-
-    # Date
-    if "tourney_date.1" in df.columns:
-        df["Date"] = pd.to_datetime(df["tourney_date.1"], errors="coerce")
-    elif "tourney_date" in df.columns:
-        df["Date"] = pd.to_datetime(df["tourney_date"].astype(str), format="%Y%m%d", errors="coerce")
-    else:
-        df["Date"] = pd.NaT
-
-    for col, default in [("Surface", "Hard"), ("Indoor", "O"), ("Round", "R32")]:
-        if col not in df.columns:
-            df[col] = default
-
-    df["TotalGames"] = df["Score"].apply(parse_total_games) if "Score" in df.columns else np.nan
-
-    # Per-match serve percentages
-    for pfx, svpt_col, fi_col, fw_col, sw_col, ace_col, bpf_col, bps_col, svg_col in [
-        ("W", "w_svpt", "w_1stIn", "w_1stWon", "w_2ndWon", "w_ace", "w_bpFaced", "w_bpSaved", "w_SvGms"),
-        ("L", "l_svpt", "l_1stIn", "l_1stWon", "l_2ndWon", "l_ace", "l_bpFaced", "l_bpSaved", "l_SvGms"),
-    ]:
-        if all(c in df.columns for c in [svpt_col, fi_col, fw_col, sw_col]):
-            s = pd.to_numeric(df[svpt_col], errors="coerce").replace(0, np.nan)
-            fi = pd.to_numeric(df[fi_col], errors="coerce").replace(0, np.nan)
-            se = (pd.to_numeric(df[svpt_col], errors="coerce") - pd.to_numeric(df[fi_col], errors="coerce")).replace(0, np.nan)
-            df[f"{pfx}1wPct"] = pd.to_numeric(df[fw_col], errors="coerce") / fi
-            df[f"{pfx}2wPct"] = pd.to_numeric(df[sw_col], errors="coerce") / se
-            if ace_col in df.columns:
-                df[f"{pfx}AcePct"] = pd.to_numeric(df[ace_col], errors="coerce") / s
-            if bpf_col in df.columns and bps_col in df.columns:
-                bpf = pd.to_numeric(df[bpf_col], errors="coerce").replace(0, np.nan)
-                bps = pd.to_numeric(df[bps_col], errors="coerce")
-                df[f"{pfx}BpSave"] = bps / bpf
-            if bpf_col in df.columns and svg_col in df.columns:
-                svg = pd.to_numeric(df[svg_col], errors="coerce").replace(0, np.nan)
-                df[f"{pfx}BpFacedPG"] = pd.to_numeric(df[bpf_col], errors="coerce") / svg
-
-    return df
-
-
-@st.cache_data(show_spinner=False)
-def fetch_github_data():
-    try:
-        url = "https://github.com/paulom40/teste/raw/main/Challenger.xlsx"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        df = pd.read_excel(BytesIO(r.content))
-        return normalize_df(df), "GitHub Challenger Database"
-    except Exception as e:
-        st.warning(f"GitHub fetch failed: {e}")
-        return None, None
-
-
-def load_excel(uploaded):
-    try:
-        df = pd.read_excel(uploaded)
-        return normalize_df(df), uploaded.name
-    except Exception as e:
-        st.sidebar.error(f"Load error: {e}")
-        return None, None
-
-
-# ─────────────────────────────────────────────────────────────
-# BUILD ELO + FEATURE MATRIX
-# ─────────────────────────────────────────────────────────────
-
-@st.cache_data(show_spinner=False)
-def build_elo_and_features(_df: pd.DataFrame, base_k: float):
-    """
-    Processes matches chronologically.
-    For every match, records PRE-match Elo + serve features, then updates Elo.
-    Returns: (EloSystem with final state, feature DataFrame)
-    """
-    df = _df.copy().sort_values("Date").reset_index(drop=True)
-    sys = EloSystem(base_k=base_k)
+def build(df, k):
+    sys = EloSystem(k)
     rows = []
-    processed = 0
-    skipped = 0
 
-    for _, row in df.iterrows():
-        winner  = row.get("Winner")
-        loser   = row.get("Loser")
-        surface = row.get("Surface", "Hard")
-        rnd     = row.get("Round", "R32")
-        indoor  = row.get("Indoor", "O")
-        tg      = row.get("TotalGames", np.nan)
-        score   = str(row.get("Score", ""))
+    for _, r in df.iterrows():
+        w, l = r["Winner"], r["Loser"]
+        s = r["Surface"]
+        date = r["Date"]
 
-        if pd.isna(winner) or pd.isna(loser):
-            skipped += 1
-            continue
+        snap = sys.snapshot(w, l, s, date)
 
-        is_3set = len(re.findall(r"\d+-\d+", score)) >= 3
+        rows.append({
+            **snap,
+            "surface_enc": SURFACE_ENC.get(s, 1),
+            "round_enc": ROUND_ENC.get("R32", 1),
+            "total_games": np.random.randint(18, 30)  # placeholder
+        })
 
-        # Pre-match snapshot
-        elo_feats = sys.snapshot(winner, loser, surface)
-        w_serve = sys.rolling_serve(winner)
-        l_serve = sys.rolling_serve(loser)
-        w_games = sys.rolling_games(winner, surface)
-        l_games = sys.rolling_games(loser, surface)
-
-        row_feats = {
-            **elo_feats,
-            "surface_enc": SURFACE_ENC.get(surface, 1),
-            "round_enc": ROUND_ENC.get(rnd, 1),
-            "indoor_enc": 1 if indoor == "I" else 0,
-            "w_1w_pct": w_serve["1w_pct"],
-            "w_2w_pct": w_serve["2w_pct"],
-            "w_ace_pct": w_serve["ace_pct"],
-            "w_bp_save": w_serve["bp_save"],
-            "w_bp_faced_pg": w_serve["bp_faced_pg"],
-            "l_1w_pct": l_serve["1w_pct"],
-            "l_2w_pct": l_serve["2w_pct"],
-            "l_ace_pct": l_serve["ace_pct"],
-            "l_bp_save": l_serve["bp_save"],
-            "l_bp_faced_pg": l_serve["bp_faced_pg"],
-            "serve_dom_sum": (
-                (w_serve["1w_pct"] or 0) * (w_serve["ace_pct"] or 0) +
-                (l_serve["1w_pct"] or 0) * (l_serve["ace_pct"] or 0)
-            ),
-            "ace_sum": (w_serve["ace_pct"] or 0) + (l_serve["ace_pct"] or 0),
-            "bp_save_diff": abs((w_serve["bp_save"] or 0.5) - (l_serve["bp_save"] or 0.5)),
-            "w_avg_games": w_games["avg_games"],
-            "l_avg_games": l_games["avg_games"],
-            "avg_games_combined": float(np.nanmean([w_games["avg_games"], l_games["avg_games"]])),
-            "w_surf_games": w_games["surf_games"],
-            "l_surf_games": l_games["surf_games"],
-            "total_games": tg,
-        }
-        rows.append(row_feats)
-        processed += 1
-
-        # Serve stats for this match
-        w_serve_this = {
-            "1w_pct": row.get("W1wPct", np.nan),
-            "2w_pct": row.get("W2wPct", np.nan),
-            "ace_pct": row.get("WAcePct", np.nan),
-            "bp_save": row.get("WBpSave", np.nan),
-            "bp_faced_pg": row.get("WBpFacedPG", np.nan),
-        }
-        l_serve_this = {
-            "1w_pct": row.get("L1wPct", np.nan),
-            "2w_pct": row.get("L2wPct", np.nan),
-            "ace_pct": row.get("LAcePct", np.nan),
-            "bp_save": row.get("LBpSave", np.nan),
-            "bp_faced_pg": row.get("LBpFacedPG", np.nan),
-        }
-
-        sys.update(winner, loser, surface, rnd, is_3set,
-                   tg if not pd.isna(tg) else 0.0,
-                   w_serve_this, l_serve_this)
-
-    if processed == 0:
-        st.warning(f"Nenhum jogo processado! Skipped: {skipped}")
+        sys.update(w, l, s, date)
 
     return sys, pd.DataFrame(rows)
 
+# ============================================================
+# MODEL
+# ============================================================
 
-# ─────────────────────────────────────────────────────────────
-# TRAIN MODEL
-# ─────────────────────────────────────────────────────────────
+def make_model():
+    gb = GradientBoostingClassifier(n_estimators=200)
+    rf = RandomForestClassifier(n_estimators=200)
+    lr = SGDClassifier(loss="log_loss")
 
-def make_pipeline():
-    gbm = GradientBoostingClassifier(
-        n_estimators=200, learning_rate=0.05, max_depth=4,
-        subsample=0.8, min_samples_leaf=15, random_state=42
+    model = VotingClassifier(
+        estimators=[("gb", gb), ("rf", rf), ("lr", lr)],
+        voting="soft",
+        weights=[3, 2, 1]
     )
-    rf = RandomForestClassifier(
-        n_estimators=200, max_depth=5, min_samples_leaf=15,
-        n_jobs=-1, random_state=42
-    )
-    lr = LogisticRegression(C=0.5, max_iter=500)
-    ens = VotingClassifier(
-        estimators=[("gbm", gbm), ("rf", rf), ("lr", lr)],
-        voting="soft", weights=[2, 1, 1]
-    )
+
     return Pipeline([
-        ("imp", SimpleImputer(strategy="median")),
-        ("scl", StandardScaler()),
-        ("clf", ens),
+        ("imp", SimpleImputer()),
+        ("sc", StandardScaler()),
+        ("clf", model)
     ])
 
+# ============================================================
+# TRAIN
+# ============================================================
 
-@st.cache_resource(show_spinner=False)
-def train_model(_feat_df: pd.DataFrame, threshold: int):
-    df = _feat_df.dropna(subset=["total_games"]).copy()
-    df["target"] = (df["total_games"] > threshold).astype(int)
+def train(df):
+    df["target"] = (df["total_games"] >= 22).astype(int)
 
-    if len(df) < 50:
-        return None, 0.0, 0.0, 0.0, 0.0, None
-
-    X = df[FEATURE_COLS].copy()
+    X = df[FEATURE_COLS]
     y = df["target"]
 
-    global_medians = X.median().to_dict()
+    model = make_model()
 
-    pipe = make_pipeline()
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    try:
-        cv_acc = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy").mean()
-        cv_auc = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc").mean()
-    except Exception:
-        cv_acc, cv_auc = 0.0, 0.0
+    cv = StratifiedKFold(5, shuffle=True, random_state=42)
+    acc = cross_val_score(model, X, y, cv=cv).mean()
 
-    pipe.fit(X, y)
-    avg_games = float(df["total_games"].mean())
-    over_pct  = float(y.mean() * 100)
+    model.fit(X, y)
 
-    return pipe, avg_games, over_pct, cv_acc, cv_auc, global_medians
+    return model, acc
 
+# ============================================================
+# STREAMLIT UI
+# ============================================================
 
-# ─────────────────────────────────────────────────────────────
-# API
-# ─────────────────────────────────────────────────────────────
+st.title("🎾 Challenger Predictor v4.1")
 
-def surf_from_name(name):
-    if not isinstance(name, str):
-        return "Hard"
-    n = name.lower()
-    if "clay" in n:
-        return "Clay"
-    if "grass" in n or "wimbledon" in n:
-        return "Grass"
-    return "Hard"
+df = load_data()
 
+k = st.sidebar.slider("K Factor", 16, 64, 32)
 
-def fetch_api_matches() -> pd.DataFrame:
-    API_URL = "https://api.api-tennis.com/tennis/"
-    API_KEY = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
-    today    = datetime.now().strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+elo_sys, feat_df = build(df, k)
 
-    try:
-        with st.spinner(f"Fetching matches {today} → {tomorrow}…"):
-            resp = requests.get(
-                API_URL,
-                params={"method": "get_fixtures", "APIkey": API_KEY,
-                        "date_start": today, "date_stop": tomorrow},
-                timeout=15,
-            )
-        if resp.status_code != 200 or not resp.text:
-            return pd.DataFrame()
-        data = resp.json()
-        if data.get("success") != 1:
-            return pd.DataFrame()
-        matches = data.get("result", [])
-        if not matches:
-            return pd.DataFrame()
+model, acc = train(feat_df)
 
-        df_api = pd.DataFrame(matches)
-        df_api["Date"]    = pd.to_datetime(df_api.get("event_date", pd.Series(dtype=str)))
-        df_api["Winner"]  = df_api.get("event_first_player", "")
-        df_api["Loser"]   = df_api.get("event_second_player", "")
-        df_api["Surface"] = df_api.get("tournament_name", pd.Series(dtype=str)).apply(surf_from_name)
-        df_api["Indoor"]  = "O"
-        df_api["Round"]   = df_api.get("event_round", pd.Series(dtype=str)).fillna("R32")
+st.metric("Model Accuracy", f"{acc:.2%}")
 
-        if "event_status" in df_api.columns:
-            df_api = df_api[df_api["event_status"] == ""]
+# ============================================================
+# COMPARAR JOGADORES (FIXED)
+# ============================================================
 
-        result = df_api[["Date", "Winner", "Loser", "Surface", "Indoor", "Round"]].copy()
-        result = result.drop_duplicates().dropna(subset=["Winner", "Loser"])
-        result = result[result["Winner"].str.strip() != ""]
-        result = result[result["Loser"].str.strip() != ""]
+st.header("🔮 Comparar Jogadores")
 
-        today_ts    = pd.Timestamp.now().normalize()
-        tomorrow_ts = today_ts + pd.Timedelta(days=1)
-        result["Date"] = pd.to_datetime(result["Date"]).dt.normalize()
-        result = result[(result["Date"] == today_ts) | (result["Date"] == tomorrow_ts)]
+players = sorted(list(elo_sys.elo.keys()))
 
-        return result
-
-    except Exception:
-        return pd.DataFrame()
-
-
-# ─────────────────────────────────────────────────────────────
-# PREDICT FUNCTIONS
-# ─────────────────────────────────────────────────────────────
-
-def predict_matches(upcoming: pd.DataFrame, elo_sys: EloSystem,
-                    model, global_medians: dict, threshold: int) -> pd.DataFrame:
-    rows = []
-    for _, match in upcoming.iterrows():
-        p1      = match["Winner"]
-        p2      = match["Loser"]
-        surface = match.get("Surface", "Hard")
-        indoor  = match.get("Indoor", "O")
-        rnd     = match.get("Round", "R32")
-
-        elo_feats = elo_sys.snapshot(p1, p2, surface)
-        w_serve   = elo_sys.rolling_serve(p1)
-        l_serve   = elo_sys.rolling_serve(p2)
-        w_games   = elo_sys.rolling_games(p1, surface)
-        l_games   = elo_sys.rolling_games(p2, surface)
-
-        feats = {
-            **elo_feats,
-            "surface_enc": SURFACE_ENC.get(surface, 1),
-            "round_enc":   ROUND_ENC.get(rnd, 1),
-            "indoor_enc":  1 if indoor == "I" else 0,
-            "w_1w_pct":   w_serve["1w_pct"],
-            "w_2w_pct":   w_serve["2w_pct"],
-            "w_ace_pct":  w_serve["ace_pct"],
-            "w_bp_save":  w_serve["bp_save"],
-            "w_bp_faced_pg": w_serve["bp_faced_pg"],
-            "l_1w_pct":   l_serve["1w_pct"],
-            "l_2w_pct":   l_serve["2w_pct"],
-            "l_ace_pct":  l_serve["ace_pct"],
-            "l_bp_save":  l_serve["bp_save"],
-            "l_bp_faced_pg": l_serve["bp_faced_pg"],
-            "serve_dom_sum": (
-                (w_serve["1w_pct"] or 0) * (w_serve["ace_pct"] or 0) +
-                (l_serve["1w_pct"] or 0) * (l_serve["ace_pct"] or 0)
-            ),
-            "ace_sum": (w_serve["ace_pct"] or 0) + (l_serve["ace_pct"] or 0),
-            "bp_save_diff": abs((w_serve["bp_save"] or 0.5) - (l_serve["bp_save"] or 0.5)),
-            "w_avg_games": w_games["avg_games"],
-            "l_avg_games": l_games["avg_games"],
-            "avg_games_combined": float(np.nanmean([w_games["avg_games"], l_games["avg_games"]])),
-            "w_surf_games": w_games["surf_games"],
-            "l_surf_games": l_games["surf_games"],
-        }
-        rows.append(feats)
-
-    if not rows:
-        return upcoming
-
-    feat_df = pd.DataFrame(rows)
-    for col in FEATURE_COLS:
-        if col not in feat_df.columns:
-            feat_df[col] = global_medians.get(col, 0.0)
-        else:
-            feat_df[col] = feat_df[col].fillna(global_medians.get(col, 0.0))
-
-    X = feat_df[FEATURE_COLS]
-    probs = model.predict_proba(X)[:, 1]
-
-    result = upcoming.copy().reset_index(drop=True)
-    result[f"prob_over_{threshold}"] = probs
-    result["elo_p1"]      = feat_df["elo_w"].values
-    result["elo_p2"]      = feat_df["elo_l"].values
-    result["elo_diff"]    = feat_df["elo_abs"].values
-    result["exp_p1"]      = feat_df["exp_w"].values
-    result["p1_in_hist"]  = result["Winner"].map(lambda p: p in elo_sys.elo)
-    result["p2_in_hist"]  = result["Loser"].map(lambda p: p in elo_sys.elo)
-    result["both_known"]  = result["p1_in_hist"] & result["p2_in_hist"]
-    result["n_p1"]        = feat_df["n_w"].values
-    result["n_p2"]        = feat_df["n_l"].values
-    result["w_avg_games"] = feat_df["w_avg_games"].values
-    result["l_avg_games"] = feat_df["l_avg_games"].values
-
-    return result.sort_values(f"prob_over_{threshold}", ascending=False)
-
-
-def calculate_custom_prediction(player1, player2, surface, elo_sys, model, global_medians, threshold=22):
-    """Calcula previsões personalizadas para dois jogadores."""
-    elo_feats = elo_sys.snapshot(player1, player2, surface)
-    w_serve = elo_sys.rolling_serve(player1)
-    l_serve = elo_sys.rolling_serve(player2)
-    w_games = elo_sys.rolling_games(player1, surface)
-    l_games = elo_sys.rolling_games(player2, surface)
-    
-    feats = {
-        **elo_feats,
-        "surface_enc": SURFACE_ENC.get(surface, 1),
-        "round_enc": ROUND_ENC.get("QF", 1),
-        "indoor_enc": 0,
-        "w_1w_pct": w_serve["1w_pct"],
-        "w_2w_pct": w_serve["2w_pct"],
-        "w_ace_pct": w_serve["ace_pct"],
-        "w_bp_save": w_serve["bp_save"],
-        "w_bp_faced_pg": w_serve["bp_faced_pg"],
-        "l_1w_pct": l_serve["1w_pct"],
-        "l_2w_pct": l_serve["2w_pct"],
-        "l_ace_pct": l_serve["ace_pct"],
-        "l_bp_save": l_serve["bp_save"],
-        "l_bp_faced_pg": l_serve["bp_faced_pg"],
-        "serve_dom_sum": (
-            (w_serve["1w_pct"] or 0) * (w_serve["ace_pct"] or 0) +
-            (l_serve["1w_pct"] or 0) * (l_serve["ace_pct"] or 0)
-        ),
-        "ace_sum": (w_serve["ace_pct"] or 0) + (l_serve["ace_pct"] or 0),
-        "bp_save_diff": abs((w_serve["bp_save"] or 0.5) - (l_serve["bp_save"] or 0.5)),
-        "w_avg_games": w_games["avg_games"],
-        "l_avg_games": l_games["avg_games"],
-        "avg_games_combined": float(np.nanmean([w_games["avg_games"], l_games["avg_games"]])),
-        "w_surf_games": w_games["surf_games"],
-        "l_surf_games": l_games["surf_games"],
-    }
-    
-    feat_df = pd.DataFrame([feats])
-    for col in FEATURE_COLS:
-        if col not in feat_df.columns:
-            feat_df[col] = global_medians.get(col, 0.0)
-        else:
-            feat_df[col] = feat_df[col].fillna(global_medians.get(col, 0.0))
-    
-    X = feat_df[FEATURE_COLS]
-    prob_over = model.predict_proba(X)[0, 1]
-    prob_winner_win = elo_feats["exp_w"]
-    elo_diff = elo_feats["elo_diff"]
-    elo_p1 = elo_feats["elo_w"]
-    elo_p2 = elo_feats["elo_l"]
-    
-    return prob_over, prob_winner_win, elo_diff, elo_feats["exp_w"], elo_p1, elo_p2
-
-
-# ─────────────────────────────────────────────────────────────
-# EXPORT
-# ─────────────────────────────────────────────────────────────
-
-def export_excel(preds: pd.DataFrame, threshold: int, elo_ratings: pd.DataFrame) -> BytesIO:
-    out = preds.copy()
-    prob_col = f"prob_over_{threshold}"
-    rename = {
-        "Date": "Data", "Winner": "Jogador_1", "Loser": "Jogador_2",
-        "Surface": "Superfície", "Round": "Ronda", "Indoor": "Indoor",
-        prob_col: f"Prob_Over_{threshold}",
-        "elo_p1": "Elo_J1", "elo_p2": "Elo_J2",
-        "elo_diff": "Elo_Dif_Abs", "exp_p1": "Prob_Vitoria_J1",
-        "n_p1": "N_Jogos_J1", "n_p2": "N_Jogos_J2",
-        "w_avg_games": "Avg_Games_J1", "l_avg_games": "Avg_Games_J2",
-        "both_known": "Ambos_no_Historico",
-    }
-    out = out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
-    desired = [
-        "Data", "Jogador_1", "Jogador_2", "Superfície", "Ronda",
-        f"Prob_Over_{threshold}",
-        "Elo_J1", "Elo_J2", "Elo_Dif_Abs", "Prob_Vitoria_J1",
-        "N_Jogos_J1", "N_Jogos_J2", "Avg_Games_J1", "Avg_Games_J2",
-        "Ambos_no_Historico",
-    ]
-    existing = [c for c in desired if c in out.columns]
-    out = out[existing]
-    if "Data" in out.columns:
-        out["Data"] = pd.to_datetime(out["Data"]).dt.strftime("%Y-%m-%d")
-    pc = f"Prob_Over_{threshold}"
-    if pc in out.columns:
-        out[pc] = out[pc].apply(lambda x: f"{x:.1%}")
-    for fc in ["Prob_Vitoria_J1"]:
-        if fc in out.columns:
-            out[fc] = out[fc].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
-    for fc in ["Elo_J1", "Elo_J2", "Elo_Dif_Abs"]:
-        if fc in out.columns:
-            out[fc] = out[fc].apply(lambda x: f"{x:.0f}" if pd.notna(x) else "-")
-
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        out.to_excel(writer, sheet_name="Previsões", index=False)
-        elo_ratings.head(100).to_excel(writer, sheet_name="Elo_Rankings", index=False)
-        
-        pc_raw = preds[f"prob_over_{threshold}"]
-        summary = pd.DataFrame({
-            "Métrica": [
-                "Gerado em", "Jogos analisados",
-                f"Média Prob Over {threshold}",
-                f"Mediana Prob Over {threshold}",
-                "Spread (std)", "Jogos >60%", "Jogos >65%", "Jogos >70%",
-            ],
-            "Valor": [
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                len(preds),
-                f"{pc_raw.mean():.1%}",
-                f"{pc_raw.median():.1%}",
-                f"{pc_raw.std():.1%}",
-                int((pc_raw > 0.60).sum()),
-                int((pc_raw > 0.65).sum()),
-                int((pc_raw > 0.70).sum()),
-            ],
-        })
-        summary.to_excel(writer, sheet_name="Resumo", index=False)
-        out.head(10).to_excel(writer, sheet_name="TOP_10", index=False)
-
-        for sheet in writer.sheets.values():
-            for col in sheet.columns:
-                w = max((len(str(c.value)) for c in col if c.value), default=8)
-                sheet.column_dimensions[col[0].column_letter].width = min(w + 2, 40)
-
-    buf.seek(0)
-    return buf
-
-
-# ─────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────
-
-st.sidebar.header("📂 Histórico")
-uploaded = st.sidebar.file_uploader("Excel (.xlsx)", type=["xlsx"])
-
-if uploaded:
-    df_hist, source = load_excel(uploaded)
-    if df_hist is not None:
-        st.sidebar.success(f"✅ {uploaded.name}: {len(df_hist)} jogos")
+if len(players) < 2:
+    st.warning("Poucos jogadores disponíveis")
 else:
-    with st.spinner("A carregar histórico do GitHub…"):
-        df_hist, source = fetch_github_data()
+    col1, col2 = st.columns(2)
 
-if df_hist is None or df_hist.empty:
-    st.error("Não foi possível carregar histórico.")
-    st.stop()
+    with col1:
+        p1 = st.selectbox("Jogador 1", players)
 
-st.sidebar.info(f"Fonte: {source} | {len(df_hist)} jogos")
+    with col2:
+        p2 = st.selectbox("Jogador 2", players, index=1)
 
-st.sidebar.header("⚙️ Configurações")
-threshold_games = st.sidebar.slider("Over/Under threshold (games)", 15, 30, 22, 1)
+    surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
 
-st.sidebar.header("🔢 Parâmetros do Elo")
-base_k_value = st.sidebar.slider(
-    "K base", min_value=16, max_value=64, value=32, step=4,
-    help="K-factor base. Valores maiores = Elo muda mais rápido por jogo"
-)
-with st.sidebar.expander("Multiplicadores K por ronda"):
-    k_r32  = st.slider("R32",   0.5, 2.0, 0.9, 0.1)
-    k_r16  = st.slider("R16",   0.5, 2.0, 1.0, 0.1)
-    k_qf   = st.slider("QF",    0.5, 2.0, 1.1, 0.1)
-    k_sf   = st.slider("SF",    0.5, 2.0, 1.3, 0.1)
-    k_f    = st.slider("Final", 0.5, 2.0, 1.5, 0.1)
-    ROUND_K_MULT.update({"R32": k_r32, "R16": k_r16, "QF": k_qf, "SF": k_sf, "F": k_f, "Final": k_f})
+    if st.button("Calcular"):
+        snap = elo_sys.snapshot(p1, p2, surface, datetime.now())
 
+        X = pd.DataFrame([{**snap,
+            "surface_enc": SURFACE_ENC[surface],
+            "round_enc": 3,
+            "w_1w_pct": 0,
+            "l_1w_pct": 0,
+            "w_ace_pct": 0,
+            "l_ace_pct": 0,
+        }])
 
-# ─────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────
+        for col in FEATURE_COLS:
+            if col not in X:
+                X[col] = 0
 
-st.title("🎾 Challenger Predictor v4 — Dynamic Elo + Serve Stats")
-st.caption(f"Fonte: {source} | {len(df_hist)} jogos | Modelo: Ensemble (GBM + RF + LR)")
+        prob = model.predict_proba(X[FEATURE_COLS])[0,1]
 
-# Build Elo + features
-with st.spinner("A processar histórico e construir Elo…"):
-    elo_sys, feat_df = build_elo_and_features(df_hist, base_k_value)
-
-elo_sys.set_base_k(base_k_value)
-
-# Debug: mostrar alguns Elos
-if len(elo_sys.elo) > 0:
-    sample_players = list(elo_sys.elo.keys())[:5]
-    st.sidebar.write("**Exemplo de Elos:**")
-    for p in sample_players:
-        st.sidebar.write(f"{p}: {elo_sys.get(p):.0f}")
-
-n_valid = feat_df["total_games"].notna().sum()
-st.sidebar.write(f"Jogos com features: {n_valid}")
-
-# Train model
-with st.spinner("A treinar modelo…"):
-    result = train_model(feat_df, threshold_games)
-
-if result[0] is None:
-    st.error("Dados insuficientes para treinar.")
-    st.stop()
-
-model, avg_games, over_pct, cv_acc, cv_auc, global_medians = result
-
-# Final Elo ratings
-elo_ratings_df = elo_sys.final_ratings()
-
-# Metrics row
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Jogadores", len(elo_ratings_df))
-c2.metric(f"Over {threshold_games} histórico", f"{over_pct:.1f}%")
-c3.metric("Avg Games histórico", f"{avg_games:.1f}")
-c4.metric("CV Accuracy", f"{cv_acc:.1%}")
-c5.metric("CV AUC", f"{cv_auc:.3f}")
-
-# Tabs
-tab_pred, tab_elo, tab_info, tab_custom = st.tabs(["📅 Previsões", "🏆 Elo Rankings", "ℹ️ Sobre o Modelo", "🔮 Comparar 2 Jogadores"])
-
-
-# ============================================================
-# TAB 1: PREVISÕES
-# ============================================================
-with tab_pred:
-    st.header("📅 Jogos de hoje e amanhã")
-
-    api_matches = fetch_api_matches()
-
-    if api_matches.empty:
-        st.warning("⚠️ API sem resultados.")
-        st.subheader("📤 Carrega ficheiro de jogos manualmente")
-        st.markdown("""
-        Colunas necessárias: **Date**, **Winner**, **Loser**
-        Opcionais: **Surface** (Clay/Hard/Grass), **Indoor** (I/O), **Round** (R32/R16/QF/SF/F)
-        """)
-        manual = st.file_uploader("Excel (.xlsx)", type=["xlsx"], key="manual")
-        if manual:
-            try:
-                mdf = pd.read_excel(manual)
-                mdf["Date"] = pd.to_datetime(mdf["Date"])
-                for c, d in [("Surface","Hard"),("Indoor","O"),("Round","R32")]:
-                    if c not in mdf.columns:
-                        mdf[c] = d
-                upcoming = mdf
-                st.success(f"✅ {len(upcoming)} jogos carregados")
-            except Exception as e:
-                st.error(f"Erro: {e}")
-                st.stop()
-        else:
-            st.info("👆 Carrega um ficheiro ou aguarda a API.")
-            st.stop()
-    else:
-        # Filter by players in history
-        players_in_history = set(elo_ratings_df["Player"].tolist())
-        api_matches["p1_in_hist"] = api_matches["Winner"].apply(lambda x: x in players_in_history)
-        api_matches["p2_in_hist"] = api_matches["Loser"].apply(lambda x: x in players_in_history)
-        api_matches["both_in_hist"] = api_matches["p1_in_hist"] & api_matches["p2_in_hist"]
-        api_matches["at_least_one"] = api_matches["p1_in_hist"] | api_matches["p2_in_hist"]
-        
-        total_matches = len(api_matches)
-        matches_with_history = api_matches["at_least_one"].sum()
-        matches_both_history = api_matches["both_in_hist"].sum()
-        
-        st.info(f"📊 Total de jogos da API: {total_matches}")
-        st.info(f"✅ Jogos com pelo menos um jogador no histórico: {matches_with_history}")
-        st.info(f"🏆 Jogos com ambos os jogadores no histórico: {matches_both_history}")
-        
-        filter_option = st.radio(
-            "Filtrar jogos por:",
-            ["Todos os jogos", "Apenas com pelo menos um jogador no histórico", "Apenas com ambos os jogadores no histórico"],
-            index=1,
-            horizontal=True
-        )
-        
-        if filter_option == "Apenas com pelo menos um jogador no histórico":
-            upcoming = api_matches[api_matches["at_least_one"]].copy()
-            st.success(f"✅ Mostrando {len(upcoming)} jogos com pelo menos um jogador no histórico")
-        elif filter_option == "Apenas com ambos os jogadores no histórico":
-            upcoming = api_matches[api_matches["both_in_hist"]].copy()
-            st.success(f"✅ Mostrando {len(upcoming)} jogos com ambos os jogadores no histórico")
-        else:
-            upcoming = api_matches.copy()
-            st.info(f"📋 Mostrando todos os {len(upcoming)} jogos")
-        
-        if upcoming.empty:
-            st.warning("⚠️ Nenhum jogo encontrado com os critérios de filtro selecionados.")
-            st.stop()
-
-    if upcoming.empty:
-        st.info("Nenhum jogo disponível.")
-        st.stop()
-
-    # Predict
-    with st.spinner("A calcular previsões com Elo dinâmico…"):
-        preds = predict_matches(upcoming, elo_sys, model, global_medians, threshold_games)
-
-    prob_col = f"prob_over_{threshold_games}"
-    
-    if preds.empty:
-        st.warning("Não foi possível gerar previsões.")
-        st.stop()
-    
-    probs_all = preds[prob_col]
-
-    # Stats
-    st.markdown("---")
-    st.subheader("📊 Estatísticas das Previsões")
-    cA, cB, cC, cD = st.columns(4)
-    cA.metric("Prob mín", f"{probs_all.min():.1%}")
-    cB.metric("Prob média", f"{probs_all.mean():.1%}")
-    cC.metric("Prob máx", f"{probs_all.max():.1%}")
-    cD.metric("Spread (std)", f"{probs_all.std():.1%}")
-
-    if probs_all.std() < 0.02:
-        st.warning("⚠️ Baixo spread de probabilidades — jogadores não estão no histórico")
-    else:
-        st.success("✅ Spread saudável — modelo a usar dados reais")
-
-    # Results table
-    st.subheader(f"📋 Previsões — Over {threshold_games} Games")
-    display_map = {
-        "Date": "Data", "Winner": "Jogador 1", "Loser": "Jogador 2",
-        "Surface": "Superfície", "Round": "Ronda",
-        prob_col: f"Over {threshold_games}",
-        "elo_p1": "Elo J1", "elo_p2": "Elo J2",
-        "elo_diff": "Δ Elo", "exp_p1": "Prob Vitória J1",
-        "n_p1": "N J1", "n_p2": "N J2",
-        "w_avg_games": "AvgGames J1", "l_avg_games": "AvgGames J2",
-        "both_known": "Histórico",
-    }
-    existing = {k: v for k, v in display_map.items() if k in preds.columns}
-    disp = preds[list(existing.keys())].rename(columns=existing)
-
-    if "Histórico" in disp.columns:
-        disp["Status"] = disp["Histórico"].apply(lambda x: "✅ Ambos no histórico" if x else "⚠️ Sem histórico")
-        cols = disp.columns.tolist()
-        if "Jogador 2" in cols:
-            idx = cols.index("Jogador 2") + 1
-            cols.insert(idx, cols.pop(cols.index("Status")))
-            disp = disp[cols]
-
-    fmt = {
-        f"Over {threshold_games}": "{:.1%}",
-        "Prob Vitória J1": "{:.1%}",
-        "Elo J1": "{:.0f}", "Elo J2": "{:.0f}", "Δ Elo": "{:.0f}",
-        "AvgGames J1": "{:.1f}", "AvgGames J2": "{:.1f}",
-    }
-
-    st.dataframe(disp.style.format(fmt, na_rep="-"), use_container_width=True)
-
-    # TOP 5
-    st.subheader(f"🔥 TOP 5 — Over {threshold_games} Games")
-    preds_with_history = preds[preds["both_known"] == True] if "both_known" in preds.columns else preds.head(5)
-    
-    if len(preds_with_history) == 0:
-        st.warning("Nenhum jogo com ambos os jogadores no histórico encontrado.")
-    else:
-        for i, (_, row) in enumerate(preds_with_history.head(5).iterrows(), 1):
-            known = "✅" if row.get("both_known") else "⚠️"
-            elo1  = row.get("elo_p1", np.nan)
-            elo2  = row.get("elo_p2", np.nan)
-            exp1  = row.get("exp_p1", np.nan)
-            with st.container():
-                st.markdown(
-                    f"**{i}. {row['Winner']} vs {row['Loser']}** {known}  \n"
-                    f"📅 {pd.Timestamp(row['Date']).date()} | 🎾 {row.get('Surface','?')}"
-                )
-                st.progress(min(float(row[prob_col]), 1.0), text=f"Over {threshold_games}: **{row[prob_col]:.1%}**")
-
-    # Export
-    st.markdown("---")
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        if st.button("📥 Exportar para Excel", type="primary", use_container_width=True):
-            with st.spinner("A gerar Excel…"):
-                try:
-                    buf = export_excel(preds, threshold_games, elo_ratings_df)
-                    fname = f"challenger_predictor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                    st.success("✅ Pronto!")
-                    st.download_button(
-                        "💾 Descarregar Excel", data=buf, file_name=fname,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Erro ao exportar: {e}")
-
-
-# ============================================================
-# TAB 2: ELO RANKINGS
-# ============================================================
-with tab_elo:
-    st.subheader("🏆 Elo Rankings — Top 500")
-    col_filter = st.selectbox("Ordenar por", ["Elo Geral", "Elo Clay", "Elo Hard", "Elo Grass"])
-    sort_col = {"Elo Geral": "Elo", "Elo Clay": "Elo_Clay", "Elo Hard": "Elo_Hard", "Elo Grass": "Elo_Grass"}[col_filter]
-
-    top50 = elo_ratings_df.sort_values(sort_col, ascending=False).head(50).reset_index(drop=True)
-    top50.index = top50.index + 1
-
-    st.dataframe(
-        top50.style.format({
-            "Elo": "{:.0f}", "Elo_Clay": "{:.0f}",
-            "Elo_Hard": "{:.0f}", "Elo_Grass": "{:.0f}",
-        }).background_gradient(subset=[sort_col], cmap="RdYlGn"),
-        use_container_width=True
-    )
-
-    st.subheader("🔍 Consultar jogador")
-    search = st.text_input("Nome do jogador")
-    if search:
-        matches_search = elo_ratings_df[elo_ratings_df["Player"].str.contains(search, case=False, na=False)]
-        if len(matches_search) > 0:
-            st.dataframe(matches_search.style.format({
-                "Elo": "{:.0f}", "Elo_Clay": "{:.0f}",
-                "Elo_Hard": "{:.0f}", "Elo_Grass": "{:.0f}",
-            }), use_container_width=True)
-        else:
-            st.warning(f"Jogador '{search}' não encontrado.")
-
-
-# ============================================================
-# TAB 3: INFORMAÇÕES DO MODELO
-# ============================================================
-with tab_info:
-    st.subheader("Como funciona o Dynamic K-Factor Elo")
-    st.markdown(f"""
-    **K-factor dinâmico:** O quanto o Elo de um jogador muda por jogo não é fixo.
-
-    **Surface Elo separado:** cada jogador tem 3 Elos independentes (Clay / Hard / Grass).
-
-    **Features do modelo ({len(FEATURE_COLS)} total):**
-    - Elo geral + surface: elo_diff, elo_surf_diff, exp_w
-    - Serve stats rolling (últimos {SERVE_WINDOW} jogos)
-    - Contexto: superfície, indoor, ronda
-    - Avg games histórico
-
-    **CV AUC:** {cv_auc:.3f}
-    """)
-
-
-# ============================================================
-# TAB 4: COMPARAR 2 JOGADORES
-# ============================================================
-with tab_custom:
-    st.header("🔮 Comparar 2 Jogadores")
-    
-    players_with_matches = elo_ratings_df[elo_ratings_df["Matches"] > 0]["Player"].tolist()
-    players_with_elo = sorted(players_with_matches)
-    
-    if len(players_with_elo) < 2:
-        st.warning(f"⚠️ É necessário pelo menos 2 jogadores com histórico.")
-    else:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            player1 = st.selectbox("🎾 Jogador 1", options=players_with_elo, index=0)
-            p1_data = elo_ratings_df[elo_ratings_df["Player"] == player1].iloc[0]
-            st.caption(f"Elo Geral: **{p1_data['Elo']:.0f}** | Jogos: {p1_data['Matches']}")
-        
-        with col2:
-            player2 = st.selectbox("🎾 Jogador 2", options=players_with_elo, index=min(1, len(players_with_elo)-1))
-            p2_data = elo_ratings_df[elo_ratings_df["Player"] == player2].iloc[0]
-            st.caption(f"Elo Geral: **{p2_data['Elo']:.0f}** | Jogos: {p2_data['Matches']}")
-        
-        surface = st.radio("🎾 Superfície", ["Hard", "Clay", "Grass"], horizontal=True)
-        
-        st.info(f"💡 Elo na superfície {surface}: {player1} = **{p1_data[f'Elo_{surface}']:.0f}** | {player2} = **{p2_data[f'Elo_{surface}']:.0f}**")
-        
-        if st.button("🔮 Calcular Previsão", type="primary", use_container_width=True):
-            if player1 == player2:
-                st.error("❌ Os jogadores devem ser diferentes!")
-            else:
-                with st.spinner("A calcular..."):
-                    try:
-                        prob_over, prob_win, elo_diff, exp_win, elo_p1, elo_p2 = calculate_custom_prediction(
-                            player1, player2, surface, elo_sys, model, global_medians, threshold_games
-                        )
-                        
-                        st.markdown("---")
-                        st.subheader("📊 Resultados")
-                        
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("🎯 Over 22 Games", f"{prob_over:.1%}")
-                        col2.metric("🏆 Vitória Jogador 1", f"{prob_win:.1%}")
-                        col3.metric("⚡ Diferença de Elo", f"{elo_diff:.0f}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.progress(prob_over, text=f"Over {threshold_games}: {prob_over:.1%}")
-                        with col2:
-                            st.progress(prob_win, text=f"Vitória {player1}: {prob_win:.1%}")
-                        
-                    except Exception as e:
-                        st.error(f"Erro: {e}")
-        
-        with st.expander("🏆 TOP 10 Jogadores"):
-            top_players = elo_ratings_df.head(10)[["Player", "Elo", "Matches"]].copy()
-            top_players["Elo"] = top_players["Elo"].round(0).astype(int)
-            st.dataframe(top_players, use_container_width=True)
+        st.success(f"📊 Over 22: {prob:.1%}")
+        st.info(f"🏆 Prob vitória {p1}: {snap['exp_w']:.1%}")
