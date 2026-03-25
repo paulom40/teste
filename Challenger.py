@@ -636,17 +636,17 @@ def predict_matches(upcoming: pd.DataFrame, elo_sys: EloSystem,
 # CUSTOM PREDICTION FUNCTION
 # ─────────────────────────────────────────────────────────────
 
-def calculate_custom_prediction(winner_name, loser_name, surface, elo_sys, model, global_medians, threshold=22):
+def calculate_custom_prediction(player1, player2, surface, elo_sys, model, global_medians, threshold=22):
     """
     Calcula previsões personalizadas para dois jogadores e uma superfície específica
-    Retorna: (prob_over, prob_winner_win, elo_diff, exp_win)
+    Retorna: (prob_over, prob_winner_win, elo_diff, exp_win, elo_p1, elo_p2)
     """
     # Obter features pré-jogo
-    elo_feats = elo_sys.snapshot(winner_name, loser_name, surface)
-    w_serve = elo_sys.rolling_serve(winner_name)
-    l_serve = elo_sys.rolling_serve(loser_name)
-    w_games = elo_sys.rolling_games(winner_name, surface)
-    l_games = elo_sys.rolling_games(loser_name, surface)
+    elo_feats = elo_sys.snapshot(player1, player2, surface)
+    w_serve = elo_sys.rolling_serve(player1)
+    l_serve = elo_sys.rolling_serve(player2)
+    w_games = elo_sys.rolling_games(player1, surface)
+    l_games = elo_sys.rolling_games(player2, surface)
     
     # Construir feature vector
     feats = {
@@ -698,7 +698,11 @@ def calculate_custom_prediction(winner_name, loser_name, surface, elo_sys, model
     # Diferença de Elo
     elo_diff = elo_feats["elo_diff"]
     
-    return prob_over, prob_winner_win, elo_diff, elo_feats["exp_w"]
+    # Elos individuais
+    elo_p1 = elo_feats["elo_w"]
+    elo_p2 = elo_feats["elo_l"]
+    
+    return prob_over, prob_winner_win, elo_diff, elo_feats["exp_w"], elo_p1, elo_p2
 
 
 # ─────────────────────────────────────────────────────────────
@@ -863,7 +867,7 @@ c4.metric("CV Accuracy", f"{cv_acc:.1%}")
 c5.metric("CV AUC", f"{cv_auc:.3f}")
 
 # ── Tabs ─────────────────────────────────────────────────────
-tab_pred, tab_elo, tab_info, tab_custom = st.tabs(["📅 Previsões", "🏆 Elo Rankings", "ℹ️ Sobre o Modelo", "🔮 Previsão Personalizada"])
+tab_pred, tab_elo, tab_info, tab_custom = st.tabs(["📅 Previsões", "🏆 Elo Rankings", "ℹ️ Sobre o Modelo", "🔮 Comparar 2 Jogadores"])
 
 # ============================================================
 # TAB 1: PREVISÕES
@@ -937,6 +941,16 @@ with tab_pred:
     existing = {k: v for k, v in display_map.items() if k in preds.columns}
     disp = preds[list(existing.keys())].rename(columns=existing)
 
+    # Adicionar coluna de aviso para jogadores sem histórico
+    if "Histórico" in disp.columns:
+        disp["Status"] = disp["Histórico"].apply(lambda x: "✅ Com histórico" if x else "⚠️ Sem histórico")
+        # Mover para posição adequada
+        cols = disp.columns.tolist()
+        if "Jogador 2" in cols:
+            idx = cols.index("Jogador 2") + 1
+            cols.insert(idx, cols.pop(cols.index("Status")))
+            disp = disp[cols]
+
     fmt = {
         f"Over {threshold_games}": "{:.1%}",
         "Prob Vitória J1": "{:.1%}",
@@ -944,11 +958,7 @@ with tab_pred:
         "AvgGames J1": "{:.1f}", "AvgGames J2": "{:.1f}",
     }
 
-    st.dataframe(
-        disp.style.format(fmt, na_rep="-")
-        .background_gradient(subset=[f"Over {threshold_games}"], cmap="RdYlGn"),
-        use_container_width=True
-    )
+    st.dataframe(disp.style.format(fmt, na_rep="-"), use_container_width=True)
 
     # TOP 5
     st.subheader(f"🔥 TOP 5 — Over {threshold_games} Games")
@@ -1051,54 +1061,63 @@ with tab_info:
     """)
 
 # ============================================================
-# TAB 4: PREVISÃO PERSONALIZADA
+# TAB 4: COMPARAR 2 JOGADORES (PREVISÃO PERSONALIZADA)
 # ============================================================
 with tab_custom:
-    st.header("🔮 Previsão Personalizada")
+    st.header("🔮 Comparar 2 Jogadores")
     st.markdown("""
-    Selecione dois jogadores e uma superfície para calcular:
+    Selecione dois jogadores do histórico e uma superfície para simular o confronto:
     - **Probabilidade de Over 22 games** (jogo com mais de 22 games)
-    - **Probabilidade do Jogador 1 vencer** (baseada em Elo)
+    - **Probabilidade de vitória do Jogador 1** (baseada em Elo)
     - **Diferença de Elo** entre os jogadores
+    - **Elo específico da superfície** selecionada
     """)
     
-    # Obter lista de jogadores com Elo registado
-    players_list = sorted(elo_ratings_df["Player"].tolist())
+    # Obter lista de jogadores com Elo registado e com pelo menos alguns jogos
+    players_with_matches = elo_ratings_df[elo_ratings_df["Matches"] > 0]["Player"].tolist()
+    players_with_elo = sorted(players_with_matches)
     
-    if len(players_list) < 2:
-        st.warning("⚠️ É necessário pelo menos 2 jogadores no histórico para fazer previsões personalizadas.")
-        st.info(f"Atualmente existem {len(players_list)} jogadores no sistema.")
+    if len(players_with_elo) < 2:
+        st.warning(f"⚠️ É necessário pelo menos 2 jogadores com histórico para fazer previsões personalizadas.")
+        st.info(f"Atualmente existem {len(players_with_elo)} jogadores com pelo menos 1 jogo no histórico.")
+        
+        # Mostrar alguns jogadores disponíveis
+        if len(players_with_elo) > 0:
+            st.write("**Jogadores disponíveis:**")
+            st.write(", ".join(players_with_elo[:20]))
+        else:
+            st.error("Nenhum jogador encontrado no histórico. Verifique se o ficheiro Excel tem dados válidos.")
     else:
         # Layout de duas colunas para seleção
         col1, col2 = st.columns(2)
         
         with col1:
             player1 = st.selectbox(
-                "🎾 Jogador 1 (Favorito)",
-                options=players_list,
+                "🎾 Jogador 1",
+                options=players_with_elo,
                 index=0,
                 help="Selecione o primeiro jogador"
             )
             
             # Mostrar informações do jogador 1
-            player1_data = elo_ratings_df[elo_ratings_df["Player"] == player1].iloc[0] if player1 in players_list else None
-            if player1_data is not None:
-                st.caption(f"Elo: {player1_data['Elo']:.0f} | Jogos: {player1_data['Matches']:.0f}")
-                st.caption(f"Elo Clay: {player1_data['Elo_Clay']:.0f} | Hard: {player1_data['Elo_Hard']:.0f} | Grass: {player1_data['Elo_Grass']:.0f}")
+            player1_data = elo_ratings_df[elo_ratings_df["Player"] == player1].iloc[0]
+            st.caption(f"📊 Elo Geral: **{player1_data['Elo']:.0f}** | Jogos: {player1_data['Matches']:.0f}")
+            st.caption(f"🏆 Clay: {player1_data['Elo_Clay']:.0f} | Hard: {player1_data['Elo_Hard']:.0f} | Grass: {player1_data['Elo_Grass']:.0f}")
         
         with col2:
+            # Evitar selecionar o mesmo jogador
+            default_index = 1 if len(players_with_elo) > 1 else 0
             player2 = st.selectbox(
-                "🎾 Jogador 2 (Underdog)",
-                options=players_list,
-                index=min(1, len(players_list)-1),
+                "🎾 Jogador 2",
+                options=players_with_elo,
+                index=min(default_index, len(players_with_elo)-1),
                 help="Selecione o segundo jogador"
             )
             
             # Mostrar informações do jogador 2
-            player2_data = elo_ratings_df[elo_ratings_df["Player"] == player2].iloc[0] if player2 in players_list else None
-            if player2_data is not None:
-                st.caption(f"Elo: {player2_data['Elo']:.0f} | Jogos: {player2_data['Matches']:.0f}")
-                st.caption(f"Elo Clay: {player2_data['Elo_Clay']:.0f} | Hard: {player2_data['Elo_Hard']:.0f} | Grass: {player2_data['Elo_Grass']:.0f}")
+            player2_data = elo_ratings_df[elo_ratings_df["Player"] == player2].iloc[0]
+            st.caption(f"📊 Elo Geral: **{player2_data['Elo']:.0f}** | Jogos: {player2_data['Matches']:.0f}")
+            st.caption(f"🏆 Clay: {player2_data['Elo_Clay']:.0f} | Hard: {player2_data['Elo_Hard']:.0f} | Grass: {player2_data['Elo_Grass']:.0f}")
         
         # Seleção de superfície
         st.markdown("---")
@@ -1110,6 +1129,11 @@ with tab_custom:
             horizontal=True,
             help="Selecione a superfície onde o jogo será disputado"
         )
+        
+        # Mostrar Elo específico da superfície selecionada
+        elo_p1_surf = player1_data[f'Elo_{surface}']
+        elo_p2_surf = player2_data[f'Elo_{surface}']
+        st.info(f"💡 **Elo na superfície {surface}:** {player1} = **{elo_p1_surf:.0f}** | {player2} = **{elo_p2_surf:.0f}**")
         
         # Botão para calcular
         st.markdown("---")
@@ -1127,7 +1151,7 @@ with tab_custom:
             else:
                 with st.spinner("A calcular previsões..."):
                     try:
-                        prob_over, prob_win, elo_diff, exp_win = calculate_custom_prediction(
+                        prob_over, prob_win, elo_diff, exp_win, elo_p1, elo_p2 = calculate_custom_prediction(
                             player1, player2, surface, elo_sys, model, global_medians, threshold_games
                         )
                         
@@ -1191,42 +1215,51 @@ with tab_custom:
                         # Detalhes adicionais
                         st.markdown("---")
                         with st.expander("📋 Detalhes Adicionais"):
-                            # Verificar se ambos os jogadores têm histórico
-                            p1_in_hist = player1 in elo_sys.elo
-                            p2_in_hist = player2 in elo_sys.elo
-                            
                             col1, col2 = st.columns(2)
                             with col1:
                                 st.write(f"**{player1}**")
                                 st.write(f"- Jogos no histórico: {elo_sys.n_matches.get(player1, 0)}")
-                                w_avg = global_medians.get('w_avg_games', np.nan)
-                                if not np.isnan(w_avg):
-                                    st.write(f"- Média de games: {w_avg:.1f}")
-                                w_1w = global_medians.get('w_1w_pct', np.nan)
-                                if not np.isnan(w_1w):
-                                    st.write(f"- 1st Serve%: {w_1w:.1%}")
+                                # Calcular média real de games do jogador
+                                p1_games = elo_sys.rolling_games(player1, surface)
+                                if not np.isnan(p1_games["avg_games"]):
+                                    st.write(f"- Média de games (geral): {p1_games['avg_games']:.1f}")
+                                if not np.isnan(p1_games["surf_games"]):
+                                    st.write(f"- Média de games ({surface}): {p1_games['surf_games']:.1f}")
+                                
+                                # Serve stats
+                                p1_serve = elo_sys.rolling_serve(player1)
+                                if not np.isnan(p1_serve["1w_pct"]):
+                                    st.write(f"- 1st Serve%: {p1_serve['1w_pct']:.1%}")
+                                if not np.isnan(p1_serve["ace_pct"]):
+                                    st.write(f"- Ace%: {p1_serve['ace_pct']:.1%}")
                             
                             with col2:
                                 st.write(f"**{player2}**")
                                 st.write(f"- Jogos no histórico: {elo_sys.n_matches.get(player2, 0)}")
-                                l_avg = global_medians.get('l_avg_games', np.nan)
-                                if not np.isnan(l_avg):
-                                    st.write(f"- Média de games: {l_avg:.1f}")
-                                l_1w = global_medians.get('l_1w_pct', np.nan)
-                                if not np.isnan(l_1w):
-                                    st.write(f"- 1st Serve%: {l_1w:.1%}")
-                            
-                            if not p1_in_hist or not p2_in_hist:
-                                st.warning("⚠️ Um dos jogadores tem poucos jogos no histórico - as previsões podem ser menos precisas")
+                                p2_games = elo_sys.rolling_games(player2, surface)
+                                if not np.isnan(p2_games["avg_games"]):
+                                    st.write(f"- Média de games (geral): {p2_games['avg_games']:.1f}")
+                                if not np.isnan(p2_games["surf_games"]):
+                                    st.write(f"- Média de games ({surface}): {p2_games['surf_games']:.1f}")
+                                
+                                p2_serve = elo_sys.rolling_serve(player2)
+                                if not np.isnan(p2_serve["1w_pct"]):
+                                    st.write(f"- 1st Serve%: {p2_serve['1w_pct']:.1%}")
+                                if not np.isnan(p2_serve["ace_pct"]):
+                                    st.write(f"- Ace%: {p2_serve['ace_pct']:.1%}")
                         
                     except Exception as e:
                         st.error(f"❌ Erro ao calcular previsão: {e}")
-                        st.info("Tente selecionar jogadores com mais histórico ou verifique se os nomes estão corretos")
+                        import traceback
+                        st.code(traceback.format_exc())
         
         # Mostrar TOP jogadores para referência
         with st.expander("🏆 TOP 10 Jogadores (Elo Geral)"):
-            top_players = elo_ratings_df.head(10)[["Player", "Elo", "Matches"]].copy()
+            top_players = elo_ratings_df.head(10)[["Player", "Elo", "Matches", "Elo_Clay", "Elo_Hard", "Elo_Grass"]].copy()
             top_players["Elo"] = top_players["Elo"].round(0).astype(int)
+            top_players["Elo_Clay"] = top_players["Elo_Clay"].round(0).astype(int)
+            top_players["Elo_Hard"] = top_players["Elo_Hard"].round(0).astype(int)
+            top_players["Elo_Grass"] = top_players["Elo_Grass"].round(0).astype(int)
             st.dataframe(top_players, use_container_width=True)
         
         # Dica de uso
