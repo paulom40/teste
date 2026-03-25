@@ -127,7 +127,11 @@ class EloSystem:
 def load_data():
     url = "https://github.com/paulom40/teste/raw/main/Challenger.xlsx"
     df = pd.read_excel(url)
-    df["Date"] = pd.to_datetime(df["tourney_date"].astype(str))
+    df["Date"] = pd.to_datetime(
+    df["tourney_date"].astype(str),
+    format="%Y%m%d",
+    errors="coerce"
+    )
     df["Surface"] = df["surface"]
     df["Winner"] = df["winner_name"]
     df["Loser"] = df["loser_name"]
