@@ -452,8 +452,22 @@ def predict_for_upcoming(upcoming_df, df_hist, model_3sets, model_over, threshol
     feat_df = pd.DataFrame(feature_list)
     meta_df = pd.DataFrame(meta_info)
 
-    feat_df = feat_df.fillna(feat_df.median(numeric_only=True))
-    X = feat_df[FEATURE_COLS]
+    # Garantir que todas as colunas existem
+for col in FEATURE_COLS:
+    if col not in feat_df.columns:
+        feat_df[col] = np.nan
+
+# Manter apenas as colunas do modelo
+feat_df = feat_df[FEATURE_COLS]
+
+# Converter tudo para float
+feat_df = feat_df.astype(float)
+
+# Substituir NaN e inf por valores seguros
+feat_df = feat_df.replace([np.inf, -np.inf], np.nan)
+feat_df = feat_df.fillna(0)
+
+X = feat_df
 
     prob_3 = model_3sets.predict_proba(X)[:, 1] if model_3sets is not None else np.full(len(X), 0.33)
     prob_over = model_over.predict_proba(X)[:, 1] if model_over is not None else np.full(len(X), 0.5)
