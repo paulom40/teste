@@ -2,103 +2,30 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
+import requests
+from io import BytesIO
 from datetime import datetime
 
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
-from sklearn.linear_model import SGDClassifier
-from sklearn.model_selection import cross_val_score, StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Tennis Predictor", layout="wide")
 
 # ============================================================
-# CONFIG
+# CONSTANTS
 # ============================================================
 
 ELO_START = 1500
+K = 32
 
 FEATURE_COLS = [
     "elo_diff",
-    "elo_surf_diff",
-    "exp_w",
+    "elo_abs",
     "surface_enc",
-    "round_enc",
-    "rest_days_diff",
-    "form_w",
-    "form_l",
+    "round_enc"
 ]
 
 SURFACE_ENC = {"Clay": 0, "Hard": 1, "Grass": 2}
-
-# ============================================================
-# ELO SYSTEM
-# ============================================================
-
-class EloSystem:
-    def __init__(self, k=32):
-        self.k = k
-        self.elo = {}
-        self.elo_surf = {}
-        self.results = {}
-        self.last_date = {}
-
-    def get(self, p, s=None):
-        if s:
-            return self.elo_surf.get(p, {}).get(s, ELO_START)
-        return self.elo.get(p, ELO_START)
-
-    def expected(self, ra, rb):
-        return 1 / (1 + 10 ** ((rb - ra) / 400))
-
-    def update(self, w, l, s, date):
-        ew = self.get(w)
-        el = self.get(l)
-
-        exp = self.expected(ew, el)
-
-        self.elo[w] = ew + self.k * (1 - exp)
-        self.elo[l] = el + self.k * (0 - (1 - exp))
-
-        ew_s = self.get(w, s)
-        el_s = self.get(l, s)
-
-        exp_s = self.expected(ew_s, el_s)
-
-        self.elo_surf.setdefault(w, {})[s] = ew_s + self.k * (1 - exp_s)
-        self.elo_surf.setdefault(l, {})[s] = el_s + self.k * (0 - (1 - exp_s))
-
-        self.results.setdefault(w, []).append(1)
-        self.results.setdefault(l, []).append(0)
-
-        self.last_date[w] = date
-        self.last_date[l] = date
-
-    def snapshot(self, w, l, s, date):
-        ew = self.get(w)
-        el = self.get(l)
-
-        ew_s = self.get(w, s)
-        el_s = self.get(l, s)
-
-        last_w = self.last_date.get(w)
-        last_l = self.last_date.get(l)
-
-        rest_w = (date - last_w).days if last_w else 7
-        rest_l = (date - last_l).days if last_l else 7
-
-        form_w = np.mean(self.results.get(w, [])[-10:]) if w in self.results else 0.5
-        form_l = np.mean(self.results.get(l, [])[-10:]) if l in self.results else 0.5
-
-        return {
-            "elo_diff": ew - el,
-            "elo_surf_diff": ew_s - el_s,
-            "exp_w": self.expected(ew, el),
-            "rest_days_diff": rest_w - rest_l,
-            "form_w": form_w,
-            "form_l": form_l,
-        }
 
 # ============================================================
 # LOAD DATA
@@ -108,6 +35,7 @@ def load_data():
     url = "https://github.com/paulom40/teste/raw/main/Challenger.xlsx"
     df = pd.read_excel(url)
 
+    # DATE FIX (CRÍTICO)
     df["Date"] = pd.to_datetime(
         df["tourney_date"].astype(str),
         format="%Y%m%d",
@@ -116,157 +44,225 @@ def load_data():
 
     df = df.dropna(subset=["Date"])
 
-    df["Surface"] = df["surface"]
-    df["Winner"] = df["winner_name"]
-    df["Loser"] = df["loser_name"]
+    df["Surface"] = df.get("surface", "Hard")
+    df["Winner"] = df.get("winner_name")
+    df["Loser"] = df.get("loser_name")
+
+    # SCORE FIX (CRÍTICO)
+    df["score"] = df.get("score", df.get("Score"))
 
     return df.sort_values("Date")
+
+
+# ============================================================
+# SCORE PARSER
+# ============================================================
+
+def parse_games(score):
+    if pd.isna(score):
+        return np.nan
+
+    sets = re.findall(r"(\d+)-(\d+)", str(score))
+    if len(sets) == 0:
+        return np.nan
+
+    return sum(int(a) + int(b) for a, b in sets)
+
+
+# ============================================================
+# ELO SYSTEM
+# ============================================================
+
+class EloSystem:
+    def __init__(self):
+        self.elo = {}
+
+    def get(self, p):
+        return self.elo.get(p, ELO_START)
+
+    def expected(self, ra, rb):
+        return 1 / (1 + 10 ** ((rb - ra) / 400))
+
+    def update(self, w, l):
+        ra, rb = self.get(w), self.get(l)
+        exp = self.expected(ra, rb)
+
+        self.elo[w] = ra + K * (1 - exp)
+        self.elo[l] = rb + K * (0 - (1 - exp))
+
+    def snapshot(self, w, l):
+        ra, rb = self.get(w), self.get(l)
+
+        return {
+            "elo_w": ra,
+            "elo_l": rb,
+            "elo_diff": ra - rb,
+            "elo_abs": abs(ra - rb),
+        }
+
 
 # ============================================================
 # BUILD FEATURES
 # ============================================================
 
-def build(df, k):
-    sys = EloSystem(k)
+def build(df):
+    elo = EloSystem()
     rows = []
 
     for _, r in df.iterrows():
         w, l = r["Winner"], r["Loser"]
-        s = r["Surface"]
-        date = r["Date"]
 
         if pd.isna(w) or pd.isna(l):
             continue
 
-        snap = sys.snapshot(w, l, s, date)
+        snap = elo.snapshot(w, l)
 
-        # calcular total games do score
-        total_games = np.nan
-        if "score" in r and pd.notna(r["score"]):
-            sets = re.findall(r"(\d+)-(\d+)", str(r["score"]))
-            if sets:
-                total_games = sum(int(a) + int(b) for a, b in sets)
+        total_games = parse_games(r["score"])
 
         rows.append({
             **snap,
-            "surface_enc": SURFACE_ENC.get(s, 1),
+            "surface_enc": SURFACE_ENC.get(r["Surface"], 1),
             "round_enc": 1,
-            "total_games": total_games,
+            "total_games": total_games
         })
 
-        sys.update(w, l, s, date)
+        elo.update(w, l)
+
+    if len(rows) == 0:
+        st.error("❌ Nenhum jogo processado")
+        st.stop()
 
     df_feat = pd.DataFrame(rows)
-    df_feat = df_feat.dropna(subset=["total_games"])
 
-    return sys, df_feat
+    # DEBUG
+    st.write("Colunas:", df_feat.columns.tolist())
 
-# ============================================================
-# MODEL
-# ============================================================
+    if "total_games" not in df_feat.columns:
+        st.error("❌ total_games não existe")
+        st.stop()
 
-def make_model():
-    gb = GradientBoostingClassifier(n_estimators=200)
-    rf = RandomForestClassifier(n_estimators=200)
-    lr = SGDClassifier(loss="log_loss")
+    df_feat = df_feat[df_feat["total_games"].notna()]
 
-    model = VotingClassifier(
-        estimators=[("gb", gb), ("rf", rf), ("lr", lr)],
-        voting="soft",
-        weights=[3, 2, 1]
-    )
+    if len(df_feat) < 50:
+        st.error("❌ Poucos jogos com score válido")
+        st.stop()
 
-    return Pipeline([
-        ("imp", SimpleImputer()),
-        ("sc", StandardScaler()),
-        ("clf", model)
-    ])
+    return elo, df_feat
+
 
 # ============================================================
-# TRAIN
+# TRAIN MODEL
 # ============================================================
 
 def train(df):
-    if "total_games" not in df.columns:
-        st.error("❌ total_games não encontrado")
-        st.stop()
-
-    df = df.dropna(subset=["total_games"])
-
-    if len(df) < 20:
-        st.error("❌ Dados insuficientes")
-        st.stop()
-
-    df["target"] = (df["total_games"] >= 22).astype(int)
-
-    for col in FEATURE_COLS:
-        if col not in df.columns:
-            df[col] = 0
-
     X = df[FEATURE_COLS]
-    y = df["target"]
+    y = (df["total_games"] >= 22).astype(int)
 
-    model = make_model()
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
 
-    cv = StratifiedKFold(5, shuffle=True, random_state=42)
-    acc = cross_val_score(model, X, y, cv=cv).mean()
+    model = RandomForestClassifier(n_estimators=200)
+    model.fit(X_train, y_train)
 
-    model.fit(X, y)
+    acc = model.score(X_test, y_test)
 
     return model, acc
 
+
 # ============================================================
-# APP
+# API MATCHES
 # ============================================================
 
-st.title("🎾 Challenger Predictor FINAL")
+def fetch_matches():
+    url = "https://api.api-tennis.com/tennis/"
+    key = "YOUR_API_KEY"
+
+    try:
+        r = requests.get(url, params={
+            "method": "get_fixtures",
+            "APIkey": key
+        }, timeout=10)
+
+        data = r.json()
+
+        if data.get("success") != 1:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data["result"])
+
+        df["Winner"] = df["event_first_player"]
+        df["Loser"] = df["event_second_player"]
+        df["Surface"] = "Hard"
+
+        return df[["Winner", "Loser", "Surface"]]
+
+    except:
+        return pd.DataFrame()
+
+
+# ============================================================
+# PREDICT
+# ============================================================
+
+def predict(matches, elo, model):
+    rows = []
+
+    for _, m in matches.iterrows():
+        snap = elo.snapshot(m["Winner"], m["Loser"])
+
+        feats = {
+            **snap,
+            "surface_enc": SURFACE_ENC.get(m["Surface"], 1),
+            "round_enc": 1
+        }
+
+        rows.append(feats)
+
+    if len(rows) == 0:
+        return matches
+
+    X = pd.DataFrame(rows)[FEATURE_COLS]
+    probs = model.predict_proba(X)[:, 1]
+
+    matches["Prob Over 22"] = probs
+
+    return matches.sort_values("Prob Over 22", ascending=False)
+
+
+# ============================================================
+# STREAMLIT APP
+# ============================================================
+
+st.title("🎾 Tennis Predictor (Stable Version)")
 
 df = load_data()
 
-k = st.sidebar.slider("K Factor", 16, 64, 32)
+st.write(f"Jogos carregados: {len(df)}")
 
-elo_sys, feat_df = build(df, k)
-
-st.write(f"Jogos usados no modelo: {len(feat_df)}")
+elo, feat_df = build(df)
 
 model, acc = train(feat_df)
 
 st.metric("Accuracy", f"{acc:.2%}")
 
 # ============================================================
-# COMPARAR JOGADORES
+# PREDICTIONS
 # ============================================================
 
-st.header("🔮 Comparar Jogadores")
+st.header("📅 Previsões")
 
-players = sorted(list(elo_sys.elo.keys()))
+matches = fetch_matches()
 
-if len(players) < 2:
-    st.warning("Poucos jogadores disponíveis")
+if matches.empty:
+    st.warning("Sem jogos da API")
 else:
-    col1, col2 = st.columns(2)
+    preds = predict(matches, elo, model)
 
-    with col1:
-        p1 = st.selectbox("Jogador 1", players)
+    st.dataframe(preds, use_container_width=True)
 
-    with col2:
-        p2 = st.selectbox("Jogador 2", players, index=1)
-
-    surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
-
-    if st.button("Calcular"):
-        snap = elo_sys.snapshot(p1, p2, surface, datetime.now())
-
-        X = pd.DataFrame([{**snap,
-            "surface_enc": SURFACE_ENC[surface],
-            "round_enc": 3,
-        }])
-
-        for col in FEATURE_COLS:
-            if col not in X:
-                X[col] = 0
-
-        prob = model.predict_proba(X[FEATURE_COLS])[0, 1]
-
-        st.success(f"📊 Over 22: {prob:.1%}")
-        st.info(f"🏆 Vitória {p1}: {snap['exp_w']:.1%}")
+    st.subheader("🔥 TOP 5")
+    for i, r in preds.head(5).iterrows():
+        st.write(
+            f"{r['Winner']} vs {r['Loser']} → {r['Prob Over 22']:.1%}"
+        )
