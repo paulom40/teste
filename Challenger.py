@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 from datetime import datetime
+
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
 from sklearn.linear_model import SGDClassifier
 from sklearn.model_selection import cross_val_score, StratifiedKFold
@@ -133,18 +135,31 @@ def build(df, k):
         s = r["Surface"]
         date = r["Date"]
 
+        if pd.isna(w) or pd.isna(l):
+            continue
+
         snap = sys.snapshot(w, l, s, date)
+
+        # calcular total games do score
+        total_games = np.nan
+        if "score" in r and pd.notna(r["score"]):
+            sets = re.findall(r"(\d+)-(\d+)", str(r["score"]))
+            if sets:
+                total_games = sum(int(a) + int(b) for a, b in sets)
 
         rows.append({
             **snap,
             "surface_enc": SURFACE_ENC.get(s, 1),
             "round_enc": 1,
-            "total_games": np.random.randint(18, 30),
+            "total_games": total_games,
         })
 
         sys.update(w, l, s, date)
 
-    return sys, pd.DataFrame(rows)
+    df_feat = pd.DataFrame(rows)
+    df_feat = df_feat.dropna(subset=["total_games"])
+
+    return sys, df_feat
 
 # ============================================================
 # MODEL
@@ -172,9 +187,18 @@ def make_model():
 # ============================================================
 
 def train(df):
+    if "total_games" not in df.columns:
+        st.error("❌ total_games não encontrado")
+        st.stop()
+
+    df = df.dropna(subset=["total_games"])
+
+    if len(df) < 20:
+        st.error("❌ Dados insuficientes")
+        st.stop()
+
     df["target"] = (df["total_games"] >= 22).astype(int)
 
-    # garantir colunas
     for col in FEATURE_COLS:
         if col not in df.columns:
             df[col] = 0
@@ -195,13 +219,15 @@ def train(df):
 # APP
 # ============================================================
 
-st.title("🎾 Challenger Predictor (Fixed)")
+st.title("🎾 Challenger Predictor FINAL")
 
 df = load_data()
 
 k = st.sidebar.slider("K Factor", 16, 64, 32)
 
 elo_sys, feat_df = build(df, k)
+
+st.write(f"Jogos usados no modelo: {len(feat_df)}")
 
 model, acc = train(feat_df)
 
