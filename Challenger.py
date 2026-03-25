@@ -525,7 +525,9 @@ def predict_for_upcoming(upcoming_df, df_hist, model_3sets, model_over, threshol
 
     # Remover inf e substituir NaN por 0
     feat_df = feat_df.replace([np.inf, -np.inf], np.nan)
-    feat_df = feat_df.fillna(0)
+
+    # Preencher NaN com a mediana das features (muito mais correto)
+    feat_df = feat_df.fillna(feat_df.median(numeric_only=True))
 
     X = feat_df
 
