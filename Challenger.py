@@ -264,15 +264,33 @@ def build_recent_stats(df_hist, window=30):
     return recent_stats
 
 # ============================================================
-# 5. FEATURE ENGINEERING PARA JOGOS FUTUROS
+# 5. FEATURE ENGINEERING (COM FIX APLICADO)
 # ============================================================
 
 def engineer_features(row, recent_stats, elo, h2h_stats):
     p1, p2 = row["Winner"], row["Loser"]
     surf = row.get("Surface", "Hard")
 
-    s1 = recent_stats.get(p1, {})
-    s2 = recent_stats.get(p2, {})
+    # FIX: fallback seguro para jogadores sem histórico
+    default_stats = {
+        "spw_30": np.nan,
+        "rpw_30": np.nan,
+        "sgw_30": np.nan,
+        "rgw_30": np.nan,
+        "games_won_30": np.nan,
+        "games_played_30": np.nan,
+        "aces_30": np.nan,
+        "df_30": np.nan,
+        "minutes_30": np.nan,
+        "spw_30_surf": {"Clay": np.nan, "Hard": np.nan, "Grass": np.nan},
+        "rpw_30_surf": {"Clay": np.nan, "Hard": np.nan, "Grass": np.nan},
+        "sgw_30_surf": {"Clay": np.nan, "Hard": np.nan, "Grass": np.nan},
+        "rgw_30_surf": {"Clay": np.nan, "Hard": np.nan, "Grass": np.nan},
+        "games_won_30_surf": {"Clay": np.nan, "Hard": np.nan, "Grass": np.nan},
+    }
+
+    s1 = recent_stats.get(p1, default_stats)
+    s2 = recent_stats.get(p2, default_stats)
 
     # Diferenças e somas
     def diff(a, b): return (a - b) if not (pd.isna(a) or pd.isna(b)) else np.nan
@@ -608,6 +626,7 @@ def fetch_matches_from_api():
     except Exception:
         return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
 
+
 # ============================================================
 # 11. EXPORT EXCEL
 # ============================================================
@@ -682,6 +701,7 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
 
     output.seek(0)
     return output
+
 
 # ============================================================
 # 12. UI STREAMLIT
