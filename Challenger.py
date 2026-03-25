@@ -191,7 +191,12 @@ def make_model():
 def train(df):
     df["target"] = (df["total_games"] >= 22).astype(int)
 
-    X = df[FEATURE_COLS]
+    missing_cols = [c for c in FEATURE_COLS if c not in df.columns]
+
+for col in missing_cols:
+    df[col] = 0  # ou np.nan
+
+X = df[FEATURE_COLS]
     y = df["target"]
 
     model = make_model()
