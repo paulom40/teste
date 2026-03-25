@@ -509,25 +509,31 @@ def predict_for_upcoming(upcoming_df, df_hist, model_3sets, model_over, threshol
     meta_df = pd.DataFrame(meta_info)
 
     # ============================================================
-    # PATCH DEFINITIVO — garantir que não há NaN, inf ou colunas faltantes
+    # PATCH FINAL — garantir que não há NaN, inf ou colunas faltantes
     # ============================================================
 
-    # Criar colunas em falta
+    # Garantir que todas as colunas existem
     for col in FEATURE_COLS:
         if col not in feat_df.columns:
             feat_df[col] = np.nan
 
-    # Manter apenas as colunas do modelo
-    feat_df = feat_df[FEATURE_COLS]
+    # Manter apenas as colunas do modelo e garantir tipo numérico
+    feat_df = feat_df[FEATURE_COLS].astype(float)
 
-    # Converter tudo para float
-    feat_df = feat_df.astype(float)
-
-    # Remover inf e substituir NaN por 0
+    # Remover inf → NaN
     feat_df = feat_df.replace([np.inf, -np.inf], np.nan)
 
-    # Preencher NaN com a mediana das features (muito mais correto)
-    feat_df = feat_df.fillna(feat_df.median(numeric_only=True))
+    # Calcular medianas
+    medianas = feat_df.median(numeric_only=True)
+
+    # Substituir medianas NaN por 0 (colunas inteiras NaN)
+    medianas = medianas.fillna(0)
+
+    # Preencher NaN com medianas corrigidas
+    feat_df = feat_df.fillna(medianas)
+
+    # Garantir que não sobra nenhum NaN
+    feat_df = feat_df.fillna(0)
 
     X = feat_df
 
@@ -568,6 +574,7 @@ def predict_for_upcoming(upcoming_df, df_hist, model_3sets, model_over, threshol
     df_up["rank_diff_dummy"] = np.nan
 
     return df_up.sort_values("prob_competitive_match", ascending=False)
+
 # ============================================================
 # 12. FILTROS E SELEÇÃO DOS MELHORES JOGOS
 # ============================================================
