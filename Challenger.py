@@ -21,7 +21,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------- Normalização / parsing ----------
+# ============================================================
+# 1. NORMALIZAÇÃO E PARSING DO SCORE
+# ============================================================
 
 def normalize_columns(df):
     col_map = {
@@ -29,10 +31,7 @@ def normalize_columns(df):
         "winner_rank": "WRank",  "loser_rank": "LRank",
         "winner_rank_points": "WPts", "loser_rank_points": "LPts",
         "tourney_date": "Date",  "score": "Score",
-        "best_of": "BestOf",     "round": "Round", "minutes": "Minutes",
-        "winner_hand": "WHand",  "loser_hand": "LHand",
-        "winner_ht": "WHt",      "loser_ht": "LHt",
-        "winner_age": "WAge",    "loser_age": "LAge",
+        "surface": "Surface"
     }
     df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
@@ -42,16 +41,11 @@ def normalize_columns(df):
     if "Date" in df.columns:
         try:
             df["Date"] = pd.to_datetime(df["Date"])
-        except Exception:
+        except:
             df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d", errors="coerce")
 
     if "Surface" not in df.columns:
-        for alt in ["surface", "tourney_surface"]:
-            if alt in df.columns:
-                df = df.rename(columns={alt: "Surface"})
-                break
-        else:
-            df["Surface"] = "Hard"
+        df["Surface"] = "Hard"
 
     return df
 
@@ -60,23 +54,18 @@ def parse_score(df):
     def _parse(score):
         if pd.isna(score):
             return [np.nan] * 11
-        sets = re.findall(r"(\d+)-(\d+)(?:\(\d+\))?", str(score))
+        sets = re.findall(r"(\d+)-(\d+)", str(score))
         w = [int(s[0]) for s in sets]
         l = [int(s[1]) for s in sets]
-        while len(w) < 5:
-            w.append(np.nan)
-        while len(l) < 5:
-            l.append(np.nan)
-        wsets = sum(
-            1 for a, b in zip(w[:5], l[:5])
-            if not (pd.isna(a) or pd.isna(b)) and a > b
-        )
+        while len(w) < 5: w.append(np.nan)
+        while len(l) < 5: l.append(np.nan)
+        wsets = sum(1 for a, b in zip(w, l) if not pd.isna(a) and not pd.isna(b) and a > b)
         return w[:5] + l[:5] + [wsets]
 
     parsed = df["Score"].apply(_parse)
     cols = ["W1","W2","W3","W4","W5","L1","L2","L3","L4","L5","Wsets"]
     for i, col in enumerate(cols):
-        df[col] = [row[i] for row in parsed]
+        df[col] = parsed.apply(lambda x: x[i])
     return df
 
 
@@ -89,31 +78,29 @@ def calculate_total_games(df):
             l = pd.to_numeric(df[lc], errors="coerce").fillna(-1)
             valid = (w >= 0) & (l >= 0)
             total += np.where(valid, w + l, 0)
-    return total.where(total > 0, other=np.nan)
+    return total.where(total > 0, np.nan)
 
-# ---------- Elo + K dinâmico ----------
+# ============================================================
+# 2. ELO GLOBAL + ELO POR SUPERFÍCIE
+# ============================================================
 
 def build_elo_ratings(df_hist):
     df = df_hist.sort_values("Date").copy()
     elo = {}
     matches_count = {}
     default_elo = 1500
+
     surface_map = {"Clay": "elo_clay", "Hard": "elo_hard", "Grass": "elo_grass"}
 
     def get_k(player):
         n = matches_count.get(player, 0)
-        if n < 20:
-            return 40
-        elif n < 50:
-            return 32
-        elif n < 100:
-            return 24
-        else:
-            return 16
+        if n < 20: return 40
+        if n < 50: return 32
+        if n < 100: return 24
+        return 16
 
     for _, row in df.iterrows():
-        w = row["Winner"]
-        l = row["Loser"]
+        w, l = row["Winner"], row["Loser"]
         surf = row.get("Surface", "Hard")
 
         for p in [w, l]:
@@ -126,8 +113,7 @@ def build_elo_ratings(df_hist):
                 }
                 matches_count[p] = 0
 
-        k_w = get_k(w)
-        k_l = get_k(l)
+        k_w, k_l = get_k(w), get_k(l)
 
         Ew = 1 / (1 + 10 ** ((elo[l]["elo"] - elo[w]["elo"]) / 400))
         El = 1 - Ew
@@ -145,7 +131,9 @@ def build_elo_ratings(df_hist):
 
     return elo
 
-# ---------- H2H ----------
+# ============================================================
+# 3. H2H GLOBAL
+# ============================================================
 
 def build_h2h_stats(df_hist):
     df = df_hist.copy()
@@ -153,12 +141,11 @@ def build_h2h_stats(df_hist):
     df = df.sort_values("Date")
 
     h2h = {}
-    pairs = df.apply(lambda r: tuple(sorted([r["Winner"], r["Loser"]])), axis=1)
-    df["pair"] = pairs
+    df["pair"] = df.apply(lambda r: tuple(sorted([r["Winner"], r["Loser"]])), axis=1)
 
     for pair, group in df.groupby("pair"):
         games = group["Total_Games"].dropna()
-        avg_g = float(games.mean()) if len(games) > 0 else np.nan
+        avg_g = float(games.mean()) if len(games) else np.nan
         p1, p2 = pair
         p1_wins = (group["Winner"] == p1).sum()
         p1_wr = p1_wins / len(group)
@@ -169,168 +156,387 @@ def build_h2h_stats(df_hist):
         }
 
     return h2h
-# ---------- Player stats com Elo ----------
+# ============================================================
+# 4. STATS RECENTES (ÚLTIMOS 30 JOGOS) — GLOBAIS E POR SUPERFÍCIE
+# ============================================================
 
-def build_player_stats(df_hist):
-    df = df_hist.copy().sort_values("Date")
-    df["Total_Games"] = calculate_total_games(df)
-    elo_ratings = build_elo_ratings(df_hist)
+def compute_player_match_stats(row):
+    """Extrai stats de serviço, devolução e jogos ganhos para winner e loser."""
+    # Winner service stats
+    w_spw = (row["w_1stWon"] + row["w_2ndWon"]) / row["w_svpt"] if row["w_svpt"] > 0 else np.nan
+    w_rpw = 1 - ((row["l_1stWon"] + row["l_2ndWon"]) / row["l_svpt"]) if row["l_svpt"] > 0 else np.nan
 
-    stats = {}
-    all_players = set(df["Winner"].dropna().unique()) | set(df["Loser"].dropna().unique())
+    w_sgw = 1 - ((row["w_bpFaced"] - row["w_bpSaved"]) / row["w_SvGms"]) if row["w_SvGms"] > 0 else np.nan
+    w_rgw = ((row["l_bpFaced"] - row["l_bpSaved"]) / row["l_SvGms"]) if row["l_SvGms"] > 0 else np.nan
 
-    for player in all_players:
-        w_mask = df["Winner"] == player
-        l_mask = df["Loser"] == player
-        all_mask = w_mask | l_mask
-        p_df = df[all_mask].copy()
+    # Loser service stats
+    l_spw = (row["l_1stWon"] + row["l_2ndWon"]) / row["l_svpt"] if row["l_svpt"] > 0 else np.nan
+    l_rpw = 1 - ((row["w_1stWon"] + row["w_2ndWon"]) / row["w_svpt"]) if row["w_svpt"] > 0 else np.nan
 
-        last_w = df[w_mask]["WRank"].dropna()
-        last_l = df[l_mask]["LRank"].dropna()
-        rank_vals = pd.concat([last_w, last_l])
-        rank = float(rank_vals.iloc[-1]) if len(rank_vals) > 0 else 300.0
+    l_sgw = 1 - ((row["l_bpFaced"] - row["l_bpSaved"]) / row["l_SvGms"]) if row["l_SvGms"] > 0 else np.nan
+    l_rgw = ((row["w_bpFaced"] - row["w_bpSaved"]) / row["w_SvGms"]) if row["w_SvGms"] > 0 else np.nan
 
-        last_w_pts = df[w_mask]["WPts"].dropna()
-        last_l_pts = df[l_mask]["LPts"].dropna()
-        pts_vals = pd.concat([last_w_pts, last_l_pts])
-        pts = float(pts_vals.iloc[-1]) if len(pts_vals) > 0 else 30.0
-
-        recent = p_df.tail(20)
-        win_rate = (recent["Winner"] == player).mean()
-
-        recent_games = recent["Total_Games"].dropna()
-        avg_games = float(recent_games.mean()) if len(recent_games) > 0 else 21.0
-
-        surface_avg = {}
-        for surf in ["Clay", "Hard", "Grass"]:
-            s_df = p_df[p_df["Surface"] == surf]["Total_Games"].dropna()
-            surface_avg[surf] = float(s_df.mean()) if len(s_df) >= 3 else avg_games
-
-        stats[player] = {
-            "rank": rank,
-            "pts": pts,
-            "win_rate": win_rate,
-            "avg_games": avg_games,
-            "surface_avg_Clay": surface_avg["Clay"],
-            "surface_avg_Hard": surface_avg["Hard"],
-            "surface_avg_Grass": surface_avg["Grass"],
-            "n_matches": len(p_df),
-            "elo": elo_ratings[player]["elo"],
-            "elo_clay": elo_ratings[player]["elo_clay"],
-            "elo_hard": elo_ratings[player]["elo_hard"],
-            "elo_grass": elo_ratings[player]["elo_grass"],
-        }
-
-    return stats
-
-# ---------- Features ----------
-
-def engineer_features(row, player_stats, h2h_stats, surface):
-    p1, p2 = row["Winner"], row["Loser"]
-    s1 = player_stats.get(p1, {})
-    s2 = player_stats.get(p2, {})
-
-    r1 = s1.get("rank", 300)
-    r2 = s2.get("rank", 300)
-    rank_diff = abs(r1 - r2)
-    rank_ratio = min(r1, r2) / max(r1, r2) if max(r1, r2) > 0 else 1.0
-
-    pts1 = s1.get("pts", 30)
-    pts2 = s2.get("pts", 30)
-    pts_diff = abs(pts1 - pts2)
-
-    wr1 = s1.get("win_rate", 0.5)
-    wr2 = s2.get("win_rate", 0.5)
-    win_rate_diff = abs(wr1 - wr2)
-    win_rate_sum = wr1 + wr2
-
-    surf_key = f"surface_avg_{surface}"
-    ag1 = s1.get(surf_key, s1.get("avg_games", 21))
-    ag2 = s2.get(surf_key, s2.get("avg_games", 21))
-    avg_games_sum = (ag1 + ag2) / 2
-
-    elo1 = s1.get("elo", 1500)
-    elo2 = s2.get("elo", 1500)
-    elo_diff = abs(elo1 - elo2)
-    elo_ratio = min(elo1, elo2) / max(elo1, elo2) if max(elo1, elo2) > 0 else 1.0
-
-    surf_elo_key = f"elo_{surface.lower()}"
-    elo_surf1 = s1.get(surf_elo_key, elo1)
-    elo_surf2 = s2.get(surf_elo_key, elo2)
-    elo_surf_diff = abs(elo_surf1 - elo_surf2)
-
-    pair_key = tuple(sorted([p1, p2]))
-    h2h = h2h_stats.get(pair_key, {})
-    h2h_avg_games = h2h.get("avg_games", avg_games_sum)
-    h2h_n = min(h2h.get("n_h2h", 0), 10)
-    h2h_balance = abs(h2h.get("p1_win_rate", 0.5) - 0.5)
-
-    surface_enc = {"Clay": 0, "Hard": 1, "Grass": 2}.get(surface, 1)
-    surface_bonus = {"Clay": 1.5, "Hard": 0.0, "Grass": -1.5}.get(surface, 0.0)
+    # Games won
+    total_games = calculate_total_games(pd.DataFrame([row])).iloc[0]
+    w_games = sum([row.get(f"W{i}", 0) for i in range(1, 6) if not pd.isna(row.get(f"W{i}", np.nan))])
+    l_games = sum([row.get(f"L{i}", 0) for i in range(1, 6) if not pd.isna(row.get(f"L{i}", np.nan))])
 
     return {
-        "rank_diff": rank_diff,
-        "rank_ratio": rank_ratio,
-        "pts_diff": pts_diff,
-        "win_rate_diff": win_rate_diff,
-        "win_rate_sum": win_rate_sum,
-        "avg_games_sum": avg_games_sum,
-        "h2h_avg_games": h2h_avg_games,
-        "h2h_n": h2h_n,
-        "h2h_balance": h2h_balance,
-        "surface_enc": surface_enc,
-        "surface_bonus": surface_bonus,
-        "r1": r1,
-        "r2": r2,
-        "pts1": pts1,
-        "pts2": pts2,
-        "elo_diff": elo_diff,
-        "elo_ratio": elo_ratio,
-        "elo_surf_diff": elo_surf_diff
+        "winner": {
+            "spw": w_spw, "rpw": w_rpw, "sgw": w_sgw, "rgw": w_rgw,
+            "games_won": w_games, "games_played": total_games,
+            "aces": row.get("w_ace", np.nan),
+            "df": row.get("w_df", np.nan),
+            "minutes": row.get("minutes", np.nan)
+        },
+        "loser": {
+            "spw": l_spw, "rpw": l_rpw, "sgw": l_sgw, "rgw": l_rgw,
+            "games_won": l_games, "games_played": total_games,
+            "aces": row.get("l_ace", np.nan),
+            "df": row.get("l_df", np.nan),
+            "minutes": row.get("minutes", np.nan)
+        }
     }
 
 
+def build_recent_stats(df_hist, window=30):
+    """Rolling window por jogador (até 30 jogos)."""
+    df = df_hist.sort_values("Date").copy()
+    df["Total_Games"] = calculate_total_games(df)
+
+    # Precompute match stats
+    match_stats = df.apply(compute_player_match_stats, axis=1)
+
+    players = set(df["Winner"]).union(df["Loser"])
+    recent_stats = {p: {} for p in players}
+
+    # Build per-player history
+    history = {p: [] for p in players}
+    history_surf = {p: {"Clay": [], "Hard": [], "Grass": []} for p in players}
+
+    for idx, row in df.iterrows():
+        stats = match_stats[idx]
+        surf = row.get("Surface", "Hard")
+
+        # Winner
+        w = row["Winner"]
+        history[w].append(stats["winner"])
+        history_surf[w][surf].append(stats["winner"])
+
+        # Loser
+        l = row["Loser"]
+        history[l].append(stats["loser"])
+        history_surf[l][surf].append(stats["loser"])
+
+    # Compute rolling stats
+    def avg_last(stats_list, key):
+        vals = [s[key] for s in stats_list[-window:] if not pd.isna(s[key])]
+        return np.mean(vals) if len(vals) > 0 else np.nan
+
+    for p in players:
+        recent_stats[p] = {
+            # Global stats
+            "spw_30": avg_last(history[p], "spw"),
+            "rpw_30": avg_last(history[p], "rpw"),
+            "sgw_30": avg_last(history[p], "sgw"),
+            "rgw_30": avg_last(history[p], "rgw"),
+            "games_won_30": avg_last(history[p], "games_won"),
+            "games_played_30": avg_last(history[p], "games_played"),
+            "aces_30": avg_last(history[p], "aces"),
+            "df_30": avg_last(history[p], "df"),
+            "minutes_30": avg_last(history[p], "minutes"),
+
+            # Surface stats
+            "spw_30_surf": {},
+            "rpw_30_surf": {},
+            "sgw_30_surf": {},
+            "rgw_30_surf": {},
+            "games_won_30_surf": {}
+        }
+
+        for surf in ["Clay", "Hard", "Grass"]:
+            recent_stats[p]["spw_30_surf"][surf] = avg_last(history_surf[p][surf], "spw")
+            recent_stats[p]["rpw_30_surf"][surf] = avg_last(history_surf[p][surf], "rpw")
+            recent_stats[p]["sgw_30_surf"][surf] = avg_last(history_surf[p][surf], "sgw")
+            recent_stats[p]["rgw_30_surf"][surf] = avg_last(history_surf[p][surf], "rgw")
+            recent_stats[p]["games_won_30_surf"][surf] = avg_last(history_surf[p][surf], "games_won")
+
+    return recent_stats
+
+# ============================================================
+# 5. FEATURE ENGINEERING PARA JOGOS FUTUROS
+# ============================================================
+
+def engineer_features(row, recent_stats, elo, h2h_stats):
+    p1, p2 = row["Winner"], row["Loser"]
+    surf = row.get("Surface", "Hard")
+
+    s1 = recent_stats.get(p1, {})
+    s2 = recent_stats.get(p2, {})
+
+    # Diferenças e somas
+    def diff(a, b): return (a - b) if not (pd.isna(a) or pd.isna(b)) else np.nan
+    def summ(a, b): return (a + b) if not (pd.isna(a) or pd.isna(b)) else np.nan
+
+    feats = {
+        "spw_diff_30": diff(s1["spw_30"], s2["spw_30"]),
+        "rpw_diff_30": diff(s1["rpw_30"], s2["rpw_30"]),
+        "sgw_diff_30": diff(s1["sgw_30"], s2["sgw_30"]),
+        "rgw_diff_30": diff(s1["rgw_30"], s2["rgw_30"]),
+        "games_won_diff_30": diff(s1["games_won_30"], s2["games_won_30"]),
+
+        "spw_sum_30": summ(s1["spw_30"], s2["spw_30"]),
+        "rpw_sum_30": summ(s1["rpw_30"], s2["rpw_30"]),
+        "sgw_sum_30": summ(s1["sgw_30"], s2["sgw_30"]),
+        "rgw_sum_30": summ(s1["rgw_30"], s2["rgw_30"]),
+        "games_won_sum_30": summ(s1["games_won_30"], s2["games_won_30"]),
+    }
+
+    # Elo
+    feats["elo_diff"] = diff(elo[p1]["elo"], elo[p2]["elo"])
+    feats["elo_surf_diff"] = diff(
+        elo[p1][f"elo_{surf.lower()}"],
+        elo[p2][f"elo_{surf.lower()}"]
+    )
+
+    # H2H
+    pair = tuple(sorted([p1, p2]))
+    h2h = h2h_stats.get(pair, {})
+    feats["h2h_avg_games"] = h2h.get("avg_games", np.nan)
+    feats["h2h_balance"] = abs(h2h.get("p1_win_rate", 0.5) - 0.5)
+    feats["h2h_n"] = h2h.get("n_h2h", 0)
+
+    # Superfície
+    feats["surface_enc"] = {"Clay": 0, "Hard": 1, "Grass": 2}.get(surf, 1)
+    feats["surface_bonus"] = {"Clay": 1.5, "Hard": 0.0, "Grass": -1.5}.get(surf, 0)
+
+    return feats
+# ============================================================
+# 6. COLUNAS DE FEATURES
+# ============================================================
+
 FEATURE_COLS = [
-    "rank_diff", "rank_ratio", "pts_diff",
-    "win_rate_diff", "win_rate_sum",
-    "avg_games_sum",
-    "h2h_avg_games", "h2h_n", "h2h_balance",
-    "surface_enc", "surface_bonus",
-    "r1", "r2", "pts1", "pts2",
-    "elo_diff", "elo_ratio", "elo_surf_diff"
+    "spw_diff_30", "rpw_diff_30", "sgw_diff_30", "rgw_diff_30",
+    "games_won_diff_30",
+    "spw_sum_30", "rpw_sum_30", "sgw_sum_30", "rgw_sum_30",
+    "games_won_sum_30",
+    "elo_diff", "elo_surf_diff",
+    "h2h_avg_games", "h2h_balance", "h2h_n",
+    "surface_enc", "surface_bonus"
 ]
 
-def build_features_for_hist(df_hist):
-    df = df_hist.copy().sort_values("Date").reset_index(drop=True)
-    df["Total_Games"] = calculate_total_games(df)
-    feature_rows = []
+# ============================================================
+# 7. ENSEMBLE E TREINO
+# ============================================================
 
-    for i, row in df.iterrows():
-        past = df.iloc[:i]
-        if len(past) < 20:
-            feature_rows.append(None)
+def make_ensemble():
+    gb = GradientBoostingClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=4,
+        subsample=0.9,
+        min_samples_leaf=20,
+        random_state=42
+    )
+
+    rf = RandomForestClassifier(
+        n_estimators=400,
+        max_depth=8,
+        min_samples_leaf=20,
+        max_features="sqrt",
+        random_state=42,
+        n_jobs=-1
+    )
+
+    lr = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(
+            C=0.8,
+            max_iter=800,
+            random_state=42,
+            class_weight="balanced"
+        ))
+    ])
+
+    ensemble = VotingClassifier(
+        estimators=[("gb", gb), ("rf", rf), ("lr", lr)],
+        voting="soft",
+        weights=[3, 2, 1]
+    )
+    return ensemble
+
+
+def build_training_dataset(df_hist, recent_stats, elo, h2h_stats, threshold_games=22):
+    df = df_hist.sort_values("Date").copy()
+    df["Total_Games"] = calculate_total_games(df)
+
+    feature_rows = []
+    labels_3sets = []
+    labels_over = []
+
+    for _, row in df.iterrows():
+        if pd.isna(row["Total_Games"]):
             continue
 
-        p_stats = build_player_stats(past)
-        h2h = build_h2h_stats(past)
-        surface = row.get("Surface", "Hard")
-        feats = engineer_features(row, p_stats, h2h, surface)
-        feats["Total_Games"] = row["Total_Games"]
+        feats = engineer_features(row, recent_stats, elo, h2h_stats)
 
+        # Label 3+ sets
         sets_played = 0
         for j in range(1, 6):
             w = row.get(f"W{j}", np.nan)
             l = row.get(f"L{j}", np.nan)
             if not (pd.isna(w) or pd.isna(l)):
                 sets_played += 1
-        feats["three_sets"] = 1 if sets_played >= 3 else 0
+        three_sets = 1 if sets_played >= 3 else 0
+
+        # Label Over threshold
+        over = 1 if row["Total_Games"] > threshold_games else 0
 
         feature_rows.append(feats)
+        labels_3sets.append(three_sets)
+        labels_over.append(over)
 
-    result = pd.DataFrame([r for r in feature_rows if r is not None])
-    return result
+    feat_df = pd.DataFrame(feature_rows)
+    feat_df["three_sets"] = labels_3sets
+    feat_df["over_threshold"] = labels_over
 
-# ---------- API jogos hoje/amanhã ----------
+    return feat_df
+
+
+def train_three_sets_model(feat_df):
+    dfm = feat_df.dropna(subset=FEATURE_COLS + ["three_sets"]).copy()
+    if len(dfm) < 100:
+        st.sidebar.warning(f"Apenas {len(dfm)} jogos com features completas para 3+ Sets.")
+        return None
+
+    X = dfm[FEATURE_COLS]
+    y = dfm["three_sets"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    model = make_ensemble()
+    model.fit(X_train, y_train)
+
+    cv_scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
+    test_score = model.score(X_test, y_test)
+
+    st.sidebar.success(f"Modelo 3+ Sets treinado com {len(dfm)} jogos")
+    st.sidebar.info(f"CV: {cv_scores.mean():.1%} ±{cv_scores.std():.1%} | Teste: {test_score:.1%}")
+
+    return model
+
+
+def train_over_games_model(feat_df, threshold=22):
+    dfm = feat_df.dropna(subset=FEATURE_COLS + ["over_threshold"]).copy()
+    if len(dfm) < 100:
+        st.sidebar.warning(f"Apenas {len(dfm)} jogos com features completas para Over {threshold}.")
+        return None
+
+    X = dfm[FEATURE_COLS]
+    y = dfm["over_threshold"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    model = make_ensemble()
+    model.fit(X_train, y_train)
+
+    cv_scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
+    test_score = model.score(X_test, y_test)
+
+    st.sidebar.success(f"Modelo Over {threshold} treinado com {len(dfm)} jogos")
+    st.sidebar.info(f"CV: {cv_scores.mean():.1%} ±{cv_scores.std():.1%} | Teste: {test_score:.1%}")
+
+    return model
+
+# ============================================================
+# 8. PREVISÕES + CONFIANÇA
+# ============================================================
+
+def predict_for_upcoming(upcoming_df, df_hist, model_3sets, model_over, threshold=22):
+    df_up = upcoming_df.copy()
+
+    # Construir estruturas globais uma vez
+    elo = build_elo_ratings(df_hist)
+    h2h_stats = build_h2h_stats(df_hist)
+    recent_stats = build_recent_stats(df_hist, window=30)
+
+    feature_list = []
+    meta_info = []
+
+    for _, row in df_up.iterrows():
+        p1, p2 = row["Winner"], row["Loser"]
+
+        feats = engineer_features(row, recent_stats, elo, h2h_stats)
+        feature_list.append(feats)
+
+        s1 = recent_stats.get(p1, {})
+        s2 = recent_stats.get(p2, {})
+
+        n1 = 0 if np.isnan(s1.get("games_played_30", np.nan)) else 30
+        n2 = 0 if np.isnan(s2.get("games_played_30", np.nan)) else 30
+
+        pair = tuple(sorted([p1, p2]))
+        h2h = h2h_stats.get(pair, {})
+        h2h_n = h2h.get("n_h2h", 0)
+
+        meta_info.append({"n1": n1, "n2": n2, "h2h_n": h2h_n})
+
+    feat_df = pd.DataFrame(feature_list)
+    meta_df = pd.DataFrame(meta_info)
+
+    feat_df = feat_df.fillna(feat_df.median(numeric_only=True))
+    X = feat_df[FEATURE_COLS]
+
+    if model_3sets is not None:
+        prob_3 = model_3sets.predict_proba(X)[:, 1]
+    else:
+        prob_3 = np.full(len(X), 0.33)
+
+    if model_over is not None:
+        prob_over = model_over.predict_proba(X)[:, 1]
+    else:
+        prob_over = np.full(len(X), 0.5)
+
+    df_up["prob_3_sets"] = prob_3
+    df_up[f"prob_over_{threshold}_games"] = prob_over
+    df_up["prob_competitive_match"] = 0.5 * prob_3 + 0.5 * prob_over
+
+    data_conf = (
+        (meta_df["n1"].clip(0, 30) / 30) * 0.4 +
+        (meta_df["n2"].clip(0, 30) / 30) * 0.4 +
+        (meta_df["h2h_n"].clip(0, 5) / 5) * 0.2
+    )
+    prob_conf = (np.abs(df_up["prob_competitive_match"] - 0.5) * 2).clip(0, 1)
+    df_up["confiança_modelo"] = (0.6 * data_conf + 0.4 * prob_conf)
+
+    # Guardar algumas features úteis para export
+    df_up["elo_diff"] = feat_df["elo_diff"].values
+    df_up["rank_diff_dummy"] = np.nan  # placeholder se quiseres no futuro
+
+    return df_up.sort_values("prob_competitive_match", ascending=False)
+
+# ============================================================
+# 9. FILTROS
+# ============================================================
+
+def filtrar_por_confianca(df, limiar=0.6):
+    return df[df["confiança_modelo"] >= limiar].copy()
+
+
+def selecionar_melhores_jogos(df, top_n=10, peso_prob=0.6, peso_conf=0.4):
+    df = df.copy()
+    df["score_final"] = (
+        peso_prob * df["prob_competitive_match"] +
+        peso_conf * df["confiança_modelo"]
+    )
+    return df.sort_values("score_final", ascending=False).head(top_n)
+# ============================================================
+# 10. API — JOGOS HOJE/AMANHÃ
+# ============================================================
 
 def extract_surface_from_tournament(tournament_name):
     if not isinstance(tournament_name, str):
@@ -338,9 +544,9 @@ def extract_surface_from_tournament(tournament_name):
     t = tournament_name.lower()
     if "clay" in t:
         return "Clay"
-    elif "grass" in t or "wimbledon" in t:
+    if "grass" in t or "wimbledon" in t:
         return "Grass"
-    elif "hard" in t:
+    if "hard" in t:
         return "Hard"
     return "Hard"
 
@@ -401,179 +607,18 @@ def fetch_matches_from_api():
 
     except Exception:
         return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
-# ---------- Ensemble ----------
 
-def make_ensemble():
-    gb = GradientBoostingClassifier(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=4,
-        subsample=0.9,
-        min_samples_leaf=20,
-        random_state=42
-    )
-
-    rf = RandomForestClassifier(
-        n_estimators=400,
-        max_depth=8,
-        min_samples_leaf=20,
-        max_features="sqrt",
-        random_state=42,
-        n_jobs=-1
-    )
-
-    lr = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(
-            C=0.8,
-            max_iter=800,
-            random_state=42,
-            class_weight="balanced"
-        ))
-    ])
-
-    ensemble = VotingClassifier(
-        estimators=[("gb", gb), ("rf", rf), ("lr", lr)],
-        voting="soft",
-        weights=[3, 2, 1]
-    )
-    return ensemble
-
-# ---------- Treino ----------
-
-def train_three_sets_model(feat_df):
-    dfm = feat_df.dropna(subset=FEATURE_COLS + ["three_sets"]).copy()
-    if len(dfm) < 50:
-        st.sidebar.warning(f"Apenas {len(dfm)} jogos com features completas para 3+ Sets.")
-        return None
-
-    X = dfm[FEATURE_COLS]
-    y = dfm["three_sets"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    model = make_ensemble()
-    model.fit(X_train, y_train)
-
-    cv_scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
-    test_score = model.score(X_test, y_test)
-
-    st.sidebar.success(f"Modelo 3+ Sets treinado com {len(dfm)} jogos")
-    st.sidebar.info(f"CV: {cv_scores.mean():.1%} ±{cv_scores.std():.1%} | Teste: {test_score:.1%}")
-
-    return model
-
-
-def train_over_games_model(feat_df, threshold=22):
-    dfm = feat_df.dropna(subset=FEATURE_COLS + ["Total_Games"]).copy()
-    dfm["over_threshold"] = (dfm["Total_Games"] > threshold).astype(int)
-    dfm = dfm.dropna(subset=["over_threshold"])
-
-    if len(dfm) < 50:
-        st.sidebar.warning(f"Apenas {len(dfm)} jogos com features completas para Over {threshold}.")
-        return None
-
-    X = dfm[FEATURE_COLS]
-    y = dfm["over_threshold"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    model = make_ensemble()
-    model.fit(X_train, y_train)
-
-    cv_scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
-    test_score = model.score(X_test, y_test)
-
-    st.sidebar.success(f"Modelo Over {threshold} treinado com {len(dfm)} jogos")
-    st.sidebar.info(f"CV: {cv_scores.mean():.1%} ±{cv_scores.std():.1%} | Teste: {test_score:.1%}")
-
-    return model
-
-# ---------- Previsões + confiança ----------
-
-def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshold=22):
-    df_up = upcoming_df.copy()
-    player_stats = build_player_stats(hist_df)
-    h2h_stats = build_h2h_stats(hist_df)
-
-    feature_list = []
-    meta_info = []
-
-    for _, row in df_up.iterrows():
-        p1, p2 = row["Winner"], row["Loser"]
-        surface = row.get("Surface", "Hard")
-
-        s1 = player_stats.get(p1, {})
-        s2 = player_stats.get(p2, {})
-
-        n1 = s1.get("n_matches", 0)
-        n2 = s2.get("n_matches", 0)
-
-        feats = engineer_features(row, player_stats, h2h_stats, surface)
-        feature_list.append(feats)
-
-        pair_key = tuple(sorted([p1, p2]))
-        h2h = h2h_stats.get(pair_key, {})
-        h2h_n = h2h.get("n_h2h", 0)
-
-        meta_info.append({"n1": n1, "n2": n2, "h2h_n": h2h_n})
-
-    feat_df = pd.DataFrame(feature_list)
-    meta_df = pd.DataFrame(meta_info)
-
-    feat_df = feat_df.fillna(feat_df.median(numeric_only=True))
-    X = feat_df[FEATURE_COLS]
-
-    if model_3sets is not None:
-        prob_3 = model_3sets.predict_proba(X)[:, 1]
-    else:
-        prob_3 = np.full(len(X), 0.33)
-
-    if model_over is not None:
-        prob_over = model_over.predict_proba(X)[:, 1]
-    else:
-        prob_over = np.full(len(X), 0.5)
-
-    df_up["prob_3_sets"] = prob_3
-    df_up[f"prob_over_{threshold}_games"] = prob_over
-    df_up["prob_competitive_match"] = 0.5 * prob_3 + 0.5 * prob_over
-
-    data_conf = (
-        (meta_df["n1"].clip(0, 50) / 50) * 0.4 +
-        (meta_df["n2"].clip(0, 50) / 50) * 0.4 +
-        (meta_df["h2h_n"].clip(0, 5) / 5) * 0.2
-    )
-    prob_conf = (np.abs(df_up["prob_competitive_match"] - 0.5) * 2).clip(0, 1)
-    df_up["confiança_modelo"] = (0.6 * data_conf + 0.4 * prob_conf)
-
-    return df_up.sort_values("prob_competitive_match", ascending=False)
-
-# ---------- Filtros ----------
-
-def filtrar_por_confianca(df, limiar=0.6):
-    return df[df["confiança_modelo"] >= limiar].copy()
-
-
-def selecionar_melhores_jogos(df, top_n=10, peso_prob=0.6, peso_conf=0.4):
-    df = df.copy()
-    df["score_final"] = (
-        peso_prob * df["prob_competitive_match"] +
-        peso_conf * df["confiança_modelo"]
-    )
-    return df.sort_values("score_final", ascending=False).head(top_n)
-# ---------- Export Excel ----------
+# ============================================================
+# 11. EXPORT EXCEL
+# ============================================================
 
 def export_to_excel(predictions_df, threshold_games, top_jogos_df):
     export_df = predictions_df.copy()
 
     export_df = export_df.rename(columns={
         "Date": "Data",
-        "Winner": "Vencedor",
-        "Loser": "Derrotado",
+        "Winner": "Jogador_A",
+        "Loser": "Jogador_B",
         "Surface": "Superfície",
         "prob_3_sets": "Probabilidade_3_Sets",
         f"prob_over_{threshold_games}_games": f"Probabilidade_Over_{threshold_games}_Games",
@@ -581,10 +626,7 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
         "confiança_modelo": "Confianca_Modelo",
         "score_final": "Score_Final",
         "elo_diff": "Diferenca_Elo",
-        "rank_diff": "Diferenca_Ranking",
-        "rank_ratio": "Proximidade_Ranking",
-        "avg_games_sum": "Media_Games_Historica",
-        "h2h_n": "Jogos_H2H",
+        "rank_diff_dummy": "Diferenca_Ranking_Aproximada",
     })
 
     export_df["Data"] = pd.to_datetime(export_df["Data"]).dt.strftime("%Y-%m-%d")
@@ -638,23 +680,20 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
         })
         stats_df.to_excel(writer, sheet_name='Estatisticas_Modelo', index=False)
 
-        for sheet in writer.sheets.values():
-            for column in sheet.columns:
-                max_length = max((len(str(cell.value)) for cell in column if cell.value), default=10)
-                sheet.column_dimensions[column[0].column_letter].width = min(max_length + 2, 50)
-
     output.seek(0)
     return output
 
-# ---------- UI Streamlit ----------
+# ============================================================
+# 12. UI STREAMLIT
+# ============================================================
 
-st.title("🎾 Ténis — Predição de Jogos Competitivos (Elo + Features Avançadas)")
+st.title("🎾 Ténis — Predição de Jogos Competitivos (Stats Recentes + Elo + H2H)")
 
 st.sidebar.header("📂 Histórico de jogos")
 hist_file = st.sidebar.file_uploader("Escolhe um ficheiro Excel de histórico (.xlsx)", type=["xlsx"])
 
 if hist_file is None:
-    st.warning("Carrega primeiro um ficheiro de histórico com jogos (Winner, Loser, Date, Surface, Score, etc.).")
+    st.warning("Carrega primeiro um ficheiro de histórico com jogos (Winner, Loser, Date, Surface, Score, stats...).")
     st.stop()
 
 df_hist = pd.read_excel(hist_file)
@@ -667,8 +706,12 @@ threshold_games = st.sidebar.slider(
 )
 
 st.sidebar.header("⚙️ Treino do modelo")
-with st.spinner("A engenheirar features do histórico..."):
-    feat_df = build_features_for_hist(df_hist)
+
+with st.spinner("A preparar stats recentes, Elo e H2H..."):
+    elo = build_elo_ratings(df_hist)
+    h2h_stats = build_h2h_stats(df_hist)
+    recent_stats = build_recent_stats(df_hist, window=30)
+    feat_df = build_training_dataset(df_hist, recent_stats, elo, h2h_stats, threshold_games)
 
 with st.spinner("A treinar modelos..."):
     model_3sets = train_three_sets_model(feat_df)
