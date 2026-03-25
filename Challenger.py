@@ -7,21 +7,21 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
+import requests
+import json
 import re
 import warnings
 
 warnings.filterwarnings("ignore")
 
 st.set_page_config(
-    page_title="Ténis — 3+ Sets & Over Predictor",
+    page_title="Ténis — Predição de Jogos Competitivos",
     page_icon="🎾",
     layout="wide"
 )
 
-# ============================================================
-# 0. NORMALIZAÇÃO / PARSING BÁSICO
-# ============================================================
+# ---------- Normalização / parsing ----------
 
 def normalize_columns(df):
     col_map = {
@@ -91,22 +91,14 @@ def calculate_total_games(df):
             total += np.where(valid, w + l, 0)
     return total.where(total > 0, other=np.nan)
 
-# ============================================================
-# 1. ELO + K DINÂMICO + H2H
-# ============================================================
+# ---------- Elo + K dinâmico ----------
 
 def build_elo_ratings(df_hist):
     df = df_hist.sort_values("Date").copy()
-
     elo = {}
     matches_count = {}
     default_elo = 1500
-
-    surface_map = {
-        "Clay": "elo_clay",
-        "Hard": "elo_hard",
-        "Grass": "elo_grass"
-    }
+    surface_map = {"Clay": "elo_clay", "Hard": "elo_hard", "Grass": "elo_grass"}
 
     def get_k(player):
         n = matches_count.get(player, 0)
@@ -139,15 +131,12 @@ def build_elo_ratings(df_hist):
 
         Ew = 1 / (1 + 10 ** ((elo[l]["elo"] - elo[w]["elo"]) / 400))
         El = 1 - Ew
-
         elo[w]["elo"] += k_w * (1 - Ew)
         elo[l]["elo"] += k_l * (0 - El)
 
         key = surface_map.get(surf, "elo_hard")
-
         Ew_surf = 1 / (1 + 10 ** ((elo[l][key] - elo[w][key]) / 400))
         El_surf = 1 - Ew_surf
-
         elo[w][key] += k_w * (1 - Ew_surf)
         elo[l][key] += k_l * (0 - El_surf)
 
@@ -156,6 +145,7 @@ def build_elo_ratings(df_hist):
 
     return elo
 
+# ---------- H2H ----------
 
 def build_h2h_stats(df_hist):
     df = df_hist.copy()
@@ -179,16 +169,11 @@ def build_h2h_stats(df_hist):
         }
 
     return h2h
-
-# ============================================================
-# 2. PLAYER STATS + FEATURES + CORREÇÃO 3 SETS
-# ============================================================
+# ---------- Player stats com Elo ----------
 
 def build_player_stats(df_hist):
-    df = df_hist.copy()
-    df = df.sort_values("Date")
+    df = df_hist.copy().sort_values("Date")
     df["Total_Games"] = calculate_total_games(df)
-
     elo_ratings = build_elo_ratings(df_hist)
 
     stats = {}
@@ -198,7 +183,6 @@ def build_player_stats(df_hist):
         w_mask = df["Winner"] == player
         l_mask = df["Loser"] == player
         all_mask = w_mask | l_mask
-
         p_df = df[all_mask].copy()
 
         last_w = df[w_mask]["WRank"].dropna()
@@ -230,20 +214,19 @@ def build_player_stats(df_hist):
             "surface_avg_Clay": surface_avg["Clay"],
             "surface_avg_Hard": surface_avg["Hard"],
             "surface_avg_Grass": surface_avg["Grass"],
-            "n_matches": len(p_df)
+            "n_matches": len(p_df),
+            "elo": elo_ratings[player]["elo"],
+            "elo_clay": elo_ratings[player]["elo_clay"],
+            "elo_hard": elo_ratings[player]["elo_hard"],
+            "elo_grass": elo_ratings[player]["elo_grass"],
         }
-
-        stats[player]["elo"] = elo_ratings[player]["elo"]
-        stats[player]["elo_clay"] = elo_ratings[player]["elo_clay"]
-        stats[player]["elo_hard"] = elo_ratings[player]["elo_hard"]
-        stats[player]["elo_grass"] = elo_ratings[player]["elo_grass"]
 
     return stats
 
+# ---------- Features ----------
 
 def engineer_features(row, player_stats, h2h_stats, surface):
     p1, p2 = row["Winner"], row["Loser"]
-
     s1 = player_stats.get(p1, {})
     s2 = player_stats.get(p2, {})
 
@@ -320,7 +303,6 @@ FEATURE_COLS = [
 def build_features_for_hist(df_hist):
     df = df_hist.copy().sort_values("Date").reset_index(drop=True)
     df["Total_Games"] = calculate_total_games(df)
-
     feature_rows = []
 
     for i, row in df.iterrows():
@@ -348,9 +330,78 @@ def build_features_for_hist(df_hist):
     result = pd.DataFrame([r for r in feature_rows if r is not None])
     return result
 
-# ============================================================
-# 3. MODELOS + ENSEMBLE OTIMIZADO + CONFIANÇA
-# ============================================================
+# ---------- API jogos hoje/amanhã ----------
+
+def extract_surface_from_tournament(tournament_name):
+    if not isinstance(tournament_name, str):
+        return "Hard"
+    t = tournament_name.lower()
+    if "clay" in t:
+        return "Clay"
+    elif "grass" in t or "wimbledon" in t:
+        return "Grass"
+    elif "hard" in t:
+        return "Hard"
+    return "Hard"
+
+
+def fetch_matches_from_api():
+    API_URL = "https://api.api-tennis.com/tennis/"
+    API_KEY = "7e3c6125ceaf5442372a487f9948c083a8778bb9604f49d8b33efc0e005f275c"
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    params = {
+        "method": "get_fixtures",
+        "APIkey": API_KEY,
+        "date_start": today,
+        "date_stop": tomorrow,
+    }
+
+    try:
+        with st.spinner(f"A buscar jogos de {today} a {tomorrow}..."):
+            response = requests.get(API_URL, params=params, timeout=15)
+            if response.status_code != 200 or not response.text:
+                return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+        if data.get("success") != 1:
+            return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+        matches = data.get("result", [])
+        if not matches:
+            return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+        df_api = pd.DataFrame(matches)
+        required_cols = ["event_date", "event_first_player", "event_second_player"]
+        if any(col not in df_api.columns for col in required_cols):
+            return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+
+        df_api["Date"] = pd.to_datetime(df_api["event_date"])
+        df_api["Winner"] = df_api["event_first_player"]
+        df_api["Loser"] = df_api["event_second_player"]
+
+        if "tournament_name" in df_api.columns:
+            df_api["Surface"] = df_api["tournament_name"].apply(extract_surface_from_tournament)
+        else:
+            df_api["Surface"] = "Hard"
+
+        if "event_status" in df_api.columns:
+            df_api = df_api[df_api["event_status"] == ""]
+
+        result_df = df_api[["Date", "Winner", "Loser", "Surface"]].copy()
+        result_df = result_df.drop_duplicates().dropna(subset=["Winner", "Loser"])
+
+        return result_df
+
+    except Exception:
+        return pd.DataFrame(columns=["Date", "Winner", "Loser", "Surface"])
+# ---------- Ensemble ----------
 
 def make_ensemble():
     gb = GradientBoostingClassifier(
@@ -388,10 +439,10 @@ def make_ensemble():
     )
     return ensemble
 
+# ---------- Treino ----------
 
 def train_three_sets_model(feat_df):
     dfm = feat_df.dropna(subset=FEATURE_COLS + ["three_sets"]).copy()
-
     if len(dfm) < 50:
         st.sidebar.warning(f"Apenas {len(dfm)} jogos com features completas para 3+ Sets.")
         return None
@@ -442,10 +493,10 @@ def train_over_games_model(feat_df, threshold=22):
 
     return model
 
+# ---------- Previsões + confiança ----------
 
 def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshold=22):
     df_up = upcoming_df.copy()
-
     player_stats = build_player_stats(hist_df)
     h2h_stats = build_h2h_stats(hist_df)
 
@@ -469,11 +520,7 @@ def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshol
         h2h = h2h_stats.get(pair_key, {})
         h2h_n = h2h.get("n_h2h", 0)
 
-        meta_info.append({
-            "n1": n1,
-            "n2": n2,
-            "h2h_n": h2h_n
-        })
+        meta_info.append({"n1": n1, "n2": n2, "h2h_n": h2h_n})
 
     feat_df = pd.DataFrame(feature_list)
     meta_df = pd.DataFrame(meta_info)
@@ -500,13 +547,12 @@ def predict_for_upcoming(upcoming_df, hist_df, model_3sets, model_over, threshol
         (meta_df["n2"].clip(0, 50) / 50) * 0.4 +
         (meta_df["h2h_n"].clip(0, 5) / 5) * 0.2
     )
-
     prob_conf = (np.abs(df_up["prob_competitive_match"] - 0.5) * 2).clip(0, 1)
-
     df_up["confiança_modelo"] = (0.6 * data_conf + 0.4 * prob_conf)
 
     return df_up.sort_values("prob_competitive_match", ascending=False)
 
+# ---------- Filtros ----------
 
 def filtrar_por_confianca(df, limiar=0.6):
     return df[df["confiança_modelo"] >= limiar].copy()
@@ -519,10 +565,7 @@ def selecionar_melhores_jogos(df, top_n=10, peso_prob=0.6, peso_conf=0.4):
         peso_conf * df["confiança_modelo"]
     )
     return df.sort_values("score_final", ascending=False).head(top_n)
-
-# ============================================================
-# 4. RELATÓRIO EXCEL
-# ============================================================
+# ---------- Export Excel ----------
 
 def export_to_excel(predictions_df, threshold_games, top_jogos_df):
     export_df = predictions_df.copy()
@@ -558,7 +601,6 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-
         export_df.to_excel(writer, sheet_name='Previsoes', index=False)
 
         summary_df = pd.DataFrame({
@@ -604,13 +646,11 @@ def export_to_excel(predictions_df, threshold_games, top_jogos_df):
     output.seek(0)
     return output
 
-# ============================================================
-# 5. STREAMLIT UI
-# ============================================================
+# ---------- UI Streamlit ----------
 
 st.title("🎾 Ténis — Predição de Jogos Competitivos (Elo + Features Avançadas)")
-st.sidebar.header("📂 Histórico de jogos")
 
+st.sidebar.header("📂 Histórico de jogos")
 hist_file = st.sidebar.file_uploader("Escolhe um ficheiro Excel de histórico (.xlsx)", type=["xlsx"])
 
 if hist_file is None:
@@ -619,7 +659,6 @@ if hist_file is None:
 
 df_hist = pd.read_excel(hist_file)
 df_hist = normalize_columns(df_hist)
-
 st.sidebar.info(f"Total de jogos históricos: {len(df_hist)}")
 
 threshold_games = st.sidebar.slider(
@@ -628,7 +667,6 @@ threshold_games = st.sidebar.slider(
 )
 
 st.sidebar.header("⚙️ Treino do modelo")
-
 with st.spinner("A engenheirar features do histórico..."):
     feat_df = build_features_for_hist(df_hist)
 
@@ -643,22 +681,40 @@ if model_3sets is None and model_over is None:
 st.markdown("---")
 st.header("📅 Jogos para previsão")
 
-st.write("Carrega um ficheiro Excel com jogos futuros (colunas: Date, Winner, Loser, Surface opcional).")
+modo = st.radio(
+    "Fonte dos jogos:",
+    ["API (hoje e amanhã)", "Ficheiro Excel"],
+    horizontal=True
+)
 
-upcoming_file = st.file_uploader("Ficheiro de jogos futuros (.xlsx)", type=["xlsx"], key="upcoming")
+df_upcoming = None
 
-if upcoming_file is not None:
-    df_upcoming = pd.read_excel(upcoming_file)
-    required_cols = ["Date", "Winner", "Loser"]
-    missing = [c for c in required_cols if c not in df_upcoming.columns]
-    if missing:
-        st.error(f"Colunas em falta: {missing}")
-        st.stop()
+if modo == "API (hoje e amanhã)":
+    df_api = fetch_matches_from_api()
+    if df_api.empty:
+        st.warning("API não devolveu jogos. Podes usar um ficheiro Excel em alternativa.")
+    else:
+        st.success(f"Encontrados {len(df_api)} jogos via API.")
+        st.dataframe(df_api)
+        df_upcoming = df_api
+else:
+    st.write("Carrega um ficheiro Excel com jogos futuros (colunas: Date, Winner, Loser, Surface opcional).")
+    upcoming_file = st.file_uploader("Ficheiro de jogos futuros (.xlsx)", type=["xlsx"], key="upcoming")
 
-    df_upcoming["Date"] = pd.to_datetime(df_upcoming["Date"])
-    if "Surface" not in df_upcoming.columns:
-        df_upcoming["Surface"] = "Hard"
+    if upcoming_file is not None:
+        df_upcoming = pd.read_excel(upcoming_file)
+        required_cols = ["Date", "Winner", "Loser"]
+        missing = [c for c in required_cols if c not in df_upcoming.columns]
+        if missing:
+            st.error(f"Colunas em falta: {missing}")
+            df_upcoming = None
+        else:
+            df_upcoming["Date"] = pd.to_datetime(df_upcoming["Date"])
+            if "Surface" not in df_upcoming.columns:
+                df_upcoming["Surface"] = "Hard"
+            st.dataframe(df_upcoming)
 
+if df_upcoming is not None and not df_upcoming.empty:
     with st.spinner("A gerar previsões..."):
         preds = predict_for_upcoming(df_upcoming, df_hist, model_3sets, model_over, threshold_games)
 
