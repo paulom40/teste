@@ -876,7 +876,7 @@ tab_pred, tab_elo, tab_info = st.tabs(["📅 Previsões", "🏆 Elo Rankings", "
 
 # ══════════════════════════════════════════════════════════════
 with tab_elo:
-    st.subheader("🏆 Elo Rankings — Top 100")
+    st.subheader("🏆 Elo Rankings — Top 500")
     st.caption(
         f"K base: {base_k_slider} | "
         f"R32×{k_r32} R16×{k_r16} QF×{k_qf} SF×{k_sf} Final×{k_f} | "
