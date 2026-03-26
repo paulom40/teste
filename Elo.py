@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import matplotlib.pyplot as plt
+from datetime import datetime
 
 # ------------------------------
 # ELO System Implementation
@@ -73,6 +75,7 @@ def prepare_matches(df):
     # Parse dates
     dates = valid['tourney_date'].apply(parse_date)
     valid = valid[dates.notna()]
+    valid = valid.copy()
     valid['tourney_date'] = dates[dates.notna()]
 
     matches = valid[['tourney_date', 'surface', 'winner_id', 'winner_name', 'loser_id', 'loser_name', 'score']].copy()
@@ -207,22 +210,29 @@ def load_and_process(uploaded_file):
     matches = prepare_matches(df)
     if matches.empty:
         st.error("No valid matches found after processing.")
-        return None, None, None
+        return None, None, None, None
     initial_ratings = initialize_ratings(matches)
     # Global ELO
     global_ratings, global_history = simulate_elo(matches, initial_ratings, custom_k_factor, scale)
     # Surface-specific ELO
     surface_ratings, surface_histories = simulate_surface_elo(matches, initial_ratings, custom_k_factor, scale)
-    return global_ratings, surface_ratings, (global_history, surface_histories)
+    return matches, global_ratings, surface_ratings, (global_history, surface_histories)
 
 # Load data
 with st.spinner("Processing data and computing ELO ratings..."):
-    global_ratings, surface_ratings, histories = load_and_process(uploaded_file)
+    matches, global_ratings, surface_ratings, histories = load_and_process(uploaded_file)
 
 if global_ratings is None:
     st.stop()
 
 global_history, surface_histories = histories
+
+# Create name mapping
+name_map = {}
+if matches is not None and not matches.empty:
+    for _, row in matches.iterrows():
+        name_map[row['winner_id']] = row['winner_name']
+        name_map[row['loser_id']] = row['loser_name']
 
 # ------------------------------
 # Display Rankings
@@ -234,24 +244,20 @@ st.subheader("Overall ELO Rankings")
 global_df = pd.DataFrame(list(global_ratings.items()), columns=['Player ID', 'ELO'])
 global_df = global_df.sort_values('ELO', ascending=False).reset_index(drop=True)
 # Add player names (if available)
-# Try to map names from matches
-name_map = {}
-for _, row in matches.iterrows():
-    name_map[row['winner_id']] = row['winner_name']
-    name_map[row['loser_id']] = row['loser_name']
 global_df['Player'] = global_df['Player ID'].map(name_map).fillna(global_df['Player ID'])
 global_df = global_df[['Player', 'ELO']]
 st.dataframe(global_df.head(50), use_container_width=True)
 
 # Surface Rankings
-tabs = st.tabs([f"{surface} Rankings" for surface in surface_ratings.keys()])
-for tab, surface in zip(tabs, surface_ratings.keys()):
-    with tab:
-        df_surf = pd.DataFrame(list(surface_ratings[surface].items()), columns=['Player ID', 'ELO'])
-        df_surf = df_surf.sort_values('ELO', ascending=False).reset_index(drop=True)
-        df_surf['Player'] = df_surf['Player ID'].map(name_map).fillna(df_surf['Player ID'])
-        df_surf = df_surf[['Player', 'ELO']]
-        st.dataframe(df_surf.head(50), use_container_width=True)
+if surface_ratings:
+    tabs = st.tabs([f"{surface} Rankings" for surface in surface_ratings.keys()])
+    for tab, surface in zip(tabs, surface_ratings.keys()):
+        with tab:
+            df_surf = pd.DataFrame(list(surface_ratings[surface].items()), columns=['Player ID', 'ELO'])
+            df_surf = df_surf.sort_values('ELO', ascending=False).reset_index(drop=True)
+            df_surf['Player'] = df_surf['Player ID'].map(name_map).fillna(df_surf['Player ID'])
+            df_surf = df_surf[['Player', 'ELO']]
+            st.dataframe(df_surf.head(50), use_container_width=True)
 
 # ------------------------------
 # ELO Evolution Chart
@@ -261,12 +267,10 @@ players_to_plot = st.multiselect("Select players to plot (by ID or Name)",
                                   options=global_df['Player'].tolist(),
                                   default=global_df['Player'].head(5).tolist() if len(global_df) > 5 else global_df['Player'].tolist())
 
-if players_to_plot:
+if players_to_plot and global_history:
     # Prepare time series data from global history
     hist_df = pd.DataFrame(global_history)
     if not hist_df.empty:
-        # Build player name mapping
-        pid_to_name = dict(zip(global_df['Player ID'], global_df['Player']))
         # Create a list of events for each player
         player_events = {}
         for _, row in hist_df.iterrows():
@@ -274,28 +278,32 @@ if players_to_plot:
                 (row['winner_id'], row['winner_name'], row['winner_rating_before'], row['winner_rating_after']),
                 (row['loser_id'], row['loser_name'], row['loser_rating_before'], row['loser_rating_after'])
             ]:
-                player_name = pid_to_name.get(pid, name)
+                player_name = name_map.get(pid, name)
                 if player_name not in players_to_plot:
                     continue
                 if player_name not in player_events:
                     player_events[player_name] = []
                 player_events[player_name].append((row['date'], rating_after))
+        
         # Plot
-        import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(12, 6))
         for player, events in player_events.items():
             events.sort(key=lambda x: x[0])
             dates = [e[0] for e in events]
             ratings = [e[1] for e in events]
-            ax.plot(dates, ratings, marker='.', linestyle='-', label=player)
+            ax.plot(dates, ratings, marker='.', linestyle='-', label=player, linewidth=2, markersize=4)
         ax.set_xlabel("Date")
         ax.set_ylabel("ELO Rating")
         ax.set_title("ELO Rating Evolution")
-        ax.legend()
-        ax.grid(True)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
         st.pyplot(fig)
     else:
         st.info("No historical data available for plotting.")
+else:
+    if not players_to_plot:
+        st.info("Please select players to view their rating evolution.")
 
 # ------------------------------
 # Export Results
@@ -323,6 +331,21 @@ with col2:
                 df.to_excel(writer, sheet_name=surface, index=False)
         st.download_button("Download All Rankings (Excel)", output.getvalue(), "elo_rankings.xlsx", 
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ------------------------------
+# Statistics
+# ------------------------------
+st.header("📊 Statistics")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Total Players", len(global_ratings))
+with col2:
+    st.metric("Total Matches Processed", len(global_history) if global_history else 0)
+with col3:
+    top_player = global_df.iloc[0]['Player'] if not global_df.empty else "N/A"
+    top_elo = global_df.iloc[0]['ELO'] if not global_df.empty else 0
+    st.metric("Top Player", f"{top_player} ({top_elo:.0f})")
 
 # ------------------------------
 # About ELO Parameters
