@@ -23,13 +23,11 @@ def update_elo(rating_a, rating_b, score_a, k_factor=32, scale=400):
 
 def get_k_factor(player_rating, match_count, base_k=32, min_k=16, max_k=32, experience_threshold=50):
     """Adjust K-factor based on player experience and rating."""
-    # Reduce K-factor for experienced players
     if match_count > experience_threshold:
         k = base_k * 0.5
     else:
         k = base_k
 
-    # Optional: Cap K-factor for very high-rated players
     if player_rating > 2400:
         k = min(k, min_k)
     elif player_rating < 1500:
@@ -38,41 +36,121 @@ def get_k_factor(player_rating, match_count, base_k=32, min_k=16, max_k=32, expe
     return max(min_k, min(k, max_k))
 
 # ------------------------------
+# Match Prediction Functions
+# ------------------------------
+
+def predict_match_winner(rating_a, rating_b, surface_ratings_a=None, surface_ratings_b=None, surface=None, scale=400):
+    """Predict probability of player A winning."""
+    if surface and surface_ratings_a and surface_ratings_b and surface in surface_ratings_a:
+        # Use surface-specific ratings if available
+        rating_a_use = surface_ratings_a[surface]
+        rating_b_use = surface_ratings_b[surface]
+    else:
+        # Use overall ratings
+        rating_a_use = rating_a
+        rating_b_use = rating_b
+    
+    prob_a_wins = expected_score(rating_a_use, rating_b_use, scale)
+    return prob_a_wins
+
+def calculate_expected_games(prob_win, over_under_line=21.5):
+    """Calculate expected total games and over/under probability."""
+    # In tennis best-of-3 sets, total games typically range from 12 to 36+
+    # Expected games based on probability of winning
+    # This is a simplified model assuming correlation between set dominance and total games
+    
+    # Expected number of sets (2 or 3)
+    prob_3_sets = 2 * prob_win * (1 - prob_win)  # Probability of going to 3 sets
+    
+    # Expected games based on win probability
+    # If player is strong favorite, games will be fewer
+    # If evenly matched, more games expected
+    if prob_win > 0.7:
+        # Dominant win - fewer games
+        expected_games = 18 + (1 - prob_win) * 10
+    elif prob_win < 0.3:
+        # Dominant loss - fewer games
+        expected_games = 18 + prob_win * 10
+    else:
+        # Competitive match - more games
+        expected_games = 22 + abs(0.5 - prob_win) * 4
+    
+    # Add additional games for 3-set matches
+    expected_games += prob_3_sets * 4
+    
+    # Probability of over 21.5 games
+    if expected_games > over_under_line:
+        prob_over = 0.6
+        if prob_win > 0.65 or prob_win < 0.35:
+            prob_over = 0.4
+        elif 0.45 < prob_win < 0.55:
+            prob_over = 0.7
+    else:
+        prob_over = 0.4
+    
+    return expected_games, prob_over, prob_3_sets
+
+def get_betting_recommendation(prob_win, prob_over, expected_games, line=21.5):
+    """Get betting recommendations based on predictions."""
+    recommendations = []
+    
+    # Moneyline recommendation
+    if prob_win > 0.55:
+        recommendations.append(f"✅ FAVORITE: {prob_win:.1%} chance to win")
+        if prob_win > 0.65:
+            recommendations.append("   → Strong favorite, good value if odds > 1.5")
+        else:
+            recommendations.append("   → Slight favorite, look for odds > 1.8")
+    elif prob_win < 0.45:
+        recommendations.append(f"⚠️ UNDERDOG: {prob_win:.1%} chance to win")
+        recommendations.append("   → Value play if odds > 2.5")
+    else:
+        recommendations.append(f"🤝 COIN FLIP: {prob_win:.1%} chance to win")
+        recommendations.append("   → Look for close odds, avoid heavy favorites")
+    
+    # Over/Under recommendation
+    if prob_over > 0.55:
+        recommendations.append(f"📈 OVER {line}: {prob_over:.1%} probability")
+        if expected_games > line + 1:
+            recommendations.append(f"   → Expected: {expected_games:.1f} games")
+    elif prob_over < 0.45:
+        recommendations.append(f"📉 UNDER {line}: {(1-prob_over):.1%} probability")
+        recommendations.append(f"   → Expected: {expected_games:.1f} games")
+    else:
+        recommendations.append(f"⚖️ TOO CLOSE: Avoid over/under bets")
+    
+    return recommendations
+
+# ------------------------------
 # Data Preparation
 # ------------------------------
 
 def parse_date(date_str):
-    """Convert Excel date (as string or number) to datetime."""
+    """Convert Excel date to datetime."""
     if pd.isna(date_str):
         return None
     try:
-        # If it's already a datetime
         return pd.to_datetime(date_str)
     except:
         try:
-            # Try parsing as Excel serial number
             if isinstance(date_str, (int, float)):
                 return pd.to_datetime('1899-12-30') + pd.Timedelta(days=date_str)
             else:
-                # Try to parse string date (e.g., 20250602)
                 return pd.to_datetime(str(int(date_str)), format='%Y%m%d')
         except:
             return None
 
 def prepare_matches(df):
     """Extract matches from the dataframe."""
-    matches = []
     required_cols = ['tourney_date', 'surface', 'winner_id', 'winner_name', 'loser_id', 'loser_name', 'score']
     if not all(col in df.columns for col in required_cols):
         st.error(f"Missing required columns. Found: {df.columns.tolist()}")
         return pd.DataFrame()
 
-    # Filter out rows with missing IDs
     valid = df.dropna(subset=['winner_id', 'loser_id'])
     valid = valid[valid['winner_id'].astype(str).str.strip() != '']
     valid = valid[valid['loser_id'].astype(str).str.strip() != '']
 
-    # Parse dates
     dates = valid['tourney_date'].apply(parse_date)
     valid = valid[dates.notna()]
     valid = valid.copy()
@@ -84,38 +162,31 @@ def prepare_matches(df):
 def initialize_ratings(matches):
     """Initialize ratings for all players."""
     all_players = set(matches['winner_id'].unique()) | set(matches['loser_id'].unique())
-    # Start all players at 1500
     return {pid: 1500 for pid in all_players}
 
-def simulate_elo(matches, initial_ratings, k_factor_func, scale=400, surface_specific=True):
+def simulate_elo(matches, initial_ratings, k_factor_func, scale=400):
     """Run ELO simulation."""
     ratings = initial_ratings.copy()
     player_matches = {pid: 0 for pid in ratings.keys()}
     history = []
 
-    # Sort matches by date
     matches_sorted = matches.sort_values('tourney_date')
 
     for idx, row in matches_sorted.iterrows():
         winner = row['winner_id']
         loser = row['loser_id']
-        surface = row['surface']
-
-        # Get current ratings
+        
         rating_winner = ratings[winner]
         rating_loser = ratings[loser]
 
-        # Determine K-factors
         k_winner = k_factor_func(rating_winner, player_matches[winner])
         k_loser = k_factor_func(rating_loser, player_matches[loser])
 
-        # Update ratings
         new_winner, new_loser = update_elo(rating_winner, rating_loser, 1.0, k_winner, scale)
 
-        # Update history for surface-specific tracking
         history.append({
             'date': row['tourney_date'],
-            'surface': surface,
+            'surface': row['surface'],
             'winner_id': winner,
             'winner_name': row['winner_name'],
             'loser_id': loser,
@@ -124,11 +195,8 @@ def simulate_elo(matches, initial_ratings, k_factor_func, scale=400, surface_spe
             'loser_rating_before': rating_loser,
             'winner_rating_after': new_winner,
             'loser_rating_after': new_loser,
-            'k_winner': k_winner,
-            'k_loser': k_loser
         })
 
-        # Apply updates
         ratings[winner] = new_winner
         ratings[loser] = new_loser
         player_matches[winner] += 1
@@ -145,9 +213,8 @@ def simulate_surface_elo(matches, initial_ratings, k_factor_func, scale=400):
     for surface in surfaces:
         surface_matches = matches[matches['surface'] == surface].copy()
         if len(surface_matches) > 0:
-            # Initialize fresh ratings for each surface
             surf_ratings = {pid: 1500 for pid in initial_ratings.keys()}
-            surf_ratings, surf_history = simulate_elo(surface_matches, surf_ratings, k_factor_func, scale, surface_specific=True)
+            surf_ratings, surf_history = simulate_elo(surface_matches, surf_ratings, k_factor_func, scale)
             surface_ratings[surface] = surf_ratings
             surface_histories[surface] = surf_history
 
@@ -161,18 +228,12 @@ st.set_page_config(page_title="Tennis ELO Rating System", layout="wide")
 st.title("🏆 Tennis ELO Rating System by Surface")
 
 st.markdown("""
-This app computes ELO ratings for tennis players based on match results, with separate ratings per surface (Hard, Clay, Grass).
-Adjust the parameters on the left to fine-tune the system.
+This app computes ELO ratings for tennis players based on match results, with separate ratings per surface.
+Use the **Match Predictor** tab to analyze potential matchups and get betting insights.
 """)
 
 with st.sidebar:
     st.header("⚙️ ELO Parameters")
-    st.markdown("""
-    - **Base K-Factor**: Higher values make ratings more volatile.
-    - **Experience Threshold**: Players with more matches get reduced K-factor (stabilize).
-    - **Minimum/Maximum K**: Caps to prevent extreme changes.
-    - **Scale**: Typical value 400 (controls rating spread).
-    """)
     base_k = st.slider("Base K-Factor", 16, 48, 32, step=2)
     min_k = st.slider("Minimum K-Factor", 8, 24, 16)
     max_k = st.slider("Maximum K-Factor", 24, 48, 32)
@@ -186,14 +247,11 @@ with st.sidebar:
         st.stop()
 
 def custom_k_factor(rating, matches):
-    """Custom K-factor function using the parameters set in sidebar."""
-    # Reduce for experienced players
     if matches > exp_thresh:
         k = base_k * 0.5
     else:
         k = base_k
-
-    # Cap based on rating
+    
     if rating > 2400:
         k = min(k, min_k)
     elif rating < 1500:
@@ -203,27 +261,36 @@ def custom_k_factor(rating, matches):
 @st.cache_data
 def load_and_process(uploaded_file):
     df = pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
-    # Convert numeric-like columns
     for col in ['winner_id', 'loser_id']:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
     matches = prepare_matches(df)
     if matches.empty:
-        st.error("No valid matches found after processing.")
-        return None, None, None, None
+        return None, None, None, None, None
+    
     initial_ratings = initialize_ratings(matches)
-    # Global ELO
     global_ratings, global_history = simulate_elo(matches, initial_ratings, custom_k_factor, scale)
-    # Surface-specific ELO
     surface_ratings, surface_histories = simulate_surface_elo(matches, initial_ratings, custom_k_factor, scale)
-    return matches, global_ratings, surface_ratings, (global_history, surface_histories)
+    
+    # Calculate player stats
+    player_stats = {}
+    for _, row in matches.iterrows():
+        for player_id, player_name in [(row['winner_id'], row['winner_name']), (row['loser_id'], row['loser_name'])]:
+            if player_id not in player_stats:
+                player_stats[player_id] = {'name': player_name, 'matches': 0, 'surfaces': {}}
+            player_stats[player_id]['matches'] += 1
+            surface = row['surface']
+            if surface not in player_stats[player_id]['surfaces']:
+                player_stats[player_id]['surfaces'][surface] = 0
+            player_stats[player_id]['surfaces'][surface] += 1
+    
+    return matches, global_ratings, surface_ratings, (global_history, surface_histories), player_stats
 
-# Load data
 with st.spinner("Processing data and computing ELO ratings..."):
-    matches, global_ratings, surface_ratings, histories = load_and_process(uploaded_file)
-
-if global_ratings is None:
-    st.stop()
+    result = load_and_process(uploaded_file)
+    if result[0] is None:
+        st.stop()
+    matches, global_ratings, surface_ratings, histories, player_stats = result
 
 global_history, surface_histories = histories
 
@@ -234,145 +301,302 @@ if matches is not None and not matches.empty:
         name_map[row['winner_id']] = row['winner_name']
         name_map[row['loser_id']] = row['loser_name']
 
-# ------------------------------
-# Display Rankings
-# ------------------------------
-st.header("📊 Player Rankings")
-
-# Global Rankings
-st.subheader("Overall ELO Rankings")
-global_df = pd.DataFrame(list(global_ratings.items()), columns=['Player ID', 'ELO'])
-global_df = global_df.sort_values('ELO', ascending=False).reset_index(drop=True)
-# Add player names (if available)
-global_df['Player'] = global_df['Player ID'].map(name_map).fillna(global_df['Player ID'])
-global_df = global_df[['Player', 'ELO']]
-st.dataframe(global_df.head(50), use_container_width=True)
-
-# Surface Rankings
-if surface_ratings:
-    tabs = st.tabs([f"{surface} Rankings" for surface in surface_ratings.keys()])
-    for tab, surface in zip(tabs, surface_ratings.keys()):
-        with tab:
-            df_surf = pd.DataFrame(list(surface_ratings[surface].items()), columns=['Player ID', 'ELO'])
-            df_surf = df_surf.sort_values('ELO', ascending=False).reset_index(drop=True)
-            df_surf['Player'] = df_surf['Player ID'].map(name_map).fillna(df_surf['Player ID'])
-            df_surf = df_surf[['Player', 'ELO']]
-            st.dataframe(df_surf.head(50), use_container_width=True)
+# Create tabs
+tab1, tab2, tab3, tab4 = st.tabs(["🏆 Rankings", "📈 ELO Evolution", "🎯 Match Predictor", "ℹ️ About"])
 
 # ------------------------------
-# ELO Evolution Chart
+# Tab 1: Rankings
 # ------------------------------
-st.header("📈 ELO Evolution Over Time")
-players_to_plot = st.multiselect("Select players to plot (by ID or Name)", 
-                                  options=global_df['Player'].tolist(),
-                                  default=global_df['Player'].head(5).tolist() if len(global_df) > 5 else global_df['Player'].tolist())
-
-if players_to_plot and global_history:
-    # Prepare time series data from global history
-    hist_df = pd.DataFrame(global_history)
-    if not hist_df.empty:
-        # Create a list of events for each player
-        player_events = {}
-        for _, row in hist_df.iterrows():
-            for pid, name, rating_before, rating_after in [
-                (row['winner_id'], row['winner_name'], row['winner_rating_before'], row['winner_rating_after']),
-                (row['loser_id'], row['loser_name'], row['loser_rating_before'], row['loser_rating_after'])
-            ]:
-                player_name = name_map.get(pid, name)
-                if player_name not in players_to_plot:
-                    continue
-                if player_name not in player_events:
-                    player_events[player_name] = []
-                player_events[player_name].append((row['date'], rating_after))
-        
-        # Plot
-        fig, ax = plt.subplots(figsize=(12, 6))
-        for player, events in player_events.items():
-            events.sort(key=lambda x: x[0])
-            dates = [e[0] for e in events]
-            ratings = [e[1] for e in events]
-            ax.plot(dates, ratings, marker='.', linestyle='-', label=player, linewidth=2, markersize=4)
-        ax.set_xlabel("Date")
-        ax.set_ylabel("ELO Rating")
-        ax.set_title("ELO Rating Evolution")
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
-    else:
-        st.info("No historical data available for plotting.")
-else:
-    if not players_to_plot:
-        st.info("Please select players to view their rating evolution.")
-
-# ------------------------------
-# Export Results
-# ------------------------------
-st.header("💾 Export Data")
-col1, col2 = st.columns(2)
-with col1:
-    # Export global rankings
-    csv_global = global_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Global Rankings (CSV)", csv_global, "global_elo_rankings.csv", "text/csv")
-with col2:
-    # Export surface rankings
+with tab1:
+    st.header("📊 Player Rankings")
+    
+    # Global Rankings
+    st.subheader("Overall ELO Rankings")
+    global_df = pd.DataFrame(list(global_ratings.items()), columns=['Player ID', 'ELO'])
+    global_df = global_df.sort_values('ELO', ascending=False).reset_index(drop=True)
+    global_df['Player'] = global_df['Player ID'].map(name_map).fillna(global_df['Player ID'])
+    global_df['Matches'] = global_df['Player ID'].map(lambda x: player_stats.get(x, {}).get('matches', 0))
+    global_df = global_df[['Player', 'ELO', 'Matches']]
+    st.dataframe(global_df.head(50), use_container_width=True)
+    
+    # Surface Rankings
     if surface_ratings:
-        surface_dfs = {}
-        for surface, ratings in surface_ratings.items():
-            df = pd.DataFrame(list(ratings.items()), columns=['Player ID', 'ELO'])
-            df['Player'] = df['Player ID'].map(name_map).fillna(df['Player ID'])
-            df = df[['Player', 'ELO']].sort_values('ELO', ascending=False)
-            surface_dfs[surface] = df
-        # Combine into one Excel file
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            global_df.to_excel(writer, sheet_name='Global', index=False)
-            for surface, df in surface_dfs.items():
-                df.to_excel(writer, sheet_name=surface, index=False)
-        st.download_button("Download All Rankings (Excel)", output.getvalue(), "elo_rankings.xlsx", 
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.subheader("Surface-Specific Rankings")
+        surf_tabs = st.tabs([f"{surface}" for surface in surface_ratings.keys()])
+        for tab, surface in zip(surf_tabs, surface_ratings.keys()):
+            with tab:
+                df_surf = pd.DataFrame(list(surface_ratings[surface].items()), columns=['Player ID', 'ELO'])
+                df_surf = df_surf.sort_values('ELO', ascending=False).reset_index(drop=True)
+                df_surf['Player'] = df_surf['Player ID'].map(name_map).fillna(df_surf['Player ID'])
+                df_surf['Matches'] = df_surf['Player ID'].map(lambda x: player_stats.get(x, {}).get('surfaces', {}).get(surface, 0))
+                df_surf = df_surf[['Player', 'ELO', 'Matches']]
+                st.dataframe(df_surf.head(50), use_container_width=True)
 
 # ------------------------------
-# Statistics
+# Tab 2: ELO Evolution
 # ------------------------------
-st.header("📊 Statistics")
+with tab2:
+    st.header("📈 ELO Evolution Over Time")
+    players_to_plot = st.multiselect("Select players to plot", 
+                                      options=global_df['Player'].tolist(),
+                                      default=global_df['Player'].head(5).tolist() if len(global_df) > 5 else global_df['Player'].tolist())
+    
+    if players_to_plot and global_history:
+        hist_df = pd.DataFrame(global_history)
+        if not hist_df.empty:
+            player_events = {}
+            for _, row in hist_df.iterrows():
+                for pid, name, rating_after in [
+                    (row['winner_id'], row['winner_name'], row['winner_rating_after']),
+                    (row['loser_id'], row['loser_name'], row['loser_rating_after'])
+                ]:
+                    player_name = name_map.get(pid, name)
+                    if player_name not in players_to_plot:
+                        continue
+                    if player_name not in player_events:
+                        player_events[player_name] = []
+                    player_events[player_name].append((row['date'], rating_after))
+            
+            fig, ax = plt.subplots(figsize=(12, 6))
+            for player, events in player_events.items():
+                events.sort(key=lambda x: x[0])
+                dates = [e[0] for e in events]
+                ratings = [e[1] for e in events]
+                ax.plot(dates, ratings, marker='.', linestyle='-', label=player, linewidth=2, markersize=4)
+            ax.set_xlabel("Date")
+            ax.set_ylabel("ELO Rating")
+            ax.set_title("ELO Rating Evolution")
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+        else:
+            st.info("No historical data available for plotting.")
+    else:
+        if not players_to_plot:
+            st.info("Please select players to view their rating evolution.")
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Total Players", len(global_ratings))
-with col2:
-    st.metric("Total Matches Processed", len(global_history) if global_history else 0)
-with col3:
-    top_player = global_df.iloc[0]['Player'] if not global_df.empty else "N/A"
-    top_elo = global_df.iloc[0]['ELO'] if not global_df.empty else 0
-    st.metric("Top Player", f"{top_player} ({top_elo:.0f})")
-
 # ------------------------------
-# About ELO Parameters
+# Tab 3: Match Predictor (NEW)
 # ------------------------------
-with st.expander("ℹ️ About ELO System and Parameters"):
+with tab3:
+    st.header("🎯 Match Predictor - 21 Line Analysis")
     st.markdown("""
-    **ELO Rating System**:
-    - Each player starts with 1500 points.
-    - After each match, points are transferred based on expected outcome.
+    Compare two players and get predictions for:
+    - Win probability
+    - Expected total games
+    - Over/Under 21.5 games analysis
+    - Betting recommendations
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        player1_name = st.selectbox("Select Player 1", options=global_df['Player'].tolist(), key="player1")
+        if player1_name:
+            player1_id = global_df[global_df['Player'] == player1_name]['Player ID'].iloc[0]
+            player1_elo = global_ratings[player1_id]
+            player1_matches = player_stats.get(player1_id, {}).get('matches', 0)
+            st.info(f"**{player1_name}**\n\nOverall ELO: {player1_elo:.0f}\nTotal Matches: {player1_matches}")
+    
+    with col2:
+        player2_name = st.selectbox("Select Player 2", options=global_df['Player'].tolist(), key="player2")
+        if player2_name:
+            player2_id = global_df[global_df['Player'] == player2_name]['Player ID'].iloc[0]
+            player2_elo = global_ratings[player2_id]
+            player2_matches = player_stats.get(player2_id, {}).get('matches', 0)
+            st.info(f"**{player2_name}**\n\nOverall ELO: {player2_elo:.0f}\nTotal Matches: {player2_matches}")
+    
+    if player1_name and player2_name and player1_name != player2_name:
+        st.divider()
+        
+        # Surface selection
+        surface_options = ['Overall'] + list(surface_ratings.keys()) if surface_ratings else ['Overall']
+        selected_surface = st.selectbox("Select Surface", surface_options)
+        
+        # Get surface-specific ratings
+        player1_surface_rating = None
+        player2_surface_rating = None
+        
+        if selected_surface != 'Overall' and surface_ratings and selected_surface in surface_ratings:
+            player1_surface_rating = surface_ratings[selected_surface].get(player1_id, 1500)
+            player2_surface_rating = surface_ratings[selected_surface].get(player2_id, 1500)
+            
+            st.info(f"**Surface Ratings ({selected_surface})**\n\n{player1_name}: {player1_surface_rating:.0f}\n{player2_name}: {player2_surface_rating:.0f}")
+        
+        # Calculate win probability
+        prob_player1_wins = predict_match_winner(
+            player1_elo, player2_elo,
+            surface_ratings, surface_ratings,
+            selected_surface if selected_surface != 'Overall' else None,
+            scale
+        )
+        prob_player2_wins = 1 - prob_player1_wins
+        
+        # Calculate expected games
+        expected_games, prob_over_21_5, prob_3_sets = calculate_expected_games(prob_player1_wins)
+        
+        # Display predictions
+        st.subheader("📊 Match Prediction")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                f"{player1_name} Win Probability",
+                f"{prob_player1_wins:.1%}",
+                delta=f"vs {prob_player2_wins:.1%}"
+            )
+        
+        with col2:
+            st.metric(
+                "Expected Total Games",
+                f"{expected_games:.1f}",
+                delta=f"Line: 21.5"
+            )
+        
+        with col3:
+            st.metric(
+                "Over 21.5 Probability",
+                f"{prob_over_21_5:.1%}",
+                delta=f"3-set: {prob_3_sets:.1%}"
+            )
+        
+        # Progress bar visualization
+        st.subheader("Win Probability Visualization")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.progress(prob_player1_wins, text=f"{player1_name}")
+        with col2:
+            st.write(f"**{prob_player2_wins:.1%}** {player2_name}")
+        
+        # Betting recommendations
+        st.subheader("💡 Betting Recommendations (21 Line)")
+        recommendations = get_betting_recommendation(prob_player1_wins, prob_over_21_5, expected_games, 21.5)
+        
+        for rec in recommendations:
+            st.write(rec)
+        
+        # Detailed analysis
+        with st.expander("📈 Detailed Analysis"):
+            st.markdown(f"""
+            **Match Analysis: {player1_name} vs {player2_name}**
+            
+            **ELO Ratings:**
+            - {player1_name}: {player1_elo:.0f}
+            - {player2_name}: {player2_elo:.0f}
+            - Difference: {abs(player1_elo - player2_elo):.0f} points
+            
+            **Win Probability Factors:**
+            - {player1_name} wins {prob_player1_wins:.1%} of the time
+            - {player2_name} wins {prob_player2_wins:.1%} of the time
+            
+            **Games Analysis:**
+            - Expected total games: {expected_games:.1f}
+            - 3-set probability: {prob_3_sets:.1%}
+            - Over 21.5 probability: {prob_over_21_5:.1%}
+            
+            **Key Insights:**
+            """)
+            
+            if prob_player1_wins > 0.7:
+                st.markdown(f"- {player1_name} is a strong favorite")
+            elif prob_player1_wins < 0.3:
+                st.markdown(f"- {player2_name} is a strong favorite")
+            else:
+                st.markdown("- This is expected to be a competitive match")
+            
+            if expected_games > 21.5:
+                st.markdown(f"- Expect a longer match with {expected_games:.0f}+ total games")
+            else:
+                st.markdown(f"- Expect a relatively quick match with {expected_games:.0f} total games")
+        
+    elif player1_name == player2_name and player1_name:
+        st.warning("Please select two different players to compare")
+
+# ------------------------------
+# Tab 4: About
+# ------------------------------
+with tab4:
+    st.header("ℹ️ About the ELO System and Match Predictor")
+    st.markdown("""
+    ### ELO Rating System
+    - Each player starts with 1500 points
+    - After each match, points are transferred based on expected outcome
     - Expected score formula: E = 1 / (1 + 10^((rating_opponent - rating_self)/scale))
     - Update: new_rating = old_rating + K * (actual_score - expected_score)
-
-    **K-Factor (K)**:
-    - Controls how much ratings change after a match.
-    - Higher K → more volatility.
-    - In this app, K is reduced for players with many matches (stabilization).
-    - Also capped for very high/low ratings.
-
-    **Scale (S)**:
-    - Typical value is 400.
-    - Determines the spread of ratings: a difference of S points implies the higher-rated player is about 10 times more likely to win.
-
-    **Surface-Specific Ratings**:
-    - Separate ratings are computed for Hard, Clay, and Grass.
-    - Only matches on that surface are used.
-    - This gives a more accurate measure of a player's ability on a given surface.
+    
+    ### K-Factor (K)
+    - Controls how much ratings change after a match
+    - Higher K → more volatility
+    - In this app, K is reduced for players with many matches (stabilization)
+    - Also capped for very high/low ratings
+    
+    ### Scale (S)
+    - Typical value is 400
+    - Determines the spread of ratings: a difference of S points implies the higher-rated player is about 10 times more likely to win
+    
+    ### Surface-Specific Ratings
+    - Separate ratings are computed for Hard, Clay, and Grass
+    - Only matches on that surface are used
+    - This gives a more accurate measure of a player's ability on a given surface
+    
+    ### Match Predictor (21 Line Analysis)
+    - Uses both overall and surface-specific ELO ratings
+    - Calculates expected total games based on match competitiveness
+    - Provides over/under 21.5 games probability
+    - Includes betting recommendations for moneyline and totals
+    
+    ### Prediction Methodology
+    - Win probability based on ELO rating difference
+    - Expected games calculated using:
+      * Match competitiveness (closer matches → more games)
+      * Probability of 3-set matches
+      * Historical patterns of game totals
+    - Over/Under probability derived from expected games and match dynamics
     """)
 
+# ------------------------------
+# Export Functionality
+# ------------------------------
+with st.expander("💾 Export Data"):
+    col1, col2 = st.columns(2)
+    with col1:
+        csv_global = global_df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download Global Rankings (CSV)", csv_global, "global_elo_rankings.csv", "text/csv")
+    with col2:
+        if surface_ratings:
+            surface_dfs = {}
+            for surface, ratings in surface_ratings.items():
+                df = pd.DataFrame(list(ratings.items()), columns=['Player ID', 'ELO'])
+                df['Player'] = df['Player ID'].map(name_map).fillna(df['Player ID'])
+                df = df[['Player', 'ELO']].sort_values('ELO', ascending=False)
+                surface_dfs[surface] = df
+            
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                global_df.to_excel(writer, sheet_name='Global', index=False)
+                for surface, df in surface_dfs.items():
+                    df.to_excel(writer, sheet_name=surface, index=False)
+            st.download_button("Download All Rankings (Excel)", output.getvalue(), "elo_rankings.xlsx", 
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ------------------------------
+# Statistics Summary
+# ------------------------------
+with st.expander("📊 Statistics Summary"):
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Players", len(global_ratings))
+    with col2:
+        st.metric("Total Matches", len(global_history) if global_history else 0)
+    with col3:
+        top_player = global_df.iloc[0]['Player'] if not global_df.empty else "N/A"
+        top_elo = global_df.iloc[0]['ELO'] if not global_df.empty else 0
+        st.metric("Top Player", f"{top_player} ({top_elo:.0f})")
+    with col4:
+        avg_elo = global_df['ELO'].mean() if not global_df.empty else 0
+        st.metric("Average ELO", f"{avg_elo:.0f}")
+
 st.markdown("---")
-st.caption("ELO system implementation for tennis. Data provided in the uploaded Excel file.")
+st.caption("ELO system implementation for tennis with 21 line betting analysis. Data provided in the uploaded Excel file.")
