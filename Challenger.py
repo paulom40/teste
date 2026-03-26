@@ -41,8 +41,9 @@ st.set_page_config(
 # CONSTANTS  (mutable — overridden by sidebar sliders)
 # ─────────────────────────────────────────────────────────────
 
-ELO_START    = 1500.0
-SERVE_WINDOW = 15
+ELO_START     = 1500.0
+SERVE_WINDOW  = 15
+MIN_SURF_MATCHES = 8   # matches on a surface before its Elo is fully trusted
 
 # These are defaults; sidebar sliders replace them at runtime
 _BASE_K      = 32.0
@@ -52,14 +53,23 @@ SURFACE_ENC  = {"Clay": 0, "Hard": 1, "Grass": 2}
 ROUND_ENC    = {"R32": 1, "R16": 2, "QF": 3, "SF": 4, "F": 5, "Final": 5}
 
 FEATURE_COLS = [
-    "elo_diff", "elo_surf_diff", "elo_abs", "elo_surf_abs",
-    "elo_w", "elo_l", "elo_w_surf", "elo_l_surf",
-    "exp_w", "exp_w_surf",
+    # Overall Elo
+    "elo_diff", "elo_abs", "elo_w", "elo_l",
+    "exp_w",
+    # Surface-specific Elo (blended — correct signal per surface)
+    "elo_surf_diff", "elo_surf_abs", "elo_w_surf", "elo_l_surf",
+    "exp_w_surf",
+    # Surface context
     "surface_enc", "round_enc", "indoor_enc",
+    # Surface data confidence (how many surface matches each player has)
+    "n_surf_w", "n_surf_l",
+    # Rolling serve stats
     "w_1w_pct", "w_2w_pct", "w_ace_pct", "w_bp_save", "w_bp_faced_pg",
     "l_1w_pct", "l_2w_pct", "l_ace_pct", "l_bp_save", "l_bp_faced_pg",
     "serve_dom_sum", "ace_sum", "bp_save_diff",
+    # Experience
     "n_w", "n_l",
+    # Historical avg games
     "w_avg_games", "l_avg_games", "avg_games_combined",
     "w_surf_games", "l_surf_games",
 ]
@@ -183,19 +193,58 @@ def dynamic_k(n_matches: int, round_str: str, is_3set: bool,
 
 
 class EloSystem:
+    """
+    Tracks overall Elo + surface-specific Elo for every player.
+
+    Key design decisions:
+    - Surface Elo starts at ELO_START (1500) and is updated only from
+      matches played on that surface.
+    - BLENDED surface Elo = weighted mix of raw surface Elo and overall Elo.
+      Weight ramps from 0→1 over the first MIN_SURF_MATCHES matches on that
+      surface. This prevents a player with 0 clay matches showing Clay=1500
+      even when their overall Elo is 1750, while still rewarding genuine
+      surface specialisation once enough data exists.
+    - n_surf tracks per-player per-surface match counts for the blend weight.
+    """
+
     def __init__(self, base_k: float = 32.0, round_k: dict | None = None):
-        self.base_k   = base_k
-        self.round_k  = round_k or dict(_ROUND_K)
-        self.elo:     dict[str, float] = {}
-        self.elo_surf:dict[str, dict]  = {}
-        self.n_matches: dict[str, int] = {}
+        self.base_k  = base_k
+        self.round_k = round_k or dict(_ROUND_K)
+        self.elo:        dict[str, float] = {}
+        self.elo_surf:   dict[str, dict]  = {}   # raw surface Elo
+        self.n_matches:  dict[str, int]   = {}   # total matches per player
+        self.n_surf:     dict[tuple, int] = {}   # (player, surface) match count
         self.serve_history: dict[str, list] = {}
         self.games_history: dict[str, list] = {}
 
+    # ── getters ──────────────────────────────────────────────
+
+    def get_overall(self, player: str) -> float:
+        return self.elo.get(player, ELO_START)
+
+    def get_raw_surf(self, player: str, surface: str) -> float:
+        """Raw surface Elo — starts at 1500, updated only from surface matches."""
+        return self.elo_surf.setdefault(player, {}).get(surface, ELO_START)
+
+    def get_blended(self, player: str, surface: str) -> float:
+        """
+        Blended surface Elo: trusts raw surface Elo more as n_surf grows.
+        With 0 surface matches  → returns overall Elo (best estimate available).
+        With MIN_SURF_MATCHES+  → returns raw surface Elo (fully specialised).
+        """
+        raw    = self.get_raw_surf(player, surface)
+        ovr    = self.get_overall(player)
+        ns     = self.n_surf.get((player, surface), 0)
+        weight = min(ns / MIN_SURF_MATCHES, 1.0)
+        return weight * raw + (1.0 - weight) * ovr
+
+    # back-compat alias used by snapshot / rolling_games callers
     def get(self, player: str, surface: str | None = None) -> float:
         if surface:
-            return self.elo_surf.setdefault(player, {}).get(surface, ELO_START)
-        return self.elo.get(player, ELO_START)
+            return self.get_blended(player, surface)
+        return self.get_overall(player)
+
+    # ── K-factor ─────────────────────────────────────────────
 
     def _k(self, player: str, round_str: str, is_3set: bool) -> float:
         return dynamic_k(
@@ -203,27 +252,36 @@ class EloSystem:
             self.base_k, self.round_k
         )
 
+    # ── update after a match ─────────────────────────────────
+
     def update(self, winner: str, loser: str, surface: str,
                round_str: str, is_3set: bool, total_games: float,
                w_serve: dict, l_serve: dict):
-        ew   = self.get(winner);      el   = self.get(loser)
-        ew_s = self.get(winner, surface); el_s = self.get(loser, surface)
+
+        ew   = self.get_overall(winner)
+        el   = self.get_overall(loser)
+        # Use RAW surface Elo for the surface update (not blended)
+        ew_s = self.get_raw_surf(winner, surface)
+        el_s = self.get_raw_surf(loser,  surface)
 
         kw = self._k(winner, round_str, is_3set)
         kl = self._k(loser,  round_str, is_3set)
 
-        # Overall Elo
+        # Overall Elo update
         exp_w = elo_expected(ew, el)
         self.elo[winner] = ew + kw * (1.0 - exp_w)
         self.elo[loser]  = el + kl * (0.0 - (1.0 - exp_w))
 
-        # Surface Elo
+        # Raw surface Elo update
         exp_ws = elo_expected(ew_s, el_s)
         self.elo_surf.setdefault(winner, {})[surface] = ew_s + kw * (1.0 - exp_ws)
         self.elo_surf.setdefault(loser,  {})[surface] = el_s + kl * (0.0 - (1.0 - exp_ws))
 
+        # Counters
         self.n_matches[winner] = self.n_matches.get(winner, 0) + 1
         self.n_matches[loser]  = self.n_matches.get(loser,  0) + 1
+        self.n_surf[(winner, surface)] = self.n_surf.get((winner, surface), 0) + 1
+        self.n_surf[(loser,  surface)] = self.n_surf.get((loser,  surface), 0) + 1
 
         for player, serve in [(winner, w_serve), (loser, l_serve)]:
             if serve:
@@ -232,19 +290,34 @@ class EloSystem:
             self.games_history.setdefault(winner, []).append((surface, total_games))
             self.games_history.setdefault(loser,  []).append((surface, total_games))
 
+    # ── pre-match feature snapshot ───────────────────────────
+
     def snapshot(self, player1: str, player2: str, surface: str) -> dict:
-        """Pre-match Elo features — uses current (post-training) ratings."""
-        ew   = self.get(player1);          el   = self.get(player2)
-        ew_s = self.get(player1, surface); el_s = self.get(player2, surface)
+        """
+        Returns Elo features for a match on a given surface.
+        Uses BLENDED surface Elo so that players with few/no surface matches
+        are represented by their overall Elo rather than a misleading 1500.
+        """
+        ew    = self.get_overall(player1)
+        el    = self.get_overall(player2)
+        ew_s  = self.get_blended(player1, surface)  # ← KEY FIX
+        el_s  = self.get_blended(player2, surface)  # ← KEY FIX
+
         return {
-            "elo_w": ew,  "elo_l": el,
-            "elo_diff": ew - el,   "elo_abs": abs(ew - el),
-            "elo_w_surf": ew_s,    "elo_l_surf": el_s,
-            "elo_surf_diff": ew_s - el_s, "elo_surf_abs": abs(ew_s - el_s),
-            "exp_w":     elo_expected(ew, el),
-            "exp_w_surf":elo_expected(ew_s, el_s),
-            "n_w": self.n_matches.get(player1, 0),
-            "n_l": self.n_matches.get(player2, 0),
+            "elo_w":          ew,
+            "elo_l":          el,
+            "elo_diff":       ew   - el,
+            "elo_abs":        abs(ew - el),
+            "elo_w_surf":     ew_s,
+            "elo_l_surf":     el_s,
+            "elo_surf_diff":  ew_s - el_s,
+            "elo_surf_abs":   abs(ew_s - el_s),
+            "exp_w":          elo_expected(ew, el),
+            "exp_w_surf":     elo_expected(ew_s, el_s),   # surface-specific win probability
+            "n_w":            self.n_matches.get(player1, 0),
+            "n_l":            self.n_matches.get(player2, 0),
+            "n_surf_w":       self.n_surf.get((player1, surface), 0),
+            "n_surf_l":       self.n_surf.get((player2, surface), 0),
         }
 
     def rolling_serve(self, player: str) -> dict:
@@ -270,13 +343,23 @@ class EloSystem:
     def ratings_df(self) -> pd.DataFrame:
         rows = []
         for p in self.elo:
+            nm = self.n_matches.get(p, 0)
             rows.append({
-                "Player":    p,
-                "Elo":       round(self.get(p), 1),
-                "Elo_Clay":  round(self.get(p, "Clay"),  1),
-                "Elo_Hard":  round(self.get(p, "Hard"),  1),
-                "Elo_Grass": round(self.get(p, "Grass"), 1),
-                "Matches":   self.n_matches.get(p, 0),
+                "Player":       p,
+                "Elo":          round(self.get_overall(p), 1),
+                # Blended = what the model actually uses for predictions
+                "Elo_Clay":     round(self.get_blended(p, "Clay"),  1),
+                "Elo_Hard":     round(self.get_blended(p, "Hard"),  1),
+                "Elo_Grass":    round(self.get_blended(p, "Grass"), 1),
+                # Raw = pure surface-specific rating
+                "Raw_Clay":     round(self.get_raw_surf(p, "Clay"),  1),
+                "Raw_Hard":     round(self.get_raw_surf(p, "Hard"),  1),
+                "Raw_Grass":    round(self.get_raw_surf(p, "Grass"), 1),
+                # Match counts
+                "Matches":      nm,
+                "N_Clay":       self.n_surf.get((p, "Clay"),  0),
+                "N_Hard":       self.n_surf.get((p, "Hard"),  0),
+                "N_Grass":      self.n_surf.get((p, "Grass"), 0),
             })
         return (pd.DataFrame(rows)
                 .sort_values("Elo", ascending=False)
@@ -403,14 +486,14 @@ def build_elo_and_features(_df: pd.DataFrame, base_k: float, round_k_tuple: tupl
         is_3set = len(re.findall(r"\d+-\d+", score)) >= 3
 
         # ── Pre-match snapshot ────────────────────────────────
-        elo_f  = sys_.snapshot(winner, loser, surface)
+        elo_f  = sys_.snapshot(winner, loser, surface)   # now returns blended surface Elo
         ws     = sys_.rolling_serve(winner)
         ls     = sys_.rolling_serve(loser)
         wg     = sys_.rolling_games(winner, surface)
         lg     = sys_.rolling_games(loser, surface)
 
         rows.append({
-            **elo_f,
+            **elo_f,   # includes n_surf_w, n_surf_l from snapshot
             "surface_enc":  SURFACE_ENC.get(surface, 1),
             "round_enc":    ROUND_ENC.get(rnd, 1),
             "indoor_enc":   1 if indoor == "I" else 0,
@@ -597,14 +680,14 @@ def predict_matches(upcoming: pd.DataFrame, elo_sys: EloSystem,
         conf_p1.append(c1)
         conf_p2.append(c2)
 
-        elo_f = elo_sys.snapshot(lookup_p1, lookup_p2, surface)
+        elo_f = elo_sys.snapshot(lookup_p1, lookup_p2, surface)  # blended surface Elo
         ws    = elo_sys.rolling_serve(lookup_p1)
         ls    = elo_sys.rolling_serve(lookup_p2)
         wg    = elo_sys.rolling_games(lookup_p1, surface)
         lg    = elo_sys.rolling_games(lookup_p2, surface)
 
         feat_rows.append({
-            **elo_f,
+            **elo_f,   # includes n_surf_w, n_surf_l
             "surface_enc":  SURFACE_ENC.get(surface, 1),
             "round_enc":    ROUND_ENC.get(rnd, 1),
             "indoor_enc":   1 if indoor == "I" else 0,
@@ -795,20 +878,48 @@ tab_pred, tab_elo, tab_info = st.tabs(["📅 Previsões", "🏆 Elo Rankings", "
 with tab_elo:
     st.subheader("🏆 Elo Rankings — Top 100")
     st.caption(
-        f"K base: {base_k_slider} | Multiplicadores: "
+        f"K base: {base_k_slider} | "
         f"R32×{k_r32} R16×{k_r16} QF×{k_qf} SF×{k_sf} Final×{k_f} | "
-        "Jogos de 3 sets: K×1.2 | Novos jogadores (<10 jogos): K×1.5"
+        "3-set match: K×1.2 | New players (<10): K×1.5"
     )
 
+    st.info(
+        "**Elo_Clay / Elo_Hard / Elo_Grass** são valores *blended*: "
+        f"combinam o Elo puro de superfície com o Elo geral, pesando pela confiança "
+        f"(jogadores com menos de {MIN_SURF_MATCHES} jogos nessa superfície usam mais o Elo geral). "
+        "**Raw_Clay / Raw_Hard / Raw_Grass** mostram o Elo puro de superfície. "
+        "**N_Clay / N_Hard / N_Grass** mostram quantos jogos foram usados por superfície."
+    )
+
+    view_mode = st.radio(
+        "Mostrar colunas",
+        ["Blended (usado no modelo)", "Raw (puro por superfície)", "Tudo"],
+        horizontal=True,
+    )
     sort_opt = st.selectbox("Ordenar por", ["Elo Geral", "Elo Clay", "Elo Hard", "Elo Grass"])
-    sort_col = {"Elo Geral":"Elo","Elo Clay":"Elo_Clay","Elo Hard":"Elo_Hard","Elo Grass":"Elo_Grass"}[sort_opt]
+    sort_col = {"Elo Geral": "Elo", "Elo Clay": "Elo_Clay",
+                "Elo Hard": "Elo_Hard", "Elo Grass": "Elo_Grass"}[sort_opt]
 
     top100 = elo_ratings_df.sort_values(sort_col, ascending=False).head(100).reset_index(drop=True)
     top100.index += 1
 
+    if view_mode == "Blended (usado no modelo)":
+        show_cols = ["Player", "Elo", "Elo_Clay", "Elo_Hard", "Elo_Grass",
+                     "N_Clay", "N_Hard", "N_Grass", "Matches"]
+    elif view_mode == "Raw (puro por superfície)":
+        show_cols = ["Player", "Elo", "Raw_Clay", "Raw_Hard", "Raw_Grass",
+                     "N_Clay", "N_Hard", "N_Grass", "Matches"]
+    else:
+        show_cols = ["Player", "Elo", "Elo_Clay", "Elo_Hard", "Elo_Grass",
+                     "Raw_Clay", "Raw_Hard", "Raw_Grass",
+                     "N_Clay", "N_Hard", "N_Grass", "Matches"]
+
+    show_cols = [c for c in show_cols if c in top100.columns]
+    fmt_cols  = {c: "{:.0f}" for c in show_cols if c not in ("Player",)}
+
     st.dataframe(
-        top100.style
-            .format({"Elo":"{:.0f}","Elo_Clay":"{:.0f}","Elo_Hard":"{:.0f}","Elo_Grass":"{:.0f}"})
+        top100[show_cols].style
+            .format(fmt_cols)
             .background_gradient(subset=[sort_col], cmap="RdYlGn"),
         use_container_width=True,
         height=600,
@@ -820,65 +931,70 @@ with tab_elo:
         found = elo_ratings_df[elo_ratings_df["Player"].str.contains(search, case=False, na=False)]
         if len(found):
             st.dataframe(
-                found.style.format({"Elo":"{:.0f}","Elo_Clay":"{:.0f}","Elo_Hard":"{:.0f}","Elo_Grass":"{:.0f}"}),
+                found[show_cols].style.format(fmt_cols),
                 use_container_width=True,
             )
         else:
-            # Try fuzzy resolve
             resolved, conf = resolve_player_name(search, name_idx, all_players)
             if resolved:
                 st.info(f"Sugestão: **{resolved}** (confiança: {conf})")
                 found2 = elo_ratings_df[elo_ratings_df["Player"] == resolved]
-                st.dataframe(
-                    found2.style.format({"Elo":"{:.0f}","Elo_Clay":"{:.0f}","Elo_Hard":"{:.0f}","Elo_Grass":"{:.0f}"}),
-                    use_container_width=True,
-                )
+                st.dataframe(found2[show_cols].style.format(fmt_cols), use_container_width=True)
             else:
                 st.warning(f"'{search}' não encontrado no histórico.")
 
-    # K-factor explanation
-    with st.expander("📐 Como funciona o K-factor dinâmico"):
+    with st.expander("📐 K-factor dinâmico — tabela de referência"):
         ex_data = []
         for rnd in ["R32", "R16", "QF", "SF", "Final"]:
             ex_data.append({
                 "Ronda": rnd,
-                "K (veterano, 2 sets)": f"{dynamic_k(50, rnd, False, base_k_slider, round_k_dict):.1f}",
-                "K (veterano, 3 sets)": f"{dynamic_k(50, rnd, True,  base_k_slider, round_k_dict):.1f}",
-                "K (novo, 2 sets)":     f"{dynamic_k(5,  rnd, False, base_k_slider, round_k_dict):.1f}",
-                "K (novo, 3 sets)":     f"{dynamic_k(5,  rnd, True,  base_k_slider, round_k_dict):.1f}",
+                "Veterano 2 sets": f"{dynamic_k(50,rnd,False,base_k_slider,round_k_dict):.1f}",
+                "Veterano 3 sets": f"{dynamic_k(50,rnd,True, base_k_slider,round_k_dict):.1f}",
+                "Novo 2 sets":     f"{dynamic_k(5, rnd,False,base_k_slider,round_k_dict):.1f}",
+                "Novo 3 sets":     f"{dynamic_k(5, rnd,True, base_k_slider,round_k_dict):.1f}",
             })
         st.dataframe(pd.DataFrame(ex_data).set_index("Ronda"), use_container_width=True)
         st.markdown("""
-        **Veterano** = 50+ jogos no histórico | **Novo** = 5 jogos  
-        3 sets = jogo mais equilibrado → K×1.2 (revela mais sobre o nível real)
+        **Veterano** = 50+ jogos | **Novo** = 5 jogos no histórico  
+        3 sets = jogo equilibrado → K×1.2
         """)
 
 # ══════════════════════════════════════════════════════════════
 with tab_info:
     st.subheader("Sobre o modelo e o Elo")
     st.markdown(f"""
+    ### Elo com K-factor dinâmico e surface Elo blended
+
+    **O problema do surface Elo puro:**
+    Se um jogador nunca jogou em terra batida, o seu Clay Elo seria 1500 mesmo que o
+    seu Elo geral seja 1750. Isso torna as comparações erradas — Cristian Garin (Clay
+    specialist, Elo geral ~1752) ficaria com Hard Elo=1500 por falta de dados, quando
+    na realidade é um jogador de topo mesmo em piso rápido.
+
+    **A solução — Blended Elo:**
+    ```
+    Elo_surf_blended = w × Elo_surf_raw + (1 − w) × Elo_geral
+    onde w = min(n_jogos_nessa_superficie / {MIN_SURF_MATCHES}, 1.0)
+    ```
+    - 0 jogos na superfície → usa 100% do Elo geral  
+    - {MIN_SURF_MATCHES}+ jogos → usa 100% do Elo de superfície  
+    - Entre os dois → interpolação linear
+
     **Features utilizadas ({len(FEATURE_COLS)} total):**
 
     | Grupo | Features |
     |---|---|
     | Elo geral | elo_diff, elo_abs, elo_w, elo_l, exp_w |
-    | Elo surface | elo_surf_diff, elo_surf_abs, elo_w_surf, elo_l_surf, exp_w_surf |
+    | Elo surface (blended) | elo_surf_diff, elo_surf_abs, elo_w_surf, elo_l_surf, exp_w_surf |
     | Contexto | surface (Clay/Hard/Grass), indoor, round |
+    | Confiança surface | n_surf_w, n_surf_l (jogos por superfície) |
     | Serve Winner | 1stWon%, 2ndWon%, ace%, bp_save%, bp_faced/game |
     | Serve Loser | idem |
-    | Combinado | serve_dom_sum, ace_sum, bp_save_diff |
-    | Histórico de jogos | avg_games, surf_games por jogador |
-    | Experiência | n_matches W, n_matches L |
+    | Histórico jogos | avg_games, surf_games por jogador |
+    | Experiência | n_matches total |
 
-    **Por que a API retorna Elo=1500 para muitos jogos:**
-    A API devolve abreviações ("S. Jones") enquanto o histórico Challenger usa nomes completos
-    ("Sebastian Jones"). O v5 inclui um resolver fuzzy que tenta fazer o match por inicial + apelido.
-    Jogadores que genuinamente não estão no histórico (ITF, sub-Challenger) ficam com 1500.
-    Esses jogos são sinalizados como "❌ Unknown" na coluna Elo_Confiança.
-
-    **Accuracy ceiling:**
-    Total de games em Challenger tem std≈5.8 em torno de média≈22.7. AUC realista ≈ 0.54.
-    O valor está no spread: jogos com prob >65% são genuinamente mais longos que jogos <35%.
+    **Accuracy ceiling (~57%):** Total de games tem std≈5.8 em torno de média≈22.7.
+    O AUC realista é ~0.54. O valor do modelo está no spread de probabilidades entre jogos.
     """)
 
 # ══════════════════════════════════════════════════════════════
