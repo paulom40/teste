@@ -1,173 +1,240 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from sklearn.linear_model import LogisticRegression
+from datetime import datetime
+import asyncio
+from playwright.async_api import async_playwright
+from io import BytesIO
+import unicodedata
+import subprocess
 
-st.set_page_config(page_title="Tennis Value Bets PRO", layout="wide")
+# ====================== INSTALAÇÃO PLAYWRIGHT ======================
+def install_playwright_browser():
+    try:
+        subprocess.run(["playwright", "install", "chromium", "--with-deps"], 
+                      timeout=180, check=False, capture_output=True)
+        return True
+    except:
+        return False
 
-st.title("🎾 Tennis Value Bets PRO")
-st.caption("Modelo com Forma + Superfície + Value Bets")
+if 'browser_installed' not in st.session_state:
+    install_playwright_browser()
+    st.session_state.browser_installed = True
 
-# ================= UPLOAD =================
-uploaded_file = st.file_uploader("📁 Carregar histórico ATP (Excel)", type=["xlsx"])
+# ====================== CONFIGURAÇÃO ======================
+st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
 
-# ================= FEATURES =================
-def calcular_forma(df):
-    df = df.sort_values("tourney_date")
+st.title("🎾 Partidas de Tênis Hoje + WELO + Linha Total")
+st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
-    historico = {}
-    forma_w, forma_l = [], []
+# ====================== SIDEBAR ======================
+with st.sidebar:
+    st.header("📁 Carregar Challenger.xlsm")
+    uploaded_file = st.file_uploader("Escolha o ficheiro Challenger.xlsm", type=["xlsm", "xlsx"])
 
-    for _, row in df.iterrows():
-        w, l = row['winner_name'], row['loser_name']
+@st.cache_data
+def load_welo_data(file):
+    try:
+        xls = pd.ExcelFile(file)
+        df = pd.read_excel(xls, sheet_name="Jogadores>20")
+        
+        def normalize_name(name):
+            if not isinstance(name, str): return ""
+            name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+            name = name.lower().strip()
+            name = ''.join(filter(str.isalnum, name))
+            return name
+        
+        df['Jogador_clean'] = df['Jogador'].apply(normalize_name)
+        st.sidebar.success(f"✅ {len(df)} jogadores carregados")
+        return df
+    except Exception as e:
+        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
+        return pd.DataFrame()
 
-        historico.setdefault(w, [])
-        historico.setdefault(l, [])
-
-        fw = sum(historico[w][-5:]) / max(1, len(historico[w][-5:]))
-        fl = sum(historico[l][-5:]) / max(1, len(historico[l][-5:]))
-
-        forma_w.append(fw)
-        forma_l.append(fl)
-
-        historico[w].append(1)
-        historico[l].append(0)
-
-    df['forma_w'] = forma_w
-    df['forma_l'] = forma_l
-    return df
-
-
-def calcular_surface(df):
-    stats = {}
-    surf_w, surf_l = [], []
-
-    for _, row in df.iterrows():
-        w, l, s = row['winner_name'], row['loser_name'], row['surface']
-
-        stats.setdefault(w, {})
-        stats.setdefault(l, {})
-
-        stats[w].setdefault(s, [0,0])
-        stats[l].setdefault(s, [0,0])
-
-        w_wins, w_tot = stats[w][s]
-        l_wins, l_tot = stats[l][s]
-
-        surf_w.append(w_wins / max(1, w_tot))
-        surf_l.append(l_wins / max(1, l_tot))
-
-        stats[w][s][0] += 1
-        stats[w][s][1] += 1
-        stats[l][s][1] += 1
-
-    df['surf_w'] = surf_w
-    df['surf_l'] = surf_l
-    return df
-
-
-def preparar_dados(df):
-    df = calcular_forma(df)
-    df = calcular_surface(df)
-
-    df_w = pd.DataFrame({
-        'rank_diff': df['winner_rank'] - df['loser_rank'],
-        'age_diff': df['winner_age'] - df['loser_age'],
-        'ht_diff': df['winner_ht'] - df['loser_ht'],
-        'forma_diff': df['forma_w'] - df['forma_l'],
-        'surf_diff': df['surf_w'] - df['surf_l'],
-        'target': 1
-    })
-
-    df_l = pd.DataFrame({
-        'rank_diff': df['loser_rank'] - df['winner_rank'],
-        'age_diff': df['loser_age'] - df['winner_age'],
-        'ht_diff': df['loser_ht'] - df['winner_ht'],
-        'forma_diff': df['forma_l'] - df['forma_w'],
-        'surf_diff': df['surf_l'] - df['surf_w'],
-        'target': 0
-    })
-
-    df_final = pd.concat([df_w, df_l])
-
-    X = df_final[['rank_diff','age_diff','ht_diff','forma_diff','surf_diff']].fillna(0)
-    y = df_final['target']
-
-    return X, y
-
-
-def calcular_value(prob, odd):
-    if odd <= 1:
-        return 0
-    return (prob - 1/odd) * 100
-
-
-# ================= MAIN =================
+df_welo = pd.DataFrame()
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+    df_welo = load_welo_data(uploaded_file)
 
-    st.success(f"✅ {len(df)} jogos carregados")
+# ====================== FUNÇÃO WELO ======================
+def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
+    if df_welo.empty or not jogador_nome:
+        return 1484.0
+    
+    clean_flash = unicodedata.normalize('NFKD', str(jogador_nome)).encode('ascii', 'ignore').decode('utf-8')
+    clean_flash = ''.join(filter(str.isalnum, clean_flash.lower().strip()))
+    
+    if len(clean_flash) < 5:
+        return 1484.0
+    
+    best_match = None
+    best_score = 0
+    
+    for _, row in df_welo.iterrows():
+        clean_excel = row['Jogador_clean']
+        if not clean_excel: continue
+            
+        score = 0
+        if clean_flash in clean_excel or clean_excel in clean_flash:
+            score = 100
+        elif len(clean_flash) > 6 and len(clean_excel) > 6:
+            common = len(set(clean_flash) & set(clean_excel))
+            if common > len(clean_flash) * 0.65:
+                score = 70
+        
+        if score > best_score:
+            best_score = score
+            best_match = row
+    
+    if best_score < 60 or best_match is None:
+        return 1484.0
+    
+    surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
+    col = surface_map.get(superficie.lower())
+    
+    if col and col in best_match.index:
+        val = best_match[col]
+        if pd.notna(val) and str(val).strip() != '':
+            return round(float(val), 1)
+    
+    elo_cols = ['ELO Hard', 'ELO Clay', 'ELO Grass', 'ELO Indoor']
+    values = [float(best_match[c]) for c in elo_cols if c in best_match.index and pd.notna(best_match[c])]
+    return round(sum(values) / len(values), 1) if values else 1484.0
 
-    # Treinar modelo
-    X, y = preparar_dados(df)
+# ====================== CÁLCULO DA LINHA TOTAL ======================
+def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
+    """
+    Retorna (Total_Esperado, Prob_Mais_21.5)
+    """
+    dif = abs(welo1 - welo2)
+    
+    # Base média de jogos por superfície
+    base_jogos = {
+        'Clay': 22.8,
+        'Hard': 22.4,
+        'Grass': 21.9,
+        'Indoor': 22.6
+    }.get(superficie, 22.5)
+    
+    # Ajuste pela diferença de nível
+    ajuste_dif = -0.035 * dif   # quanto maior a diferença, menos jogos esperados
+    
+    total_esperado = base_jogos + ajuste_dif
+    total_esperado = max(18.5, min(27.0, total_esperado))  # limite realista
+    
+    # Probabilidade de Mais de 21.5
+    # Quanto mais próximo de 22.5, maior a probabilidade de ir acima
+    prob_mais_21_5 = max(0.35, min(0.78, 0.5 + (total_esperado - 22.0) * 0.08))
+    
+    return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1)
 
-    model = LogisticRegression(max_iter=1000)
-    model.fit(X, y)
+# ====================== RESTO DO CÓDIGO (mesmo de antes) ======================
+def detect_surface(tournament: str) -> str:
+    t = str(tournament).lower()
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona']):
+        return 'Clay'
+    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne']):
+        return 'Grass'
+    if any(k in t for k in ['indoor', 'stockholm', 'basel']):
+        return 'Indoor'
+    return 'Hard'
 
-    st.success("🤖 Modelo treinado com sucesso")
+async def get_flashscore_matches():
+    # ... (mesma função anterior - mantida igual)
+    matches = []
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+        page = await browser.new_page()
+        try:
+            await page.goto("https://www.flashscore.pt/tenis/", timeout=60000)
+            await page.wait_for_timeout(9000)
+            
+            try:
+                tab = await page.query_selector("text=Agendados")
+                if tab: 
+                    await tab.click()
+                    await page.wait_for_timeout(6000)
+            except: pass
+            
+            elements = await page.query_selector_all(".event__match")
+            for el in elements[:80]:
+                try:
+                    tour = await el.query_selector(".event__tournament")
+                    tournament = (await tour.inner_text()).strip() if tour else "Desconhecido"
+                    p1 = await el.query_selector(".event__participant--home")
+                    j1 = (await p1.inner_text()).strip() if p1 else "?"
+                    p2 = await el.query_selector(".event__participant--away")
+                    j2 = (await p2.inner_text()).strip() if p2 else "?"
+                    time_el = await el.query_selector(".event__time")
+                    horario = (await time_el.inner_text()).strip() if time_el else "?"
+                    
+                    if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
+                        superficie = detect_surface(tournament)
+                        matches.append({
+                            'torneio': tournament,
+                            'jogador_1': j1,
+                            'jogador_2': j2,
+                            'horario': horario,
+                            'superficie': superficie
+                        })
+                except: continue
+        finally:
+            await browser.close()
+    return pd.DataFrame(matches)
 
-    # ================= INPUT =================
-    st.subheader("🎯 Prever Novo Jogo")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        rank1 = st.number_input("Rank Jogador 1", 1, 2000, 100)
-        age1 = st.number_input("Idade Jogador 1", 15, 45, 25)
-        ht1 = st.number_input("Altura Jogador 1", 150, 220, 180)
-        forma1 = st.slider("Forma J1", 0.0, 1.0, 0.5)
-        surf1 = st.slider("Winrate Superfície J1", 0.0, 1.0, 0.5)
-
-    with col2:
-        rank2 = st.number_input("Rank Jogador 2", 1, 2000, 120)
-        age2 = st.number_input("Idade Jogador 2", 15, 45, 26)
-        ht2 = st.number_input("Altura Jogador 2", 150, 220, 182)
-        forma2 = st.slider("Forma J2", 0.0, 1.0, 0.5)
-        surf2 = st.slider("Winrate Superfície J2", 0.0, 1.0, 0.5)
-
-    # ================= PREDIÇÃO =================
-    input_data = np.array([[
-        rank1 - rank2,
-        age1 - age2,
-        ht1 - ht2,
-        forma1 - forma2,
-        surf1 - surf2
-    ]])
-
-    prob = model.predict_proba(input_data)[0][1]
-
-    st.metric("📊 Probabilidade Jogador 1", f"{prob:.2%}")
-
-    # ================= ODDS =================
-    st.subheader("💰 Odds")
-
-    odd1 = st.number_input("Odd Jogador 1", value=2.0)
-    odd2 = st.number_input("Odd Jogador 2", value=2.0)
-
-    value1 = calcular_value(prob, odd1)
-    value2 = calcular_value(1 - prob, odd2)
-
-    colv1, colv2 = st.columns(2)
-    colv1.metric("Value J1", f"{value1:.2f}%")
-    colv2.metric("Value J2", f"{value2:.2f}%")
-
-    # ================= ALERTAS =================
-    if value1 > 5:
-        st.warning("🔥 VALUE BET FORTE: Jogador 1")
-    elif value2 > 5:
-        st.warning("🔥 VALUE BET FORTE: Jogador 2")
-    elif value1 > 2 or value2 > 2:
-        st.info("⚠️ Value leve encontrado")
-
+# ====================== EXECUÇÃO ======================
+if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary"):
+    if df_welo.empty:
+        st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
+    else:
+        with st.spinner("Buscando partidas e calculando WELO + Linha Total..."):
+            df = asyncio.run(get_flashscore_matches())
+            
+            if not df.empty:
+                df['WELO_J1'] = df.apply(lambda row: get_welo(row['jogador_1'], row['superficie'], df_welo), axis=1)
+                df['WELO_J2'] = df.apply(lambda row: get_welo(row['jogador_2'], row['superficie'], df_welo), axis=1)
+                df['Dif_WELO'] = abs(df['WELO_J1'] - df['WELO_J2'])
+                
+                # Calcula linha total
+                resultados = df.apply(lambda row: calcular_linha_total(row['WELO_J1'], row['WELO_J2'], row['superficie']), axis=1)
+                df['Total_Esperado'] = [r[0] for r in resultados]
+                df['Prob_Mais_21.5'] = [r[1] for r in resultados]
+                
+                st.success(f"✅ {len(df)} partidas analisadas!")
+                
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "torneio": "🏆 Torneio",
+                        "jogador_1": "🎾 Jogador 1",
+                        "jogador_2": "🎾 Jogador 2",
+                        "horario": "⏰ Horário",
+                        "superficie": "🏟️ Superfície",
+                        "WELO_J1": st.column_config.NumberColumn("WELO J1", format="%.1f"),
+                        "WELO_J2": st.column_config.NumberColumn("WELO J2", format="%.1f"),
+                        "Dif_WELO": st.column_config.NumberColumn("Dif WELO", format="%.1f"),
+                        "Total_Esperado": st.column_config.NumberColumn("Total Esperado", format="%.2f"),
+                        "Prob_Mais_21.5": st.column_config.NumberColumn("Prob >21.5 (%)", format="%.1f"),
+                    }
+                )
+                
+                # Downloads
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
+                                      f"tenis_hoje_total_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                with col2:
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df.to_excel(writer, index=False)
+                    output.seek(0)
+                    st.download_button("📊 Excel", output, 
+                                      f"tenis_hoje_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                st.warning("Nenhuma partida encontrada.")
 else:
-    st.info("📁 Carrega o ficheiro para começar")
+    st.info("Carregue o ficheiro na sidebar e clique no botão.")
+
+st.caption("WELO por superfície • Estimativa de Total de Jogos • Probabilidade > 21.5")
