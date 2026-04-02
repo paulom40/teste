@@ -1,24 +1,27 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import asyncio
 from io import BytesIO
 import unicodedata
 import time
 
-# Instalar selenium e webdriver se necessário
+# ====================== INSTALAÇÃO AUTOMÁTICA ======================
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
 except ImportError:
-    st.error("Selenium não está instalado. Por favor, instale com: pip install selenium webdriver-manager")
+    st.error("Instalando Selenium e WebDriver Manager...")
+    import subprocess
+    subprocess.run(["pip", "install", "selenium", "webdriver-manager"], check=True)
+    st.success("Pacotes instalados! Recarregue a página.")
     st.stop()
 
 # ====================== CONFIGURAÇÃO ======================
-st.set_page_config(page_title="Tênis Hoje - WELO (Selenium)", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="Tênis Hoje - WELO", page_icon="🎾", layout="wide")
 
 st.title("🎾 Partidas de Tênis Hoje + WELO por Jogador/Superfície")
 st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')} - Versão Selenium")
@@ -52,7 +55,7 @@ df_welo = pd.DataFrame()
 if uploaded_file:
     df_welo = load_welo_data(uploaded_file)
 
-# ====================== WELO POR JOGADOR E SUPERFÍCIE ======================
+# ====================== WELO POR JOGADOR ======================
 def get_player_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     if df_welo.empty or not jogador_nome:
         return 1484.0
@@ -111,43 +114,40 @@ def calcular_linha_total(welo1: float, welo2: float, superficie: str):
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
     clay_kw = ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona', 'murcia', 'girona', 'oeiras']
-    grass_kw = ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne']
-    indoor_kw = ['indoor', 'stockholm', 'basel']
-    
     if any(k in t for k in clay_kw):
         return 'Clay'
-    elif any(k in t for k in grass_kw):
+    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens']):
         return 'Grass'
-    elif any(k in t for k in indoor_kw):
+    if any(k in t for k in ['indoor', 'stockholm', 'basel']):
         return 'Indoor'
     return 'Hard'
 
 # ====================== SCRAPING COM SELENIUM ======================
 def get_flashscore_matches_selenium():
     matches = []
+    
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
+    options.add_argument("--window-size=1920,1080")
+    
     try:
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
         driver.get("https://www.flashscore.pt/tenis/")
-        time.sleep(8)  # Aguarda carregamento inicial
+        time.sleep(8)
 
-        # Tenta clicar na aba "Agendados"
+        # Clica na aba "Agendados"
         try:
-            scheduled_tab = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), 'Agendados')]"))
+            scheduled = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Agendados')]"))
             )
-            scheduled_tab.click()
-            time.sleep(5)
+            scheduled.click()
+            time.sleep(6)
         except:
             pass
 
-        # Pega todas as partidas
         games = driver.find_elements(By.CSS_SELECTOR, "div.event__match")
         
         for game in games[:80]:
@@ -173,7 +173,7 @@ def get_flashscore_matches_selenium():
         return pd.DataFrame(matches)
     
     except Exception as e:
-        st.error(f"Erro no Selenium: {e}")
+        st.error(f"Erro no Selenium: {str(e)}")
         if 'driver' in locals():
             driver.quit()
         return pd.DataFrame()
@@ -183,7 +183,7 @@ if st.button("🔄 Buscar Partidas com Selenium + Calcular WELO", type="primary"
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Abrindo navegador e buscando partidas no FlashScore... (pode demorar 15-25 segundos)"):
+        with st.spinner("Abrindo navegador headless e buscando partidas... (pode demorar 20-35 segundos)"):
             df = get_flashscore_matches_selenium()
             
             if not df.empty:
@@ -217,19 +217,19 @@ if st.button("🔄 Buscar Partidas com Selenium + Calcular WELO", type="primary"
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
+                    st.download_button("📥 Baixar CSV", df.to_csv(index=False).encode('utf-8'), 
                                       f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
                 with col2:
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False)
                     output.seek(0)
-                    st.download_button("📊 Excel", output, 
+                    st.download_button("📊 Baixar Excel", output, 
                                       f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("Não foi possível extrair partidas. Tente novamente ou use o modo manual.")
+                st.error("Não foi possível extrair as partidas. Tente novamente.")
 else:
-    st.info("Clique no botão acima para buscar as partidas usando Selenium.")
+    st.info("Clique no botão acima para iniciar o scraping com Selenium.")
 
-st.caption("Versão com Selenium | Mais estável que Playwright no Streamlit Cloud")
+st.caption("Versão Selenium com webdriver-manager automático")
