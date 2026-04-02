@@ -1,30 +1,30 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import asyncio
+from playwright.async_api import async_playwright
 from io import BytesIO
 import unicodedata
-import time
+import subprocess
 
-# ====================== INSTALAÇÃO AUTOMÁTICA ======================
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-except ImportError:
-    st.error("Instalando Selenium e WebDriver Manager...")
-    import subprocess
-    subprocess.run(["pip", "install", "selenium", "webdriver-manager"], check=True)
-    st.success("Pacotes instalados! Recarregue a página.")
-    st.stop()
+# ====================== INSTALAÇÃO PLAYWRIGHT ======================
+def install_playwright_browser():
+    try:
+        subprocess.run(["playwright", "install", "chromium", "--with-deps"], 
+                      timeout=180, check=False, capture_output=True)
+        return True
+    except:
+        return False
+
+if 'browser_installed' not in st.session_state:
+    install_playwright_browser()
+    st.session_state.browser_installed = True
 
 # ====================== CONFIGURAÇÃO ======================
-st.set_page_config(page_title="Tênis Hoje - WELO", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
 
-st.title("🎾 Partidas de Tênis Hoje + WELO por Jogador/Superfície")
-st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')} - Versão Selenium")
+st.title("🎾 Partidas de Tênis Hoje + WELO + Linha Total")
+st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
@@ -55,8 +55,8 @@ df_welo = pd.DataFrame()
 if uploaded_file:
     df_welo = load_welo_data(uploaded_file)
 
-# ====================== WELO POR JOGADOR ======================
-def get_player_welo(jogador_nome: str, superficie: str, df_welo) -> float:
+# ====================== FUNÇÃO WELO ======================
+def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     if df_welo.empty or not jogador_nome:
         return 1484.0
     
@@ -70,7 +70,7 @@ def get_player_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     best_score = 0
     
     for _, row in df_welo.iterrows():
-        clean_excel = row.get('Jogador_clean', '')
+        clean_excel = row['Jogador_clean']
         if not clean_excel: continue
             
         score = 0
@@ -79,7 +79,7 @@ def get_player_welo(jogador_nome: str, superficie: str, df_welo) -> float:
         elif len(clean_flash) > 6 and len(clean_excel) > 6:
             common = len(set(clean_flash) & set(clean_excel))
             if common > len(clean_flash) * 0.65:
-                score = 75
+                score = 70
         
         if score > best_score:
             best_score = score
@@ -100,102 +100,106 @@ def get_player_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     values = [float(best_match[c]) for c in elo_cols if c in best_match.index and pd.notna(best_match[c])]
     return round(sum(values) / len(values), 1) if values else 1484.0
 
-# ====================== LINHA TOTAL ======================
-def calcular_linha_total(welo1: float, welo2: float, superficie: str):
+# ====================== CÁLCULO DA LINHA TOTAL ======================
+def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
+    """
+    Retorna (Total_Esperado, Prob_Mais_21.5)
+    """
     dif = abs(welo1 - welo2)
-    base = {'Clay': 23.1, 'Hard': 22.5, 'Grass': 22.0, 'Indoor': 22.7}.get(superficie, 22.6)
-    ajuste = -0.042 * dif
-    total_esperado = round(base + ajuste, 2)
-    total_esperado = max(19.0, min(27.0, total_esperado))
-    prob = max(40, min(78, 53 + (total_esperado - 22.0) * 7))
-    return total_esperado, round(prob, 1)
+    
+    # Base média de jogos por superfície
+    base_jogos = {
+        'Clay': 22.8,
+        'Hard': 22.4,
+        'Grass': 21.9,
+        'Indoor': 22.6
+    }.get(superficie, 22.5)
+    
+    # Ajuste pela diferença de nível
+    ajuste_dif = -0.035 * dif   # quanto maior a diferença, menos jogos esperados
+    
+    total_esperado = base_jogos + ajuste_dif
+    total_esperado = max(18.5, min(27.0, total_esperado))  # limite realista
+    
+    # Probabilidade de Mais de 21.5
+    # Quanto mais próximo de 22.5, maior a probabilidade de ir acima
+    prob_mais_21_5 = max(0.35, min(0.78, 0.5 + (total_esperado - 22.0) * 0.08))
+    
+    return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1)
 
-# ====================== DETECÇÃO SUPERFÍCIE ======================
+# ====================== RESTO DO CÓDIGO (mesmo de antes) ======================
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
-    clay_kw = ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona', 'murcia', 'girona', 'oeiras']
-    if any(k in t for k in clay_kw):
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona']):
         return 'Clay'
-    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens']):
+    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne']):
         return 'Grass'
     if any(k in t for k in ['indoor', 'stockholm', 'basel']):
         return 'Indoor'
     return 'Hard'
 
-# ====================== SCRAPING COM SELENIUM ======================
-def get_flashscore_matches_selenium():
+async def get_flashscore_matches():
+    # ... (mesma função anterior - mantida igual)
     matches = []
-    
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    
-    try:
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-        driver.get("https://www.flashscore.pt/tenis/")
-        time.sleep(8)
-
-        # Clica na aba "Agendados"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+        page = await browser.new_page()
         try:
-            scheduled = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Agendados')]"))
-            )
-            scheduled.click()
-            time.sleep(6)
-        except:
-            pass
-
-        games = driver.find_elements(By.CSS_SELECTOR, "div.event__match")
-        
-        for game in games[:80]:
+            await page.goto("https://www.flashscore.pt/tenis/", timeout=60000)
+            await page.wait_for_timeout(9000)
+            
             try:
-                tournament = game.find_element(By.CSS_SELECTOR, "div.event__tournament").text.strip()
-                j1 = game.find_element(By.CSS_SELECTOR, "div.event__participant--home").text.strip()
-                j2 = game.find_element(By.CSS_SELECTOR, "div.event__participant--away").text.strip()
-                horario = game.find_element(By.CSS_SELECTOR, "div.event__time").text.strip()
-
-                if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
-                    superficie = detect_surface(tournament)
-                    matches.append({
-                        'torneio': tournament,
-                        'jogador_1': j1,
-                        'jogador_2': j2,
-                        'horario': horario,
-                        'superficie': superficie
-                    })
-            except:
-                continue
-                
-        driver.quit()
-        return pd.DataFrame(matches)
-    
-    except Exception as e:
-        st.error(f"Erro no Selenium: {str(e)}")
-        if 'driver' in locals():
-            driver.quit()
-        return pd.DataFrame()
+                tab = await page.query_selector("text=Agendados")
+                if tab: 
+                    await tab.click()
+                    await page.wait_for_timeout(6000)
+            except: pass
+            
+            elements = await page.query_selector_all(".event__match")
+            for el in elements[:80]:
+                try:
+                    tour = await el.query_selector(".event__tournament")
+                    tournament = (await tour.inner_text()).strip() if tour else "Desconhecido"
+                    p1 = await el.query_selector(".event__participant--home")
+                    j1 = (await p1.inner_text()).strip() if p1 else "?"
+                    p2 = await el.query_selector(".event__participant--away")
+                    j2 = (await p2.inner_text()).strip() if p2 else "?"
+                    time_el = await el.query_selector(".event__time")
+                    horario = (await time_el.inner_text()).strip() if time_el else "?"
+                    
+                    if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
+                        superficie = detect_surface(tournament)
+                        matches.append({
+                            'torneio': tournament,
+                            'jogador_1': j1,
+                            'jogador_2': j2,
+                            'horario': horario,
+                            'superficie': superficie
+                        })
+                except: continue
+        finally:
+            await browser.close()
+    return pd.DataFrame(matches)
 
 # ====================== EXECUÇÃO ======================
-if st.button("🔄 Buscar Partidas com Selenium + Calcular WELO", type="primary"):
+if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary"):
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Abrindo navegador headless e buscando partidas... (pode demorar 20-35 segundos)"):
-            df = get_flashscore_matches_selenium()
+        with st.spinner("Buscando partidas e calculando WELO + Linha Total..."):
+            df = asyncio.run(get_flashscore_matches())
             
             if not df.empty:
-                df['WELO_J1'] = df.apply(lambda row: get_player_welo(row['jogador_1'], row['superficie'], df_welo), axis=1)
-                df['WELO_J2'] = df.apply(lambda row: get_player_welo(row['jogador_2'], row['superficie'], df_welo), axis=1)
+                df['WELO_J1'] = df.apply(lambda row: get_welo(row['jogador_1'], row['superficie'], df_welo), axis=1)
+                df['WELO_J2'] = df.apply(lambda row: get_welo(row['jogador_2'], row['superficie'], df_welo), axis=1)
                 df['Dif_WELO'] = abs(df['WELO_J1'] - df['WELO_J2'])
                 
+                # Calcula linha total
                 resultados = df.apply(lambda row: calcular_linha_total(row['WELO_J1'], row['WELO_J2'], row['superficie']), axis=1)
                 df['Total_Esperado'] = [r[0] for r in resultados]
                 df['Prob_Mais_21.5'] = [r[1] for r in resultados]
                 
-                st.success(f"✅ {len(df)} partidas encontradas!")
+                st.success(f"✅ {len(df)} partidas analisadas!")
                 
                 st.dataframe(
                     df,
@@ -215,21 +219,22 @@ if st.button("🔄 Buscar Partidas com Selenium + Calcular WELO", type="primary"
                     }
                 )
                 
+                # Downloads
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.download_button("📥 Baixar CSV", df.to_csv(index=False).encode('utf-8'), 
-                                      f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                    st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
+                                      f"tenis_hoje_total_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
                 with col2:
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df.to_excel(writer, index=False)
                     output.seek(0)
-                    st.download_button("📊 Baixar Excel", output, 
-                                      f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    st.download_button("📊 Excel", output, 
+                                      f"tenis_hoje_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.error("Não foi possível extrair as partidas. Tente novamente.")
+                st.warning("Nenhuma partida encontrada.")
 else:
-    st.info("Clique no botão acima para iniciar o scraping com Selenium.")
+    st.info("Carregue o ficheiro na sidebar e clique no botão.")
 
-st.caption("Versão Selenium com webdriver-manager automático")
+st.caption("WELO por superfície • Estimativa de Total de Jogos • Probabilidade > 21.5")
