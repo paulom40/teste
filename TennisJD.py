@@ -4,6 +4,11 @@ from datetime import datetime
 import asyncio
 from playwright.async_api import async_playwright
 import os
+import sys
+
+# Instalar browsers do Playwright automaticamente
+if not os.path.exists("/home/appuser/.cache/ms-playwright"):
+    os.system("playwright install chromium")
 
 # Configuração da página
 st.set_page_config(
