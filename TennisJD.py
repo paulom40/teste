@@ -6,13 +6,28 @@ from playwright.async_api import async_playwright
 from io import BytesIO
 import unicodedata
 import os
-import sys
+import subprocess
 
-# ====================== INSTALAÇÃO DO PLAYWRIGHT (uma única vez) ======================
-if not os.path.exists("/home/appuser/.cache/ms-playwright") and not os.path.exists("/root/.cache/ms-playwright"):
-    with st.spinner("Instalando browser do Playwright (pode demorar na primeira vez)..."):
-        os.system("playwright install chromium --with-deps")
+# ====================== INSTALAÇÃO AUTOMÁTICA DO BROWSER ======================
+@st.cache_resource
+def install_playwright():
+    try:
+        st.info("🔧 Instalando browser do Playwright (primeira vez pode demorar 20-40s)...")
+        result = subprocess.run(["playwright", "install", "chromium", "--with-deps"], 
+                               capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            st.success("✅ Browser instalado com sucesso!")
+        else:
+            st.warning("Aviso na instalação do browser, mas vamos tentar continuar...")
+        return True
+    except Exception as e:
+        st.error(f"Erro na instalação: {e}")
+        return False
 
+# Executa a instalação no startup
+install_playwright()
+
+# ====================== CONFIGURAÇÃO ======================
 st.set_page_config(page_title="Tênis Hoje - WELO", page_icon="🎾", layout="wide")
 
 st.title("🎾 Partidas de Tênis Hoje + WELO por Superfície")
@@ -59,17 +74,15 @@ def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     if not clean_name:
         return 1484.0
     
-    # Matching bidirecional
     mask = (
         df_welo['Jogador_clean'].str.contains(clean_name, na=False) |
-        df_welo['Jogador_clean'].apply(lambda x: clean_name in x if isinstance(x, str) else False)
+        df_welo['Jogador_clean'].apply(lambda x: clean_name in str(x) if pd.notna(x) else False)
     )
     
     match = df_welo[mask]
     if match.empty:
         return 1484.0
     
-    # ELO da superfície
     surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
     col = surface_map.get(superficie.lower())
     
@@ -86,19 +99,18 @@ def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
 # ====================== DETEÇÃO SUPERFÍCIE ======================
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
-    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio']):
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona']):
         return 'Clay'
-    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens']):
+    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne']):
         return 'Grass'
     if any(k in t for k in ['indoor', 'stockholm', 'basel']):
         return 'Indoor'
     return 'Hard'
 
-# ====================== BUSCAR PARTIDAS (VERSÃO MAIS ESTÁVEL) ======================
+# ====================== BUSCAR PARTIDAS ======================
 async def get_flashscore_matches():
     matches = []
     async with async_playwright() as p:
-        # Tenta lançar com opções mais amigáveis para cloud
         browser = await p.chromium.launch(
             headless=True,
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -106,7 +118,7 @@ async def get_flashscore_matches():
         page = await browser.new_page()
         
         try:
-            await page.goto("https://www.flashscore.pt/tenis/", timeout=45000)
+            await page.goto("https://www.flashscore.pt/tenis/", timeout=60000)
             await page.wait_for_timeout(8000)
             
             try:
@@ -120,8 +132,8 @@ async def get_flashscore_matches():
             elements = await page.query_selector_all(".event__match")
             for el in elements[:70]:
                 try:
-                    tour_el = await el.query_selector(".event__tournament")
-                    tournament = (await tour_el.inner_text()).strip() if tour_el else "Desconhecido"
+                    tour = await el.query_selector(".event__tournament")
+                    tournament = (await tour.inner_text()).strip() if tour else "Desconhecido"
                     
                     p1 = await el.query_selector(".event__participant--home")
                     j1 = (await p1.inner_text()).strip() if p1 else "?"
@@ -148,12 +160,12 @@ async def get_flashscore_matches():
     
     return pd.DataFrame(matches)
 
-# ====================== BOTÃO PRINCIPAL ======================
+# ====================== BOTÃO ======================
 if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Acedendo ao FlashScore e calculando WELO..."):
+        with st.spinner("Acedendo ao FlashScore..."):
             try:
                 df = asyncio.run(get_flashscore_matches())
                 
@@ -191,11 +203,11 @@ if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
                                           f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else:
-                    st.warning("Nenhuma partida agendada encontrada.")
+                    st.warning("Nenhuma partida agendada encontrada neste momento.")
             except Exception as e:
                 st.error(f"Erro ao aceder ao FlashScore: {str(e)}")
-                st.info("Tente novamente em alguns minutos. O site pode estar lento ou com proteção anti-bot.")
+                st.info("💡 Dica: Aguarde 10-20 segundos e tente novamente.")
 else:
-    st.info("Carregue o ficheiro na sidebar e clique no botão para buscar.")
+    st.info("Carregue o ficheiro na sidebar e clique no botão.")
 
-st.caption("Matching melhorado | WELO por superfície | Playwright otimizado para Cloud")
+st.caption("Playwright instalado automaticamente | Matching de nomes melhorado")
