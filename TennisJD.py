@@ -5,9 +5,7 @@ import requests
 from io import BytesIO
 import unicodedata
 import re
-import json
 from bs4 import BeautifulSoup
-import time
 
 # ====================== CONFIGURAÇÃO ======================
 st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
@@ -28,7 +26,7 @@ with st.sidebar:
     st.header("⚙️ Configurações")
     fonte_dados = st.selectbox(
         "Fonte de dados:",
-        ["Automático (Tenta todas)", "Dados de Demonstração", "ATP Tour (Scraping)", "Tennis API (RapidAPI)"]
+        ["Automático (Tenta todas)", "Dados de Demonstração", "ATP Tour (Scraping)"]
     )
     
     if uploaded_file:
@@ -52,6 +50,8 @@ def load_welo_data(file):
             sheet_name = xls.sheet_names[0]
         
         df = pd.read_excel(xls, sheet_name=sheet_name)
+        
+        st.sidebar.success(f"✅ Sheet '{sheet_name}' carregada com {len(df)} linhas")
         
         # Normalizar nomes
         def normalize_name(name):
@@ -213,7 +213,6 @@ def get_demo_matches():
         {'torneio': 'ATP 250 Houston', 'jogador_1': 'Ben Shelton', 'jogador_2': 'Frances Tiafoe', 'horario': '20:00', 'data': (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'), 'superficie': 'Clay'},
         {'torneio': 'ATP Challenger Oeiras', 'jogador_1': 'Nuno Borges', 'jogador_2': 'João Sousa', 'horario': '15:00', 'data': (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d'), 'superficie': 'Clay'},
         {'torneio': 'ATP 500 Barcelona', 'jogador_1': 'Casper Ruud', 'jogador_2': 'Stefanos Tsitsipas', 'horario': '18:30', 'data': datetime.now().strftime('%Y-%m-%d'), 'superficie': 'Clay'},
-        {'torneio': 'WTA 1000 Madrid', 'jogador_1': 'Aryna Sabalenka', 'jogador_2': 'Jessica Pegula', 'horario': '17:00', 'data': (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d'), 'superficie': 'Clay'},
     ]
     return pd.DataFrame(matches)
 
@@ -235,13 +234,11 @@ def get_atp_scraping():
             
             for card in match_cards[:15]:
                 try:
-                    # Extrair jogadores
                     players = card.find_all('span', class_='player-name')
                     if len(players) >= 2:
                         player1 = players[0].get_text(strip=True)
                         player2 = players[1].get_text(strip=True)
                         
-                        # Extrair torneio
                         tournament_div = card.find('div', class_='tourney-title')
                         tournament = tournament_div.get_text(strip=True) if tournament_div else "ATP Tour"
                         
@@ -255,32 +252,8 @@ def get_atp_scraping():
                         })
                 except:
                     continue
-    except:
-        pass
-    
-    return pd.DataFrame(matches)
-
-def get_tennis_api():
-    """Fonte 3: Tennis API (RapidAPI)"""
-    matches = []
-    
-    # Tentar API alternativa de ténis
-    url = "https://tennisapi1.p.rapidapi.com/api/tennis/events/live"
-    
-    headers = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "tennisapi1.p.rapidapi.com"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            # Processar dados conforme estrutura da API
-            # (adaptar conforme necessário)
-            pass
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Scraping ATP falhou: {str(e)}")
     
     return pd.DataFrame(matches)
 
@@ -288,8 +261,8 @@ def get_all_matches_auto():
     """Tenta todas as fontes automaticamente"""
     
     # Tentar ATP scraping primeiro
-    st.info("🔍 Tentando ATP Tour scraping...")
-    df = get_atp_scraping()
+    with st.spinner("Tentando ATP Tour scraping..."):
+        df = get_atp_scraping()
     
     if not df.empty:
         st.success(f"✅ Encontradas {len(df)} partidas via ATP Tour")
@@ -304,25 +277,55 @@ def get_all_matches_auto():
 
 # ====================== EXPORTAR EXCEL ======================
 def export_to_excel(df_analise):
+    """Exporta para Excel sem erros de tipo"""
     output = BytesIO()
     
+    # Criar uma cópia para exportação (remover % para estatísticas)
+    df_export = df_analise.copy()
+    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_analise.to_excel(writer, sheet_name='Análise Partidas', index=False)
+        df_export.to_excel(writer, sheet_name='Análise Partidas', index=False)
         
-        # Estatísticas
+        # Calcular estatísticas (usando os valores numéricos)
+        prob_numerica = df_analise['Prob_Mais_21.5_Num']
+        
         stats_data = {
-            'Métrica': ['Total Partidas', 'Média WELO J1', 'Média WELO J2', 'Média Total Esperado', 'Média Prob >21.5%', 'Data'],
+            'Métrica': [
+                'Total Partidas',
+                'Média WELO Jogador 1',
+                'Média WELO Jogador 2',
+                'Média Diferença WELO',
+                'Média Total Esperado',
+                'Média Probabilidade >21.5%',
+                'Partidas com OVER (>65%)',
+                'Partidas com UNDER (<40%)',
+                'Data da Análise'
+            ],
             'Valor': [
                 len(df_analise),
                 f"{df_analise['WELO_J1'].mean():.1f}",
                 f"{df_analise['WELO_J2'].mean():.1f}",
+                f"{df_analise['Dif_WELO'].mean():.1f}",
                 f"{df_analise['Total_Esperado'].mean():.2f}",
-                f"{df_analise['Prob_Mais_21.5'].mean():.1f}%",
+                f"{prob_numerica.mean():.1f}%",
+                len(df_analise[df_analise['Prob_Mais_21.5_Num'] > 65]),
+                len(df_analise[df_analise['Prob_Mais_21.5_Num'] < 40]),
                 datetime.now().strftime('%d/%m/%Y %H:%M')
             ]
         }
         df_stats = pd.DataFrame(stats_data)
         df_stats.to_excel(writer, sheet_name='Estatísticas', index=False)
+        
+        # Oportunidades
+        over_df = df_analise[df_analise['Prob_Mais_21.5_Num'] > 65].copy()
+        if not over_df.empty:
+            over_df = over_df.drop(columns=['Prob_Mais_21.5_Num'])
+            over_df.to_excel(writer, sheet_name='Oportunidades OVER', index=False)
+        
+        under_df = df_analise[df_analise['Prob_Mais_21.5_Num'] < 40].copy()
+        if not under_df.empty:
+            under_df = under_df.drop(columns=['Prob_Mais_21.5_Num'])
+            under_df.to_excel(writer, sheet_name='Oportunidades UNDER', index=False)
     
     output.seek(0)
     return output
@@ -349,13 +352,11 @@ if st.button("🔄 Buscar Partidas + Calcular WELO", type="primary", use_contain
         elif fonte_dados == "Dados de Demonstração":
             df_partidas = get_demo_matches()
             st.info("📊 Usando dados de demonstração")
-        elif fonte_dados == "ATP Tour (Scraping)":
+        else:
             df_partidas = get_atp_scraping()
             if df_partidas.empty:
                 st.warning("⚠️ Nenhuma partida encontrada no ATP Tour")
                 df_partidas = get_demo_matches()
-        else:
-            df_partidas = get_demo_matches()
         
         if not df_partidas.empty:
             # Calcular WELO
@@ -379,22 +380,26 @@ if st.button("🔄 Buscar Partidas + Calcular WELO", type="primary", use_contain
             
             df_partidas['Total_Esperado'] = [r[0] for r in resultados]
             df_partidas['Prob_Mais_21.5'] = [f"{r[1]}%" for r in resultados]
+            df_partidas['Prob_Mais_21.5_Num'] = [r[1] for r in resultados]  # Versão numérica para cálculos
             
             # Estatísticas
             st.success(f"✅ {len(df_partidas)} partidas analisadas!")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Total Partidas", len(df_partidas))
             with col2:
-                st.metric("Média WELO", f"{df_partidas[['WELO_J1', 'WELO_J2']].mean().mean():.0f}")
+                st.metric("Média WELO J1", f"{df_partidas['WELO_J1'].mean():.0f}")
             with col3:
-                prob_mean = df_partidas['Prob_Mais_21.5'].str.replace('%', '').astype(float).mean()
-                st.metric("Média Prob >21.5", f"{prob_mean:.1f}%")
+                st.metric("Média WELO J2", f"{df_partidas['WELO_J2'].mean():.0f}")
+            with col4:
+                st.metric("Média Prob >21.5", f"{df_partidas['Prob_Mais_21.5_Num'].mean():.1f}%")
             
-            # Tabela
+            # Tabela (sem a coluna numérica)
+            display_df = df_partidas.drop(columns=['Prob_Mais_21.5_Num'])
+            
             st.dataframe(
-                df_partidas,
+                display_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -414,36 +419,61 @@ if st.button("🔄 Buscar Partidas + Calcular WELO", type="primary", use_contain
             
             # Oportunidades
             st.subheader("🎯 Recomendações")
-            over_df = df_partidas[df_partidas['Prob_Mais_21.5'].str.replace('%', '').astype(float) > 65]
-            under_df = df_partidas[df_partidas['Prob_Mais_21.5'].str.replace('%', '').astype(float) < 40]
+            
+            over_df = df_partidas[df_partidas['Prob_Mais_21.5_Num'] > 65]
+            under_df = df_partidas[df_partidas['Prob_Mais_21.5_Num'] < 40]
             
             for _, row in over_df.iterrows():
-                st.success(f"🔴 OVER 21.5: {row['jogador_1']} vs {row['jogador_2']} ({row['Prob_Mais_21.5']})")
+                st.success(f"🔴 **OVER 21.5** - {row['jogador_1']} vs {row['jogador_2']} ({row['Prob_Mais_21.5']})")
             
             for _, row in under_df.iterrows():
-                st.info(f"🔵 UNDER 21.5: {row['jogador_1']} vs {row['jogador_2']} ({100 - float(row['Prob_Mais_21.5'].replace('%', '')):.0f}%)")
+                st.info(f"🔵 **UNDER 21.5** - {row['jogador_1']} vs {row['jogador_2']} ({100 - row['Prob_Mais_21.5_Num']:.0f}%)")
             
             # Exportação
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("📄 CSV", df_partidas.to_csv(index=False).encode('utf-8'), f"tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
-            with col2:
-                st.download_button("📊 Excel", export_to_excel(df_partidas), f"tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+            st.markdown("---")
+            st.subheader("📥 Exportar Resultados")
+            
+            col_exp1, col_exp2 = st.columns(2)
+            
+            with col_exp1:
+                # Remover coluna numérica antes de exportar CSV
+                export_csv_df = df_partidas.drop(columns=['Prob_Mais_21.5_Num'])
+                csv_data = export_csv_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📄 Exportar CSV",
+                    data=csv_data,
+                    file_name=f"tenis_analise_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            with col_exp2:
+                excel_file = export_to_excel(df_partidas)
+                st.download_button(
+                    label="📊 Exportar Excel",
+                    data=excel_file,
+                    file_name=f"tenis_analise_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
 else:
     st.info("""
     ### 🎾 Como usar:
     
-    1. **Carregue o ficheiro Challenger.xlsm**
+    1. **Carregue o ficheiro Challenger.xlsm** na barra lateral
     2. **Escolha a fonte de dados** (recomendado: Automático)
-    3. **Clique em buscar** para ver as análises
+    3. **Clique no botão** para analisar as partidas
     
-    ### Fontes de dados disponíveis:
+    ### Fontes disponíveis:
     - **Automático**: Tenta ATP scraping → Demonstração
-    - **ATP Tour**: Scraping do site oficial
-    - **Demonstração**: Dados de exemplo (sempre funciona)
+    - **Dados de Demonstração**: Exemplos para teste
+    - **ATP Tour (Scraping)**: Dados reais do site oficial
     
-    **Nota:** A API SportScore não retorna dados de ténis no plano gratuito. Use as alternativas acima.
+    ### O que é calculado:
+    - **WELO real** de cada jogador
+    - **Total esperado** de games
+    - **Probabilidade** de Over/Under 21.5
     """)
 
-st.caption("🎾 Múltiplas fontes de dados • WELO real • Análise de Totais")
+st.caption("🎾 Múltiplas fontes • WELO real • Análise de Totais • Exportação Excel/CSV")
