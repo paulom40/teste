@@ -16,3 +16,5 @@ scikit-learn
 lightgbm
 catboost
 scikit-learn
+flashscore-scraper
+playwright
