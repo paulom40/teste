@@ -1,151 +1,67 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from io import BytesIO
-import unicodedata
+from datetime import datetime, timedelta
+import random
 
 # ====================== CONFIGURAÇÃO ======================
 st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
 
-st.title("🎾 Partidas de Tênis + WELO + Linha Total")
+st.title("🎾 Partidas de Tênis Hoje + WELO + Linha Total")
 st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
-    st.header("📁 Carregar Ficheiros")
+    st.header("📁 Carregar Challenger.xlsm")
+    st.warning("⚠️ Como não tem o ficheiro WELO, a demonstração usa valores estimados")
     
-    st.subheader("1. Ficheiro WELO (Challenger.xlsm)")
-    welo_file = st.file_uploader("Escolha o ficheiro Challenger.xlsm", type=["xlsm", "xlsx"], key="welo")
-    
-    st.subheader("2. Ficheiro de Partidas (ATP/Challenger)")
-    matches_file = st.file_uploader("Escolha o ficheiro CSV de partidas", type=["csv"], key="matches")
-    
-    st.markdown("---")
-    st.info("💡 O ficheiro CSV deve conter colunas: winner_name, loser_name, surface, tourney_name, score")
+    uploaded_file = st.file_uploader("Quando tiver o ficheiro, carregue aqui", type=["xlsm", "xlsx"])
 
-# ====================== CARREGAR DADOS WELO ======================
+# ====================== DADOS DE DEMONSTRAÇÃO ======================
 @st.cache_data
-def load_welo_data(file):
-    try:
-        xls = pd.ExcelFile(file)
-        df = pd.read_excel(xls, sheet_name="Jogadores>20")
-        
-        def normalize_name(name):
-            if not isinstance(name, str): return ""
-            name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
-            name = name.lower().strip()
-            name = ''.join(filter(str.isalnum, name))
-            return name
-        
-        df['Jogador_clean'] = df['Jogador'].apply(normalize_name)
-        st.sidebar.success(f"✅ {len(df)} jogadores WELO carregados")
-        return df
-    except Exception as e:
-        st.sidebar.error(f"Erro ao carregar WELO: {e}")
-        return pd.DataFrame()
-
-# ====================== CARREGAR PARTIDAS ======================
-@st.cache_data
-def load_matches_data(file):
-    try:
-        df = pd.read_csv(file)
-        
-        # Verificar colunas necessárias
-        required_cols = ['winner_name', 'loser_name', 'surface']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        
-        if missing_cols:
-            st.error(f"Colunas faltando no CSV: {missing_cols}")
-            st.info(f"Colunas disponíveis: {list(df.columns)}")
-            return pd.DataFrame()
-        
-        # Filtrar apenas partidas completas (com vencedor)
-        df = df[df['winner_name'].notna() & df['loser_name'].notna()]
-        
-        # Adicionar colunas necessárias se não existirem
-        if 'tourney_name' not in df.columns:
-            df['tourney_name'] = 'Torneio'
-        
-        if 'score' not in df.columns:
-            df['score'] = ''
-        
-        # Calcular total de games se não existir
-        if 'T Games' not in df.columns:
-            df['T Games'] = df.apply(lambda x: calculate_games_from_score(x.get('score', '')), axis=1)
-        
-        st.sidebar.success(f"✅ {len(df)} partidas carregadas")
-        return df
-    except Exception as e:
-        st.sidebar.error(f"Erro ao carregar partidas: {e}")
-        return pd.DataFrame()
-
-def calculate_games_from_score(score):
-    """Calcula total de games a partir do placar"""
-    if not score or pd.isna(score):
-        return 0
+def get_demo_matches():
+    """Gera partidas de demonstração realistas"""
+    today = datetime.now()
     
-    total = 0
-    import re
-    # Extrair sets (ex: 6-4, 3-6, 6-2)
-    sets = re.findall(r'(\d+)-(\d+)', score)
-    for set_score in sets:
-        total += int(set_score[0]) + int(set_score[1])
+    torneios = [
+        "ATP Masters 1000 Monte Carlo", "WTA 500 Stuttgart", "ATP 250 Houston",
+        "WTA 1000 Madrid", "ATP Challenger Oeiras", "ITF M15 Lisbon"
+    ]
     
-    return total
-
-# ====================== FUNÇÃO WELO ======================
-def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
-    if df_welo.empty or not jogador_nome:
-        return 1484.0
+    jogadores = [
+        ("Novak Djokovic", "Carlos Alcaraz", 1980, 1870),
+        ("Jannik Sinner", "Daniil Medvedev", 1950, 1850),
+        ("Iga Swiatek", "Elena Rybakina", 1930, 1820),
+        ("Coco Gauff", "Jessica Pegula", 1880, 1790),
+        ("Alexander Zverev", "Andrey Rublev", 1860, 1770),
+        ("Holger Rune", "Stefanos Tsitsipas", 1820, 1750),
+        ("Nuno Borges", "Arthur Fils", 1650, 1600),
+        ("João Sousa", "Gastao Elias", 1550, 1480)
+    ]
     
-    clean_flash = unicodedata.normalize('NFKD', str(jogador_nome)).encode('ascii', 'ignore').decode('utf-8')
-    clean_flash = ''.join(filter(str.isalnum, clean_flash.lower().strip()))
+    superficies = ['Clay', 'Hard', 'Clay', 'Hard', 'Clay', 'Hard', 'Clay', 'Hard']
     
-    if len(clean_flash) < 5:
-        return 1484.0
-    
-    best_match = None
-    best_score = 0
-    
-    for _, row in df_welo.iterrows():
-        clean_excel = row['Jogador_clean']
-        if not clean_excel: continue
-            
-        score = 0
-        if clean_flash in clean_excel or clean_excel in clean_flash:
-            score = 100
-        elif len(clean_flash) > 6 and len(clean_excel) > 6:
-            common = len(set(clean_flash) & set(clean_excel))
-            if common > len(clean_flash) * 0.65:
-                score = 70
+    matches = []
+    for i, (j1, j2, elo1, elo2) in enumerate(jogadores):
+        # Horário progressivo
+        hora = 10 + i
+        minuto = random.choice([0, 30])
         
-        if score > best_score:
-            best_score = score
-            best_match = row
+        matches.append({
+            'torneio': torneios[i % len(torneios)],
+            'jogador_1': j1,
+            'jogador_2': j2,
+            'horario': f"{hora:02d}:{minuto:02d}",
+            'superficie': superficies[i % len(superficies)],
+            'WELO_J1_Demo': elo1,
+            'WELO_J2_Demo': elo2
+        })
     
-    if best_score < 60 or best_match is None:
-        return 1484.0
-    
-    surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
-    col = surface_map.get(superficie.lower())
-    
-    if col and col in best_match.index:
-        val = best_match[col]
-        if pd.notna(val) and str(val).strip() != '':
-            return round(float(val), 1)
-    
-    elo_cols = ['ELO Hard', 'ELO Clay', 'ELO Grass', 'ELO Indoor']
-    values = [float(best_match[c]) for c in elo_cols if c in best_match.index and pd.notna(best_match[c])]
-    return round(sum(values) / len(values), 1) if values else 1484.0
+    return pd.DataFrame(matches)
 
 # ====================== CÁLCULO DA LINHA TOTAL ======================
-def calcular_linha_total(welo1: float, welo2: float, superficie: str, games_reais=None) -> tuple:
-    """
-    Retorna (Total_Esperado, Prob_Mais_21.5, Diferenca_Real)
-    """
+def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
     dif = abs(welo1 - welo2)
     
-    # Base média de jogos por superfície (baseado nos dados reais)
     base_jogos = {
         'Clay': 22.8,
         'Hard': 22.4,
@@ -153,163 +69,82 @@ def calcular_linha_total(welo1: float, welo2: float, superficie: str, games_reai
         'Indoor': 22.6
     }.get(superficie, 22.5)
     
-    # Ajuste pela diferença de nível
     ajuste_dif = -0.035 * dif
-    
     total_esperado = base_jogos + ajuste_dif
     total_esperado = max(18.5, min(27.0, total_esperado))
-    
-    # Probabilidade de Mais de 21.5
     prob_mais_21_5 = max(0.35, min(0.78, 0.5 + (total_esperado - 22.0) * 0.08))
     
-    # Calcular diferença se tivermos games reais
-    diferenca = None
-    if games_reais and games_reais > 0:
-        diferenca = games_reais - total_esperado
-    
-    return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1), diferenca
+    return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1)
 
-# ====================== DETECTAR SUPERFÍCIE ======================
-def get_surface_display(surface):
-    """Converte superfície para formato amigável"""
-    surface_map = {
-        'Clay': '🏟️ Clay',
-        'Hard': '🎾 Hard',
-        'Grass': '🌿 Grass',
-        'Indoor': '🏠 Indoor'
-    }
-    return surface_map.get(surface, surface)
-
-# ====================== EXECUÇÃO PRINCIPAL ======================
-# Carregar dados
-df_welo = pd.DataFrame()
-df_matches = pd.DataFrame()
-
-if welo_file:
-    df_welo = load_welo_data(welo_file)
-
-if matches_file:
-    df_matches = load_matches_data(matches_file)
-
-# Botão de análise
-if st.button("🔄 Analisar Partidas + Calcular WELO + Linha Total", type="primary"):
-    if df_welo.empty:
-        st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
-    elif df_matches.empty:
-        st.warning("⚠️ Carregue primeiro o ficheiro CSV de partidas na barra lateral.")
-    else:
-        with st.spinner("Analisando partidas e calculando WELO..."):
-            
-            # Criar DataFrame para análise
-            analysis_df = df_matches.copy()
-            
-            # Calcular WELO para cada jogador
-            analysis_df['WELO_Winner'] = analysis_df.apply(
-                lambda row: get_welo(row['winner_name'], row['surface'], df_welo), axis=1
-            )
-            analysis_df['WELO_Loser'] = analysis_df.apply(
-                lambda row: get_welo(row['loser_name'], row['surface'], df_welo), axis=1
-            )
-            analysis_df['Dif_WELO'] = abs(analysis_df['WELO_Winner'] - analysis_df['WELO_Loser'])
-            
+# ====================== EXECUÇÃO ======================
+if st.button("🔄 Buscar Partidas Hoje + Calcular Linha Total", type="primary"):
+    with st.spinner("Gerando partidas e calculando totais..."):
+        df = get_demo_matches()
+        
+        if not df.empty:
             # Calcular linha total
-            games_col = 'T Games' if 'T Games' in analysis_df.columns else None
-            
-            resultados = analysis_df.apply(
+            resultados = df.apply(
                 lambda row: calcular_linha_total(
-                    row['WELO_Winner'], 
-                    row['WELO_Loser'], 
-                    row['surface'],
-                    row.get(games_col, 0) if games_col else None
+                    row['WELO_J1_Demo'], 
+                    row['WELO_J2_Demo'], 
+                    row['superficie']
                 ), axis=1
             )
             
-            analysis_df['Total_Esperado'] = [r[0] for r in resultados]
-            analysis_df['Prob_Mais_21.5'] = [r[1] for r in resultados]
-            if games_col:
-                analysis_df['Diferenca_Real_vs_Esperado'] = [r[2] for r in resultados if r[2] is not None]
+            df['Total_Esperado'] = [r[0] for r in resultados]
+            df['Prob_Mais_21.5'] = [r[1] for r in resultados]
+            df['Dif_WELO'] = abs(df['WELO_J1_Demo'] - df['WELO_J2_Demo'])
             
-            # Estatísticas resumo
-            st.subheader("📊 Estatísticas de Análise")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Partidas", len(analysis_df))
-            with col2:
-                st.metric("Média WELO Vencedor", f"{analysis_df['WELO_Winner'].mean():.0f}")
-            with col3:
-                st.metric("Média Total Esperado", f"{analysis_df['Total_Esperado'].mean():.2f}")
-            with col4:
-                if games_col:
-                    st.metric("Média Total Real", f"{analysis_df[games_col].mean():.2f}")
+            st.success(f"✅ {len(df)} partidas analisadas!")
             
-            # Mostrar dados
-            st.subheader("🎾 Detalhe das Partidas")
-            
-            # Selecionar colunas para exibir
-            display_cols = ['tourney_name', 'winner_name', 'loser_name', 'surface', 'score']
-            display_cols.extend(['WELO_Winner', 'WELO_Loser', 'Dif_WELO', 'Total_Esperado', 'Prob_Mais_21.5'])
-            if games_col and 'Diferenca_Real_vs_Esperado' in analysis_df.columns:
-                display_cols.append('Diferenca_Real_vs_Esperado')
-            
+            # Mostrar tabela
             st.dataframe(
-                analysis_df[display_cols],
+                df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "tourney_name": "🏆 Torneio",
-                    "winner_name": "🏆 Vencedor",
-                    "loser_name": "📉 Perdedor",
-                    "surface": "🏟️ Superfície",
-                    "score": "📊 Placar",
-                    "WELO_Winner": st.column_config.NumberColumn("WELO Vencedor", format="%.1f"),
-                    "WELO_Loser": st.column_config.NumberColumn("WELO Perdedor", format="%.1f"),
-                    "Dif_WELO": st.column_config.NumberColumn("Dif WELO", format="%.1f"),
+                    "torneio": "🏆 Torneio",
+                    "jogador_1": "🎾 Jogador 1",
+                    "jogador_2": "🎾 Jogador 2",
+                    "horario": "⏰ Horário",
+                    "superficie": "🏟️ Superfície",
+                    "WELO_J1_Demo": st.column_config.NumberColumn("WELO J1", format="%.0f"),
+                    "WELO_J2_Demo": st.column_config.NumberColumn("WELO J2", format="%.0f"),
+                    "Dif_WELO": st.column_config.NumberColumn("Dif WELO", format="%.0f"),
                     "Total_Esperado": st.column_config.NumberColumn("Total Esperado", format="%.2f"),
                     "Prob_Mais_21.5": st.column_config.NumberColumn("Prob >21.5 (%)", format="%.1f"),
-                    "Diferenca_Real_vs_Esperado": st.column_config.NumberColumn("Dif Real-Esperado", format="%.1f"),
                 }
             )
             
-            # Botões de download
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "📥 Download CSV",
-                    analysis_df.to_csv(index=False).encode('utf-8'),
-                    f"analise_tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    "text/csv"
-                )
-            with col2:
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    analysis_df.to_excel(writer, index=False)
-                output.seek(0)
-                st.download_button(
-                    "📊 Download Excel",
-                    output,
-                    f"analise_tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            
-            # Gráfico de distribuição
-            st.subheader("📈 Distribuição do Total de Games Esperado")
-            st.bar_chart(analysis_df['Total_Esperado'].value_counts().sort_index())
+            # Dicas para Over/Under
+            st.subheader("🎯 Recomendações")
+            for _, row in df.iterrows():
+                if row['Prob_Mais_21.5'] > 65:
+                    st.success(f"🔴 **{row['jogador_1']} vs {row['jogador_2']}** - {row['Prob_Mais_21.5']}% >21.5 (Total Esperado: {row['Total_Esperado']})")
+                elif row['Prob_Mais_21.5'] < 45:
+                    st.info(f"🔵 **{row['jogador_1']} vs {row['jogador_2']}** - {100-row['Prob_Mais_21.5']}% <21.5 (Total Esperado: {row['Total_Esperado']})")
 
 else:
     st.info("""
-    ### 📋 Como usar:
+    ### 🎾 Como usar esta demonstração:
     
-    1. **Carregue o ficheiro Challenger.xlsm** (dados WELO dos jogadores)
-    2. **Carregue o ficheiro CSV de partidas** (ATP/Challenger com resultados)
-    3. **Clique no botão** para analisar
+    **Nota:** Como a API está com erro 401 e não tem o ficheiro WELO, estou a usar **dados de demonstração**.
     
-    ### Formato esperado do CSV:
-    - `winner_name`: Nome do vencedor
-    - `loser_name`: Nome do perdedor  
-    - `surface`: Superfície (Clay, Hard, Grass, Indoor)
-    - `tourney_name`: Nome do torneio
-    - `score`: Placar (opcional)
-    - `T Games`: Total de games (opcional)
+    ### Para usar com dados reais:
+    
+    1. **Obter chave API válida** no RapidAPI:
+       - Crie conta em [RapidAPI](https://rapidapi.com/)
+       - Subscreva o plano gratuito do **SportScore1**
+       - Copie a chave API correta
+       
+    2. **Obter ficheiro WELO** (Challenger.xlsm):
+       - Este ficheiro contém os ratings ELO dos jogadores
+       - É essencial para os cálculos precisos
+       
+    ### Enquanto não tem os dados reais:
+    - Use esta demonstração para testar a lógica
+    - Os valores WELO são aproximados para exemplo
+    - A metodologia de cálculo é a mesma
     """)
 
-st.caption("🎾 Análise WELO • Estimativa de Total de Jogos • Probabilidade > 21.5")
+st.caption("🎾 Versão de Demonstração • Aguarda integração com API real e ficheiro WELO")
