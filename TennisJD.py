@@ -6,41 +6,21 @@ from playwright.async_api import async_playwright
 from io import BytesIO
 import unicodedata
 import subprocess
-import os
 
-# ====================== INSTALAÇÃO FORÇADA DO BROWSER ======================
+# ====================== INSTALAÇÃO DO PLAYWRIGHT ======================
 def install_playwright_browser():
     try:
-        st.info("🔧 Instalando Chromium do Playwright... (pode demorar 15-40 segundos na primeira vez)")
-        
-        # Comando mais completo e com dependências do sistema
-        result = subprocess.run(
-            ["playwright", "install", "chromium", "--with-deps"],
-            capture_output=True,
-            text=True,
-            timeout=180,   # 3 minutos de timeout
-            check=False
-        )
-        
-        if result.returncode == 0:
-            st.success("✅ Browser Chromium instalado com sucesso!")
-            return True
-        else:
-            st.warning(f"Aviso durante instalação: {result.stderr[-300:]}")  # mostra só o final
-            # Tenta uma segunda vez de forma mais simples
-            subprocess.run(["playwright", "install", "chromium"], timeout=120, check=False)
-            return True
-    except subprocess.TimeoutExpired:
-        st.error("Timeout durante instalação do browser. Tente novamente.")
-        return False
-    except Exception as e:
-        st.error(f"Erro na instalação: {e}")
+        with st.spinner("Instalando Chromium do Playwright (primeira vez pode demorar)..."):
+            subprocess.run(["playwright", "install", "chromium", "--with-deps"], 
+                         timeout=180, check=False, capture_output=True)
+        st.success("✅ Browser instalado!")
+        return True
+    except:
         return False
 
-# Executa a instalação assim que a app carrega
-if 'playwright_installed' not in st.session_state:
+if 'browser_installed' not in st.session_state:
     install_playwright_browser()
-    st.session_state.playwright_installed = True
+    st.session_state.browser_installed = True
 
 # ====================== CONFIGURAÇÃO ======================
 st.set_page_config(page_title="Tênis Hoje - WELO", page_icon="🎾", layout="wide")
@@ -78,36 +58,59 @@ df_welo = pd.DataFrame()
 if uploaded_file:
     df_welo = load_welo_data(uploaded_file)
 
-# ====================== FUNÇÃO WELO ======================
+# ====================== FUNÇÃO WELO MELHORADA ======================
 def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     if df_welo.empty or not jogador_nome:
         return 1484.0
     
-    clean_name = unicodedata.normalize('NFKD', str(jogador_nome)).encode('ascii', 'ignore').decode('utf-8')
-    clean_name = ''.join(filter(str.isalnum, clean_name.lower().strip()))
+    # Normaliza nome do FlashScore
+    clean_flash = unicodedata.normalize('NFKD', str(jogador_nome)).encode('ascii', 'ignore').decode('utf-8')
+    clean_flash = ''.join(filter(str.isalnum, clean_flash.lower().strip()))
     
-    if not clean_name:
+    if len(clean_flash) < 5:
         return 1484.0
     
-    mask = (
-        df_welo['Jogador_clean'].str.contains(clean_name, na=False) |
-        df_welo['Jogador_clean'].apply(lambda x: clean_name in str(x) if pd.notna(x) else False)
-    )
+    best_match = None
+    best_score = 0
     
-    match = df_welo[mask]
-    if match.empty:
+    for _, row in df_welo.iterrows():
+        clean_excel = row['Jogador_clean']
+        if not clean_excel:
+            continue
+        
+        score = 0
+        if clean_flash in clean_excel or clean_excel in clean_flash:
+            score = 100
+        elif len(clean_flash) > 6 and len(clean_excel) > 6:
+            common = len(set(clean_flash) & set(clean_excel))
+            if common > len(clean_flash) * 0.65:
+                score = 70
+        
+        if score > best_score:
+            best_score = score
+            best_match = row
+    
+    if best_score < 60 or best_match is None:
         return 1484.0
     
+    # Prioridade ao ELO da superfície
     surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
     col = surface_map.get(superficie.lower())
     
-    if col and col in match.columns:
-        val = match[col].iloc[0]
+    if col and col in best_match.index:
+        val = best_match[col]
         if pd.notna(val) and str(val).strip() != '':
             return round(float(val), 1)
     
+    # Fallback: média dos ELOs disponíveis
     elo_cols = ['ELO Hard', 'ELO Clay', 'ELO Grass', 'ELO Indoor']
-    values = [float(match[c].iloc[0]) for c in elo_cols if c in match.columns and pd.notna(match[c].iloc[0])]
+    values = []
+    for c in elo_cols:
+        if c in best_match.index:
+            v = best_match[c]
+            if pd.notna(v) and str(v).strip() != '':
+                values.append(float(v))
+    
     return round(sum(values) / len(values), 1) if values else 1484.0
 
 # ====================== DETEÇÃO DE SUPERFÍCIE ======================
@@ -127,13 +130,13 @@ async def get_flashscore_matches():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         )
         page = await browser.new_page()
         
         try:
             await page.goto("https://www.flashscore.pt/tenis/", timeout=60000)
-            await page.wait_for_timeout(9000)   # mais tempo para carregar
+            await page.wait_for_timeout(9000)
             
             try:
                 tab = await page.query_selector("text=Agendados")
@@ -174,12 +177,12 @@ async def get_flashscore_matches():
     
     return pd.DataFrame(matches)
 
-# ====================== BOTÃO ======================
+# ====================== EXECUÇÃO ======================
 if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Acedendo ao FlashScore e calculando WELO..."):
+        with st.spinner("Buscando partidas no FlashScore e calculando WELO..."):
             try:
                 df = asyncio.run(get_flashscore_matches())
                 
@@ -189,6 +192,7 @@ if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
                     
                     st.success(f"✅ {len(df)} partidas encontradas!")
                     
+                    # Mostrar tabela
                     st.dataframe(
                         df,
                         use_container_width=True,
@@ -204,24 +208,26 @@ if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
                         }
                     )
                     
+                    # Downloads
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
-                                          f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                        st.download_button("📥 Baixar CSV", 
+                                         df.to_csv(index=False).encode('utf-8'),
+                                         f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", 
+                                         "text/csv")
                     with col2:
                         output = BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False)
                         output.seek(0)
-                        st.download_button("📊 Excel", output, 
-                                          f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        st.download_button("📊 Baixar Excel", output, 
+                                         f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else:
                     st.warning("Nenhuma partida agendada encontrada.")
             except Exception as e:
                 st.error(f"Erro ao aceder ao FlashScore: {str(e)}")
-                st.info("Tente clicar no botão novamente em 10-20 segundos.")
 else:
-    st.info("Carregue o ficheiro na sidebar e clique no botão.")
+    st.info("Carregue o ficheiro Challenger.xlsm na barra lateral e clique no botão.")
 
-st.caption("Instalação automática do browser | Matching melhorado de nomes")
+st.caption("Matching de nomes melhorado | WELO por superfície")
