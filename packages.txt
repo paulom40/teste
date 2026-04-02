@@ -1,19 +1,2 @@
-# packages.txt - Versão corrigida para Streamlit Cloud (Debian Trixie 2026)
-libnss3
-libnspr4
-libatk1.0-0
-libatk-bridge2.0-0
-libcups2t64
-libdrm2
-libxkbcommon0
-libxcomposite1
-libxdamage1
-libxfixes3
-libxrandr2
-libgbm1
-libasound2t64
-libpango-1.0-0
-libcairo2
-libatspi2.0-0
-libxshmfence1
-fonts-liberation
+gcc
+python3-dev
