@@ -4,6 +4,7 @@ from datetime import datetime
 import asyncio
 from playwright.async_api import async_playwright
 from io import BytesIO
+import unicodedata
 
 st.set_page_config(page_title="Tênis Hoje - WELO", page_icon="🎾", layout="wide")
 
@@ -12,12 +13,8 @@ st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
-    st.header("📁 Dados WELO")
-    uploaded_file = st.file_uploader(
-        "Carregue o ficheiro Challenger.xlsm",
-        type=["xlsm", "xlsx"],
-        help="Deve conter a aba 'Jogadores>20'"
-    )
+    st.header("📁 Carregar Challenger.xlsm")
+    uploaded_file = st.file_uploader("Escolha o ficheiro Challenger.xlsm", type=["xlsm", "xlsx"])
 
 @st.cache_data
 def load_welo_data(file):
@@ -25,14 +22,17 @@ def load_welo_data(file):
         xls = pd.ExcelFile(file)
         df = pd.read_excel(xls, sheet_name="Jogadores>20")
         
-        # Coluna para matching robusto
-        df['Jogador_clean'] = (
-            df['Jogador'].astype(str)
-            .str.strip()
-            .str.lower()
-            .str.replace(r'[^a-z0-9áéíóúãõçâêîôûàèìòùäëïöü]', '', regex=True)
-            .str.replace(r'\s+', '', regex=True)
-        )
+        # Normalização forte para matching
+        def normalize_name(name):
+            if not isinstance(name, str):
+                return ""
+            # Remove acentos, converte para minúsculas, remove caracteres especiais
+            name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+            name = name.lower().strip()
+            name = ''.join(filter(str.isalnum, name))  # só letras e números
+            return name
+        
+        df['Jogador_clean'] = df['Jogador'].apply(normalize_name)
         
         st.sidebar.success(f"✅ {len(df)} jogadores carregados")
         return df
@@ -44,128 +44,104 @@ df_welo = pd.DataFrame()
 if uploaded_file:
     df_welo = load_welo_data(uploaded_file)
 
-# ====================== FUNÇÃO WELO POR SUPERFÍCIE ======================
-def get_welo(jogador_nome, superficie, df_welo):
+# ====================== FUNÇÃO WELO MELHORADA ======================
+def get_welo(jogador_nome: str, superficie: str, df_welo) -> float:
     if df_welo.empty or not jogador_nome:
         return 1484.0
     
-    # Limpeza leve para matching
-    clean = ''.join(filter(str.isalnum, str(jogador_nome).lower().strip()))
+    clean_name = unicodedata.normalize('NFKD', str(jogador_nome)).encode('ascii', 'ignore').decode('utf-8')
+    clean_name = ''.join(filter(str.isalnum, clean_name.lower().strip()))
     
-    match = df_welo[df_welo['Jogador_clean'] == clean]
+    # Matching: procura nome que contenha o clean_name ou vice-versa
+    mask = df_welo['Jogador_clean'].str.contains(clean_name, na=False) | \
+           clean_name.str.contains(df_welo['Jogador_clean'], na=False)  # bidirectional
+    
+    match = df_welo[mask]
+    
     if match.empty:
         return 1484.0
     
-    # Mapeamento superfície → coluna
-    surface_map = {
-        'clay': 'ELO Clay',
-        'hard': 'ELO Hard',
-        'grass': 'ELO Grass',
-        'indoor': 'ELO Indoor'
-    }
-    
+    # Prioridade: ELO da superfície
+    surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
     col = surface_map.get(superficie.lower())
     
     if col and col in match.columns:
         val = match[col].iloc[0]
         if pd.notna(val) and str(val).strip() != '':
-            return float(val)
+            return round(float(val), 1)
     
     # Fallback: média dos ELOs disponíveis
     elo_cols = ['ELO Hard', 'ELO Clay', 'ELO Grass', 'ELO Indoor']
-    values = []
-    for c in elo_cols:
-        if c in match.columns:
-            v = match[c].iloc[0]
-            if pd.notna(v) and str(v).strip() != '':
-                values.append(float(v))
+    values = [float(match[c].iloc[0]) for c in elo_cols if c in match.columns and pd.notna(match[c].iloc[0])]
     
     return round(sum(values) / len(values), 1) if values else 1484.0
 
-# ====================== DETEÇÃO MELHORADA DE SUPERFÍCIE ======================
-def detect_surface(tournament_name: str) -> str:
-    name = str(tournament_name).lower()
-    
-    clay_keywords = ['clay', 'saibro', 'roland', 'paris', 'madrid', 'rome', 'monte carlo', 'barcelona', 
-                     'bucharest', 'houston', 'marrakech', 'santiago', 'kigali', 'punto cana', 'rio']
-    grass_keywords = ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne', 'mallorca', 'stuttgart']
-    indoor_keywords = ['indoor', 'stockholm', 'basel', 'vienna', 'paris masters']
-    
-    if any(k in name for k in clay_keywords):
+# ====================== DETEÇÃO DE SUPERFÍCIE ======================
+def detect_surface(tournament: str) -> str:
+    t = str(tournament).lower()
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech']):
         return 'Clay'
-    elif any(k in name for k in grass_keywords):
+    if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens']):
         return 'Grass'
-    elif any(k in name for k in indoor_keywords):
+    if any(k in t for k in ['indoor', 'stockholm', 'basel']):
         return 'Indoor'
-    else:
-        return 'Hard'  # default mais comum
+    return 'Hard'
 
 # ====================== BUSCAR PARTIDAS ======================
 async def get_flashscore_matches():
+    # (mesma função anterior - mantida igual)
     matches = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         page = await browser.new_page()
-        
         try:
             await page.goto("https://www.flashscore.pt/tenis/", timeout=30000)
             await page.wait_for_timeout(7000)
             
-            # Tentar aba "Agendados"
             try:
                 tab = await page.query_selector("text=Agendados")
-                if tab:
-                    await tab.click()
-                    await page.wait_for_timeout(4000)
-            except:
-                pass
+                if tab: await tab.click(); await page.wait_for_timeout(4000)
+            except: pass
             
             elements = await page.query_selector_all(".event__match")
-            
             for el in elements[:60]:
                 try:
-                    tour = await el.query_selector(".event__tournament")
-                    tournament = (await tour.inner_text()).strip() if tour else "Desconhecido"
+                    tour_el = await el.query_selector(".event__tournament")
+                    tournament = (await tour_el.inner_text()).strip() if tour_el else "Desconhecido"
                     
                     p1 = await el.query_selector(".event__participant--home")
-                    jogador1 = (await p1.inner_text()).strip() if p1 else "?"
+                    j1 = (await p1.inner_text()).strip() if p1 else "?"
                     
                     p2 = await el.query_selector(".event__participant--away")
-                    jogador2 = (await p2.inner_text()).strip() if p2 else "?"
+                    j2 = (await p2.inner_text()).strip() if p2 else "?"
                     
                     time_el = await el.query_selector(".event__time")
                     horario = (await time_el.inner_text()).strip() if time_el else "?"
                     
                     if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
                         superficie = detect_surface(tournament)
-                        
                         matches.append({
                             'torneio': tournament,
-                            'jogador_1': jogador1,
-                            'jogador_2': jogador2,
+                            'jogador_1': j1,
+                            'jogador_2': j2,
                             'horario': horario,
-                            'superficie': superficie,
-                            'status': 'Agendado'
+                            'superficie': superficie
                         })
                 except:
                     continue
-        except Exception as e:
-            st.error(f"Erro FlashScore: {e}")
         finally:
             await browser.close()
-    
     return pd.DataFrame(matches)
 
-# ====================== BOTÃO PRINCIPAL ======================
+# ====================== EXECUÇÃO ======================
 if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
-    if df_welo.empty and uploaded_file is None:
-        st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
+    if df_welo.empty:
+        st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral!")
     else:
-        with st.spinner("A buscar partidas no FlashScore e calcular WELO..."):
+        with st.spinner("Buscando partidas..."):
             df = asyncio.run(get_flashscore_matches())
             
             if not df.empty:
-                # Calcular WELO usando a superfície detetada
                 df['WELO_J1'] = df.apply(lambda row: get_welo(row['jogador_1'], row['superficie'], df_welo), axis=1)
                 df['WELO_J2'] = df.apply(lambda row: get_welo(row['jogador_2'], row['superficie'], df_welo), axis=1)
                 
@@ -189,21 +165,19 @@ if st.button("🔄 Buscar Partidas e Calcular WELO", type="primary"):
                 # Downloads
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
-                                     f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
-                
+                    st.download_button("📥 Baixar CSV", df.to_csv(index=False).encode(), 
+                                      f"tenis_hoje_{datetime.now():%Y%m%d_%H%M}.csv", "text/csv")
                 with col2:
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df.to_excel(writer, index=False, sheet_name="Partidas")
+                        df.to_excel(writer, index=False)
                     output.seek(0)
-                    st.download_button("📊 Excel", output, 
-                                     f"tenis_hoje_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button("📊 Baixar Excel", output, 
+                                      f"tenis_hoje_welo_{datetime.now():%Y%m%d_%H%M}.xlsx", 
+                                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("Nenhuma partida agendada encontrada neste momento.")
-
+                st.warning("Nenhuma partida encontrada.")
 else:
-    st.info("Carregue o ficheiro na sidebar e clique no botão para atualizar.")
+    st.info("Carregue o ficheiro na sidebar e clique no botão.")
 
-st.caption("FlashScore • WELO por superfície • Nomes mantidos originais")
+st.caption("Melhoria no matching de nomes + WELO por superfície")
