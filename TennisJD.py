@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
-from bs4 import BeautifulSoup
 from io import BytesIO
 import unicodedata
-import re
+import time
 
 # ====================== CONFIGURAÇÃO ======================
 st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
@@ -13,10 +12,164 @@ st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", la
 st.title("🎾 Partidas de Tênis Hoje + WELO + Linha Total")
 st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
+# ====================== CONFIGURAÇÃO DA API ======================
+RAPIDAPI_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a4"
+RAPIDAPI_HOST = "sportscore1.p.rapidapi.com"
+
+# Cache para evitar muitas requisições
+@st.cache_data(ttl=300)  # Cache de 5 minutos
+def get_tennis_matches():
+    """
+    Busca partidas de ténis do dia atual via SportScore API
+    """
+    matches = []
+    
+    try:
+        # Data de hoje e próximos 7 dias
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Endpoint para buscar eventos de ténis (sport_id=2)
+        url = "https://sportscore1.p.rapidapi.com/api/v1/events"
+        
+        headers = {
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": RAPIDAPI_HOST,
+            "Content-Type": "application/json"
+        }
+        
+        # Parâmetros para filtrar ténis e partidas futuras
+        params = {
+            "sport_id": 2,  # 2 = Tennis
+            "page": 1,
+            "status": "not_started"  # Partidas não iniciadas
+        }
+        
+        st.info("🔄 Buscando partidas de ténis da API...")
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Processar os dados
+            if 'data' in data and isinstance(data['data'], list):
+                for event in data['data']:
+                    try:
+                        # Extrair informações da partida
+                        tournament = event.get('league', {}).get('name', 'Torneio Desconhecido')
+                        home_team = event.get('home_team', {}).get('name', '')
+                        away_team = event.get('away_team', {}).get('name', '')
+                        
+                        # Data e hora
+                        start_time = event.get('starting_at', '')
+                        horario = ''
+                        if start_time:
+                            try:
+                                dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                                horario = dt.strftime('%H:%M')
+                            except:
+                                horario = start_time
+                        
+                        # Verificar se tem ambos os jogadores
+                        if home_team and away_team:
+                            # Detectar superfície
+                            superficie = detect_surface(tournament)
+                            
+                            matches.append({
+                                'torneio': tournament,
+                                'jogador_1': home_team,
+                                'jogador_2': away_team,
+                                'horario': horario,
+                                'superficie': superficie,
+                                'status': event.get('status', 'Agendado')
+                            })
+                    except Exception as e:
+                        continue
+                
+                st.success(f"✅ Encontradas {len(matches)} partidas de ténis")
+            else:
+                st.warning("Nenhuma partida encontrada para hoje")
+        else:
+            st.error(f"Erro na API: {response.status_code}")
+            st.json(response.text if response.text else "Sem detalhes")
+            
+    except requests.exceptions.Timeout:
+        st.error("⏰ Timeout na requisição. A API demorou muito para responder.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Erro na requisição: {str(e)}")
+    except Exception as e:
+        st.error(f"❌ Erro inesperado: {str(e)}")
+    
+    return pd.DataFrame(matches)
+
+# ====================== FUNÇÃO PARA BUSCAR MAIS PARTIDAS ======================
+def get_more_matches():
+    """
+    Busca partidas de ténis de datas específicas
+    """
+    matches = []
+    
+    try:
+        # Buscar partidas dos próximos 7 dias
+        for i in range(7):
+            date = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
+            
+            url = f"https://sportscore1.p.rapidapi.com/api/v1/events/date/{date}"
+            
+            headers = {
+                "X-RapidAPI-Key": RAPIDAPI_KEY,
+                "X-RapidAPI-Host": RAPIDAPI_HOST
+            }
+            
+            params = {
+                "sport_id": 2  # Tennis
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if 'data' in data and isinstance(data['data'], list):
+                    for event in data['data']:
+                        try:
+                            tournament = event.get('league', {}).get('name', 'Torneio Desconhecido')
+                            home_team = event.get('home_team', {}).get('name', '')
+                            away_team = event.get('away_team', {}).get('name', '')
+                            
+                            if home_team and away_team:
+                                superficie = detect_surface(tournament)
+                                
+                                matches.append({
+                                    'torneio': tournament,
+                                    'jogador_1': home_team,
+                                    'jogador_2': away_team,
+                                    'horario': date,
+                                    'superficie': superficie,
+                                    'status': event.get('status', 'Agendado')
+                                })
+                        except:
+                            continue
+            
+            time.sleep(0.5)  # Evitar rate limiting
+            
+    except Exception as e:
+        st.error(f"Erro ao buscar mais partidas: {str(e)}")
+    
+    return pd.DataFrame(matches)
+
 # ====================== SIDEBAR ======================
 with st.sidebar:
     st.header("📁 Carregar Challenger.xlsm")
     uploaded_file = st.file_uploader("Escolha o ficheiro Challenger.xlsm", type=["xlsm", "xlsx"])
+    
+    st.markdown("---")
+    st.header("⚙️ Opções")
+    days_option = st.radio(
+        "Período das partidas:",
+        ["Hoje apenas", "Próximos 7 dias"],
+        help="Selecione 'Hoje apenas' para partidas do dia atual"
+    )
 
 @st.cache_data
 def load_welo_data(file):
@@ -109,90 +262,46 @@ def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
     total_esperado = max(18.5, min(27.0, total_esperado))  # limite realista
     
     # Probabilidade de Mais de 21.5
-    # Quanto mais próximo de 22.5, maior a probabilidade de ir acima
     prob_mais_21_5 = max(0.35, min(0.78, 0.5 + (total_esperado - 22.0) * 0.08))
     
     return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1)
 
-# ====================== FUNÇÃO PARA BUSCAR PARTIDAS ======================
+# ====================== FUNÇÃO DE SUPORTE ======================
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
-    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona']):
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'bucharest', 'houston', 'marrakech', 'rio', 'barcelona', 'monte carlo']):
         return 'Clay'
     if any(k in t for k in ['grass', 'wimbledon', 'halle', 'queens', 'eastbourne']):
         return 'Grass'
-    if any(k in t for k in ['indoor', 'stockholm', 'basel']):
+    if any(k in t for k in ['indoor', 'stockholm', 'basel', 'vienna']):
         return 'Indoor'
     return 'Hard'
 
-def get_flashscore_matches():
-    """
-    Versão alternativa usando requests + BeautifulSoup
-    Nota: FlashScore tem proteção anti-bot, então usamos uma API alternativa
-    """
-    matches = []
-    
-    # Opção 1: Usar API da FlashScore (não oficial)
-    # Esta é uma abordagem mais simples que pode funcionar
-    
-    try:
-        # Headers para simular um navegador
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # Tentar a versão mobile da FlashScore
-        url = "https://www.flashscore.com/tennis/"
-        response = requests.get(url, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Procurar por elementos de partidas (seletores podem mudar)
-            # Nota: FlashScore usa JavaScript, então isso pode não funcionar bem
-            
-            # Alternativa: Usar dados de exemplo para demonstração
-            st.warning("⚠️ O FlashScore tem proteção anti-bot. Usando dados de exemplo para demonstração.")
-            
-            # Dados de exemplo para demonstrar a funcionalidade
-            example_matches = [
-                {'torneio': 'ATP Masters 1000 Monte Carlo', 'jogador_1': 'Novak Djokovic', 'jogador_2': 'Carlos Alcaraz', 'horario': '14:00', 'superficie': 'Clay'},
-                {'torneio': 'WTA 500 Stuttgart', 'jogador_1': 'Iga Swiatek', 'jogador_2': 'Elena Rybakina', 'horario': '16:30', 'superficie': 'Clay'},
-                {'torneio': 'ATP 250 Houston', 'jogador_1': 'Ben Shelton', 'jogador_2': 'Frances Tiafoe', 'horario': '19:00', 'superficie': 'Clay'},
-                {'torneio': 'WTA 1000 Madrid', 'jogador_1': 'Coco Gauff', 'jogador_2': 'Jessica Pegula', 'horario': '21:00', 'superficie': 'Clay'},
-            ]
-            
-            for match in example_matches:
-                matches.append(match)
-        else:
-            st.error(f"Erro ao acessar FlashScore: {response.status_code}")
-            
-    except Exception as e:
-        st.error(f"Erro na requisição: {e}")
-        st.info("💡 Dica: O FlashScore bloqueia scraping direto. Considere usar uma API oficial ou fonte alternativa.")
-    
-    return pd.DataFrame(matches)
-
-# ====================== EXECUÇÃO ======================
+# ====================== EXECUÇÃO PRINCIPAL ======================
 if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary"):
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Buscando partidas e calculando WELO + Linha Total..."):
-            df = get_flashscore_matches()
+        with st.spinner("Buscando partidas da API e calculando WELO..."):
+            if days_option == "Hoje apenas":
+                df = get_tennis_matches()
+            else:
+                df = get_more_matches()
             
             if not df.empty:
+                # Calcular WELO para cada jogador
                 df['WELO_J1'] = df.apply(lambda row: get_welo(row['jogador_1'], row['superficie'], df_welo), axis=1)
                 df['WELO_J2'] = df.apply(lambda row: get_welo(row['jogador_2'], row['superficie'], df_welo), axis=1)
                 df['Dif_WELO'] = abs(df['WELO_J1'] - df['WELO_J2'])
                 
-                # Calcula linha total
+                # Calcular linha total
                 resultados = df.apply(lambda row: calcular_linha_total(row['WELO_J1'], row['WELO_J2'], row['superficie']), axis=1)
                 df['Total_Esperado'] = [r[0] for r in resultados]
                 df['Prob_Mais_21.5'] = [r[1] for r in resultados]
                 
                 st.success(f"✅ {len(df)} partidas analisadas!")
                 
+                # Mostrar tabela
                 st.dataframe(
                     df,
                     use_container_width=True,
@@ -203,6 +312,7 @@ if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary
                         "jogador_2": "🎾 Jogador 2",
                         "horario": "⏰ Horário",
                         "superficie": "🏟️ Superfície",
+                        "status": "📊 Status",
                         "WELO_J1": st.column_config.NumberColumn("WELO J1", format="%.1f"),
                         "WELO_J2": st.column_config.NumberColumn("WELO J2", format="%.1f"),
                         "Dif_WELO": st.column_config.NumberColumn("Dif WELO", format="%.1f"),
@@ -211,7 +321,7 @@ if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary
                     }
                 )
                 
-                # Downloads
+                # Botões de download
                 col1, col2 = st.columns(2)
                 with col1:
                     st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'), 
@@ -225,8 +335,8 @@ if st.button("🔄 Buscar Partidas + Calcular WELO + Linha Total", type="primary
                                       f"tenis_hoje_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("Nenhuma partida encontrada.")
+                st.warning("⚠️ Nenhuma partida encontrada. Verifique a sua conexão ou tente novamente mais tarde.")
 else:
-    st.info("Carregue o ficheiro na sidebar e clique no botão.")
+    st.info("📌 Carregue o ficheiro Challenger.xlsm na sidebar e clique no botão para buscar partidas reais de ténis da API.")
 
-st.caption("WELO por superfície • Estimativa de Total de Jogos • Probabilidade > 21.5")
+st.caption("🎾 Dados via SportScore API • WELO por superfície • Estimativa de Total de Jogos • Probabilidade > 21.5")
