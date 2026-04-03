@@ -6,11 +6,11 @@ from playwright.async_api import async_playwright
 from io import BytesIO
 import unicodedata
 import subprocess
-from difflib import SequenceMatcher  # Para fuzzy matching
+from difflib import SequenceMatcher
 
 # ====================== CONFIGURAÇÃO ======================
-st.set_page_config(page_title="Tênis Hoje - WELO + Total + AI", page_icon="🎾", layout="wide")
-st.title("🎾 Partidas de Tênis Hoje + WELO Melhorado + TennisPredictions.ai")
+st.set_page_config(page_title="Tênis Hoje - WELO Melhorado + AI", page_icon="🎾", layout="wide")
+st.title("🎾 Partidas de Tênis Hoje + WELO Blend + TennisPredictions.ai")
 st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
 
 # ====================== INSTALAÇÃO PLAYWRIGHT ======================
@@ -18,19 +18,16 @@ def install_playwright_browser():
     try:
         result = subprocess.run(
             ["playwright", "install", "chromium"],
-            timeout=240,
-            capture_output=True,
-            text=True,
-            check=False
+            timeout=240, capture_output=True, text=True, check=False
         )
         if result.returncode == 0:
-            st.sidebar.success("✅ Chromium instalado com sucesso")
+            st.sidebar.success("✅ Chromium instalado")
             return True
         else:
-            st.sidebar.warning("⚠️ Playwright instalou com avisos")
+            st.sidebar.warning("Playwright instalou com avisos")
             return False
     except Exception as e:
-        st.sidebar.error(f"Erro na instalação: {e}")
+        st.sidebar.error(f"Erro instalação: {e}")
         return False
 
 if 'browser_installed' not in st.session_state:
@@ -56,7 +53,7 @@ def load_welo_data(file):
             return name
         
         df['Jogador_clean'] = df['Jogador'].apply(normalize_name)
-        st.sidebar.success(f"✅ {len(df)} jogadores carregados do Excel")
+        st.sidebar.success(f"✅ {len(df)} jogadores carregados")
         return df
     except Exception as e:
         st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
@@ -66,9 +63,8 @@ df_welo = pd.DataFrame()
 if uploaded_file:
     df_welo = load_welo_data(uploaded_file)
 
-# ====================== FUNÇÃO WELO MELHORADA ======================
+# ====================== WELO MELHORADO ======================
 def get_welo(jogador_nome: str, superficie: str, df_welo) -> tuple[float, str]:
-    """Retorna (welo_final, fonte) com blend 60% superfície + 40% geral"""
     if df_welo.empty or not jogador_nome:
         return 1484.0, "Default"
 
@@ -83,21 +79,16 @@ def get_welo(jogador_nome: str, superficie: str, df_welo) -> tuple[float, str]:
 
     for _, row in df_welo.iterrows():
         clean_excel = row.get('Jogador_clean', "")
-        if not clean_excel:
-            continue
-        
-        # Fuzzy matching melhorado
+        if not clean_excel: continue
         similarity = SequenceMatcher(None, clean_flash, clean_excel).ratio()
         score = similarity * 100
-        
         if score > best_score:
             best_score = score
             best_match = row
 
-    if best_score < 55 or best_match is None:   # limiar mais flexível
+    if best_score < 55 or best_match is None:
         return 1484.0, "Default"
 
-    # ELO da superfície específica
     surface_map = {'clay': 'ELO Clay', 'hard': 'ELO Hard', 'grass': 'ELO Grass', 'indoor': 'ELO Indoor'}
     col_surface = surface_map.get(superficie.lower())
 
@@ -107,7 +98,6 @@ def get_welo(jogador_nome: str, superficie: str, df_welo) -> tuple[float, str]:
         if pd.notna(val) and str(val).strip():
             elo_surface = float(val)
 
-    # ELO geral (média)
     elo_cols = ['ELO Hard', 'ELO Clay', 'ELO Grass', 'ELO Indoor']
     values = [float(best_match[c]) for c in elo_cols if c in best_match.index and pd.notna(best_match[c])]
     elo_geral = round(sum(values) / len(values), 1) if values else 1484.0
@@ -117,13 +107,13 @@ def get_welo(jogador_nome: str, superficie: str, df_welo) -> tuple[float, str]:
         fonte = f"{superficie.capitalize()} (Blend)"
     else:
         welo_final = elo_geral
-        fonte = "Blended (Geral)"
+        fonte = "Blended"
 
     return welo_final, fonte
 
 # ====================== OUTRAS FUNÇÕES ======================
 def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
-    dif = abs(welo1 - welo2)
+    dif = abs(welo1 - welo2) if welo1 is not None and welo2 is not None else 0
     base_jogos = {'Clay': 22.8, 'Hard': 22.4, 'Grass': 21.9, 'Indoor': 22.6}.get(superficie, 22.5)
     ajuste_dif = -0.035 * dif
     total_esperado = max(18.5, min(27.0, base_jogos + ajuste_dif))
@@ -158,14 +148,13 @@ async def get_flashscore_matches():
         try:
             await page.goto("https://www.flashscore.pt/tenis/", timeout=90000)
             await page.wait_for_timeout(12000)
-           
             try:
                 tab = await page.query_selector("text=Agendados")
-                if tab: 
+                if tab:
                     await tab.click()
                     await page.wait_for_timeout(8000)
             except: pass
-           
+
             elements = await page.query_selector_all(".event__match")
             for el in elements[:80]:
                 try:
@@ -177,7 +166,7 @@ async def get_flashscore_matches():
                     j2 = (await p2.inner_text()).strip() if p2 else "?"
                     time_el = await el.query_selector(".event__time")
                     horario = (await time_el.inner_text()).strip() if time_el else "?"
-                   
+
                     if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
                         superficie = detect_surface(tournament)
                         matches.append({
@@ -208,9 +197,7 @@ async def get_tennispredictions_data():
             for row in rows[1:]:
                 try:
                     cells = await row.query_selector_all("td")
-                    if len(cells) < 3: 
-                        continue
-
+                    if len(cells) < 3: continue
                     matchup = (await cells[1].inner_text()).strip() if len(cells) > 1 else ""
                     prediction_text = (await cells[2].inner_text()).strip() if len(cells) > 2 else ""
 
@@ -227,20 +214,19 @@ async def get_tennispredictions_data():
                         'pred_vencedor': pred_vencedor,
                         'prob_ai': prob_ai
                     })
-                except:
-                    continue
+                except: continue
         finally:
             await browser.close()
     return pd.DataFrame(predictions)
 
-# ====================== PROCESSAMENTO PRINCIPAL ======================
+# ====================== PROCESSAMENTO ======================
 def process_matches(df_flash, df_pred, df_welo):
     if df_flash.empty:
         return pd.DataFrame()
 
     df = df_flash.copy()
 
-    # Merge com previsões AI
+    # Merge AI
     if not df_pred.empty:
         df['match_key'] = df.apply(lambda row: normalize_match_name(row['jogador_1'], row['jogador_2']), axis=1)
         df_pred['match_key'] = df_pred['matchup'].apply(
@@ -250,13 +236,14 @@ def process_matches(df_flash, df_pred, df_welo):
         df.rename(columns={'pred_vencedor': 'Pred_AI', 'prob_ai': 'Prob_AI_%'}, inplace=True)
         df.drop(columns=['match_key'], inplace=True, errors='ignore')
 
-    # Calcula WELO melhorado
-    df[['WELO_J1', 'Fonte_WELO_J1']] = df.apply(
-        lambda row: pd.Series(get_welo(row['jogador_1'], row['superficie'], df_welo)), axis=1
-    )
-    df[['WELO_J2', 'Fonte_WELO_J2']] = df.apply(
-        lambda row: pd.Series(get_welo(row['jogador_2'], row['superficie'], df_welo)), axis=1
-    )
+    # WELO com proteção contra None
+    def safe_welo(row):
+        w1, f1 = get_welo(row['jogador_1'], row['superficie'], df_welo)
+        w2, f2 = get_welo(row['jogador_2'], row['superficie'], df_welo)
+        return pd.Series([w1, f1, w2, f2])
+
+    df[['WELO_J1', 'Fonte_WELO_J1', 'WELO_J2', 'Fonte_WELO_J2']] = df.apply(safe_welo, axis=1)
+
     df['Dif_WELO'] = abs(df['WELO_J1'] - df['WELO_J2'])
 
     # Linha Total
@@ -264,24 +251,21 @@ def process_matches(df_flash, df_pred, df_welo):
     df['Total_Esperado'] = [r[0] for r in resultados]
     df['Prob_Mais_21.5'] = [r[1] for r in resultados]
 
-    # Probabilidade implícita WELO
+    # Probabilidades
     df['Prob_WELO_%'] = df.apply(
         lambda row: round(100 / (1 + 10**((row['WELO_J2'] - row['WELO_J1']) / 400)), 1) 
-        if pd.notna(row.get('WELO_J1')) and pd.notna(row.get('WELO_J2')) else None, axis=1
+        if pd.notna(row['WELO_J1']) and pd.notna(row['WELO_J2']) else 50.0, axis=1
     )
 
-    # Probabilidade Combinada (melhor modelo)
     df['Prob_Combined_%'] = df.apply(
         lambda row: round(0.62 * row.get('Prob_WELO_%', 50) + 0.38 * row.get('Prob_AI_%', 50), 1)
         if pd.notna(row.get('Prob_AI_%')) else row.get('Prob_WELO_%'), axis=1
     )
 
-    # Diferença e Value
     df['Dif_Prob'] = df.apply(
-        lambda row: round(row.get('Prob_AI_%', 0) - row.get('Prob_WELO_%', 0), 1) 
-        if pd.notna(row.get('Prob_AI_%')) else None, axis=1
+        lambda row: round(row.get('Prob_AI_%', 50) - row.get('Prob_WELO_%', 50), 1), axis=1
     )
-    
+
     df['Value'] = df.apply(
         lambda row: "🔥 HIGH VALUE" if abs(row.get('Dif_Prob', 0)) >= 12 else 
                    "✅ Bom Value" if abs(row.get('Dif_Prob', 0)) >= 7 else "", axis=1
@@ -294,7 +278,7 @@ if st.button("🔄 Buscar Partidas + WELO Melhorado + AI", type="primary"):
     if df_welo.empty:
         st.warning("⚠️ Carregue primeiro o ficheiro Challenger.xlsm na barra lateral.")
     else:
-        with st.spinner("Buscando Flashscore + TennisPredictions.ai + calculando modelo..."):
+        with st.spinner("Buscando dados e calculando modelo..."):
             try:
                 df_flash = asyncio.run(get_flashscore_matches())
                 df_pred = asyncio.run(get_tennispredictions_data())
@@ -304,9 +288,8 @@ if st.button("🔄 Buscar Partidas + WELO Melhorado + AI", type="primary"):
                 if df.empty:
                     st.warning("Nenhuma partida encontrada.")
                 else:
-                    st.success(f"✅ {len(df)} partidas analisadas | {df['Prob_AI_%'].notna().sum()} com previsão AI")
+                    st.success(f"✅ {len(df)} partidas analisadas")
 
-                    # Tabela com formatação condicional
                     st.dataframe(
                         df,
                         use_container_width=True,
@@ -327,28 +310,27 @@ if st.button("🔄 Buscar Partidas + WELO Melhorado + AI", type="primary"):
                             "Pred_AI": "🤖 Pred AI",
                             "Prob_AI_%": st.column_config.NumberColumn("Prob AI (%)", format="%.0f"),
                             "Prob_Combined_%": st.column_config.NumberColumn("Prob Combinada (%)", format="%.1f"),
-                            "Dif_Prob": st.column_config.NumberColumn("Dif Prob (AI-WELO)", format="%.1f"),
+                            "Dif_Prob": st.column_config.NumberColumn("Dif Prob", format="%.1f"),
                             "Value": "Value Bet",
                         }
                     )
 
-                    # Downloads
                     col1, col2 = st.columns(2)
                     with col1:
                         st.download_button("📥 CSV", df.to_csv(index=False).encode('utf-8'),
-                                          f"tenis_hoje_melhorado_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                                          f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
                     with col2:
                         output = BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False)
                         output.seek(0)
                         st.download_button("📊 Excel", output,
-                                          f"tenis_hoje_melhorado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                          f"tenis_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except Exception as e:
                 st.error(f"Erro durante o processamento: {e}")
 
 else:
-    st.info("Carregue o ficheiro Challenger.xlsm na sidebar e clique no botão.")
+    st.info("Carregue o ficheiro na sidebar e clique no botão.")
 
-st.caption("Modelo Melhorado: WELO Blend (60/40) • Probabilidade Combinada • Detecção de Value Bets")
+st.caption("WELO Blend 60/40 • Probabilidade Combinada • Detecção de Value Bets")
