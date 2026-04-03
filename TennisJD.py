@@ -5,6 +5,7 @@ import numpy as np
 import xgboost as xgb
 import requests
 import io
+import datetime as dt
 
 # -----------------------
 # CONFIG
@@ -45,7 +46,7 @@ def load_data_from_file(path: str, sheet_name: str):
     df.columns = [str(c).strip() for c in df.columns]
     if "tourney_date" in df.columns:
         df["tourney_date"] = pd.to_datetime(df["tourney_date"], format="%Y%m%d", errors="coerce")
-    if "T Games" not in df.columns:
+    if "T Games" not in df.columns and "score" in df.columns:
         df["T Games"] = df["score"].apply(total_games_from_score)
     return df
 
@@ -62,9 +63,23 @@ def load_data():
         df.columns = [str(c).strip() for c in df.columns]
         if "tourney_date" in df.columns:
             df["tourney_date"] = pd.to_datetime(df["tourney_date"], format="%Y%m%d", errors="coerce")
-        if "T Games" not in df.columns:
+        if "T Games" not in df.columns and "score" in df.columns:
             df["T Games"] = df["score"].apply(total_games_from_score)
         return df
+
+@st.cache_data
+def load_future_matches(path=DATA_FILE, sheet="Future_Matches"):
+    try:
+        df = pd.read_excel(path, sheet_name=sheet)
+    except Exception:
+        return pd.DataFrame()
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    if "match_date" in df.columns:
+        df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce").dt.date
+
+    return df
 
 def init_elo_dict():
     return {}
@@ -84,7 +99,11 @@ def compute_elo_by_surface(df, K_global: int, K_surface: int):
     elo_global = init_elo_dict()
     elo_surface = {}
 
-    df_sorted = df.sort_values("tourney_date")
+    if "tourney_date" in df.columns:
+        df_sorted = df.sort_values("tourney_date")
+    else:
+        df_sorted = df.copy()
+
     for _, row in df_sorted.iterrows():
         w = row["winner_name"]
         l = row["loser_name"]
@@ -119,13 +138,14 @@ def compute_service_return_elo(df, K: int):
     svc_elo = {}
     ret_elo = {}
 
-    def get_elo(d, p):
-        return d.get(p, 1500.0)
-
     def upd(d, p, delta):
         d[p] = d.get(p, 1500.0) + delta
 
-    df_sorted = df.sort_values("tourney_date")
+    if "tourney_date" in df.columns:
+        df_sorted = df.sort_values("tourney_date")
+    else:
+        df_sorted = df.copy()
+
     for _, row in df_sorted.iterrows():
         w = row["winner_name"]
         l = row["loser_name"]
@@ -195,6 +215,9 @@ def build_training_dataset(df, elo_global_df, elo_surface_df, svc_df, ret_df):
     base["service_elo_diff"] = base["w_service_elo"] - base["l_service_elo"]
     base["return_elo_diff"] = base["w_return_elo"] - base["l_return_elo"]
 
+    if "T Games" not in base.columns:
+        base["T Games"] = base["score"].apply(total_games_from_score)
+
     base["over_21_5"] = (base["T Games"] > 21.5).astype(int)
 
     feats = ["elo_global_diff", "elo_surface_diff", "service_elo_diff", "return_elo_diff"]
@@ -249,7 +272,57 @@ def predict_match(playerA, playerB, surface, model_over, feats,
     X = build_feature_row(playerA, playerB, surface, elo_global_df, elo_surface_df, svc_df, ret_df)
     dtest = xgb.DMatrix(X[feats], feature_names=feats)
     p_over = float(model_over.predict(dtest)[0])
-    return p_over, 1 - p_over
+    p_under = 1 - p_over
+    return p_over, p_under
+
+def win_prob_from_elo(playerA, playerB, surface, elo_global_df, elo_surface_df, alpha_surface=0.5):
+    eg = elo_global_df.set_index("player")["elo_global"]
+    es = elo_surface_df.set_index(["surface", "player"])["elo_surface"]
+
+    def get_es(surf, p):
+        try:
+            return es.loc[(surf, p)]
+        except KeyError:
+            return np.nan
+
+    Ra_g = eg.get(playerA, 1500)
+    Rb_g = eg.get(playerB, 1500)
+    Ra_s = get_es(surface, playerA)
+    Rb_s = get_es(surface, playerB)
+
+    if np.isnan(Ra_s) or np.isnan(Rb_s):
+        Ra = Ra_g
+        Rb = Rb_g
+    else:
+        Ra = (1 - alpha_surface) * Ra_g + alpha_surface * Ra_s
+        Rb = (1 - alpha_surface) * Rb_g + alpha_surface * Rb_s
+
+    pA = 1 / (1 + 10 ** ((Rb - Ra) / 400))
+    pB = 1 - pA
+    return pA, pB, Ra, Rb
+
+def predict_future_match(playerA, playerB, surface,
+                         model_over, feats,
+                         elo_global_df, elo_surface_df, svc_df, ret_df):
+
+    pA_win, pB_win, Ra, Rb = win_prob_from_elo(playerA, playerB, surface, elo_global_df, elo_surface_df)
+
+    X = build_feature_row(playerA, playerB, surface, elo_global_df, elo_surface_df, svc_df, ret_df)
+    dtest = xgb.DMatrix(X[feats], feature_names=feats)
+    p_over = float(model_over.predict(dtest)[0])
+    p_under = 1 - p_over
+
+    return {
+        "playerA": playerA,
+        "playerB": playerB,
+        "surface": surface,
+        "eloA": Ra,
+        "eloB": Rb,
+        "pA_win": pA_win,
+        "pB_win": pB_win,
+        "p_over": p_over,
+        "p_under": p_under,
+    }
 
 def call_sportscore_api():
     querystring = {
@@ -285,6 +358,7 @@ def call_sportscore_api():
 # -----------------------
 
 df = load_data()
+future_df = load_future_matches()
 
 st.title("Tennis JD – Elo, Serviço/Devolução e Over 21.5")
 
@@ -306,13 +380,17 @@ model_over, feats = train_models(df, elo_global_df, elo_surface_df, svc_df, ret_
 
 players = sorted(set(df["winner_name"]).union(set(df["loser_name"])))
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Ranking Elo por Superfície",
     "Elo Serviço & Devolução",
     "Comparar Jogadores & Over 21.5",
-    "Explorar Dados & Exportar"
+    "Explorar Dados & Exportar",
+    "Jogos Futuros (Hoje & Amanhã)"
 ])
 
+# -----------------------
+# TAB 1 – Elo por superfície
+# -----------------------
 with tab1:
     st.subheader("Ranking Elo por Superfície")
     surfaces = sorted(elo_surface_df["surface"].unique())
@@ -330,6 +408,9 @@ with tab1:
             use_container_width=True
         )
 
+# -----------------------
+# TAB 2 – Elo serviço/devolução
+# -----------------------
 with tab2:
     st.subheader("Elo de Serviço e Devolução")
     col1, col2 = st.columns(2)
@@ -348,6 +429,9 @@ with tab2:
     combo = svc_plot.join(ret_plot, how="outer")
     st.bar_chart(combo, use_container_width=True)
 
+# -----------------------
+# TAB 3 – Comparar jogadores & Over 21.5
+# -----------------------
 with tab3:
     st.subheader("Comparar 2 Jogadores e Prever Over 21.5")
 
@@ -403,6 +487,9 @@ with tab3:
             with col2:
                 st.metric("Prob. Under 21.5 jogos", f"{p_under*100:.1f}%")
 
+# -----------------------
+# TAB 4 – Explorar dados & exportar
+# -----------------------
 with tab4:
     st.subheader("Explorar dados históricos")
 
@@ -411,7 +498,10 @@ with tab4:
         surf_filter = st.multiselect("Superfície", sorted(df["surface"].unique()),
                                      default=list(sorted(df["surface"].unique())))
     with col2:
-        years = df["tourney_date"].dt.year.dropna().unique() if "tourney_date" in df.columns else []
+        if "tourney_date" in df.columns:
+            years = df["tourney_date"].dt.year.dropna().unique()
+        else:
+            years = []
         year_filter = st.multiselect("Ano", sorted(years), default=list(sorted(years)))
     with col3:
         player_filter = st.multiselect("Jogador (winner/loser)", players)
@@ -431,6 +521,9 @@ with tab4:
 
     st.markdown("---")
     st.subheader("Percentagem de jogos Over/Under 21.5 (dados filtrados)")
+
+    if "T Games" not in df_filt.columns and "score" in df_filt.columns:
+        df_filt["T Games"] = df_filt["score"].apply(total_games_from_score)
 
     df_filt = df_filt.dropna(subset=["T Games"])
     if len(df_filt) > 0:
@@ -461,3 +554,79 @@ with tab4:
         file_name="Challenger_Elo_ML_2026.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+# -----------------------
+# TAB 5 – Jogos futuros (hoje & amanhã) + ranking EV
+# -----------------------
+with tab5:
+    st.subheader("Jogos futuros – Hoje e Amanhã")
+
+    if future_df.empty:
+        st.info("Não existe sheet 'Future_Matches' ou está vazia.")
+    else:
+        today = dt.date.today()
+        tomorrow = today + dt.timedelta(days=1)
+
+        df_future = future_df[
+            (future_df["match_date"] >= today) &
+            (future_df["match_date"] <= tomorrow)
+        ].copy()
+
+        if df_future.empty:
+            st.info("Não há jogos para hoje ou amanhã.")
+        else:
+            rows = []
+            for _, row in df_future.iterrows():
+                res = predict_future_match(
+                    row["playerA"], row["playerB"], row["surface"],
+                    model_over, feats,
+                    elo_global_df, elo_surface_df, svc_df, ret_df
+                )
+                res["match_date"] = row["match_date"]
+
+                res["EV_winA"] = res["pA_win"] - 0.50
+                res["EV_winB"] = res["pB_win"] - 0.50
+                res["EV_over"] = res["p_over"] - 0.50
+                res["EV_under"] = res["p_under"] - 0.50
+
+                rows.append(res)
+
+            pred_df = pd.DataFrame(rows)
+
+            pred_df["pA_win_%"] = (pred_df["pA_win"] * 100).round(1)
+            pred_df["pB_win_%"] = (pred_df["pB_win"] * 100).round(1)
+            pred_df["p_over_%"] = (pred_df["p_over"] * 100).round(1)
+            pred_df["p_under_%"] = (pred_df["p_under"] * 100).round(1)
+
+            pred_df["EV_winA_%"] = (pred_df["EV_winA"] * 100).round(1)
+            pred_df["EV_winB_%"] = (pred_df["EV_winB"] * 100).round(1)
+            pred_df["EV_over_%"] = (pred_df["EV_over"] * 100).round(1)
+            pred_df["EV_under_%"] = (pred_df["EV_under"] * 100).round(1)
+
+            st.markdown("### 📊 Jogos futuros (probabilidades e EV)")
+            st.dataframe(
+                pred_df[
+                    ["match_date", "surface", "playerA", "playerB",
+                     "pA_win_%", "pB_win_%", "p_over_%", "p_under_%",
+                     "EV_winA_%", "EV_winB_%", "EV_over_%", "EV_under_%"]
+                ],
+                use_container_width=True
+            )
+
+            st.markdown("---")
+            st.markdown("### 🏆 Ranking de Valor Esperado (Top oportunidades)")
+
+            pred_df["EV_best"] = pred_df[
+                ["EV_winA", "EV_winB", "EV_over", "EV_under"]
+            ].max(axis=1)
+
+            ranking = pred_df.sort_values("EV_best", ascending=False).copy()
+            ranking["EV_best_%"] = (ranking["EV_best"] * 100).round(1)
+
+            st.dataframe(
+                ranking[
+                    ["match_date", "surface", "playerA", "playerB",
+                     "EV_best_%", "pA_win_%", "pB_win_%", "p_over_%", "p_under_%"]
+                ].head(15),
+                use_container_width=True
+            )
