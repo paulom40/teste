@@ -1,4 +1,3 @@
-# packages.txt - Corrigido para Playwright no Streamlit Cloud 2026
 libnss3
 libnspr4
 libatk1.0-0
