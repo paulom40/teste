@@ -1,150 +1,438 @@
 import streamlit as st
+import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import random
+import json
 
-# ====================== CONFIGURAÇÃO ======================
-st.set_page_config(page_title="Tênis Hoje - WELO + Total", page_icon="🎾", layout="wide")
+st.set_page_config(
+    page_title="ATP & Challenger Tennis - API",
+    page_icon="🎾",
+    layout="wide"
+)
 
-st.title("🎾 Partidas de Tênis Hoje + WELO + Linha Total")
-st.caption(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .stMetric {
+        background-color: #f0f2f6;
+        padding: 10px;
+        border-radius: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# ====================== SIDEBAR ======================
-with st.sidebar:
-    st.header("📁 Carregar Challenger.xlsm")
-    st.warning("⚠️ Como não tem o ficheiro WELO, a demonstração usa valores estimados")
-    
-    uploaded_file = st.file_uploader("Quando tiver o ficheiro, carregue aqui", type=["xlsm", "xlsx"])
+st.markdown('<p class="main-header">🎾 ATP & Challenger Tennis - Live Data</p>', unsafe_allow_html=True)
+st.markdown("**Powered by SportsScore API**")
 
-# ====================== DADOS DE DEMONSTRAÇÃO ======================
-@st.cache_data
-def get_demo_matches():
-    """Gera partidas de demonstração realistas"""
-    today = datetime.now()
+# API Configuration
+API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
+API_HOST = "sportscore1.p.rapidapi.com"
+BASE_URL = "https://sportscore1.p.rapidapi.com"
+
+@st.cache_data(ttl=1800)  # Cache por 30 minutos
+def get_tennis_sport_id():
+    """
+    Get the sport ID for tennis
+    """
+    url = f"{BASE_URL}/sports"
     
-    torneios = [
-        "ATP Masters 1000 Monte Carlo", "WTA 500 Stuttgart", "ATP 250 Houston",
-        "WTA 1000 Madrid", "ATP Challenger Oeiras", "ITF M15 Lisbon"
-    ]
+    headers = {
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": API_HOST
+    }
     
-    jogadores = [
-        ("Novak Djokovic", "Carlos Alcaraz", 1980, 1870),
-        ("Jannik Sinner", "Daniil Medvedev", 1950, 1850),
-        ("Iga Swiatek", "Elena Rybakina", 1930, 1820),
-        ("Coco Gauff", "Jessica Pegula", 1880, 1790),
-        ("Alexander Zverev", "Andrey Rublev", 1860, 1770),
-        ("Holger Rune", "Stefanos Tsitsipas", 1820, 1750),
-        ("Nuno Borges", "Arthur Fils", 1650, 1600),
-        ("João Sousa", "Gastao Elias", 1550, 1480)
-    ]
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            # Find tennis in the sports list
+            for sport in data.get('data', []):
+                if 'tennis' in sport.get('name', '').lower():
+                    return sport.get('id')
+            # If not found, tennis is usually sport_id = 5 or 2
+            return 5
+        return 5  # Default tennis ID
+    except Exception as e:
+        st.error(f"Erro ao obter sport ID: {e}")
+        return 5
+
+@st.cache_data(ttl=1800)
+def get_tennis_leagues():
+    """
+    Get ATP and Challenger leagues
+    """
+    sport_id = get_tennis_sport_id()
+    url = f"{BASE_URL}/leagues"
     
-    superficies = ['Clay', 'Hard', 'Clay', 'Hard', 'Clay', 'Hard', 'Clay', 'Hard']
+    headers = {
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": API_HOST
+    }
     
+    params = {
+        "sport_id": sport_id
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            leagues = []
+            
+            for league in data.get('data', []):
+                league_name = league.get('name', '')
+                # Filtrar apenas ATP e Challenger
+                if any(keyword in league_name for keyword in ['ATP', 'Challenger', 'Grand Slam']):
+                    leagues.append({
+                        'id': league.get('id'),
+                        'name': league_name,
+                        'country': league.get('country', {}).get('name', 'International')
+                    })
+            
+            return leagues
+        else:
+            st.error(f"Erro na API: {response.status_code}")
+            return []
+    except Exception as e:
+        st.error(f"Erro ao buscar ligas: {e}")
+        return []
+
+@st.cache_data(ttl=600)  # Cache por 10 minutos
+def get_tennis_events(league_id=None, date_start=None, date_end=None):
+    """
+    Get tennis events/matches
+    """
+    sport_id = get_tennis_sport_id()
+    url = f"{BASE_URL}/events/search"
+    
+    headers = {
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": API_HOST,
+        "Content-Type": "application/json"
+    }
+    
+    # Preparar parâmetros
+    params = {
+        "sport_id": sport_id,
+        "page": 1
+    }
+    
+    if league_id:
+        params["league_id"] = league_id
+    
+    if date_start:
+        params["date_start"] = date_start
+    
+    if date_end:
+        params["date_end"] = date_end
+    
+    try:
+        response = requests.post(url, headers=headers, params=params, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('data', [])
+        else:
+            st.warning(f"API Status: {response.status_code}")
+            st.write(f"Response: {response.text[:500]}")
+            return []
+            
+    except Exception as e:
+        st.error(f"Erro ao buscar eventos: {e}")
+        return []
+
+def parse_match_data(events):
+    """
+    Parse event data into readable format
+    """
     matches = []
-    for i, (j1, j2, elo1, elo2) in enumerate(jogadores):
-        # Horário progressivo
-        hora = 10 + i
-        minuto = random.choice([0, 30])
-        
-        matches.append({
-            'torneio': torneios[i % len(torneios)],
-            'jogador_1': j1,
-            'jogador_2': j2,
-            'horario': f"{hora:02d}:{minuto:02d}",
-            'superficie': superficies[i % len(superficies)],
-            'WELO_J1_Demo': elo1,
-            'WELO_J2_Demo': elo2
-        })
     
-    return pd.DataFrame(matches)
+    for event in events:
+        try:
+            match = {
+                'ID': event.get('id'),
+                'Liga': event.get('league', {}).get('name', 'N/A'),
+                'Torneio': event.get('tournament', {}).get('name', 'N/A'),
+                'Jogador_Casa': event.get('home_team', {}).get('name', 'N/A'),
+                'Jogador_Fora': event.get('away_team', {}).get('name', 'N/A'),
+                'Status': event.get('status', 'N/A'),
+                'Data': event.get('start_at', 'N/A'),
+                'Placar_Casa': event.get('home_score', {}).get('current', '-'),
+                'Placar_Fora': event.get('away_score', {}).get('current', '-'),
+                'Round': event.get('round', {}).get('name', 'N/A') if event.get('round') else 'N/A',
+            }
+            
+            # Adicionar odds se disponível
+            if event.get('odds'):
+                match['Odds_Casa'] = event.get('odds', {}).get('home', 'N/A')
+                match['Odds_Fora'] = event.get('odds', {}).get('away', 'N/A')
+            
+            matches.append(match)
+            
+        except Exception as e:
+            continue
+    
+    return matches
 
-# ====================== CÁLCULO DA LINHA TOTAL ======================
-def calcular_linha_total(welo1: float, welo2: float, superficie: str) -> tuple:
-    dif = abs(welo1 - welo2)
-    
-    base_jogos = {
-        'Clay': 22.8,
-        'Hard': 22.4,
-        'Grass': 21.9,
-        'Indoor': 22.6
-    }.get(superficie, 22.5)
-    
-    ajuste_dif = -0.035 * dif
-    total_esperado = base_jogos + ajuste_dif
-    total_esperado = max(18.5, min(27.0, total_esperado))
-    prob_mais_21_5 = max(0.35, min(0.78, 0.5 + (total_esperado - 22.0) * 0.08))
-    
-    return round(total_esperado, 2), round(prob_mais_21_5 * 100, 1)
+# Sidebar - Configurações
+st.sidebar.header("⚙️ Configurações")
 
-# ====================== EXECUÇÃO ======================
-if st.button("🔄 Buscar Partidas Hoje + Calcular Linha Total", type="primary"):
-    with st.spinner("Gerando partidas e calculando totais..."):
-        df = get_demo_matches()
+# Datas
+today = datetime.now()
+date_start = st.sidebar.date_input(
+    "Data Início",
+    value=today - timedelta(days=1),
+    max_value=today + timedelta(days=30)
+)
+
+date_end = st.sidebar.date_input(
+    "Data Fim",
+    value=today + timedelta(days=7),
+    max_value=today + timedelta(days=30)
+)
+
+# Botões de controle
+if st.sidebar.button("🔄 Atualizar Dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+auto_refresh = st.sidebar.checkbox("Auto-refresh (5 min)", value=False)
+
+# Informação da API
+with st.sidebar.expander("ℹ️ Info da API"):
+    st.write("**Status:** Conectada")
+    st.write(f"**Host:** {API_HOST}")
+    st.write(f"**Sport ID:** Tennis")
+    st.caption("API: SportsScore via RapidAPI")
+
+# Main Content
+st.markdown("---")
+
+# Métricas de topo
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("⏰ Última Atualização", datetime.now().strftime("%H:%M:%S"))
+with col2:
+    st.metric("📅 Período", f"{(date_end - date_start).days} dias")
+with col3:
+    st.metric("🔄 Status", "🟢 Ativa")
+
+st.markdown("---")
+
+# Buscar ligas
+with st.spinner("🔍 Buscando ligas de ténis..."):
+    leagues = get_tennis_leagues()
+
+if leagues:
+    st.success(f"✅ {len(leagues)} ligas encontradas")
+    
+    # Selector de liga
+    st.subheader("🏆 Selecionar Torneio")
+    
+    league_options = {f"{l['name']} ({l['country']})": l['id'] for l in leagues}
+    league_options = {"Todos os Torneios": None, **league_options}
+    
+    selected_league_name = st.selectbox(
+        "Escolha o torneio",
+        options=list(league_options.keys())
+    )
+    
+    selected_league_id = league_options[selected_league_name]
+    
+    # Buscar eventos
+    st.markdown("---")
+    st.subheader("🎾 Jogos")
+    
+    with st.spinner("📊 Carregando jogos..."):
+        events = get_tennis_events(
+            league_id=selected_league_id,
+            date_start=date_start.strftime("%Y-%m-%d"),
+            date_end=date_end.strftime("%Y-%m-%d")
+        )
+    
+    if events:
+        # Parse data
+        matches = parse_match_data(events)
         
-        if not df.empty:
-            # Calcular linha total
-            resultados = df.apply(
-                lambda row: calcular_linha_total(
-                    row['WELO_J1_Demo'], 
-                    row['WELO_J2_Demo'], 
-                    row['superficie']
-                ), axis=1
-            )
+        if matches:
+            df = pd.DataFrame(matches)
             
-            df['Total_Esperado'] = [r[0] for r in resultados]
-            df['Prob_Mais_21.5'] = [r[1] for r in resultados]
-            df['Dif_WELO'] = abs(df['WELO_J1_Demo'] - df['WELO_J2_Demo'])
+            # Estatísticas
+            st.markdown("### 📊 Estatísticas")
             
-            st.success(f"✅ {len(df)} partidas analisadas!")
+            metric_cols = st.columns(4)
+            with metric_cols[0]:
+                st.metric("Total de Jogos", len(df))
+            with metric_cols[1]:
+                tournaments = df['Torneio'].nunique()
+                st.metric("Torneios", tournaments)
+            with metric_cols[2]:
+                live_matches = len(df[df['Status'].str.contains('live|playing', case=False, na=False)])
+                st.metric("Ao Vivo", live_matches)
+            with metric_cols[3]:
+                upcoming = len(df[df['Status'].str.contains('not_started|scheduled', case=False, na=False)])
+                st.metric("Próximos", upcoming)
             
-            # Mostrar tabela
+            st.markdown("---")
+            
+            # Filtros adicionais
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                status_filter = st.multiselect(
+                    "Filtrar por Status",
+                    options=df['Status'].unique().tolist(),
+                    default=df['Status'].unique().tolist()
+                )
+            
+            with col2:
+                tournament_filter = st.multiselect(
+                    "Filtrar por Torneio",
+                    options=df['Torneio'].unique().tolist(),
+                    default=df['Torneio'].unique().tolist()
+                )
+            
+            # Aplicar filtros
+            filtered_df = df[
+                (df['Status'].isin(status_filter)) &
+                (df['Torneio'].isin(tournament_filter))
+            ]
+            
+            st.markdown("---")
+            
+            # Tabela de dados
+            st.markdown(f"### 📋 Dados dos Jogos ({len(filtered_df)} jogos)")
+            
+            # Formatar colunas para exibição
+            display_df = filtered_df[[
+                'Liga', 'Torneio', 'Jogador_Casa', 'Jogador_Fora',
+                'Placar_Casa', 'Placar_Fora', 'Status', 'Data', 'Round'
+            ]]
+            
             st.dataframe(
-                df,
+                display_df,
                 use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "torneio": "🏆 Torneio",
-                    "jogador_1": "🎾 Jogador 1",
-                    "jogador_2": "🎾 Jogador 2",
-                    "horario": "⏰ Horário",
-                    "superficie": "🏟️ Superfície",
-                    "WELO_J1_Demo": st.column_config.NumberColumn("WELO J1", format="%.0f"),
-                    "WELO_J2_Demo": st.column_config.NumberColumn("WELO J2", format="%.0f"),
-                    "Dif_WELO": st.column_config.NumberColumn("Dif WELO", format="%.0f"),
-                    "Total_Esperado": st.column_config.NumberColumn("Total Esperado", format="%.2f"),
-                    "Prob_Mais_21.5": st.column_config.NumberColumn("Prob >21.5 (%)", format="%.1f"),
-                }
+                height=400,
+                hide_index=True
             )
             
-            # Dicas para Over/Under
-            st.subheader("🎯 Recomendações")
-            for _, row in df.iterrows():
-                if row['Prob_Mais_21.5'] > 65:
-                    st.success(f"🔴 **{row['jogador_1']} vs {row['jogador_2']}** - {row['Prob_Mais_21.5']}% >21.5 (Total Esperado: {row['Total_Esperado']})")
-                elif row['Prob_Mais_21.5'] < 45:
-                    st.info(f"🔵 **{row['jogador_1']} vs {row['jogador_2']}** - {100-row['Prob_Mais_21.5']}% <21.5 (Total Esperado: {row['Total_Esperado']})")
+            # Seção de Downloads
+            st.markdown("---")
+            st.markdown("### 💾 Exportar Dados")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                csv = filtered_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv,
+                    file_name=f'tennis_atp_challenger_{datetime.now().strftime("%Y%m%d_%H%M")}.csv',
+                    mime='text/csv',
+                )
+            
+            with col2:
+                json_data = filtered_df.to_json(orient='records', indent=2)
+                st.download_button(
+                    label="📥 Download JSON",
+                    data=json_data,
+                    file_name=f'tennis_atp_challenger_{datetime.now().strftime("%Y%m%d_%H%M")}.json',
+                    mime='application/json',
+                )
+            
+            with col3:
+                # Dados completos (incluindo odds se houver)
+                full_json = json.dumps(events, indent=2)
+                st.download_button(
+                    label="📥 Dados Completos (JSON)",
+                    data=full_json,
+                    file_name=f'tennis_full_data_{datetime.now().strftime("%Y%m%d_%H%M")}.json',
+                    mime='application/json',
+                )
+            
+            # Ver dados brutos
+            with st.expander("🔍 Ver Dados Brutos da API"):
+                st.json(events[:3] if len(events) > 3 else events)
+        
+        else:
+            st.warning("⚠️ Não foi possível processar os dados dos eventos")
+            st.json(events[:2] if len(events) > 2 else events)
+    
+    else:
+        st.info("ℹ️ Nenhum jogo encontrado para o período selecionado")
+        st.write("Tente ajustar as datas ou selecionar outro torneio")
 
 else:
+    st.error("❌ Não foi possível carregar as ligas")
     st.info("""
-    ### 🎾 Como usar esta demonstração:
-    
-    **Nota:** Como a API está com erro 401 e não tem o ficheiro WELO, estou a usar **dados de demonstração**.
-    
-    ### Para usar com dados reais:
-    
-    1. **Obter chave API válida** no RapidAPI:
-       - Crie conta em [RapidAPI](https://rapidapi.com/)
-       - Subscreva o plano gratuito do **SportScore1**
-       - Copie a chave API correta
-       
-    2. **Obter ficheiro WELO** (Challenger.xlsm):
-       - Este ficheiro contém os ratings ELO dos jogadores
-       - É essencial para os cálculos precisos
-       
-    ### Enquanto não tem os dados reais:
-    - Use esta demonstração para testar a lógica
-    - Os valores WELO são aproximados para exemplo
-    - A metodologia de cálculo é a mesma
+    **Possíveis soluções:**
+    1. Verifique se a API key está correta
+    2. Confirme que você tem créditos disponíveis na RapidAPI
+    3. Tente novamente em alguns segundos
     """)
 
-st.caption("🎾 Versão de Demonstração • Aguarda integração com API real e ficheiro WELO")
+# Informações adicionais
+st.markdown("---")
+with st.expander("📖 Como Usar"):
+    st.markdown("""
+    ### Instruções:
+    
+    1. **Selecione as datas** na barra lateral
+    2. **Escolha um torneio** específico ou veja todos
+    3. **Filtre por status** (ao vivo, agendados, finalizados)
+    4. **Exporte os dados** em CSV ou JSON
+    
+    ### Tipos de Status:
+    - `not_started` / `scheduled` - Jogos agendados
+    - `live` / `playing` - Jogos ao vivo
+    - `finished` / `ended` - Jogos finalizados
+    - `postponed` - Jogos adiados
+    - `cancelled` - Jogos cancelados
+    
+    ### Dados Disponíveis:
+    - Liga e Torneio
+    - Jogadores (Casa vs Fora)
+    - Placar atual
+    - Status do jogo
+    - Data e hora
+    - Round/Fase
+    - Odds (quando disponível)
+    """)
+
+with st.expander("⚙️ Sobre a API"):
+    st.markdown("""
+    ### SportsScore API (RapidAPI)
+    
+    **Características:**
+    - ✅ Dados em tempo real
+    - ✅ Cobertura global de ténis
+    - ✅ ATP, Challenger, Grand Slams
+    - ✅ Estatísticas detalhadas
+    
+    **Limites:**
+    - Verifique seu plano no RapidAPI
+    - Free tier tem limite de requisições
+    - Cache de 10-30 minutos para otimizar
+    
+    **Endpoints utilizados:**
+    - `/sports` - Listar esportes
+    - `/leagues` - Listar ligas/torneios
+    - `/events/search` - Buscar jogos
+    """)
+
+# Footer
+st.markdown("---")
+st.caption("🎾 ATP & Challenger Tennis Scraper | Powered by SportsScore API")
+
+# Auto-refresh
+if auto_refresh:
+    import time
+    time.sleep(300)  # 5 minutos
+    st.rerun()
