@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
 
-tab1, tab2, tab3 = st.tabs(["📅 Partidas Hoje (Flashscore)", "🔍 Previsão Personalizada", "📈 Modeling Strategy"])
+tab1, tab2, tab3 = st.tabs(["📅 Partidas Hoje", "🔍 Previsão Personalizada", "📈 Recommended Modeling Strategy"])
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
@@ -21,7 +21,8 @@ with st.sidebar:
 # ====================== CARREGAR STATS ======================
 @st.cache_data
 def load_stats(file):
-    if not file: return pd.DataFrame()
+    if not file:
+        return pd.DataFrame()
     try:
         df = pd.read_excel(file)
         def norm(name):
@@ -30,7 +31,7 @@ def load_stats(file):
             return ''.join(filter(str.isalnum, n.lower().strip()))
         df['winner_clean'] = df['winner_name'].apply(norm)
         df['loser_clean'] = df['loser_name'].apply(norm)
-        st.sidebar.success(f"✅ {len(df)} jogos com stats carregados")
+        st.sidebar.success(f"✅ {len(df)} jogos carregados")
         return df
     except Exception as e:
         st.sidebar.error(f"Erro ao carregar: {e}")
@@ -38,12 +39,15 @@ def load_stats(file):
 
 df_stats = load_stats(uploaded_file)
 
-# ====================== MATCHING MELHORADO ======================
+# ====================== FUNÇÕES AUXILIARES ======================
+def norm(name):
+    if not isinstance(name, str): return ""
+    n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+    return ''.join(filter(str.isalnum, n.lower().strip()))
+
 def find_best_player_stats(player_name, df):
     if df.empty or not player_name: return pd.Series(dtype='object')
-    clean_name = unicodedata.normalize('NFKD', player_name).encode('ascii', 'ignore').decode('utf-8')
-    clean_name = ''.join(filter(str.isalnum, clean_name.lower().strip()))
-    
+    clean_name = norm(player_name)
     best_match = None
     best_score = 0.0
     for _, row in df.iterrows():
@@ -59,7 +63,6 @@ def find_best_player_stats(player_name, df):
                 best_match = row
     return best_match if best_score >= 60 else pd.Series(dtype='object')
 
-# ====================== PREDICTOR ======================
 def predict_from_stats(p1_stats, p2_stats, superficie="Hard"):
     def safe(v):
         try: return float(v) if pd.notna(v) else 0.0
@@ -100,6 +103,16 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard"):
         "BP_Saved_J1_%": round(safe(p1_stats.get('w_bpSaved',0)) / max(safe(p1_stats.get('w_bpFaced',1)), 1) * 100, 1),
     }
 
+def detect_surface(tournament: str) -> str:
+    t = str(tournament).lower()
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'heilbronn', 'perugia']):
+        return 'Clay'
+    if any(k in t for k in ['grass', 'birmingham']):
+        return 'Grass'
+    if any(k in t for k in ['indoor', 'cherbourg']):
+        return 'Indoor'
+    return 'Hard'
+
 # ====================== SCRAPING FLASHSCORE ======================
 async def get_flashscore_matches():
     matches = []
@@ -121,7 +134,7 @@ async def get_flashscore_matches():
             except: pass
 
             elements = await page.query_selector_all(".event__match")
-            for el in elements[:80]:
+            for el in elements[:70]:
                 try:
                     tour = await el.query_selector(".event__tournament")
                     tournament = (await tour.inner_text()).strip() if tour else "Desconhecido"
@@ -146,25 +159,15 @@ async def get_flashscore_matches():
             await browser.close()
     return pd.DataFrame(matches)
 
-def detect_surface(tournament: str) -> str:
-    t = str(tournament).lower()
-    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'heilbronn', 'perugia']):
-        return 'Clay'
-    if any(k in t for k in ['grass', 'birmingham']):
-        return 'Grass'
-    if any(k in t for k in ['indoor', 'cherbourg']):
-        return 'Indoor'
-    return 'Hard'
-
 # ====================== ABA 1 - PARTIDAS HOJE ======================
 with tab1:
-    st.header("Partidas de Hoje (Flashscore + Predictor)")
+    st.header("Partidas de Hoje + Previsão Automática")
 
-    if st.button("🔄 Buscar Partidas de Hoje + Fazer Previsões", type="primary"):
+    if st.button("🔄 Buscar Partidas do Flashscore + Calcular Previsões", type="primary"):
         if df_stats.empty:
-            st.error("Carregue primeiro o ficheiro Challenger1.xlsx")
+            st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx")
         else:
-            with st.spinner("Buscando partidas no Flashscore e calculando previsões..."):
+            with st.spinner("Buscando partidas e calculando..."):
                 df_flash = asyncio.run(get_flashscore_matches())
 
                 if df_flash.empty:
@@ -172,13 +175,18 @@ with tab1:
                 else:
                     results = []
                     for _, row in df_flash.iterrows():
-                        p1_stats = find_best_player_stats(row['jogador_1'], df_stats)
-                        p2_stats = find_best_player_stats(row['jogador_2'], df_stats)
+                        p1 = find_best_player_stats(row['jogador_1'], df_stats)
+                        p2 = find_best_player_stats(row['jogador_2'], df_stats)
 
-                        if not p1_stats.empty and not p2_stats.empty:
-                            pred = predict_from_stats(p1_stats, p2_stats, row['superficie'])
-                            results.append([pred["Prob_J1_%"], pred["Total_Esperado"], 
-                                          pred["Prob_Over_21.5_%"], pred["Serve_J1_%"], pred["BP_Saved_J1_%"]])
+                        if not p1.empty and not p2.empty:
+                            pred = predict_from_stats(p1, p2, row['superficie'])
+                            results.append([
+                                pred["Prob_J1_%"], 
+                                pred["Total_Esperado"], 
+                                pred["Prob_Over_21.5_%"],
+                                pred["Serve_J1_%"],
+                                pred["BP_Saved_J1_%"]
+                            ])
                         else:
                             results.append([None, None, None, None, None])
 
@@ -194,21 +202,56 @@ with tab1:
 # ====================== ABA 2 - PREVISÃO PERSONALIZADA ======================
 with tab2:
     st.header("🔍 Previsão Personalizada")
-    col1, col2 = st.columns(2)
-    with col1:
-        jogador_a = st.selectbox("Jogador A", options=player_list if 'player_list' in locals() else [], key="a")
-    with col2:
-        jogador_b = st.selectbox("Jogador B", options=player_list if 'player_list' in locals() else [], key="b")
-    
-    superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
 
-    if st.button("Calcular Previsão Personalizada", type="primary"):
-        result = predict_match(jogador_a, jogador_b, superficie)   # usa a mesma função
-        if result:
-            # (mostra resultado + botão exportar - igual à versão anterior)
+    if not player_list := pd.concat([df_raw['winner_name'], df_raw['loser_name']]).drop_duplicates().sort_values().tolist() if not df_raw.empty else []:
+        st.info("Carregue o ficheiro para ativar esta aba")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            jogador_a = st.selectbox("Jogador A", options=player_list, key="ja")
+        with col2:
+            jogador_b = st.selectbox("Jogador B", options=player_list, key="jb")
+
+        superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
+
+        if st.button("Calcular Previsão", type="primary"):
+            if jogador_a == jogador_b:
+                st.error("Escolha jogadores diferentes!")
+            else:
+                result = predict_match(jogador_a, jogador_b, superficie)  # função simplificada
+                if result:
+                    st.success("Previsão Calculada!")
+                    c1, c2 = st.columns(2)
+                    with c1: st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
+                    with c2: st.metric(f"{jogador_b} vence", f"{result['Prob_B_Vitória_%'] if 'Prob_B_Vitória_%' in result else 100-result['Prob_J1_%']}%")
+                    st.metric("Total Esperado", f"{result['Total_Esperado']} jogos")
+                    st.metric("Over 21.5", f"{result['Prob_Over_21.5_%']}%")
 
 # ====================== ABA 3 - MODELING STRATEGY ======================
 with tab3:
-    # (mantém a aba de Recommended Modeling Strategy que enviei anteriormente)
+    st.header("📈 Recommended Modeling Strategy")
+    st.markdown("""
+    ### Estratégia Recomendada para Modelar Tênis
 
-st.caption("Web scraping Flashscore + Predictor baseado em stats reais do Challenger1.xlsx")
+    **Para melhores resultados em Vitória + Total de Jogos (Over/Under 21.5):**
+
+    1. **Feature Engineering**
+       - Rank Difference, Points Difference
+       - Average Total Games (últimos 5-10 jogos)
+       - Serve % e Return % por superfície
+       - Break Points Saved / Faced
+
+    2. **Hybrid Modeling (Melhor Abordagem)**
+       - **Win Probability**: XGBoost ou Logistic Regression
+       - **Total Games**: Markov Chain Simulation ou Poisson Distribution
+       - **Combinação Final**: Ensemble dos dois modelos
+
+    3. **Validação**
+       - 10-fold Cross-Validation (time-based)
+       - Testar por superfície e nível de torneio
+
+    **Conclusão da comunidade:**
+    > Machine Learning é excelente para prever o vencedor, mas **Markov Chains** e simulações são atualmente as mais precisas para o mercado de Total de Jogos.
+    """)
+
+st.caption("Web scraping Flashscore + Predictor baseado em stats reais")
