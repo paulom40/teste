@@ -7,7 +7,6 @@ import unicodedata
 from difflib import SequenceMatcher
 import time
 import random
-import json
 
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
@@ -60,8 +59,7 @@ def get_random_headers():
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0'
     ]
     
     return {
@@ -74,13 +72,12 @@ def get_random_headers():
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
         'Cache-Control': 'max-age=0'
     }
 
 def random_delay():
     """Delay aleatório para evitar detecção"""
-    time.sleep(random.uniform(1.5, 3.5))
+    time.sleep(random.uniform(1.0, 2.5))
 
 def find_best_player_stats(player_name, df):
     if df.empty or not player_name: 
@@ -152,15 +149,14 @@ def detect_surface(tournament: str) -> str:
     return 'Hard'
 
 # ====================== SCRAPING MELHORADO ======================
-def get_matches_from_soft tennis():
+def get_matches_from_web():
     """Tenta obter partidas de múltiplas fontes"""
     
     # Lista de URLs para tentar
     urls = [
         "https://www.sofascore.com/tennis",
         "https://www.flashscore.com/tennis/",
-        "https://www.atptour.com/en/scores/current-results",
-        "https://www.tennis.com.au/tournaments/"
+        "https://www.atptour.com/en/scores/current-results"
     ]
     
     all_matches = []
@@ -313,13 +309,12 @@ with tab1:
             st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
         else:
             with st.spinner("Buscando partidas da web..."):
-                df_matches = get_matches_from_soft tennis()
+                df_matches = get_matches_from_web()
                 
                 if df_matches.empty:
                     st.warning("⚠️ Não foi possível obter partidas automaticamente.")
                     st.info("💡 Use uma das opções abaixo:\n- Clique em 'Usar Partidas Exemplo'\n- Ative 'Entrada Manual' no sidebar\n- Insira partidas manualmente abaixo")
                     
-                    # Mostrar opção de exemplo
                     if st.button("📊 Carregar exemplo agora"):
                         st.session_state.current_matches = get_predefined_matches()
                         st.rerun()
@@ -523,4 +518,4 @@ with tab3:
     - Adicione colunas: `surface`, `round`, `best_of`
     """)
 
-st.caption("🎾 Tênis Predictor Pro v2.0 • Sem dependências externas • Funciona no Streamlit Cloud")
+st.caption("🎾 Tênis Predictor Pro v2.0 • Corrigido • Sem dependências externas")
