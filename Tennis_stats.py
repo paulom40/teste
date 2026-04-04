@@ -477,3 +477,29 @@ with tab3:
     - Fator K = 32 para ajustes
     
     **2. Probabilidade de Vitória**
+    - Combinação de estatísticas de jogo (60%) e Elo rating (40%)
+    - Ajuste por superfície baseado em dados históricos
+    - Maior precisão em previsões
+    
+    **3. Total de Jogos**
+    - Cálculo baseado em probabilidade de hold de serviço
+    - Ajuste por superfície (Clay: +12%, Grass: -12%, etc)
+    - Estimativa de número de sets esperados
+    
+    **4. Over/Under 21.5**
+    - Baseado em distribuição normal (média histórica: 22.5 jogos)
+    - Desvio padrão: 4.2 jogos
+    - Probabilidades calibradas entre 15% e 85%
+    
+    ### 📊 Fatores por Superfície
+    - **Clay**: Jogos mais longos, maior vantagem para especialistas
+    - **Hard**: Superfície neutra, estatísticas balanceadas
+    - **Grass**: Jogos mais rápidos, maior importância do serviço
+    - **Indoor**: Condições controladas, ligeiro boost para servidor
+    
+    ### 🔧 Melhorias Futuras
+    - Histórico de confrontos diretos (H2H)
+    - Forma recente dos jogadores (últimos 5 jogos)
+    - Fatores de fadiga e lesões
+    - Condições meteorológicas
+    """)
