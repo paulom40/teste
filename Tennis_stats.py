@@ -6,8 +6,9 @@ from datetime import datetime
 import unicodedata
 from difflib import SequenceMatcher
 from io import BytesIO
+import time
 
-st.set_page_config(page_title="Tênis Predictor", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
 
 tab1, tab2, tab3 = st.tabs(["📅 Partidas Hoje", "🔍 Previsão Personalizada", "📈 Modeling Strategy"])
@@ -113,65 +114,83 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== SCRAPING LEVE (BeautifulSoup + requests) ======================
+# ====================== SCRAPING LEVE (Melhorado) ======================
 def get_flashscore_matches():
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "pt-PT,pt;q=0.9,en;q=0.8",
+            "Referer": "https://www.flashscore.pt/"
         }
-        response = requests.get("https://www.flashscore.pt/tenis/", headers=headers, timeout=15)
+
+        response = requests.get("https://www.flashscore.pt/tenis/", headers=headers, timeout=20)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.text, 'html.parser')
         matches = []
 
-        # Encontrar os jogos agendados
         events = soup.find_all("div", class_="event__match")
-        for event in events[:70]:
+        
+        for event in events[:80]:
             try:
-                tournament = event.find("div", class_="event__tournament")
-                tournament_name = tournament.get_text(strip=True) if tournament else "Desconhecido"
+                # Torneio
+                tour = event.find("div", class_="event__tournament")
+                tournament = tour.get_text(strip=True) if tour else "Desconhecido"
 
-                j1 = event.find("div", class_="event__participant--home")
-                jogador1 = j1.get_text(strip=True) if j1 else "?"
+                # Jogadores
+                p1 = event.find("div", class_="event__participant--home")
+                j1 = p1.get_text(strip=True) if p1 else "?"
 
-                j2 = event.find("div", class_="event__participant--away")
-                jogador2 = j2.get_text(strip=True) if j2 else "?"
+                p2 = event.find("div", class_="event__participant--away")
+                j2 = p2.get_text(strip=True) if p2 else "?"
 
+                # Horário
                 time_el = event.find("div", class_="event__time")
                 horario = time_el.get_text(strip=True) if time_el else "?"
 
-                if horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
-                    superficie = detect_surface(tournament_name)
+                if horario and horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
+                    superficie = detect_surface(tournament)
                     matches.append({
-                        'torneio': tournament_name,
-                        'jogador_1': jogador1,
-                        'jogador_2': jogador2,
+                        'torneio': tournament,
+                        'jogador_1': j1,
+                        'jogador_2': j2,
                         'horario': horario,
                         'superficie': superficie
                     })
             except:
                 continue
 
+        if not matches:
+            st.warning("Não foi possível extrair partidas. O site pode ter mudado a estrutura.")
+        
         return pd.DataFrame(matches)
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro de conexão com Flashscore: {e}")
+        st.info("Tenta novamente em alguns minutos ou usa a aba 'Previsão Personalizada'")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro no scraping: {e}")
+        st.error(f"Erro inesperado no scraping: {e}")
         return pd.DataFrame()
 
 # ====================== ABA 1 - PARTIDAS HOJE ======================
 with tab1:
     st.header("Partidas de Hoje + Previsão Automática")
 
-    if st.button("🔄 Buscar Partidas do Flashscore + Calcular", type="primary"):
+    if st.button("🔄 Buscar Partidas do Flashscore + Calcular Previsões", type="primary"):
         if df_stats.empty:
-            st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx")
+            st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
         else:
-            with st.spinner("Buscando partidas..."):
+            with st.spinner("A tentar obter partidas do Flashscore..."):
                 df_flash = get_flashscore_matches()
 
                 if df_flash.empty:
-                    st.warning("Não foi possível obter partidas. Tenta novamente.")
+                    st.warning("Não foi possível obter as partidas automaticamente.")
+                    st.info("Podes usar a aba 'Previsão Personalizada' para fazer previsões manuais.")
                 else:
+                    st.success(f"✅ {len(df_flash)} partidas encontradas")
+
                     results = []
                     for _, row in df_flash.iterrows():
                         p1 = find_best_player_stats(row['jogador_1'], df_stats)
@@ -179,18 +198,28 @@ with tab1:
 
                         if not p1.empty and not p2.empty:
                             pred = predict_from_stats(p1, p2, row['superficie'])
-                            results.append([pred["Prob_J1_%"], pred["Total_Esperado"], 
-                                          pred["Prob_Over_21.5_%"], pred["Serve_J1_%"], pred["BP_Saved_J1_%"]])
+                            results.append([
+                                pred["Prob_J1_%"], 
+                                pred["Total_Esperado"], 
+                                pred["Prob_Over_21.5_%"],
+                                pred["Serve_J1_%"],
+                                pred["BP_Saved_J1_%"]
+                            ])
                         else:
                             results.append([None, None, None, None, None])
 
                     df_flash[['Prob_J1_%', 'Total_Esperado', 'Prob_Over_21.5_%', 'Serve_J1_%', 'BP_Saved_J1_%']] = pd.DataFrame(results)
 
-                    st.success(f"✅ {len(df_flash)} partidas analisadas")
                     st.dataframe(df_flash, use_container_width=True, hide_index=True)
 
+                    # Download
                     csv = df_flash.to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 Exportar CSV", csv, f"previsoes_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                    st.download_button(
+                        "📥 Exportar CSV", 
+                        csv, 
+                        f"previsoes_hoje_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", 
+                        "text/csv"
+                    )
 
 # ====================== ABA 2 - PREVISÃO PERSONALIZADA ======================
 with tab2:
@@ -217,7 +246,7 @@ with tab2:
                 p2 = find_best_player_stats(jogador_b, df_stats)
 
                 if p1.empty or p2.empty:
-                    st.error("Não foi possível encontrar stats suficientes.")
+                    st.error("Não foi possível encontrar stats para um dos jogadores.")
                 else:
                     result = predict_from_stats(p1, p2, superficie)
                     st.success("Previsão Calculada!")
@@ -225,7 +254,7 @@ with tab2:
                     with c1:
                         st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
                     with c2:
-                        st.metric(f"{jogador_b} vence", f"{result['Prob_Under_21.5_%'] if 'Prob_Under_21.5_%' in result else 100 - result['Prob_J1_%']}%")
+                        st.metric(f"{jogador_b} vence", f"{100 - result['Prob_J1_%']}%")
                     st.metric("Total Esperado", f"{result['Total_Esperado']} jogos")
                     st.metric("Over 21.5", f"{result['Prob_Over_21.5_%']}%")
 
@@ -236,19 +265,16 @@ with tab3:
     ### Estratégia Recomendada
 
     1. **Feature Engineering**
-       - Rank Difference, Points Difference
-       - Average Total Games (últimos jogos)
+       - Rank Difference
+       - Average Total Games
        - Serve % e Return % por superfície
 
     2. **Modelo Híbrido**
        - Vitória → XGBoost / Logistic Regression
        - Total Jogos → Markov Chain Simulation
 
-    3. **Validação**
-       - 10-fold Cross-Validation
-
     **Melhor prática atual:**
     Machine Learning para vencedor + **Markov Chains** para Total de Jogos.
     """)
 
-st.caption("Versão leve com BeautifulSoup + requests")
+st.caption("Versão com scraping leve (BeautifulSoup) • Baseado no teu ficheiro Challenger1.xlsx")
