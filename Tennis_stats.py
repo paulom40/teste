@@ -5,73 +5,74 @@ import unicodedata
 from difflib import SequenceMatcher
 from io import BytesIO
 
-st.set_page_config(page_title="Tênis Predictor - Stats", page_icon="🎾", layout="wide")
-st.title("🎾 Predictor de Tênis por Stats Reais")
-st.caption("Baseado no ficheiro Challenger1.xlsx")
+st.set_page_config(page_title="Tênis Predictor", page_icon="🎾", layout="wide")
+st.title("🎾 Predictor de Tênis - Escolha Jogadores")
+
+tab1, tab2 = st.tabs(["📊 Todos os Jogos", "🔍 Previsão Personalizada"])
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
     st.header("📁 Carregar Challenger1.xlsx")
     uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
 
-# ====================== CARREGAR E PROCESSAR DADOS ======================
+# ====================== CARREGAR DADOS ======================
 @st.cache_data
-def load_and_process_data(file):
+def load_data(file):
     if not file:
         return pd.DataFrame()
-    
     try:
         df = pd.read_excel(file)
         
-        # Normalização de nomes
         def norm(name):
-            if not isinstance(name, str): 
-                return ""
+            if not isinstance(name, str): return ""
             n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
             return ''.join(filter(str.isalnum, n.lower().strip()))
         
         df['winner_clean'] = df['winner_name'].apply(norm)
         df['loser_clean'] = df['loser_name'].apply(norm)
         
-        st.sidebar.success(f"✅ {len(df)} jogos carregados com stats detalhadas")
-        return df
+        # Lista única de jogadores para seleção
+        all_players = pd.concat([
+            df['winner_name'], 
+            df['loser_name']
+        ]).drop_duplicates().sort_values().tolist()
+        
+        st.sidebar.success(f"✅ {len(df)} jogos | {len(all_players)} jogadores únicos")
+        return df, all_players
     except Exception as e:
-        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
-        return pd.DataFrame()
+        st.sidebar.error(f"Erro: {e}")
+        return pd.DataFrame(), []
 
-df_raw = load_and_process_data(uploaded_file)
+df_raw, player_list = load_data(uploaded_file)
 
 # ====================== PREDICTOR ======================
-def predict_from_row(row, superficie):
+def predict_match(jogador_a, jogador_b, superficie="Hard"):
+    if df_raw.empty:
+        return None
+    
+    def norm(name):
+        if not isinstance(name, str): return ""
+        n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+        return ''.join(filter(str.isalnum, n.lower().strip()))
+    
+    # Encontrar stats do Jogador A e B
+    p1_stats = find_best_player_stats(jogador_a, df_raw)
+    p2_stats = find_best_player_stats(jogador_b, df_raw)
+    
+    if p1_stats.empty or p2_stats.empty:
+        return None
+    
     def safe(v):
         try: return float(v) if pd.notna(v) else 0.0
         except: return 0.0
 
-    # Stats do Winner (Jogador 1)
-    p1 = {
-        'w_svpt': safe(row.get('w_svpt')),
-        'w_1stWon': safe(row.get('w_1stWon')),
-        'w_2ndWon': safe(row.get('w_2ndWon')),
-        'w_bpSaved': safe(row.get('w_bpSaved')),
-        'w_bpFaced': safe(row.get('w_bpFaced'))
-    }
-    
-    # Stats do Loser (Jogador 2)
-    p2 = {
-        'w_svpt': safe(row.get('l_svpt')),
-        'w_1stWon': safe(row.get('l_1stWon')),
-        'w_2ndWon': safe(row.get('l_2ndWon')),
-        'w_bpSaved': safe(row.get('l_bpSaved')),
-        'w_bpFaced': safe(row.get('l_bpFaced'))
-    }
-
     def serve_win(stats):
-        svpt = stats['w_svpt']
+        svpt = safe(stats.get('w_svpt', 0))
         if svpt == 0: return 0.65
-        return (stats['w_1stWon'] + stats['w_2ndWon']) / svpt
+        return (safe(stats.get('w_1stWon', 0)) + safe(stats.get('w_2ndWon', 0))) / svpt
 
-    serve1 = serve_win(p1)
-    serve2 = serve_win(p2)
+    serve1 = serve_win(p1_stats)
+    serve2 = serve_win(p2_stats)
     return1 = 1 - serve2
     return2 = 1 - serve1
 
@@ -81,7 +82,7 @@ def predict_from_row(row, superficie):
     surface_factor = {'Clay': 1.08, 'Hard': 1.0, 'Grass': 0.93, 'Indoor': 1.02}.get(superficie, 1.0)
 
     diff = (p1_point_win - p2_point_win) * 100
-    prob_p1_win = 1 / (1 + 10 ** (-diff / 38))
+    prob_a_win = 1 / (1 + 10 ** (-diff / 38))
 
     hold1 = serve1 ** 1.85
     hold2 = serve2 ** 1.85
@@ -90,71 +91,107 @@ def predict_from_row(row, superficie):
     total_esperado = round(games_per_set * 2.15 * surface_factor, 2)
 
     prob_over = max(0.38, min(0.78, 0.5 + (total_esperado - 21.5) * 0.085))
+    prob_under = 100 - prob_over
 
     return {
-        "Jogador_1": row['winner_name'],
-        "Jogador_2": row['loser_name'],
+        "Jogador_A": jogador_a,
+        "Jogador_B": jogador_b,
         "Superficie": superficie,
-        "Prob_J1_%": round(prob_p1_win * 100, 1),
+        "Prob_A_Vitória_%": round(prob_a_win * 100, 1),
+        "Prob_B_Vitória_%": round(100 - prob_a_win * 100, 1),
         "Total_Esperado": total_esperado,
-        "Prob_Over_21.5_%": round(prob_over * 100, 1),
-        "Serve_J1_%": round(serve1 * 100, 1),
-        "BP_Saved_J1_%": round(safe(p1['w_bpSaved']) / max(safe(p1['w_bpFaced']), 1) * 100, 1),
-        "Score": row.get('score', ''),
-        "Round": row.get('round', '')
+        "Prob_Over_21.5_%": round(prob_over, 1),
+        "Prob_Under_21.5_%": round(prob_under, 1),
+        "Serve_A_%": round(serve1 * 100, 1),
+        "BP_Saved_A_%": round(safe(p1_stats.get('w_bpSaved',0)) / max(safe(p1_stats.get('w_bpFaced',1)), 1) * 100, 1),
     }
 
-# ====================== EXECUÇÃO ======================
-if df_raw.empty:
-    st.info("👆 Carregue o ficheiro Challenger1.xlsx na barra lateral para começar.")
-else:
-    st.success(f"Ficheiro carregado com {len(df_raw)} jogos")
+def find_best_player_stats(player_name, df):
+    clean_name = norm(player_name)
+    best_match = None
+    best_score = 0.0
 
-    # Filtro por superfície
-    surfaces = df_raw['surface'].dropna().unique().tolist()
-    selected_surface = st.selectbox("Filtrar por Superfície", options=["Todas"] + surfaces)
+    for _, row in df.iterrows():
+        for col in ['winner_clean', 'loser_clean']:
+            clean_db = row.get(col, "")
+            if not clean_db: continue
+            similarity = SequenceMatcher(None, clean_name, clean_db).ratio()
+            if clean_name in clean_db or clean_db in clean_name:
+                similarity = max(similarity, 0.95)
+            score = similarity * 100
+            if score > best_score:
+                best_score = score
+                best_match = row
+    return best_match if best_score >= 60 else pd.Series(dtype='object')
 
-    if selected_surface != "Todas":
-        df_filtered = df_raw[df_raw['surface'] == selected_surface].copy()
-    else:
-        df_filtered = df_raw.copy()
+def norm(name):
+    if not isinstance(name, str): return ""
+    n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+    return ''.join(filter(str.isalnum, n.lower().strip()))
 
-    # Calcular previsões
-    if st.button("🚀 Calcular Predictor para todos os jogos", type="primary"):
-        with st.spinner("A aplicar predictor em todos os jogos..."):
-            predictions = []
-            for _, row in df_filtered.iterrows():
-                pred = predict_from_row(row, row.get('surface', 'Hard'))
-                predictions.append(pred)
-            
-            result_df = pd.DataFrame(predictions)
-            
-            # Ordenar por probabilidade mais alta
-            result_df = result_df.sort_values(by="Prob_J1_%", ascending=False)
+# ====================== ABA 1 - TODOS OS JOGOS ======================
+with tab1:
+    st.header("Todos os Jogos")
+    if not df_raw.empty:
+        if st.button("Calcular para todos os jogos"):
+            # (podes manter ou remover esta parte)
+            st.info("Funcionalidade disponível na aba 'Previsão Personalizada'")
 
-            st.success(f"✅ Previsões calculadas para {len(result_df)} jogos")
-            
-            st.dataframe(
-                result_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Prob_J1_%": st.column_config.NumberColumn("Probabilidade J1 (%)", format="%.1f"),
-                    "Total_Esperado": st.column_config.NumberColumn("Total Esperado", format="%.2f"),
-                    "Prob_Over_21.5_%": st.column_config.NumberColumn("Over 21.5 (%)", format="%.1f"),
-                    "Serve_J1_%": st.column_config.NumberColumn("Serve J1 (%)", format="%.1f"),
-                    "BP_Saved_J1_%": st.column_config.NumberColumn("BP Saved J1 (%)", format="%.1f"),
-                }
-            )
+# ====================== ABA 2 - PREVISÃO PERSONALIZADA ======================
+with tab2:
+    st.header("🔍 Previsão Personalizada")
+    st.write("Selecione os dois jogadores e a superfície")
 
-            # Download
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "📥 Download CSV",
-                    result_df.to_csv(index=False).encode('utf-8'),
-                    f"predictor_tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    "text/csv"
-                )
+    col1, col2 = st.columns(2)
+    with col1:
+        jogador_a = st.selectbox("Jogador A", options=player_list, key="ja")
+    with col2:
+        jogador_b = st.selectbox("Jogador B", options=player_list, key="jb")
 
-st.caption("Predictor baseado em stats reais (serve, return, break points) • Superfície considerada")
+    superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"], index=0)
+
+    if st.button("🚀 Calcular Previsão", type="primary"):
+        if jogador_a == jogador_b:
+            st.error("Selecione dois jogadores diferentes!")
+        else:
+            with st.spinner("Calculando previsão..."):
+                result = predict_match(jogador_a, jogador_b, superficie)
+                
+                if result is None:
+                    st.error("Não foi possível encontrar stats suficientes para um dos jogadores.")
+                else:
+                    st.success("Previsão Calculada!")
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.metric(f"🏆 {result['Jogador_A']} vence", f"{result['Prob_A_Vitória_%']}%")
+                    with c2:
+                        st.metric(f"🏆 {result['Jogador_B']} vence", f"{result['Prob_B_Vitória_%']}%")
+                    
+                    st.metric("📊 Total de Jogos Esperado", f"{result['Total_Esperado']} jogos")
+                    
+                    over, under = st.columns(2)
+                    with over:
+                        st.metric("Over 21.5", f"{result['Prob_Over_21.5_%']}%")
+                    with under:
+                        st.metric("Under 21.5", f"{result['Prob_Under_21.5_%']}%")
+                    
+                    st.write(f"**Serve {result['Jogador_A']}**: {result['Serve_A_%']}%")
+                    st.write(f"**BP Saved {result['Jogador_A']}**: {result['BP_Saved_A_%']}%")
+
+                    # ====================== BOTÃO EXPORTAR PARA EXCEL ======================
+                    result_df = pd.DataFrame([result])
+                    
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        result_df.to_excel(writer, index=False, sheet_name='Previsão')
+                    output.seek(0)
+
+                    st.download_button(
+                        label="📥 Exportar Previsão para Excel",
+                        data=output,
+                        file_name=f"previsao_{jogador_a}_vs_{jogador_b}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+st.caption("Selecione Jogador A, Jogador B e Superfície → Calcule → Exporte para Excel")
