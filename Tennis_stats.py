@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
 
-tab1, tab2, tab3 = st.tabs(["📅 Partidas Hoje", "🔍 Previsão Personalizada", "📈 Recommended Modeling Strategy"])
+tab1, tab2, tab3 = st.tabs(["📅 Partidas Hoje", "🔍 Previsão Personalizada", "📈 Modeling Strategy"])
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
@@ -46,7 +46,8 @@ def norm(name):
     return ''.join(filter(str.isalnum, n.lower().strip()))
 
 def find_best_player_stats(player_name, df):
-    if df.empty or not player_name: return pd.Series(dtype='object')
+    if df.empty or not player_name: 
+        return pd.Series(dtype='object')
     clean_name = norm(player_name)
     best_match = None
     best_score = 0.0
@@ -113,7 +114,7 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== SCRAPING FLASHSCORE ======================
+# ====================== SCRAPING ======================
 async def get_flashscore_matches():
     matches = []
     async with async_playwright() as p:
@@ -163,11 +164,11 @@ async def get_flashscore_matches():
 with tab1:
     st.header("Partidas de Hoje + Previsão Automática")
 
-    if st.button("🔄 Buscar Partidas do Flashscore + Calcular Previsões", type="primary"):
+    if st.button("🔄 Buscar Partidas + Calcular Previsões", type="primary"):
         if df_stats.empty:
             st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx")
         else:
-            with st.spinner("Buscando partidas e calculando..."):
+            with st.spinner("Buscando partidas..."):
                 df_flash = asyncio.run(get_flashscore_matches())
 
                 if df_flash.empty:
@@ -180,13 +181,8 @@ with tab1:
 
                         if not p1.empty and not p2.empty:
                             pred = predict_from_stats(p1, p2, row['superficie'])
-                            results.append([
-                                pred["Prob_J1_%"], 
-                                pred["Total_Esperado"], 
-                                pred["Prob_Over_21.5_%"],
-                                pred["Serve_J1_%"],
-                                pred["BP_Saved_J1_%"]
-                            ])
+                            results.append([pred["Prob_J1_%"], pred["Total_Esperado"], 
+                                          pred["Prob_Over_21.5_%"], pred["Serve_J1_%"], pred["BP_Saved_J1_%"]])
                         else:
                             results.append([None, None, None, None, None])
 
@@ -203,9 +199,12 @@ with tab1:
 with tab2:
     st.header("🔍 Previsão Personalizada")
 
-    if not player_list := pd.concat([df_raw['winner_name'], df_raw['loser_name']]).drop_duplicates().sort_values().tolist() if not df_raw.empty else []:
-        st.info("Carregue o ficheiro para ativar esta aba")
+    if df_stats.empty:
+        st.info("Carregue o ficheiro Challenger1.xlsx para ativar esta aba")
     else:
+        # Criar lista de jogadores
+        player_list = pd.concat([df_stats['winner_name'], df_stats['loser_name']]).drop_duplicates().sort_values().tolist()
+
         col1, col2 = st.columns(2)
         with col1:
             jogador_a = st.selectbox("Jogador A", options=player_list, key="ja")
@@ -216,14 +215,23 @@ with tab2:
 
         if st.button("Calcular Previsão", type="primary"):
             if jogador_a == jogador_b:
-                st.error("Escolha jogadores diferentes!")
+                st.error("Escolha dois jogadores diferentes!")
             else:
-                result = predict_match(jogador_a, jogador_b, superficie)  # função simplificada
-                if result:
+                p1 = find_best_player_stats(jogador_a, df_stats)
+                p2 = find_best_player_stats(jogador_b, df_stats)
+
+                if p1.empty or p2.empty:
+                    st.error("Não foi possível encontrar stats suficientes para um dos jogadores.")
+                else:
+                    result = predict_from_stats(p1, p2, superficie)
                     st.success("Previsão Calculada!")
+                    
                     c1, c2 = st.columns(2)
-                    with c1: st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
-                    with c2: st.metric(f"{jogador_b} vence", f"{result['Prob_B_Vitória_%'] if 'Prob_B_Vitória_%' in result else 100-result['Prob_J1_%']}%")
+                    with c1:
+                        st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
+                    with c2:
+                        st.metric(f"{jogador_b} vence", f"{result['Prob_Under_21.5_%'] if 'Prob_Under_21.5_%' in result else ''}")  # simplificado
+
                     st.metric("Total Esperado", f"{result['Total_Esperado']} jogos")
                     st.metric("Over 21.5", f"{result['Prob_Over_21.5_%']}%")
 
@@ -233,25 +241,25 @@ with tab3:
     st.markdown("""
     ### Estratégia Recomendada para Modelar Tênis
 
-    **Para melhores resultados em Vitória + Total de Jogos (Over/Under 21.5):**
+    Para obter os melhores resultados em **vitória** e **Over/Under 21.5 jogos**, recomenda-se uma abordagem híbrida:
 
     1. **Feature Engineering**
        - Rank Difference, Points Difference
-       - Average Total Games (últimos 5-10 jogos)
+       - Average Total Games (últimos jogos)
        - Serve % e Return % por superfície
-       - Break Points Saved / Faced
+       - Break Points Saved/Faced
 
-    2. **Hybrid Modeling (Melhor Abordagem)**
-       - **Win Probability**: XGBoost ou Logistic Regression
-       - **Total Games**: Markov Chain Simulation ou Poisson Distribution
-       - **Combinação Final**: Ensemble dos dois modelos
+    2. **Modelo Híbrido**
+       - Win Probability → XGBoost ou Logistic Regression
+       - Total Games → Markov Chain Simulation ou Poisson
+       - Combinação final → Ensemble
 
     3. **Validação**
        - 10-fold Cross-Validation (time-based)
-       - Testar por superfície e nível de torneio
+       - Teste por superfície
 
-    **Conclusão da comunidade:**
-    > Machine Learning é excelente para prever o vencedor, mas **Markov Chains** e simulações são atualmente as mais precisas para o mercado de Total de Jogos.
+    **Conclusão:**
+    Machine Learning é bom para prever o vencedor, mas **simulações (Markov Chains)** são atualmente as mais precisas para o mercado de Total de Jogos.
     """)
 
 st.caption("Web scraping Flashscore + Predictor baseado em stats reais")
