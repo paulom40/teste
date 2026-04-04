@@ -7,8 +7,18 @@ import unicodedata
 from difflib import SequenceMatcher
 from io import BytesIO
 import time
+import random
 import json
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from fake_useragent import UserAgent
+import cloudscraper
 
+# Configuração da página
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
 
@@ -19,8 +29,16 @@ with st.sidebar:
     st.header("📁 Carregar Challenger1.xlsx")
     uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
     
-    # Opção para usar partidas manuais se o scraping falhar
-    use_manual = st.checkbox("✏️ Usar entrada manual de partidas", value=False)
+    st.markdown("---")
+    st.header("⚙️ Configurações de Scraping")
+    
+    scraping_method = st.selectbox(
+        "Método de scraping",
+        ["Auto (Recomendado)", "API Sofascore", "Selenium (Mais Robusto)", "CloudScraper", "Manual"]
+    )
+    
+    use_proxy = st.checkbox("Usar rotação de User-Agent", value=True)
+    delay_range = st.slider("Delay entre requests (segundos)", 1, 10, (2, 5))
 
 # ====================== CARREGAR STATS ======================
 @st.cache_data
@@ -35,6 +53,11 @@ def load_stats(file):
             return ''.join(filter(str.isalnum, n.lower().strip()))
         df['winner_clean'] = df['winner_name'].apply(norm)
         df['loser_clean'] = df['loser_name'].apply(norm)
+        
+        # Calcular estatísticas adicionais
+        df['total_games'] = df.get('w_svpt', 0) + df.get('l_svpt', 0)
+        df['avg_games_per_match'] = df.groupby('winner_clean')['total_games'].transform('mean')
+        
         st.sidebar.success(f"✅ {len(df)} jogos carregados")
         return df
     except Exception as e:
@@ -49,6 +72,286 @@ def norm(name):
     n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
     return ''.join(filter(str.isalnum, n.lower().strip()))
 
+def get_random_user_agent():
+    """Retorna um User-Agent aleatório"""
+    ua = UserAgent()
+    return ua.random
+
+def get_random_headers():
+    """Headers com rotação"""
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+    ]
+    return {
+        'User-Agent': random.choice(user_agents),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
+    }
+
+def random_delay():
+    """Delay aleatório para evitar detecção"""
+    delay = random.uniform(st.session_state.get('delay_min', 2), st.session_state.get('delay_max', 5))
+    time.sleep(delay)
+
+# ====================== SELENIUM SCRAPER (MAIS ROBUSTO) ======================
+def setup_selenium_driver():
+    """Configura o driver do Selenium com opções anti-detecção"""
+    chrome_options = Options()
+    
+    # Opções para evitar detecção
+    chrome_options.add_argument('--headless')  # Modo headless para servidores
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Random User Agent
+    if use_proxy:
+        chrome_options.add_argument(f'user-agent={get_random_user_agent()}')
+    
+    # Desabilitar imagens para carregamento mais rápido
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    chrome_options.add_experimental_option("prefs", prefs)
+    
+    try:
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        return driver
+    except WebDriverException as e:
+        st.error(f"Erro ao iniciar Selenium: {e}")
+        return None
+
+def get_matches_selenium():
+    """Obtém partidas usando Selenium (mais robusto contra JavaScript)"""
+    driver = setup_selenium_driver()
+    if not driver:
+        return pd.DataFrame()
+    
+    matches = []
+    
+    try:
+        # URLs para tentar (múltiplas fontes)
+        urls = [
+            "https://www.flashscore.com/tennis/",
+            "https://www.sofascore.com/tennis",
+            "https://www.atptour.com/en/scores/results"
+        ]
+        
+        for url in urls:
+            st.info(f"Tentando: {url}")
+            driver.get(url)
+            random_delay()
+            
+            # Aguardar carregamento da página
+            wait = WebDriverWait(driver, 15)
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            
+            # Scroll para carregar conteúdo dinâmico
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            random_delay()
+            
+            # Extrair HTML
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            
+            # Padrões comuns para encontrar partidas
+            selectors = [
+                'div[class*="event"]',
+                'div[class*="match"]',
+                'div[class*="game"]',
+                'div[data-testid*="match"]',
+                'div[class*="tennis"]'
+            ]
+            
+            for selector in selectors:
+                events = soup.select(selector)
+                if events:
+                    for event in events[:30]:
+                        try:
+                            # Tentar extrair nomes dos jogadores
+                            text = event.get_text()
+                            lines = [line.strip() for line in text.split('\n') if line.strip()]
+                            
+                            # Procurar por nomes que parecem jogadores (2-3 palavras)
+                            players = [line for line in lines if len(line.split()) in [2, 3] and len(line) > 3]
+                            
+                            if len(players) >= 2:
+                                j1, j2 = players[0], players[1]
+                                
+                                # Extrair torneio
+                                tournament = "Tênis"
+                                for line in lines:
+                                    if any(word in line.lower() for word in ['challenger', 'atp', 'wta', 'open', 'cup']):
+                                        tournament = line
+                                        break
+                                
+                                matches.append({
+                                    'torneio': tournament,
+                                    'jogador_1': j1,
+                                    'jogador_2': j2,
+                                    'horario': datetime.now().strftime('%H:%M'),
+                                    'superficie': 'Hard'  # Será detectado depois
+                                })
+                        except:
+                            continue
+                    
+                    if matches:
+                        break
+            
+            if matches:
+                st.success(f"✅ Encontradas {len(matches)} partidas com Selenium")
+                break
+                
+    except Exception as e:
+        st.error(f"Erro no Selenium: {str(e)[:200]}")
+    finally:
+        driver.quit()
+    
+    # Remover duplicatas
+    if matches:
+        df = pd.DataFrame(matches)
+        df = df.drop_duplicates(subset=['jogador_1', 'jogador_2'])
+        return df
+    
+    return pd.DataFrame()
+
+# ====================== CLOUDSCRAPER (BYPASS CLOUDFLARE) ======================
+def get_matches_cloudscraper():
+    """Usa cloudscraper para bypassar Cloudflare"""
+    try:
+        scraper = cloudscraper.create_scraper()
+        
+        urls = [
+            "https://www.flashscore.com/tennis/",
+            "https://www.sofascore.com/tennis"
+        ]
+        
+        for url in urls:
+            headers = get_random_headers()
+            response = scraper.get(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                matches = []
+                
+                # Procurar por padrões de partidas
+                match_elements = soup.find_all(['div', 'a'], class_=lambda x: x and ('match' in str(x).lower() or 'event' in str(x).lower()))
+                
+                for elem in match_elements[:50]:
+                    text = elem.get_text(strip=True)
+                    if 'vs' in text.lower() or ' - ' in text:
+                        parts = text.split('vs') if 'vs' in text.lower() else text.split('-')
+                        if len(parts) >= 2:
+                            j1 = parts[0].strip()
+                            j2 = parts[1].strip().split()[0] if parts[1] else ''
+                            
+                            if j1 and j2 and len(j1) > 2 and len(j2) > 2:
+                                matches.append({
+                                    'torneio': 'Torneio',
+                                    'jogador_1': j1,
+                                    'jogador_2': j2,
+                                    'horario': 'Hoje',
+                                    'superficie': detect_surface('')
+                                })
+                
+                if matches:
+                    return pd.DataFrame(matches)
+                    
+        return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"Erro no CloudScraper: {e}")
+        return pd.DataFrame()
+
+# ====================== API SOFASCORE (MÉTODO ORIGINAL) ======================
+def get_matches_sofascore_api():
+    """Usa a API do Sofascore"""
+    try:
+        url = "https://api.sofascore.com/api/v1/sport/tennis/events/live-and-upcoming"
+        headers = get_random_headers()
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            matches = []
+            
+            for event in data.get('events', [])[:50]:
+                try:
+                    tournament = event.get('tournament', {}).get('name', 'Desconhecido')
+                    home = event.get('homeTeam', {}).get('name', '')
+                    away = event.get('awayTeam', {}).get('name', '')
+                    
+                    if home and away:
+                        matches.append({
+                            'torneio': tournament,
+                            'jogador_1': home,
+                            'jogador_2': away,
+                            'horario': datetime.fromtimestamp(event.get('startTimestamp', 0)).strftime('%H:%M'),
+                            'superficie': detect_surface(tournament)
+                        })
+                except:
+                    continue
+            
+            return pd.DataFrame(matches)
+        
+        return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"Erro na API: {e}")
+        return pd.DataFrame()
+
+# ====================== FUNÇÃO PRINCIPAL DE SCRAPING ======================
+def get_matches_robust():
+    """Tenta múltiplos métodos até conseguir dados"""
+    
+    # Dicionário de métodos disponíveis
+    methods = {
+        "API Sofascore": get_matches_sofascore_api,
+        "CloudScraper": get_matches_cloudscraper,
+        "Selenium": get_matches_selenium
+    }
+    
+    # Selecionar método baseado na escolha do usuário
+    if scraping_method == "Auto (Recomendado)":
+        # Tentar em ordem de eficiência
+        for method_name, method_func in methods.items():
+            st.info(f"🔄 Tentando {method_name}...")
+            df = method_func()
+            if not df.empty:
+                st.success(f"✅ Sucesso com {method_name}!")
+                return df
+            random_delay()
+    elif scraping_method in methods:
+        df = methods[scraping_method]()
+        if not df.empty:
+            return df
+    elif scraping_method == "Manual":
+        return pd.DataFrame()  # Será tratado pelo modo manual
+    
+    return pd.DataFrame()
+
+def detect_surface(tournament: str) -> str:
+    t = str(tournament).lower()
+    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'heilbronn', 'perugia', 'barletta', 'rome']):
+        return 'Clay'
+    if any(k in t for k in ['grass', 'wimbledon', 'birmingham', 'newport', 's-Hertogenbosch']):
+        return 'Grass'
+    if any(k in t for k in ['indoor', 'cherbourg', 'bergerac', 'pau', 'quimper']):
+        return 'Indoor'
+    return 'Hard'
+
 def find_best_player_stats(player_name, df):
     if df.empty or not player_name: 
         return pd.Series(dtype='object')
@@ -62,11 +365,10 @@ def find_best_player_stats(player_name, df):
             similarity = SequenceMatcher(None, clean_name, clean_db).ratio()
             if clean_name in clean_db or clean_db in clean_name:
                 similarity = max(similarity, 0.95)
-            score = similarity * 100
-            if score > best_score:
-                best_score = score
+            if similarity > best_score:
+                best_score = similarity
                 best_match = row
-    return best_match if best_score >= 60 else pd.Series(dtype='object')
+    return best_match if best_score >= 0.6 else pd.Series(dtype='object')
 
 def predict_from_stats(p1_stats, p2_stats, superficie="Hard"):
     def safe(v):
@@ -102,91 +404,14 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard"):
     return {
         "Prob_J1_%": round(prob_p1 * 100, 1),
         "Total_Esperado": total_esperado,
-        "Prob_Over_21.5_%": round(prob_over, 1),
-        "Prob_Under_21.5_%": round(100 - prob_over, 1),
+        "Prob_Over_21.5_%": round(prob_over * 100, 1),
+        "Prob_Under_21.5_%": round((1 - prob_over) * 100, 1),
         "Serve_J1_%": round(serve1 * 100, 1),
         "BP_Saved_J1_%": round(safe(p1_stats.get('w_bpSaved',0)) / max(safe(p1_stats.get('w_bpFaced',1)), 1) * 100, 1),
     }
 
-def detect_surface(tournament: str) -> str:
-    t = str(tournament).lower()
-    if any(k in t for k in ['clay', 'saibro', 'kigali', 'santiago', 'punto cana', 'heilbronn', 'perugia']):
-        return 'Clay'
-    if any(k in t for k in ['grass', 'birmingham']):
-        return 'Grass'
-    if any(k in t for k in ['indoor', 'cherbourg']):
-        return 'Indoor'
-    return 'Hard'
-
-# ====================== NOVA VERSÃO: API SOFASCORE ======================
-def get_sofascore_api_matches():
-    """Usa a API não oficial do Sofascore para obter partidas"""
-    try:
-        # Endpoint da API do Sofascore para tênis (partidas ao vivo + agendadas)
-        url = "https://api.sofascore.com/api/v1/sport/tennis/events/live-and-upcoming"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "pt-PT,pt;q=0.9"
-        }
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            matches = []
-            
-            # Procurar eventos
-            events = data.get('events', [])
-            
-            for event in events[:50]:  # Limitar a 50 partidas
-                try:
-                    # Extrair informações
-                    tournament = event.get('tournament', {}).get('name', 'Desconhecido')
-                    home_team = event.get('homeTeam', {}).get('name', '')
-                    away_team = event.get('awayTeam', {}).get('name', '')
-                    
-                    if not home_team or not away_team:
-                        continue
-                    
-                    # Horário (timestamp)
-                    start_timestamp = event.get('startTimestamp', 0)
-                    if start_timestamp:
-                        horario = datetime.fromtimestamp(start_timestamp).strftime('%H:%M')
-                    else:
-                        horario = '?'
-                    
-                    # Verificar se é hoje (opcional)
-                    event_date = datetime.fromtimestamp(start_timestamp).date() if start_timestamp else None
-                    today = datetime.now().date()
-                    
-                    # Superfície
-                    superficie = detect_surface(tournament)
-                    
-                    matches.append({
-                        'torneio': tournament,
-                        'jogador_1': home_team,
-                        'jogador_2': away_team,
-                        'horario': horario,
-                        'superficie': superficie,
-                        'data': event_date
-                    })
-                    
-                except Exception as e:
-                    continue
-            
-            return pd.DataFrame(matches)
-        else:
-            return pd.DataFrame()
-            
-    except Exception as e:
-        st.error(f"Erro na API: {str(e)[:100]}")
-        return pd.DataFrame()
-
-# ====================== ENTRADA MANUAL DE PARTIDAS ======================
+# ====================== INTERFACE MANUAL ======================
 def manual_matches_input():
-    """Interface para inserir partidas manualmente"""
     st.subheader("📝 Inserir Partidas Manualmente")
     
     num_matches = st.number_input("Número de partidas", min_value=1, max_value=20, value=3)
@@ -220,49 +445,52 @@ def manual_matches_input():
 with tab1:
     st.header("Partidas de Hoje + Previsão Automática")
     
-    # Botão para buscar partidas
-    col1, col2 = st.columns([1,3])
-    with col1:
-        fetch_matches = st.button("🔄 Buscar Partidas (API)", type="primary", use_container_width=True)
+    # Salvar configurações na sessão
+    st.session_state['delay_min'] = delay_range[0]
+    st.session_state['delay_max'] = delay_range[1]
     
-    df_flash = pd.DataFrame()
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        fetch_matches = st.button("🔄 Buscar Partidas", type="primary", use_container_width=True)
+    
+    df_matches = pd.DataFrame()
     
     if fetch_matches:
         if df_stats.empty:
             st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
         else:
-            with st.spinner("A obter partidas da API do Sofascore..."):
-                df_flash = get_sofascore_api_matches()
+            with st.spinner("Buscando partidas com método robusto..."):
+                df_matches = get_matches_robust()
                 
-                if df_flash.empty:
+                if df_matches.empty and scraping_method != "Manual":
                     st.warning("⚠️ Não foi possível obter partidas automaticamente.")
-                    st.info("💡 Podes usar a opção 'Entrada Manual' no sidebar ou a aba 'Previsão Personalizada'.")
+                    st.info("💡 Dicas:\n- Tente selecionar 'Selenium (Mais Robusto)' no sidebar\n- Ou use o modo 'Manual'\n- Verifique sua conexão com internet")
                     
-                    # Opção de exemplo
+                    # Exemplo para teste
                     st.markdown("---")
-                    st.subheader("📋 Exemplo de partidas para teste")
+                    st.subheader("📋 Carregar exemplo para teste")
                     
-                    example_matches = pd.DataFrame({
-                        'torneio': ['Challenger Santiago', 'Challenger Kigali', 'Challenger Perugia'],
-                        'jogador_1': ['Joao Sousa', 'Carlos Taberner', 'Federico Coria'],
-                        'jogador_2': ['Gastao Elias', 'Pedro Sousa', 'Thiago Monteiro'],
-                        'horario': ['15:00', '13:00', '11:00'],
-                        'superficie': ['Clay', 'Clay', 'Clay']
-                    })
-                    
-                    if st.button("📊 Usar exemplo para teste"):
-                        df_flash = example_matches
+                    if st.button("📊 Carregar exemplo de partidas"):
+                        example_matches = pd.DataFrame({
+                            'torneio': ['Challenger Santiago', 'Challenger Kigali', 'Challenger Perugia'],
+                            'jogador_1': ['Joao Sousa', 'Carlos Taberner', 'Federico Coria'],
+                            'jogador_2': ['Gastao Elias', 'Pedro Sousa', 'Thiago Monteiro'],
+                            'horario': ['15:00', '13:00', '11:00'],
+                            'superficie': ['Clay', 'Clay', 'Clay']
+                        })
+                        df_matches = example_matches
                         st.rerun()
-                else:
-                    st.success(f"✅ {len(df_flash)} partidas encontradas!")
     
-    # Se temos partidas (ou por API ou por exemplo)
-    if not df_flash.empty:
+    # Processar partidas encontradas
+    if not df_matches.empty:
         with st.spinner("Calculando previsões..."):
             results = []
             progress_bar = st.progress(0)
             
-            for idx, row in df_flash.iterrows():
+            # Detectar superfície para cada partida
+            df_matches['superficie'] = df_matches['torneio'].apply(detect_surface)
+            
+            for idx, row in df_matches.iterrows():
                 p1 = find_best_player_stats(row['jogador_1'], df_stats)
                 p2 = find_best_player_stats(row['jogador_2'], df_stats)
                 
@@ -282,20 +510,20 @@ with tab1:
                     if p2.empty:
                         st.warning(f"⚠️ Sem stats para: {row['jogador_2']}")
                 
-                progress_bar.progress((idx + 1) / len(df_flash))
+                progress_bar.progress((idx + 1) / len(df_matches))
                 time.sleep(0.1)
             
-            df_flash[['Prob_J1_%', 'Total_Esperado', 'Prob_Over_21.5_%', 'Serve_J1_%', 'BP_Saved_J1_%']] = pd.DataFrame(results)
+            df_matches[['Prob_J1_%', 'Total_Esperado', 'Prob_Over_21.5_%', 'Serve_J1_%', 'BP_Saved_J1_%']] = pd.DataFrame(results)
             
             # Formatar para exibição
-            display_df = df_flash.copy()
+            display_df = df_matches.copy()
             display_df['Prob_J1_%'] = display_df['Prob_J1_%'].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
             display_df['Prob_Over_21.5_%'] = display_df['Prob_Over_21.5_%'].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
             
             st.dataframe(display_df, use_container_width=True, hide_index=True)
             
             # Download
-            csv = df_flash.to_csv(index=False).encode('utf-8')
+            csv = df_matches.to_csv(index=False).encode('utf-8')
             st.download_button(
                 "📥 Exportar CSV", 
                 csv, 
@@ -303,13 +531,13 @@ with tab1:
                 "text/csv"
             )
     
-    # Entrada manual alternativa
-    if use_manual or df_flash.empty:
+    # Modo manual
+    if scraping_method == "Manual" or df_matches.empty:
         st.markdown("---")
         manual_df = manual_matches_input()
         
-        if st.button("📊 Calcular Previsões para Partidas Manuais", type="secondary"):
-            if not manual_df.empty:
+        if st.button("📊 Calcular Previsões", type="secondary"):
+            if not manual_df.empty and not df_stats.empty:
                 with st.spinner("Calculando..."):
                     results = []
                     for _, row in manual_df.iterrows():
@@ -381,13 +609,19 @@ with tab3:
        - Vitória → XGBoost / Logistic Regression
        - Total Jogos → Markov Chain Simulation
 
-    **Melhor prática atual:**
-    Machine Learning para vencedor + **Markov Chains** para Total de Jogos.
-    
-    ### Limitações conhecidas
-    - O scraping direto pode falhar devido a bloqueios
-    - Usar a API do Sofascore (não oficial) é mais estável
-    - Para produção, considerar usar dados de APIs pagas como Tennis Data API ou Tennis Abstract
+    ### Métodos de Scraping Implementados
+
+    - **Selenium**: Mais robusto, executa JavaScript, bypassa proteções básicas
+    - **CloudScraper**: Bypassa Cloudflare e proteções similares
+    - **API Sofascore**: Mais rápido, mas pode ter rate limiting
+    - **Rotação de Headers**: Evita detecção por User-Agent
+
+    ### Para Produção
+
+    Recomenda-se usar uma combinação:
+    1. Tentar API primeiro (mais rápida)
+    2. Fallback para Selenium (mais robusto)
+    3. Cache de resultados para evitar scraping excessivo
     """)
 
-st.caption("Versão com API Sofascore + Entrada Manual • Baseado no teu ficheiro Challenger1.xlsx")
+st.caption("Versão com Selenium + CloudScraper + Rotação de Headers • Baseado no teu ficheiro Challenger1.xlsx")
