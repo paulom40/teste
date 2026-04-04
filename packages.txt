@@ -20,3 +20,4 @@ libxext6
 libxtst6
 libxi6
 fonts-liberation
+libglib2.0-0t64
