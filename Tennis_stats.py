@@ -114,40 +114,43 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== SCRAPING LEVE (Melhorado) ======================
+# ====================== SCRAPING SOFASCORE (Melhor Alternativa) ======================
 def get_flashscore_matches():
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "pt-PT,pt;q=0.9,en;q=0.8",
-            "Referer": "https://www.flashscore.pt/"
         }
 
-        response = requests.get("https://www.flashscore.pt/tenis/", headers=headers, timeout=20)
+        # Sofascore tennis page (agendados)
+        url = "https://www.sofascore.com/tennis"
+        response = requests.get(url, headers=headers, timeout=20)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, 'html.parser')
         matches = []
 
-        events = soup.find_all("div", class_="event__match")
-        
-        for event in events[:80]:
+        # Sofascore usa muitas classes dinâmicas, por isso procuramos por padrões comuns
+        event_cards = soup.find_all("div", class_=lambda x: x and ("event" in x.lower() or "match" in x.lower()))
+
+        for card in event_cards[:80]:
             try:
                 # Torneio
-                tour = event.find("div", class_="event__tournament")
-                tournament = tour.get_text(strip=True) if tour else "Desconhecido"
+                tournament_tag = card.find(["div", "span"], class_=lambda x: x and "tournament" in x.lower())
+                tournament = tournament_tag.get_text(strip=True) if tournament_tag else "Desconhecido"
 
                 # Jogadores
-                p1 = event.find("div", class_="event__participant--home")
-                j1 = p1.get_text(strip=True) if p1 else "?"
-
-                p2 = event.find("div", class_="event__participant--away")
-                j2 = p2.get_text(strip=True) if p2 else "?"
+                participants = card.find_all(["div", "span"], class_=lambda x: x and ("participant" in x.lower() or "team" in x.lower()))
+                if len(participants) >= 2:
+                    j1 = participants[0].get_text(strip=True)
+                    j2 = participants[1].get_text(strip=True)
+                else:
+                    continue
 
                 # Horário
-                time_el = event.find("div", class_="event__time")
-                horario = time_el.get_text(strip=True) if time_el else "?"
+                time_tag = card.find(["div", "span"], class_=lambda x: x and ("time" in x.lower() or "start" in x.lower()))
+                horario = time_tag.get_text(strip=True) if time_tag else "?"
 
                 if horario and horario not in ["AO VIVO", "Terminado", "Cancelado", ""]:
                     superficie = detect_surface(tournament)
@@ -162,16 +165,15 @@ def get_flashscore_matches():
                 continue
 
         if not matches:
-            st.warning("Não foi possível extrair partidas. O site pode ter mudado a estrutura.")
-        
+            st.warning("Sofascore não retornou partidas. Tentando fallback...")
+            # Fallback simples: retorna DataFrame vazio para ativar a mensagem
+            return pd.DataFrame()
+
         return pd.DataFrame(matches)
 
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro de conexão com Flashscore: {e}")
-        st.info("Tenta novamente em alguns minutos ou usa a aba 'Previsão Personalizada'")
-        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro inesperado no scraping: {e}")
+        st.error(f"Erro ao aceder Sofascore: {str(e)[:100]}...")
+        st.info("O site pode estar a bloquear ou ter mudado a estrutura. Usa a aba 'Previsão Personalizada' por agora.")
         return pd.DataFrame()
 
 # ====================== ABA 1 - PARTIDAS HOJE ======================
