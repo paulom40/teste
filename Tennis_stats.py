@@ -6,9 +6,9 @@ from difflib import SequenceMatcher
 from io import BytesIO
 
 st.set_page_config(page_title="Tênis Predictor", page_icon="🎾", layout="wide")
-st.title("🎾 Predictor de Tênis por Stats")
+st.title("🎾 Tennis Predictor - Baseado no teu Excel")
 
-tab1, tab2, tab3 = st.tabs(["📊 Todos os Jogos", "🔍 Previsão Personalizada", "📈 Modeling Strategy"])
+tab1, tab2, tab3 = st.tabs(["📊 Todos os Jogos", "🔍 Previsão Personalizada", "📈 Estratégia Recomendada"])
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
@@ -36,7 +36,7 @@ def load_data(file):
         st.sidebar.success(f"✅ {len(df)} jogos carregados")
         return df, all_players
     except Exception as e:
-        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
+        st.sidebar.error(f"Erro ao carregar: {e}")
         return pd.DataFrame(), []
 
 df_raw, player_list = load_data(uploaded_file)
@@ -89,7 +89,6 @@ def predict_match(jogador_a, jogador_b, superficie="Hard"):
         "Prob_Over_21.5_%": round(prob_over, 1),
         "Prob_Under_21.5_%": round(100 - prob_over, 1),
         "Serve_A_%": round(serve1 * 100, 1),
-        "BP_Saved_A_%": round(safe(p1_stats.get('w_bpSaved',0)) / max(safe(p1_stats.get('w_bpFaced',1)), 1) * 100, 1),
     }
 
 def find_best_player_stats(player_name, df):
@@ -117,12 +116,10 @@ def norm(name):
 
 # ====================== ABA 1 - TODOS OS JOGOS ======================
 with tab1:
-    st.header("Todos os Jogos com Previsão")
-    if df_raw.empty:
-        st.info("Carregue o ficheiro Challenger1.xlsx")
-    else:
+    st.header("Todos os Jogos")
+    if not df_raw.empty:
         if st.button("Calcular Previsão para Todos os Jogos", type="primary"):
-            with st.spinner("Calculando..."):
+            with st.spinner("A calcular..."):
                 predictions = []
                 for _, row in df_raw.iterrows():
                     pred = predict_match(row['winner_name'], row['loser_name'], row.get('surface', 'Hard'))
@@ -136,7 +133,7 @@ with tab2:
     st.header("🔍 Previsão Personalizada")
 
     if not player_list:
-        st.info("Carregue o ficheiro para ativar esta aba")
+        st.info("Carregue o ficheiro Challenger1.xlsx")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -152,7 +149,7 @@ with tab2:
             else:
                 result = predict_match(jogador_a, jogador_b, superficie)
                 if result:
-                    st.success("Previsão Calculada!")
+                    st.success("✅ Previsão Calculada!")
                     c1, c2 = st.columns(2)
                     with c1:
                         st.metric(f"{jogador_a} vence", f"{result['Prob_A_Vitória_%']}%")
@@ -168,7 +165,7 @@ with tab2:
                     st.download_button(
                         "📥 Exportar para Excel",
                         data=output,
-                        file_name=f"previsao_{jogador_a}_vs_{jogador_b}.xlsx",
+                        file_name=f"previsao_{jogador_a}_vs_{jogador_b}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
@@ -176,22 +173,25 @@ with tab2:
 with tab3:
     st.header("📈 Recommended Modeling Strategy")
     st.markdown("""
-    ### Estratégia Recomendada
+    ### Estratégia Recomendada para Modelar Tênis
+
+    **Para melhores resultados:**
 
     1. **Feature Engineering**
-       - Rank Difference
-       - Average Total Games
+       - Diferença de Ranking
+       - Média de Total de Jogos recentes
        - Serve % e Return % por superfície
+       - Break Points Saved / Faced
 
-    2. **Modelo Híbrido**
-       - Win Probability → XGBoost / Logistic Regression
-       - Total Games → Markov Chain Simulation
+    2. **Abordagem Híbrida (Melhor Prática)**
+       - **Vitória**: XGBoost ou Logistic Regression
+       - **Total Jogos (Over/Under)**: Markov Chain Simulation
 
     3. **Validação**
-       - 10-fold Cross-Validation
+       - 10-fold Cross-Validation (time-based)
 
-    **Melhor prática atual:**
-    Machine Learning para vencedor + **Markov Chains** para Total de Jogos.
+    **Conclusão atual da comunidade:**
+    > Machine Learning é bom para prever o vencedor, mas **simulações Markovianas** são as mais precisas para o mercado de Total de Jogos.
     """)
 
-st.caption("Versão sem scraping • Baseada no teu ficheiro Challenger1.xlsx")
+st.caption("Versão sem scraping • Baseada exclusivamente no teu ficheiro Challenger1.xlsx")
