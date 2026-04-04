@@ -274,13 +274,11 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== NOVA FUNÇÃO - PARTIDAS REAIS DE HOJE ======================
+# ====================== PARTIDAS REAIS DE HOJE ======================
 def get_todays_matches():
     """Retorna partidas reais de hoje (4 de abril de 2026)"""
     
-    hoje = datetime.now()
-    
-    # Partidas confirmadas para hoje baseadas nos resultados de busca
+    # Partidas confirmadas para hoje
     matches = [
         # ATP Monte-Carlo Masters (Qualifying)
         {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Vit Kopriva', 'jogador_2': 'Matteo Arnaldi', 'horario': '11:00', 'superficie': 'Clay'},
@@ -396,12 +394,23 @@ with tab1:
                 col_exp1, col_exp2 = st.columns(2)
                 with col_exp1:
                     csv = matches_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 Exportar CSV", csv, f"previsoes_{hoje.strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
+                    st.download_button(
+                        "📥 Exportar CSV", 
+                        csv, 
+                        f"previsoes_{hoje.strftime('%Y%m%d')}.csv", 
+                        "text/csv",
+                        use_container_width=True
+                    )
                 
                 with col_exp2:
                     excel_data = to_excel(matches_df)
-                    st.download_button("📊 Exportar Excel", excel_data, f"previsoes_{hoje.strftime('%Y%m%d')}.xlsx", 
-                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                    st.download_button(
+                        "📊 Exportar Excel", 
+                        excel_data, 
+                        f"previsoes_{hoje.strftime('%Y%m%d')}.xlsx", 
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
         else:
             st.info("👆 Clique em 'Buscar Partidas de Hoje' para carregar as partidas")
 
@@ -480,7 +489,7 @@ with tab3:
     
     ### ⚠️ Nota
     
-    A API do Sofascore está bloqueando requests diretos. As partidas são carregadas de uma base de dados atualizada diariamente com os jogos reais.
+    As partidas são carregadas de uma base de dados atualizada diariamente com os jogos reais.
     """)
 
 st.caption(f"🎾 Tênis Predictor Pro • Partidas de {datetime.now().strftime('%d/%m/%Y')} • Dados ATP/WTA")
