@@ -9,7 +9,7 @@ from io import BytesIO
 import math
 
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
-st.title("🎾 Tennis Predictor Pro - API RapidAPI")
+st.title("🎾 Tennis Predictor Pro")
 
 # ====================== CONFIGURAÇÃO API ======================
 RAPIDAPI_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
@@ -252,175 +252,189 @@ def to_excel(df):
 
 # ====================== FUNÇÕES API ======================
 @st.cache_data(ttl=1800)
-def get_matches_from_rapidapi(date_str=None, tour="atp"):
-    """Busca partidas via RapidAPI Tennis"""
-    if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-   
+def search_players_by_name(player_name, tour_type="atp"):
+    """Busca jogadores pela API - baseado no JSON que você mostrou"""
     headers = {
         "x-rapidapi-host": RAPIDAPI_HOST,
         "x-rapidapi-key": RAPIDAPI_KEY
     }
     
-    # NOTA: Como a API está retornando 404, vamos retornar DataFrame vazio
-    # e permitir que o usuário adicione partidas manualmente
-    st.warning("⚠️ API não está respondendo. Use o botão '+ Adicionar Partida' para inserir jogos manualmente.")
+    # Esta API parece ser para busca de jogadores
+    # O endpoint pode ser algo como /search ou /players
+    url = f"https://{RAPIDAPI_HOST}/search"
     
+    params = {
+        "query": player_name,
+        "tour": tour_type
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
+
+@st.cache_data(ttl=1800)
+def get_matches_from_rapidapi(date_str=None, tour="atp"):
+    """Busca partidas - VERSÃO SIMPLIFICADA (foca em partidas manuais)"""
+    # Como a API não tem endpoints claros para partidas,
+    # vamos retornar vazio e usar apenas partidas manuais
     return pd.DataFrame()
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
-    st.header("📁 Carregar Challenger1.xlsx")
-    uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
+    st.header("📁 Carregar Base de Dados")
+    st.markdown("**Challenger1.xlsx** - Deve conter colunas: `winner_name`, `loser_name`")
+    uploaded_file = st.file_uploader("Escolha o ficheiro", type=["xlsx", "xls"])
    
     st.markdown("---")
-    st.markdown("### ⚙️ Configurações API")
-    
-    tour_type = st.selectbox("Tipo de Torneio", ["atp", "wta"])
+    st.markdown("### ⚙️ Configurações")
+    tour_type = st.selectbox("Circuito", ["atp", "wta"])
    
-    if st.button("🔌 Testar Conexão API"):
-        with st.spinner("Testando..."):
+    if st.button("🔌 Testar API", use_container_width=True):
+        with st.spinner("Testando API..."):
             try:
                 headers = {
                     "x-rapidapi-host": RAPIDAPI_HOST,
                     "x-rapidapi-key": RAPIDAPI_KEY
                 }
                 
-                # Tentar diferentes endpoints comuns
-                endpoints_to_try = [
-                    f"https://{RAPIDAPI_HOST}/getRanking",
-                    f"https://{RAPIDAPI_HOST}/getAllFixtures",
-                    f"https://{RAPIDAPI_HOST}/singlesRanking",
-                ]
+                # Testar busca de jogador
+                test_url = f"https://{RAPIDAPI_HOST}/search"
+                params = {"query": "Novak", "tour": "atp"}
                 
-                working = False
-                for url in endpoints_to_try:
-                    try:
-                        response = requests.get(url, headers=headers, timeout=10)
-                        if response.status_code == 200:
-                            st.success(f"✅ API Conectada! Endpoint funcionando: {url}")
-                            st.json(response.json())
-                            working = True
-                            break
-                    except:
-                        continue
-                
-                if not working:
-                    st.error("❌ Nenhum endpoint da API respondeu. Verifique sua chave API ou use partidas manuais.")
+                response = requests.get(test_url, headers=headers, params=params, timeout=10)
+               
+                if response.status_code == 200:
+                    st.success("✅ API Conectada!")
+                    data = response.json()
+                    st.info(f"Resposta: {str(data)[:200]}...")
+                else:
+                    st.error(f"❌ Erro {response.status_code}: {response.text[:100]}")
                     
             except Exception as e:
-                st.error(f"❌ Erro de conexão: {str(e)[:150]}")
+                st.error(f"❌ Erro: {str(e)[:100]}")
    
     st.markdown("---")
-    if st.button("🗑️ Limpar Cache"):
+    if st.button("🗑️ Limpar Cache", use_container_width=True):
         st.cache_data.clear()
         st.success("Cache limpo!")
 
 # ====================== CARREGAR DADOS ======================
-# Isso define a variável df_stats
 df_stats = load_stats(uploaded_file)
 
-# Mostrar status do carregamento
 if not df_stats.empty:
     st.sidebar.success(f"✅ {len(df_stats)} jogos carregados!")
 else:
     if uploaded_file is not None:
-        st.sidebar.error("❌ Erro ao carregar o arquivo. Verifique o formato.")
+        st.sidebar.error("❌ Erro ao carregar o arquivo")
 
 # ====================== INTERFACE PRINCIPAL ======================
-st.markdown(f"## 📅 Partidas de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
+st.markdown(f"## 📅 Previsões de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
 
-# Verificar se os dados foram carregados
 if df_stats.empty:
     st.warning("⚠️ **Carregue o ficheiro Challenger1.xlsx na barra lateral!**")
-    st.info("O arquivo deve conter as colunas: 'winner_name', 'loser_name' e opcionalmente 'surface'")
+    st.info("""
+    ### 📋 Formato esperado do arquivo Excel:
+    - **winner_name**: Nome do jogador vencedor
+    - **loser_name**: Nome do jogador perdedor  
+    - **surface** (opcional): Tipo de superfície (Clay, Hard, Grass, Indoor)
+    
+    Exemplo:
+    | winner_name | loser_name | surface |
+    |-------------|------------|---------|
+    | Novak Djokovic | Rafael Nadal | Clay |
+    """)
 else:
-    # Seleção de data
-    col_date1, col_date2, col_date3 = st.columns([2, 1, 1])
-   
-    with col_date1:
-        date_selected = st.date_input(
-            "📅 Selecione a data:",
-            value=datetime.now(),
-            min_value=datetime.now() - timedelta(days=7),
-            max_value=datetime.now() + timedelta(days=14)
-        )
-   
-    with col_date2:
-        if st.button("🔄 BUSCAR PARTIDAS", type="primary", use_container_width=True):
-            with st.spinner("🌐 Buscando via RapidAPI..."):
-                date_str = date_selected.strftime("%Y-%m-%d")
-                matches_df = get_matches_from_rapidapi(date_str, tour_type)
-               
-                if not matches_df.empty:
-                    st.session_state.matches = matches_df
-                    st.success(f"✅ {len(matches_df)} partidas encontradas!")
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Nenhuma partida encontrada. Use '+ Adicionar Partida' para inserir manualmente.")
-   
-    with col_date3:
-        if st.button("➕ Adicionar Partida", use_container_width=True):
+    # Botões principais
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    with col1:
+        if st.button("➕ Adicionar Partida", type="primary", use_container_width=True):
             st.session_state.show_form = True
-   
+    
+    with col2:
+        if st.button("📋 Exemplo Rápido", use_container_width=True):
+            # Adicionar partidas de exemplo
+            example_matches = pd.DataFrame([
+                {'torneio': 'ATP Masters', 'jogador_1': 'Novak Djokovic', 'jogador_2': 'Carlos Alcaraz', 'horario': '14:00', 'superficie': 'Hard'},
+                {'torneio': 'Grand Slam', 'jogador_1': 'Jannik Sinner', 'jogador_2': 'Daniil Medvedev', 'horario': '16:30', 'superficie': 'Clay'},
+            ])
+            if 'matches' not in st.session_state:
+                st.session_state.matches = example_matches
+            else:
+                st.session_state.matches = pd.concat([st.session_state.matches, example_matches], ignore_index=True)
+            st.success("✅ Exemplos adicionados!")
+            st.rerun()
+    
     # Formulário para adicionar partida manualmente
     if st.session_state.get('show_form', False):
         with st.form("add_match"):
-            st.subheader("➕ Adicionar Partida Manualmente")
+            st.subheader("➕ Adicionar Nova Partida")
+            
             col1, col2, col3 = st.columns(3)
             with col1:
-                torneio = st.text_input("Torneio", "ATP Tournament")
-                jogador1 = st.text_input("Jogador 1 *")
+                torneio = st.text_input("Torneio", "ATP Tour")
+                jogador1 = st.text_input("Jogador 1 *", placeholder="Ex: Novak Djokovic")
             with col2:
-                jogador2 = st.text_input("Jogador 2 *")
-                horario = st.text_input("Horário", "14:00")
+                jogador2 = st.text_input("Jogador 2 *", placeholder="Ex: Carlos Alcaraz")
+                horario = st.text_input("Horário", datetime.now().strftime("%H:%M"))
             with col3:
                 superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
-           
-            st.caption("* Campos obrigatórios")
-           
+                st.markdown("---")
+                st.caption("* Campos obrigatórios")
+            
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                submitted = st.form_submit_button("✅ Adicionar", use_container_width=True)
+                submitted = st.form_submit_button("✅ Adicionar Partida", use_container_width=True)
             with col_btn2:
                 cancel = st.form_submit_button("❌ Cancelar", use_container_width=True)
-           
+            
             if cancel:
                 st.session_state.show_form = False
                 st.rerun()
-           
-            if submitted and jogador1 and jogador2:
-                new_match = pd.DataFrame([{
-                    'torneio': torneio,
-                    'jogador_1': jogador1,
-                    'jogador_2': jogador2,
-                    'horario': horario,
-                    'superficie': superficie
-                }])
-               
-                if 'matches' not in st.session_state:
-                    st.session_state.matches = new_match
+            
+            if submitted:
+                if not jogador1 or not jogador2:
+                    st.error("⚠️ Preencha os nomes dos dois jogadores!")
                 else:
-                    st.session_state.matches = pd.concat([st.session_state.matches, new_match], ignore_index=True)
-               
-                st.session_state.show_form = False
-                st.success(f"✅ Adicionado: {jogador1} vs {jogador2}")
-                st.rerun()
-   
+                    new_match = pd.DataFrame([{
+                        'torneio': torneio,
+                        'jogador_1': jogador1.strip(),
+                        'jogador_2': jogador2.strip(),
+                        'horario': horario,
+                        'superficie': superficie
+                    }])
+                    
+                    if 'matches' not in st.session_state:
+                        st.session_state.matches = new_match
+                    else:
+                        st.session_state.matches = pd.concat([st.session_state.matches, new_match], ignore_index=True)
+                    
+                    st.session_state.show_form = False
+                    st.success(f"✅ Adicionado: {jogador1} vs {jogador2}")
+                    st.rerun()
+    
     # MOSTRAR PREVISÕES
     if 'matches' in st.session_state and not st.session_state.matches.empty:
         matches_df = st.session_state.matches
-       
-        st.info(f"📊 {len(matches_df)} partidas para análise")
-       
+        
+        # Limpar dados duplicados se necessário
+        matches_df = matches_df.drop_duplicates(subset=['jogador_1', 'jogador_2'])
+        
+        st.info(f"📊 {len(matches_df)} partida(s) para análise")
+        
         with st.spinner("🔮 Calculando previsões..."):
             results = []
             progress_bar = st.progress(0)
-           
+            
             for idx, row in matches_df.iterrows():
                 p1 = find_best_player_stats(row['jogador_1'], df_stats)
                 p2 = find_best_player_stats(row['jogador_2'], df_stats)
-               
+                
                 if not p1.empty and not p2.empty:
                     pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'], df_stats)
                     results.append([
@@ -433,65 +447,82 @@ else:
                         pred["Under_21.5%"]
                     ])
                 else:
+                    # Se não encontrar stats, mostrar mensagem
+                    if p1.empty:
+                        st.warning(f"⚠️ Jogador não encontrado na base: {row['jogador_1']}")
+                    if p2.empty:
+                        st.warning(f"⚠️ Jogador não encontrado na base: {row['jogador_2']}")
                     results.append([None, None, None, None, None, None, None])
-               
+                
                 progress_bar.progress((idx + 1) / len(matches_df))
                 time.sleep(0.01)
-           
+            
             matches_df[['Win_J1%', 'Win_J2%', 'Elo_J1', 'Elo_J2', 'Total', 'Over_21.5%', 'Under_21.5%']] = pd.DataFrame(results)
-           
+            
             # Formatar para exibição
             display_df = matches_df.copy()
             for col in ['Win_J1%', 'Win_J2%', 'Over_21.5%', 'Under_21.5%']:
                 if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
-           
+                    display_df[col] = display_df[col].apply(lambda x: f"{x}%" if pd.notna(x) else "Sem dados")
+            
+            # Reordenar colunas para melhor visualização
+            col_order = ['horario', 'torneio', 'jogador_1', 'jogador_2', 'superficie', 
+                        'Win_J1%', 'Win_J2%', 'Elo_J1', 'Elo_J2', 'Total', 'Over_21.5%', 'Under_21.5%']
+            display_df = display_df[[c for c in col_order if c in display_df.columns]]
+            
             st.dataframe(display_df, use_container_width=True, hide_index=True)
-           
+            
             # Estatísticas
             st.markdown("---")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("📊 Total", len(matches_df))
+                st.metric("📊 Total Partidas", len(matches_df))
             with col2:
+                valid = len(matches_df[matches_df['Win_J1%'].notna()])
+                st.metric("✅ Com Previsão", valid)
+            with col3:
                 clay = len(matches_df[matches_df['superficie'] == 'Clay']) if 'superficie' in matches_df else 0
                 st.metric("🟤 Clay", clay)
-            with col3:
+            with col4:
                 hard = len(matches_df[matches_df['superficie'] == 'Hard']) if 'superficie' in matches_df else 0
                 st.metric("🔵 Hard", hard)
-            with col4:
-                grass = len(matches_df[matches_df['superficie'] == 'Grass']) if 'superficie' in matches_df else 0
-                st.metric("🟢 Grass", grass)
-           
-            # Exportar
+            
+            # Botões de exportação
             st.markdown("---")
             col1, col2, col3 = st.columns(3)
             with col1:
                 csv = matches_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    "📥 CSV",
+                    "📥 Exportar CSV",
                     csv,
-                    f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    f"previsoes_tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     "text/csv",
                     use_container_width=True
                 )
             with col2:
                 excel = to_excel(matches_df)
                 st.download_button(
-                    "📊 Excel",
+                    "📊 Exportar Excel",
                     excel,
-                    f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    f"previsoes_tenis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
             with col3:
-                if st.button("🗑️ Limpar Partidas", use_container_width=True):
+                if st.button("🗑️ Limpar Todas Partidas", use_container_width=True):
                     del st.session_state.matches
                     if 'show_form' in st.session_state:
                         del st.session_state.show_form
                     st.rerun()
     else:
-        st.info("👆 Clique em **'+ Adicionar Partida'** para inserir jogos manualmente ou **'BUSCAR PARTIDAS'** para tentar a API")
+        st.info("👆 Clique em **'+ Adicionar Partida'** para começar ou **'📋 Exemplo Rápido'** para testar")
+        
+        # Mostrar alguns jogadores disponíveis na base
+        if not df_stats.empty:
+            with st.expander("📋 Jogadores disponíveis na sua base de dados"):
+                all_players = set(df_stats['winner_clean'].tolist() + df_stats['loser_clean'].tolist())
+                players_list = sorted([p for p in all_players if p and len(p) > 2])[:50]
+                st.write(", ".join(players_list))
 
 st.markdown("---")
-st.caption(f"🎾 Tennis Predictor Pro • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(f"🎾 Tennis Predictor Pro • Base: {len(df_stats)} jogos • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
