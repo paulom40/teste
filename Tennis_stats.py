@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import time
 from io import BytesIO
 import math
+import json
 
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Tennis Predictor Pro")
@@ -250,78 +251,59 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Previsoes')
     return output.getvalue()
 
-# ====================== FUNÇÕES API CORRETAS ======================
-@st.cache_data(ttl=1800)
-def test_api_connection():
-    """Testa a conexão com a API usando endpoint que existe"""
+# ====================== FUNÇÕES API CORRETAS (POST) ======================
+def call_api_endpoint(endpoint, payload):
+    """Função genérica para chamar endpoints da API via POST"""
     headers = {
         "x-rapidapi-host": RAPIDAPI_HOST,
-        "x-rapidapi-key": RAPIDAPI_KEY
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "Content-Type": "application/json"
     }
     
-    # Usando endpoint singlesRanking que deve existir [citation:2]
-    url = f"https://{RAPIDAPI_HOST}/singlesRanking"
+    url = f"https://{RAPIDAPI_HOST}/{endpoint}"
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         if response.status_code == 200:
             return True, response.json()
         else:
-            return False, f"Erro {response.status_code}: {response.text[:100]}"
+            return False, f"Erro {response.status_code}: {response.text[:200]}"
     except Exception as e:
         return False, str(e)
 
 @st.cache_data(ttl=1800)
-def get_fixtures_from_api(tour="atp", date=None):
-    """Busca partidas futuras usando getAllFixtures [citation:2]"""
-    headers = {
-        "x-rapidapi-host": RAPIDAPI_HOST,
-        "x-rapidapi-key": RAPIDAPI_KEY
+def test_api_connection():
+    """Testa a conexão com a API usando singlesRanking [citation:2]"""
+    payload = {
+        "tour": "atp",
+        "limit": 5
     }
-    
-    url = f"https://{RAPIDAPI_HOST}/getAllFixtures"
-    
-    params = {
-        "tour": tour,  # atp ou wta
-    }
-    
-    if date:
-        params["date"] = date
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception as e:
-        return None
+    return call_api_endpoint("singlesRanking", payload)
 
 @st.cache_data(ttl=1800)
-def get_ranking_from_api(tour="atp"):
+def get_ranking_from_api(tour="atp", limit=50):
     """Busca ranking usando singlesRanking [citation:2]"""
-    headers = {
-        "x-rapidapi-host": RAPIDAPI_HOST,
-        "x-rapidapi-key": RAPIDAPI_KEY
-    }
-    
-    url = f"https://{RAPIDAPI_HOST}/singlesRanking"
-    
-    params = {
+    payload = {
         "tour": tour,
-        "limit": 50
+        "limit": limit
     }
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception as e:
-        return None
+    success, result = call_api_endpoint("singlesRanking", payload)
+    return result if success else None
 
-def parse_fixtures_to_matches(fixtures_data, superficie_padrao="Hard"):
+@st.cache_data(ttl=1800)
+def get_fixtures_from_api(tour="atp", date=None):
+    """Busca partidas futuras usando getAllFixtures [citation:2]"""
+    payload = {
+        "tour": tour,
+        "limit": 100
+    }
+    if date:
+        payload["date"] = date
+    
+    success, result = call_api_endpoint("getAllFixtures", payload)
+    return result if success else None
+
+def parse_fixtures_to_matches(fixtures_data):
     """Converte dados da API em formato de partidas"""
     matches = []
     
@@ -329,18 +311,19 @@ def parse_fixtures_to_matches(fixtures_data, superficie_padrao="Hard"):
         return matches
     
     # A estrutura pode variar, tentamos diferentes formatos
-    data = fixtures_data
     fixtures = []
     
-    if isinstance(data, dict):
-        if 'results' in data:
-            fixtures = data['results']
-        elif 'fixtures' in data:
-            fixtures = data['fixtures']
-        elif 'data' in data:
-            fixtures = data['data'] if isinstance(data['data'], list) else []
-    elif isinstance(data, list):
-        fixtures = data
+    if isinstance(fixtures_data, dict):
+        if 'results' in fixtures_data:
+            fixtures = fixtures_data['results']
+        elif 'fixtures' in fixtures_data:
+            fixtures = fixtures_data['fixtures']
+        elif 'data' in fixtures_data:
+            fixtures = fixtures_data['data'] if isinstance(fixtures_data['data'], list) else []
+        elif 'response' in fixtures_data:
+            fixtures = fixtures_data['response']
+    elif isinstance(fixtures_data, list):
+        fixtures = fixtures_data
     
     for fixture in fixtures:
         try:
@@ -378,11 +361,13 @@ def parse_fixtures_to_matches(fixtures_data, superficie_padrao="Hard"):
                     if isinstance(start_time, str):
                         if 'T' in start_time:
                             horario = start_time.split('T')[1][:5]
+                        elif len(start_time) >= 5:
+                            horario = start_time[:5]
                 except:
                     pass
             
             # Superfície
-            superficie = superficie_padrao
+            superficie = 'Hard'
             if 'surface' in fixture:
                 s = str(fixture['surface']).lower()
                 if 'clay' in s:
@@ -391,6 +376,8 @@ def parse_fixtures_to_matches(fixtures_data, superficie_padrao="Hard"):
                     superficie = 'Grass'
                 elif 'indoor' in s:
                     superficie = 'Indoor'
+            elif torneio:
+                superficie = detect_surface(torneio)
             
             matches.append({
                 'torneio': torneio,
@@ -399,7 +386,7 @@ def parse_fixtures_to_matches(fixtures_data, superficie_padrao="Hard"):
                 'horario': horario,
                 'superficie': superficie
             })
-        except Exception:
+        except Exception as e:
             continue
     
     return matches
@@ -415,18 +402,21 @@ with st.sidebar:
     tour_type = st.selectbox("Circuito", ["atp", "wta"])
    
     if st.button("🔌 Testar Conexão API", use_container_width=True):
-        with st.spinner("Testando conexão..."):
+        with st.spinner("Testando conexão via POST..."):
             success, result = test_api_connection()
             if success:
-                st.success("✅ API Conectada com sucesso!")
-                st.info(f"Ranking obtido: {str(result)[:200]}...")
+                st.success("✅ API Conectada com sucesso! (singlesRanking)")
+                if isinstance(result, dict):
+                    st.info(f"Resposta: {str(result)[:300]}...")
+                else:
+                    st.info(f"Resposta: {result}")
             else:
                 st.error(f"❌ Erro: {result}")
-                st.info("💡 Dica: Verifique se sua chave API está ativa e tem créditos disponíveis")
+                st.info("💡 A API requer requisições POST com payload JSON")
     
-    if st.button("📊 Testar Ranking", use_container_width=True):
+    if st.button("📊 Ver Ranking", use_container_width=True):
         with st.spinner("Buscando ranking..."):
-            ranking = get_ranking_from_api(tour_type)
+            ranking = get_ranking_from_api(tour_type, 20)
             if ranking:
                 st.success("✅ Ranking obtido!")
                 st.json(ranking)
@@ -468,7 +458,7 @@ else:
     
     with col2:
         if st.button("🔄 Buscar da API", use_container_width=True):
-            with st.spinner("Buscando partidas da API..."):
+            with st.spinner("Buscando partidas da API (POST getAllFixtures)..."):
                 fixtures_data = get_fixtures_from_api(tour_type)
                 if fixtures_data:
                     matches = parse_fixtures_to_matches(fixtures_data)
@@ -481,15 +471,16 @@ else:
                         st.success(f"✅ {len(matches)} partidas encontradas!")
                         st.rerun()
                     else:
-                        st.warning("⚠️ Nenhuma partida encontrada para esta data")
+                        st.warning("⚠️ Nenhuma partida encontrada")
                 else:
-                    st.error("❌ Erro ao buscar da API")
+                    st.error("❌ Erro ao buscar da API. Verifique sua chave e créditos.")
     
     with col3:
         if st.button("📋 Exemplo Rápido", use_container_width=True):
             example_matches = pd.DataFrame([
                 {'torneio': 'ATP Masters', 'jogador_1': 'Novak Djokovic', 'jogador_2': 'Carlos Alcaraz', 'horario': '14:00', 'superficie': 'Hard'},
                 {'torneio': 'Grand Slam', 'jogador_1': 'Jannik Sinner', 'jogador_2': 'Daniil Medvedev', 'horario': '16:30', 'superficie': 'Clay'},
+                {'torneio': 'Wimbledon', 'jogador_1': 'Carlos Alcaraz', 'jogador_2': 'Novak Djokovic', 'horario': '12:00', 'superficie': 'Grass'},
             ])
             if 'matches' not in st.session_state:
                 st.session_state.matches = example_matches
@@ -500,18 +491,20 @@ else:
     
     with col4:
         if st.button("📊 Ver Ranking", use_container_width=True):
-            ranking = get_ranking_from_api(tour_type)
+            ranking = get_ranking_from_api(tour_type, 20)
             if ranking:
                 st.session_state.show_ranking = True
                 st.session_state.ranking_data = ranking
                 st.rerun()
+            else:
+                st.error("❌ Não foi possível obter o ranking")
     
     # Modal de Ranking
     if st.session_state.get('show_ranking', False):
         with st.expander("📊 Ranking - Clique para fechar", expanded=True):
             st.subheader(f"Ranking {tour_type.upper()}")
             st.json(st.session_state.ranking_data)
-            if st.button("Fechar"):
+            if st.button("Fechar Ranking"):
                 st.session_state.show_ranking = False
                 st.rerun()
     
@@ -529,6 +522,8 @@ else:
                 horario = st.text_input("Horário", datetime.now().strftime("%H:%M"))
             with col3:
                 superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
+            
+            st.caption("* Campos obrigatórios")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -588,10 +583,10 @@ else:
                         pred["Under_21.5%"]
                     ])
                 else:
-                    if p1.empty:
-                        st.warning(f"⚠️ Jogador não encontrado: {row['jogador_1']}")
-                    if p2.empty:
-                        st.warning(f"⚠️ Jogador não encontrado: {row['jogador_2']}")
+                    if p1.empty and row['jogador_1']:
+                        st.warning(f"⚠️ Jogador não encontrado na base: {row['jogador_1']}")
+                    if p2.empty and row['jogador_2']:
+                        st.warning(f"⚠️ Jogador não encontrado na base: {row['jogador_2']}")
                     results.append([None, None, None, None, None, None, None])
                 
                 progress_bar.progress((idx + 1) / len(matches_df))
@@ -620,8 +615,11 @@ else:
                 valid = len(matches_df[matches_df['Win_J1%'].notna()])
                 st.metric("✅ Com Previsão", valid)
             with col3:
-                fav = len(matches_df[matches_df['Win_J1%'].notna() & (matches_df['Win_J1%'] > 50)]) if 'Win_J1%' in matches_df else 0
-                st.metric("⭐ Favoritos", fav)
+                if valid > 0:
+                    media_favorito = matches_df[matches_df['Win_J1%'].notna()]['Win_J1%'].mean()
+                    st.metric("⭐ Média Favorito", f"{media_favorito:.1f}%")
+                else:
+                    st.metric("⭐ Média Favorito", "N/A")
             with col4:
                 media_elo = matches_df['Elo_J1'].mean() if 'Elo_J1' in matches_df and matches_df['Elo_J1'].notna().any() else 1500
                 st.metric("📈 Média ELO", int(media_elo))
@@ -655,6 +653,13 @@ else:
                     st.rerun()
     else:
         st.info("👆 Clique em **'+ Adicionar Partida'** ou **'🔄 Buscar da API'** para começar")
+        
+        # Mostrar alguns jogadores disponíveis na base
+        if not df_stats.empty:
+            with st.expander("📋 Jogadores disponíveis na sua base de dados"):
+                all_players = set(df_stats['winner_clean'].tolist() + df_stats['loser_clean'].tolist())
+                players_list = sorted([p for p in all_players if p and len(p) > 2])[:50]
+                st.write(", ".join(players_list))
 
 st.markdown("---")
 st.caption(f"🎾 Tennis Predictor Pro • Base: {len(df_stats)} jogos • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
