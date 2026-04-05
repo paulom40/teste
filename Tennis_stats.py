@@ -8,7 +8,6 @@ import time
 from io import BytesIO
 import math
 import random
-import pytz
 
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Partidas Hoje + Predictor Stats")
@@ -278,102 +277,29 @@ def detect_surface(tournament: str) -> str:
 def get_real_tournaments():
     """Retorna os torneios reais que estão acontecendo neste momento"""
     today = datetime.now()
+    current_month = today.month
     
-    # Calendário real ATP/WTA 2024 por semana
-    tournaments_schedule = {
-        # Semana 1 (Jan 1-7)
-        '2024-01-01': ['United Cup', 'ATP Brisbane', 'ATP Hong Kong', 'WTA Brisbane', 'WTA Auckland'],
-        # Semana 2 (Jan 8-14)
-        '2024-01-08': ['ATP Adelaide', 'ATP Auckland', 'WTA Adelaide', 'WTA Hobart'],
-        # Semana 3 (Jan 15-28)
-        '2024-01-15': ['Australian Open'],
-        # Semana 4 (Jan 29 - Feb 4)
-        '2024-01-29': ['ATP Montpellier', 'ATP Dallas', 'WTA Linz', 'WTA Hua Hin'],
-        # Semana 5 (Feb 5-11)
-        '2024-02-05': ['ATP Marseille', 'ATP Buenos Aires', 'WTA Abu Dhabi', 'WTA Cluj-Napoca'],
-        # Semana 6 (Feb 12-18)
-        '2024-02-12': ['ATP Rotterdam', 'ATP Delray Beach', 'ATP Buenos Aires', 'WTA Doha'],
-        # Semana 7 (Feb 19-25)
-        '2024-02-19': ['ATP Rio Open', 'ATP Los Cabos', 'ATP Doha', 'WTA Dubai'],
-        # Semana 8 (Feb 26 - Mar 3)
-        '2024-02-26': ['ATP Acapulco', 'ATP Dubai', 'ATP Santiago', 'WTA San Diego', 'WTA Austin'],
-        # Semana 9 (Mar 4-17)
-        '2024-03-04': ['Indian Wells'],
-        # Semana 10 (Mar 18-31)
-        '2024-03-18': ['Miami Open'],
-        # Semana 11 (Apr 1-7)
-        '2024-04-01': ['ATP Estoril', 'ATP Houston', 'ATP Marrakech', 'WTA Charleston', 'WTA Bogota'],
-        # Semana 12 (Apr 8-14)
-        '2024-04-08': ['Monte-Carlo Masters', 'WTA Stuttgart'],
-        # Semana 13 (Apr 15-21)
-        '2024-04-15': ['ATP Barcelona', 'ATP Munich', 'ATP Bucharest', 'WTA Stuttgart'],
-        # Semana 14 (Apr 22-28)
-        '2024-04-22': ['Madrid Open'],
-        # Semana 15 (Apr 29 - May 5)
-        '2024-04-29': ['Madrid Open'],
-        # Semana 16 (May 6-19)
-        '2024-05-06': ['Italian Open'],
-        # Semana 17 (May 20-26)
-        '2024-05-20': ['ATP Geneva', 'ATP Lyon', 'WTA Strasbourg', 'WTA Rabat'],
-        # Semana 18 (May 26 - Jun 9)
-        '2024-05-26': ['French Open'],
-        # Semana 19 (Jun 10-16)
-        '2024-06-10': ['ATP Stuttgart', 'ATP Hertogenbosch', 'WTA Nottingham', 'WTA Hertogenbosch'],
-        # Semana 20 (Jun 17-23)
-        '2024-06-17': ['Halle Open', 'Queen\'s Club', 'WTA Berlin', 'WTA Birmingham'],
-        # Semana 21 (Jun 24 - Jul 14)
-        '2024-06-24': ['Wimbledon'],
-        # Semana 22 (Jul 15-21)
-        '2024-07-15': ['ATP Hamburg', 'ATP Newport', 'ATP Gstaad', 'WTA Palermo', 'WTA Budapest'],
-        # Semana 23 (Jul 22-28)
-        '2024-07-22': ['ATP Atlanta', 'ATP Umag', 'ATP Kitzbühel', 'WTA Prague', 'WTA Warsaw'],
-        # Semana 24 (Jul 29 - Aug 4)
-        '2024-07-29': ['ATP Washington', 'WTA Washington'],
-        # Semana 25 (Aug 5-12)
-        '2024-08-05': ['ATP Montreal', 'WTA Toronto'],
-        # Semana 26 (Aug 12-19)
-        '2024-08-12': ['Cincinnati Masters'],
-        # Semana 27 (Aug 19-25)
-        '2024-08-19': ['ATP Winston-Salem', 'WTA Cleveland', 'WTA Monterrey'],
-        # Semana 28 (Aug 26 - Sep 8)
-        '2024-08-26': ['US Open'],
-        # Semana 29 (Sep 16-22)
-        '2024-09-16': ['ATP Chengdu', 'ATP Zhuhai', 'WTA Seoul', 'WTA Guangzhou'],
-        # Semana 30 (Sep 23-29)
-        '2024-09-23': ['ATP Tokyo', 'ATP Beijing', 'WTA Beijing'],
-        # Semana 31 (Sep 30 - Oct 6)
-        '2024-09-30': ['ATP Shanghai', 'WTA Wuhan'],
-        # Semana 32 (Oct 7-13)
-        '2024-10-07': ['ATP Shanghai', 'WTA Wuhan'],
-        # Semana 33 (Oct 14-20)
-        '2024-10-14': ['ATP Vienna', 'ATP Stockholm', 'WTA Tokyo', 'WTA Ningbo'],
-        # Semana 34 (Oct 21-27)
-        '2024-10-21': ['ATP Vienna', 'ATP Basel', 'WTA Tokyo', 'WTA Guangzhou'],
-        # Semana 35 (Oct 28 - Nov 3)
-        '2024-10-28': ['Paris Masters', 'WTA Hong Kong', 'WTA Jiangxi'],
-        # Semana 36 (Nov 4-10)
-        '2024-11-04': ['ATP Metz', 'ATP Belgrade', 'WTA Finals'],
-        # Semana 37 (Nov 11-17)
-        '2024-11-11': ['ATP Finals', 'WTA Finals'],
-        # Semana 38 (Nov 18-24)
-        '2024-11-18': ['Davis Cup Finals'],
-        # Semana 39 (Nov 25 - Dec 1)
-        '2024-11-25': ['Next Gen Finals'],
+    # Torneios reais por mês (ATP/WTA 2024)
+    tournaments_by_month = {
+        1: ['Australian Open', 'ATP Adelaide', 'ATP Auckland', 'WTA Adelaide', 'WTA Hobart'],
+        2: ['ATP Buenos Aires', 'ATP Delray Beach', 'ATP Marseille', 'ATP Rio Open', 'WTA Doha', 'WTA Dubai'],
+        3: ['Indian Wells', 'Miami Open', 'ATP Acapulco', 'ATP Dubai', 'WTA Indian Wells', 'WTA Miami'],
+        4: ['Monte-Carlo Masters', 'ATP Barcelona', 'ATP Munich', 'ATP Estoril', 'WTA Charleston', 'WTA Stuttgart'],
+        5: ['Madrid Open', 'Italian Open', 'ATP Geneva', 'ATP Lyon', 'WTA Rome', 'WTA Strasbourg'],
+        6: ['French Open', 'ATP Stuttgart', 'Halle Open', 'ATP London', 'WTA Berlin', 'WTA Birmingham'],
+        7: ['Wimbledon', 'ATP Hamburg', 'ATP Gstaad', 'ATP Newport', 'WTA Palermo', 'WTA Budapest'],
+        8: ['ATP Washington', 'ATP Montreal', 'Cincinnati Masters', 'ATP Winston-Salem', 'WTA Toronto', 'WTA Cincinnati'],
+        9: ['US Open', 'ATP Chengdu', 'ATP Zhuhai', 'ATP Metz', 'WTA Guadalajara', 'WTA Tokyo'],
+        10: ['ATP Tokyo', 'ATP Shanghai', 'ATP Vienna', 'ATP Stockholm', 'WTA Beijing', 'WTA Wuhan'],
+        11: ['Paris Masters', 'ATP Metz', 'ATP Sofia', 'ATP Belgrade', 'WTA Finals', 'WTA Hong Kong'],
+        12: ['ATP Finals', 'Next Gen Finals', 'Challenger Maia', 'WTA Finals']
     }
     
-    # Encontrar a semana atual
-    current_week_start = today - timedelta(days=today.weekday())
-    week_key = current_week_start.strftime('%Y-%m-%d')
-    
-    # Torneios desta semana
-    tournaments = tournaments_schedule.get(week_key, ['ATP Tour', 'WTA Tour', 'Challenger Tour'])
-    
-    return tournaments
+    return tournaments_by_month.get(current_month, ['ATP Tour', 'WTA Tour', 'Challenger Tour'])
 
 # ====================== PARTIDAS REAIS DE HOJE ======================
 def get_today_real_matches():
     """Gera partidas reais baseadas nos torneios que estão acontecendo hoje"""
-    today = datetime.now()
     tournaments = get_real_tournaments()
     
     # Ranking ATP atualizado (top 30)
@@ -382,7 +308,8 @@ def get_today_real_matches():
         'Alexander Zverev', 'Andrey Rublev', 'Holger Rune', 'Casper Ruud',
         'Hubert Hurkacz', 'Alex de Minaur', 'Taylor Fritz', 'Stefanos Tsitsipas',
         'Tommy Paul', 'Grigor Dimitrov', 'Karen Khachanov', 'Ben Shelton',
-        'Frances Tiafoe', 'Nicolas Jarry', 'Adrian Mannarino', 'Cameron Norrie'
+        'Frances Tiafoe', 'Nicolas Jarry', 'Adrian Mannarino', 'Cameron Norrie',
+        'Sebastian Korda', 'Felix Auger-Aliassime', 'Alejandro Davidovich Fokina', 'Lorenzo Musetti'
     ]
     
     # Ranking WTA atualizado (top 20)
@@ -390,36 +317,36 @@ def get_today_real_matches():
         'Iga Swiatek', 'Aryna Sabalenka', 'Coco Gauff', 'Elena Rybakina',
         'Jessica Pegula', 'Ons Jabeur', 'Marketa Vondrousova', 'Karolina Muchova',
         'Maria Sakkari', 'Barbora Krejcikova', 'Beatriz Haddad Maia', 'Jelena Ostapenko',
-        'Liudmila Samsonova', 'Veronika Kudermetova', 'Madison Keys', 'Victoria Azarenka'
+        'Liudmila Samsonova', 'Veronika Kudermetova', 'Madison Keys', 'Victoria Azarenka',
+        'Ekaterina Alexandrova', 'Magda Linette', 'Caroline Garcia', 'Petra Kvitova'
     ]
     
     matches = []
-    surfaces = {'Clay': '🟤', 'Hard': '🔵', 'Grass': '🟢', 'Indoor': '🟠'}
     
     for tournament in tournaments:
         # Determinar superfície baseada no torneio
-        if 'Clay' in tournament or 'clay' in tournament.lower() or 'Monte-Carlo' in tournament or 'Barcelona' in tournament or 'Madrid' in tournament or 'Rome' in tournament or 'French' in tournament or 'Roland' in tournament:
+        if any(word in tournament for word in ['Clay', 'Monte-Carlo', 'Barcelona', 'Madrid', 'Rome', 'French', 'Roland', 'Estoril', 'Munich', 'Charleston', 'Stuttgart']):
             surface = 'Clay'
-        elif 'Grass' in tournament or 'Wimbledon' in tournament or 'Halle' in tournament or 'Queen' in tournament:
+        elif any(word in tournament for word in ['Grass', 'Wimbledon', 'Halle', 'Queen', 'Berlin', 'Birmingham', 'Newport']):
             surface = 'Grass'
-        elif 'Indoor' in tournament:
+        elif any(word in tournament for word in ['Indoor', 'Paris Masters', 'Vienna', 'Basel', 'Metz', 'Sofia', 'Belgrade']):
             surface = 'Indoor'
         else:
             surface = 'Hard'
         
-        # Verificar se é torneio ATP ou WTA
-        is_atp = any(word in tournament for word in ['ATP', 'Open', 'Masters', 'Cup', 'Finals'])
+        # Verificar se é torneio ATP, WTA ou ambos
+        is_atp = any(word in tournament for word in ['ATP', 'Open', 'Masters', 'Cup', 'Finals']) and 'WTA' not in tournament
         is_wta = 'WTA' in tournament
         
-        if is_atp and not is_wta:
+        if is_atp:
             players = atp_ranking
             prefix = 'ATP'
-        elif is_wta and not is_atp:
+        elif is_wta:
             players = wta_ranking
             prefix = 'WTA'
         else:
-            # Torneio misto
-            players = atp_ranking + wta_ranking
+            # Torneio misto (como Australian Open, US Open)
+            players = atp_ranking[:15] + wta_ranking[:15]
             prefix = ''
         
         # Gerar 3-6 partidas por torneio
@@ -442,21 +369,18 @@ def get_today_real_matches():
                     'superficie': surface
                 })
     
+    # Embaralhar para misturar torneios
+    random.shuffle(matches)
+    
     return pd.DataFrame(matches)
 
-# ====================== API SOFASCORE CORRIGIDA ======================
+# ====================== API SOFASCORE ======================
 @st.cache_data(ttl=1800)
 def get_matches_from_sofascore():
     """Obtém partidas de tênis filtrando APENAS as de hoje"""
     try:
-        # Usar fuso horário de Portugal (UTC+0 no inverno, UTC+1 no verão)
-        try:
-            lisbon_tz = pytz.timezone('Europe/Lisbon')
-            today_lisbon = datetime.now(lisbon_tz)
-        except:
-            today_lisbon = datetime.now()
-        
-        today_str = today_lisbon.strftime("%Y-%m-%d")
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -487,9 +411,9 @@ def get_matches_from_sofascore():
                             event_date = datetime.fromtimestamp(start_timestamp)
                             
                             # Comparar APENAS a data (ignorar hora)
-                            if (event_date.year == today_lisbon.year and 
-                                event_date.month == today_lisbon.month and 
-                                event_date.day == today_lisbon.day):
+                            if (event_date.year == today.year and 
+                                event_date.month == today.month and 
+                                event_date.day == today.day):
                                 
                                 tournament = event.get('tournament', {})
                                 tournament_name = tournament.get('name', '')
@@ -575,8 +499,7 @@ def get_matches_from_sofascore():
         
         return pd.DataFrame()
         
-    except Exception as e:
-        print(f"Erro: {e}")
+    except Exception:
         return pd.DataFrame()
 
 # ====================== EXPORTAR PARA EXCEL ======================
@@ -591,13 +514,8 @@ with tab1:
     hoje = datetime.now()
     st.header(f"📅 Partidas de Tênis - {hoje.strftime('%d/%m/%Y (%A)')}")
     
-    # Informação de fuso horário
-    try:
-        lisbon_tz = pytz.timezone('Europe/Lisbon')
-        hora_lisboa = datetime.now(lisbon_tz)
-        st.caption(f"🕐 Hora em Lisboa: {hora_lisboa.strftime('%H:%M:%S')} | 🇵🇹 Fuso horário de Portugal")
-    except:
-        st.caption(f"🕐 Hora atual: {hoje.strftime('%H:%M:%S')}")
+    # Mostrar hora atual
+    st.caption(f"🕐 Hora atual: {hoje.strftime('%H:%M:%S')}")
     
     if df_stats.empty:
         st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
@@ -622,14 +540,14 @@ with tab1:
                     st.success(f"✅ {len(matches_df)} partidas encontradas para HOJE!")
         
         if usar_reais:
-            with st.spinner("Carregando torneios reais que estão acontecendo neste momento..."):
+            with st.spinner("Carregando torneios reais que estão acontecendo neste mês..."):
                 matches_df = get_today_real_matches()
                 st.session_state.cached_matches = matches_df
                 
                 # Mostrar quais torneios estão ativos
                 torneios_ativos = matches_df['torneio'].unique()
                 st.success(f"🎾 {len(matches_df)} partidas carregadas")
-                with st.expander("📅 Torneios ativos neste momento"):
+                with st.expander("📅 Torneios ativos neste mês"):
                     for t in torneios_ativos[:10]:
                         st.write(f"• {t}")
         
