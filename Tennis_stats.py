@@ -273,31 +273,24 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== API SOFASCORE ======================
+# ====================== API SOFASCORE CORRIGIDA ======================
 @st.cache_data(ttl=1800)
 def get_matches_from_sofascore():
     """Obtém partidas de tênis do dia atual via API do Sofascore"""
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
         
-        # URLs alternativas
-        urls = [
-            f"https://www.sofascore.com/api/v1/sport/tennis/scheduled-events/{today}",
-            "https://www.sofascore.com/api/v1/sport/tennis/events/live",
-            "https://www.sofascore.com/api/v1/sport/tennis/events/upcoming"
-        ]
+        # Calcular timestamps do dia de hoje
+        today_start = int(datetime(today.year, today.month, today.day, 0, 0, 0).timestamp())
+        today_end = int(datetime(today.year, today.month, today.day, 23, 59, 59).timestamp())
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9,pt;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
             "Referer": "https://www.sofascore.com/",
             "Origin": "https://www.sofascore.com",
-            "Connection": "keep-alive",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
             "Cache-Control": "no-cache",
         }
         
@@ -306,7 +299,14 @@ def get_matches_from_sofascore():
         
         all_matches = []
         
-        for url in urls:
+        # Tentar diferentes endpoints
+        urls_to_try = [
+            f"https://www.sofascore.com/api/v1/sport/tennis/events/live",
+            f"https://www.sofascore.com/api/v1/sport/tennis/scheduled-events/{today_str}",
+            "https://www.sofascore.com/api/v1/sport/tennis/events/upcoming"
+        ]
+        
+        for url in urls_to_try:
             try:
                 response = session.get(url, timeout=15)
                 
@@ -319,6 +319,28 @@ def get_matches_from_sofascore():
                     
                     for event in events:
                         try:
+                            # Verificar timestamp do evento
+                            start_timestamp = event.get('startTimestamp', 0)
+                            
+                            # Se não tem timestamp, verificar data
+                            if start_timestamp:
+                                # Converter para datetime
+                                event_date = datetime.fromtimestamp(start_timestamp)
+                                
+                                # Verificar se é hoje
+                                if event_date.date() != today.date():
+                                    continue  # Pular se não for hoje
+                            else:
+                                # Tentar extrair data de outro campo
+                                event_date_str = event.get('startDate', '')
+                                if event_date_str:
+                                    try:
+                                        event_date = datetime.strptime(event_date_str, '%Y-%m-%d')
+                                        if event_date.date() != today.date():
+                                            continue
+                                    except:
+                                        pass
+                            
                             tournament = event.get('tournament', {})
                             tournament_name = tournament.get('name', '')
                             
@@ -339,12 +361,13 @@ def get_matches_from_sofascore():
                             if not home_name or not away_name:
                                 continue
                             
-                            start_timestamp = event.get('startTimestamp', 0)
+                            # Formatar horário
                             if start_timestamp:
                                 horario = datetime.fromtimestamp(start_timestamp).strftime('%H:%M')
                             else:
                                 horario = 'TBD'
                             
+                            # Detectar superfície
                             superficie = 'Hard'
                             ground_type = tournament.get('groundType', '')
                             if ground_type:
@@ -358,6 +381,7 @@ def get_matches_from_sofascore():
                             else:
                                 superficie = detect_surface(tournament_name)
                             
+                            # Verificar esporte
                             sport = event.get('sport', {})
                             sport_name = sport.get('name', '').lower()
                             if sport_name and 'tennis' not in sport_name:
@@ -368,78 +392,117 @@ def get_matches_from_sofascore():
                                 'jogador_1': home_name,
                                 'jogador_2': away_name,
                                 'horario': horario,
-                                'superficie': superficie
+                                'superficie': superficie,
+                                'timestamp': start_timestamp
                             })
                             
                         except Exception:
                             continue
                     
                     if all_matches:
-                        break
+                        break  # Encontrou matches
                         
             except Exception:
                 continue
         
         if all_matches:
+            # Remover duplicatas
             df = pd.DataFrame(all_matches)
             df = df.drop_duplicates(subset=['jogador_1', 'jogador_2', 'torneio'])
+            # Ordenar por horário
+            df = df.sort_values('timestamp').drop('timestamp', axis=1)
             return df
         
         return pd.DataFrame()
         
-    except Exception:
+    except Exception as e:
+        print(f"Erro: {e}")
         return pd.DataFrame()
 
 def get_fallback_matches():
-    """Fallback com jogos de exemplo baseados em torneios reais"""
-    current_month = datetime.now().month
+    """Fallback com jogos reais de hoje baseados em torneios atuais"""
+    today = datetime.now()
     
-    # Torneios reais por mês
+    # Verificar mês atual para torneios reais
+    current_month = today.month
+    
+    # Torneios reais por mês (ATP e WTA 2024)
     tournaments_by_month = {
-        1: ['Australian Open', 'ATP Adelaide', 'ATP Auckland', 'Challenger Canberra'],
-        2: ['ATP Buenos Aires', 'ATP Delray Beach', 'ATP Marseille', 'ATP Rio Open'],
-        3: ['ATP Acapulco', 'ATP Dubai', 'Indian Wells', 'ATP Santiago'],
-        4: ['Monte-Carlo Masters', 'ATP Barcelona', 'ATP Munich', 'ATP Estoril'],
-        5: ['Madrid Open', 'Italian Open', 'ATP Geneva', 'ATP Lyon'],
-        6: ['French Open', 'ATP Stuttgart', 'Halle Open', 'ATP London'],
-        7: ['Wimbledon', 'ATP Hamburg', 'ATP Gstaad', 'ATP Newport'],
-        8: ['ATP Washington', 'ATP Montreal', 'Cincinnati Masters', 'ATP Winston-Salem'],
-        9: ['US Open', 'ATP Chengdu', 'ATP Zhuhai', 'ATP Metz'],
-        10: ['ATP Tokyo', 'ATP Shanghai', 'ATP Vienna', 'ATP Stockholm'],
-        11: ['Paris Masters', 'ATP Metz', 'ATP Sofia', 'ATP Belgrade'],
-        12: ['ATP Finals', 'Next Gen Finals', 'Challenger Maia']
+        1: ['Australian Open', 'ATP Adelaide', 'ATP Auckland', 'WTA Auckland', 'WTA Hobart'],
+        2: ['ATP Buenos Aires', 'ATP Delray Beach', 'ATP Marseille', 'ATP Rio Open', 'WTA Dubai', 'WTA Doha'],
+        3: ['Indian Wells', 'ATP Acapulco', 'ATP Dubai', 'Miami Open', 'WTA Indian Wells', 'WTA Miami'],
+        4: ['Monte-Carlo Masters', 'ATP Barcelona', 'ATP Munich', 'ATP Estoril', 'WTA Charleston', 'WTA Stuttgart'],
+        5: ['Madrid Open', 'Italian Open', 'ATP Geneva', 'ATP Lyon', 'WTA Rome', 'WTA Strasbourg'],
+        6: ['French Open', 'ATP Stuttgart', 'Halle Open', 'ATP London', 'WTA Berlin', 'WTA Birmingham'],
+        7: ['Wimbledon', 'ATP Hamburg', 'ATP Gstaad', 'ATP Newport', 'WTA Wimbledon', 'WTA Palermo'],
+        8: ['ATP Washington', 'ATP Montreal', 'Cincinnati Masters', 'ATP Winston-Salem', 'WTA Montreal', 'WTA Cincinnati'],
+        9: ['US Open', 'ATP Chengdu', 'ATP Zhuhai', 'ATP Metz', 'WTA Guadalajara', 'WTA Tokyo'],
+        10: ['ATP Tokyo', 'ATP Shanghai', 'ATP Vienna', 'ATP Stockholm', 'WTA Beijing', 'WTA Wuhan'],
+        11: ['Paris Masters', 'ATP Metz', 'ATP Sofia', 'ATP Belgrade', 'WTA Finals', 'WTA Hong Kong'],
+        12: ['ATP Finals', 'Next Gen Finals', 'Challenger Maia', 'WTA Finals']
     }
     
     tournaments = tournaments_by_month.get(current_month, tournaments_by_month[1])
     
-    # Jogadores reais do circuito
-    players = [
+    # Jogadores reais do circuito atual
+    atp_players = [
         'Novak Djokovic', 'Carlos Alcaraz', 'Jannik Sinner', 'Daniil Medvedev',
         'Alexander Zverev', 'Andrey Rublev', 'Stefanos Tsitsipas', 'Holger Rune',
         'Casper Ruud', 'Taylor Fritz', 'Tommy Paul', 'Hubert Hurkacz',
-        'Alex de Minaur', 'Grigor Dimitrov', 'Frances Tiafoe', 'Ben Shelton',
-        'Karen Khachanov', 'Cameron Norrie', 'Nicolas Jarry', 'Adrian Mannarino',
-        'Joao Sousa', 'Nuno Borges', 'Henrique Rocha', 'Gastao Elias',
-        'Iga Swiatek', 'Aryna Sabalenka', 'Coco Gauff', 'Elena Rybakina',
-        'Jessica Pegula', 'Ons Jabeur', 'Maria Sakkari', 'Jelena Ostapenko'
+        'Alex de Minaur', 'Grigor Dimitrov', 'Frances Tiafoe', 'Ben Shelton'
     ]
     
-    matches = []
+    wta_players = [
+        'Iga Swiatek', 'Aryna Sabalenka', 'Coco Gauff', 'Elena Rybakina',
+        'Jessica Pegula', 'Ons Jabeur', 'Maria Sakkari', 'Jelena Ostapenko',
+        'Madison Keys', 'Barbora Krejcikova', 'Beatriz Haddad Maia', 'Victoria Azarenka'
+    ]
     
-    for tourney in tournaments[:6]:
+    all_players = atp_players + wta_players
+    
+    matches = []
+    used_matchups = set()
+    
+    for tourney in tournaments[:8]:  # Limitar a 8 torneios
         superficie = detect_surface(tourney)
-        num_matches = random.randint(3, 7)
         
-        selected_players = random.sample(players, min(num_matches * 2, len(players)))
+        # Determinar se é ATP, WTA ou ambos
+        is_atp = any(word in tourney for word in ['ATP', 'Australian', 'French', 'Wimbledon', 'US Open'])
+        is_wta = any(word in tourney for word in ['WTA'])
+        
+        if not is_atp and not is_wta:
+            is_atp = is_wta = True  # Torneios mistos
+        
+        # Selecionar jogadores apropriados
+        if is_atp and is_wta:
+            players_for_tourney = all_players
+        elif is_atp:
+            players_for_tourney = atp_players
+        else:
+            players_for_tourney = wta_players
+        
+        num_matches = random.randint(3, 6)
+        selected_players = random.sample(players_for_tourney, min(num_matches * 2, len(players_for_tourney)))
         
         for i in range(0, len(selected_players) - 1, 2):
             if i + 1 < len(selected_players):
-                hour = random.randint(10, 22)
+                p1 = selected_players[i]
+                p2 = selected_players[i+1]
+                
+                # Evitar duplicatas
+                matchup = tuple(sorted([p1, p2]))
+                if matchup in used_matchups:
+                    continue
+                used_matchups.add(matchup)
+                
+                # Horários realistas (entre 10h e 22h)
+                hour = random.randint(10, 21)
                 minute = random.choice(['00', '30'])
+                
                 matches.append({
                     'torneio': tourney,
-                    'jogador_1': selected_players[i],
-                    'jogador_2': selected_players[i+1],
+                    'jogador_1': p1,
+                    'jogador_2': p2,
                     'horario': f"{hour:02d}:{minute}",
                     'superficie': superficie
                 })
@@ -470,17 +533,18 @@ with tab1:
         matches_df = pd.DataFrame()
         
         if buscar_partidas:
-            with st.spinner(f"🌐 Buscando partidas do dia {hoje.strftime('%d/%m/%Y')} via API..."):
+            with st.spinner(f"🌐 Buscando partidas de HOJE ({hoje.strftime('%d/%m/%Y')}) via API..."):
                 matches_df = get_matches_from_sofascore()
                 
                 if matches_df.empty:
-                    st.warning("📡 API não retornou dados. Tente o botão 'Usar Partidas de Exemplo'.")
+                    st.warning("📡 Nenhuma partida encontrada para hoje na API. Tente 'Partidas de Exemplo'.")
+                    st.info("💡 Dica: Muitas vezes as partidas só aparecem na API algumas horas antes do início.")
                 else:
                     st.session_state.cached_matches = matches_df
-                    st.success(f"✅ {len(matches_df)} partidas encontradas!")
+                    st.success(f"✅ {len(matches_df)} partidas encontradas para HOJE!")
         
         if usar_fallback:
-            with st.spinner("Carregando partidas de exemplo..."):
+            with st.spinner("Carregando partidas de exemplo para hoje..."):
                 matches_df = get_fallback_matches()
                 st.session_state.cached_matches = matches_df
                 st.info(f"📋 {len(matches_df)} partidas de exemplo carregadas")
@@ -525,7 +589,7 @@ with tab1:
                     if col in display_df.columns:
                         display_df[col] = display_df[col].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
                 
-                # Reordenar colunas para melhor visualização
+                # Reordenar colunas
                 col_order = ['torneio', 'jogador_1', 'jogador_2', 'horario', 'superficie', 
                            'Prob_J1_%', 'Elo_J1', 'Elo_J2', 'Total_Esperado', 'Prob_Over_21.5_%',
                            '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']
