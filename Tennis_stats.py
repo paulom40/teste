@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
 import unicodedata
 from difflib import SequenceMatcher
+from datetime import datetime
 from io import BytesIO
 import math
 
@@ -74,7 +72,8 @@ def norm(name):
     return ''.join(filter(str.isalnum, n.lower().strip()))
 
 def find_best_player_stats(player_name, df):
-    if df.empty or not player_name: return pd.Series(dtype='object')
+    if df.empty or not player_name:
+        return pd.Series(dtype='object')
     clean_name = norm(player_name)
     best_score = 0.0
     best_match = None
@@ -83,147 +82,87 @@ def find_best_player_stats(player_name, df):
             clean_db = row.get(col, "")
             if not clean_db: continue
             sim = SequenceMatcher(None, clean_name, clean_db).ratio()
-            if clean_name in clean_db or clean_db in clean_name: sim = max(sim, 0.95)
+            if sim > 0.85 or clean_name in clean_db or clean_db in clean_name:
+                sim = max(sim, 0.92)
             if sim > best_score:
                 best_score = sim
-                best_match = row
-        if best_score > 0.95: break
-    return best_match if best_score >= 0.6 else pd.Series(dtype='object')
+                best_match = row.copy()  # .copy() para evitar problemas
+        if best_score > 0.92: break
+    return best_match if best_score >= 0.65 else pd.Series(dtype='object')
 
-def get_player_elo(player_name, surface):
-    if df_stats.empty or not player_name: return 1500
-    clean_name = norm(player_name)
-    surface = surface.capitalize()
-    player_games = df_stats[(df_stats['winner_clean'] == clean_name) | (df_stats['loser_clean'] == clean_name)]
-    if player_games.empty: return 1500
-    surface_games = player_games[player_games.get('surface', 'Hard') == surface]
-    if surface_games.empty: surface_games = player_games
-    elos = [row['winner_elo'] if row['winner_clean'] == clean_name else row['loser_elo'] for _, row in surface_games.iterrows()]
-    return int(sum(elos) / len(elos)) if elos else 1500
+def predict_from_stats(p1_stats, p2_stats, superficie="Clay", p1_name="", p2_name=""):
+    if p1_stats.empty or p2_stats.empty:
+        return {
+            "Prob_J1_%": None, "Elo_J1": None, "Elo_J2": None, "Total_Esperado": None,
+            "Prob_Over_21.5_%": None, "First_Serve_J1_%": None, "Hold_J1_%": None,
+            "Break_Prob_J1_%": None, "Prob_3_Sets_%": None
+        }
 
-def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_name=""):
     def safe(v):
         try: return float(v) if pd.notna(v) else 0.0
         except: return 0.0
 
-    def serve_win(stats):
-        svpt = safe(stats.get('w_svpt', 0))
-        if svpt == 0: return 0.65
-        return (safe(stats.get('w_1stWon', 0)) + safe(stats.get('w_2ndWon', 0))) / svpt
+    serve1 = (safe(p1_stats.get('w_1stWon',0)) + safe(p1_stats.get('w_2ndWon',0))) / max(safe(p1_stats.get('w_svpt',1)), 1)
+    serve2 = (safe(p2_stats.get('w_1stWon',0)) + safe(p2_stats.get('w_2ndWon',0))) / max(safe(p2_stats.get('w_svpt',1)), 1)
 
-    serve1 = serve_win(p1_stats)
-    serve2 = serve_win(p2_stats)
     p1_point = (serve1 + (1 - serve2)) / 2
     p2_point = (serve2 + (1 - serve1)) / 2
 
-    elo1 = get_player_elo(p1_name, superficie)
-    elo2 = get_player_elo(p2_name, superficie)
-    prob_elo = 1 / (1 + 10 ** ((elo2 - elo1) / 400))
+    elo1 = 1500 if pd.isna(p1_stats.get('winner_elo')) else int(p1_stats.get('winner_elo', 1500))
+    elo2 = 1500 if pd.isna(p2_stats.get('winner_elo')) else int(p2_stats.get('winner_elo', 1500))  # simplificado
 
+    prob_elo = 1 / (1 + 10 ** ((elo2 - elo1) / 400))
     diff = (p1_point - p2_point) * 100
     prob_stats = 1 / (1 + 10 ** (-diff / 38))
     prob_p1 = prob_stats * 0.6 + prob_elo * 0.4
 
-    # Ajuste Clay (dominante hoje)
-    factor = 1.05 if superficie == "Clay" else 1.0
-    prob_p1 = prob_p1 * factor / (prob_p1 * factor + (1 - prob_p1) * (2 - factor))
+    # Ajuste para Clay
+    prob_p1 = prob_p1 * 1.04 if superficie == "Clay" else prob_p1
 
-    first_serve_p1 = safe(p1_stats.get('w_1stIn', 0)) / max(safe(p1_stats.get('w_svpt', 1)), 1) or 0.63
-    hold_p1 = (serve1 * 0.6 + first_serve_p1 * 0.4) ** 1.6
-    break_prob_p1 = max(0.08, min(0.42, 1 - hold_p1))
+    first_serve = safe(p1_stats.get('w_1stIn',0)) / max(safe(p1_stats.get('w_svpt',1)),1) or 0.63
+    hold_p1 = (serve1 * 0.65 + first_serve * 0.35) ** 1.5
 
     return {
         "Prob_J1_%": round(prob_p1 * 100, 1),
         "Elo_J1": elo1,
         "Elo_J2": elo2,
-        "Total_Esperado": 32.5,
-        "Prob_Over_21.5_%": 55,
-        "First_Serve_J1_%": round(first_serve_p1 * 100, 1),
+        "Total_Esperado": round(22 + (p1_point - 0.5) * 20, 1),
+        "Prob_Over_21.5_%": 58,
+        "First_Serve_J1_%": round(first_serve * 100, 1),
         "Hold_J1_%": round(hold_p1 * 100, 1),
-        "Break_Prob_J1_%": round(break_prob_p1 * 100, 1),
-        "Prob_3_Sets_%": 38,
+        "Break_Prob_J1_%": round(max(0.15, min(0.40, 1 - hold_p1)) * 100, 1),
+        "Prob_3_Sets_%": 42,
     }
 
-# ====================== SCRAPING TENNIS EXPLORER ======================
-@st.cache_data(ttl=600)
+# ====================== FALLBACK ATUALIZADO ======================
+@st.cache_data(ttl=3600)
 def get_todays_matches():
-    url = "https://www.tennisexplorer.com/matches/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        matches = []
-        rows = soup.find_all('tr')
-        
-        for row in rows:
-            try:
-                cells = row.find_all('td')
-                if len(cells) < 3: continue
-                
-                horario = cells[0].get_text(strip=True) if cells else "11:00"
-                
-                player_links = row.find_all('a', href=lambda x: x and '/player/' in str(x))
-                if len(player_links) >= 2:
-                    j1 = player_links[0].get_text(strip=True)
-                    j2 = player_links[1].get_text(strip=True)
-                else:
-                    continue
-                
-                torneio = "ATP/WTA Tour"
-                for cell in cells:
-                    text = cell.get_text(strip=True)
-                    if any(k in text.lower() for k in ['monte-carlo', 'marrakech', 'houston', 'bucharest', 'charleston']):
-                        torneio = text
-                        break
-                
-                if j1 and j2 and len(j1) > 3 and len(j2) > 3:
-                    matches.append({
-                        'torneio': torneio,
-                        'jogador_1': j1,
-                        'jogador_2': j2,
-                        'horario': horario,
-                        'superficie': 'Clay'
-                    })
-            except:
-                continue
-        
-        if len(matches) >= 6:
-            st.success(f"✅ {len(matches)} partidas carregadas do Tennis Explorer!")
-            return pd.DataFrame(matches)
-            
-    except Exception as e:
-        st.warning(f"Scraping falhou: {str(e)[:80]}... Usando fallback.")
-    
-    # ====================== FALLBACK ATUALIZADO ======================
-    st.info("📋 Usando fallback com partidas reais de 5 de Abril 2026")
-    
-    fallback = [
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Cameron Norrie', 'jogador_2': 'Miomir Kecmanovic', 'horario': '13:30', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Gael Monfils', 'jogador_2': 'Tallon Griekspoor', 'horario': '15:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Ugo Humbert', 'jogador_2': 'Moise Kouame', 'horario': '16:30', 'superficie': 'Clay'},
-        {'torneio': 'ATP Marrakech', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '16:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Houston', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '21:30', 'superficie': 'Clay'},
-        {'torneio': 'ATP Bucharest', 'jogador_1': 'Mariano Navone', 'jogador_2': 'Daniel Merida', 'horario': '13:00', 'superficie': 'Clay'},
+    data = [
+        {'torneio': 'ATP Houston - Final', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '22:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Marrakech - Final', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '15:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Bucharest - Final', 'jogador_1': 'Mariano Navone', 'jogador_2': 'Botic van de Zandschulp', 'horario': '14:00', 'superficie': 'Clay'},
+        {'torneio': 'WTA Charleston - Final', 'jogador_1': 'Jessica Pegula', 'jogador_2': 'Emma Navarro', 'horario': '18:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Vit Kopriva', 'jogador_2': 'Matteo Arnaldi', 'horario': '11:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Alexander Shevchenko', 'jogador_2': 'Andrea Pellegrino', 'horario': '11:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Hugo Gaston', 'jogador_2': 'Titouan Droguet', 'horario': '13:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Richard Gasquet', 'jogador_2': 'Valentin Royer', 'horario': '13:30', 'superficie': 'Clay'},
     ]
-    return pd.DataFrame(fallback)
+    return pd.DataFrame(data)
 
 # ====================== ABA 1 ======================
 with tab1:
     st.header(f"📅 Partidas de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
    
     if df_stats.empty:
-        st.error("⚠️ Carregue primeiro o ficheiro **Challenger1.xlsx** na barra lateral.")
+        st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
     else:
         if st.button("🔄 Buscar Partidas de Hoje", type="primary", use_container_width=True):
-            with st.spinner("🌐 A tentar scraping no Tennis Explorer..."):
-                matches_df = get_todays_matches()
-                st.session_state.cached_matches = matches_df
-                st.success(f"✅ {len(matches_df)} partidas carregadas!")
+            matches_df = get_todays_matches()
+            st.session_state.cached_matches = matches_df
+            st.success(f"✅ {len(matches_df)} partidas carregadas (Fallback)")
 
         if 'cached_matches' in st.session_state:
-            matches_df = st.session_state.cached_matches
+            matches_df = st.session_state.cached_matches.copy()
             
             with st.spinner("Calculando previsões..."):
                 results = []
@@ -233,44 +172,24 @@ with tab1:
                     p1 = find_best_player_stats(row['jogador_1'], df_stats)
                     p2 = find_best_player_stats(row['jogador_2'], df_stats)
                     
-                    if not p1.empty and not p2.empty:
-                        pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'])
-                        results.append([pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], pred["Total_Esperado"],
-                                      pred["Prob_Over_21.5_%"], pred["First_Serve_J1_%"], pred["Hold_J1_%"],
-                                      pred["Break_Prob_J1_%"], pred["Prob_3_Sets_%"]])
-                    else:
-                        results.append([None] * 9)
+                    pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'])
+                    results.append([
+                        pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], pred["Total_Esperado"],
+                        pred["Prob_Over_21.5_%"], pred["First_Serve_J1_%"], pred["Hold_J1_%"],
+                        pred["Break_Prob_J1_%"], pred["Prob_3_Sets_%"]
+                    ])
                     progress_bar.progress((idx + 1) / len(matches_df))
                 
                 cols = ['Prob_J1_%', 'Elo_J1', 'Elo_J2', 'Total_Esperado', 'Prob_Over_21.5_%',
                         '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']
                 matches_df[cols] = pd.DataFrame(results, index=matches_df.index)
                 
+                # Formatação
                 display_df = matches_df.copy()
-                for col in ['Prob_J1_%', 'Prob_Over_21.5_%', '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']:
+                percent_cols = ['Prob_J1_%', 'Prob_Over_21.5_%', '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']
+                for col in percent_cols:
                     display_df[col] = display_df[col].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-# ====================== ABA 2 ======================
-with tab2:
-    st.header("🔍 Previsão Personalizada")
-    if not df_stats.empty:
-        player_list = pd.concat([df_stats['winner_name'], df_stats['loser_name']]).drop_duplicates().sort_values().tolist()
-        col1, col2 = st.columns(2)
-        with col1: jogador_a = st.selectbox("Jogador A", player_list[:500], key="ja")
-        with col2: jogador_b = st.selectbox("Jogador B", player_list[:500], key="jb")
-        superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
-        
-        if st.button("Calcular Previsão", type="primary"):
-            if jogador_a != jogador_b:
-                p1 = find_best_player_stats(jogador_a, df_stats)
-                p2 = find_best_player_stats(jogador_b, df_stats)
-                if not p1.empty and not p2.empty:
-                    result = predict_from_stats(p1, p2, superficie, jogador_a, jogador_b)
-                    col1, col2, col3 = st.columns(3)
-                    with col1: st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
-                    with col2: st.metric(f"{jogador_b} vence", f"{100 - result['Prob_J1_%']}%")
-                    with col3: st.metric("Total Esperado", f"{result['Total_Esperado']}")
-
-st.caption("🎾 Tênis Predictor Pro • 5 de Abril 2026 • Scraping Tennis Explorer")
+st.caption("🎾 Tênis Predictor Pro • 5 de Abril 2026")
