@@ -30,11 +30,20 @@ with st.sidebar:
                     "x-rapidapi-host": RAPIDAPI_HOST,
                     "x-rapidapi-key": RAPIDAPI_KEY
                 }
-                test_url = f"https://{RAPIDAPI_HOST}/tennis/v2/atp/rankings"
-                response = requests.get(test_url, headers=headers, timeout=5)
+                # Usando um endpoint que realmente existe - buscar torneios ATP
+                test_url = f"https://{RAPIDAPI_HOST}/tennis/v2/atp/tournaments"
+                response = requests.get(test_url, headers=headers, timeout=10)
                
                 if response.status_code == 200:
-                    st.success("✅ API Conectada!")
+                    st.success("✅ API Conectada com sucesso!")
+                    # Mostrar informações da resposta
+                    data = response.json()
+                    if isinstance(data, dict) and 'results' in data:
+                        st.info(f"📊 {len(data['results'])} torneios encontrados")
+                    elif isinstance(data, list):
+                        st.info(f"📊 {len(data)} torneios encontrados")
+                    else:
+                        st.info("✅ API respondendo corretamente")
                 else:
                     st.error(f"❌ Erro: {response.status_code} - {response.text[:200]}")
             except Exception as e:
@@ -59,11 +68,10 @@ def get_matches_from_rapidapi(date_str=None):
    
     matches = []
    
+    # Endpoints corrigidos - usando os endpoints corretos da API
     endpoints = [
-        f"https://{RAPIDAPI_HOST}/tennis/v2/atp/matches/schedule/{date_str}",
-        f"https://{RAPIDAPI_HOST}/tennis/v2/wta/matches/schedule/{date_str}",
-        f"https://{RAPIDAPI_HOST}/tennis/v2/atp/matches/live",
-        f"https://{RAPIDAPI_HOST}/tennis/v2/wta/matches/live",
+        f"https://{RAPIDAPI_HOST}/tennis/v2/atp/matches/{date_str}",
+        f"https://{RAPIDAPI_HOST}/tennis/v2/wta/matches/{date_str}",
     ]
    
     for url in endpoints:
@@ -73,9 +81,20 @@ def get_matches_from_rapidapi(date_str=None):
             if response.status_code == 200:
                 data = response.json()
                
+                # A API retorna os matches em diferentes estruturas
                 events = []
                 if isinstance(data, dict):
-                    events = data.get('matches') or data.get('events') or data.get('data') or []
+                    # Tentar diferentes chaves comuns
+                    if 'matches' in data:
+                        events = data['matches']
+                    elif 'results' in data:
+                        events = data['results']
+                    elif 'data' in data:
+                        events = data['data']
+                    elif 'events' in data:
+                        events = data['events']
+                    elif isinstance(data.get('response'), list):
+                        events = data['response']
                 elif isinstance(data, list):
                     events = data
                
@@ -84,23 +103,36 @@ def get_matches_from_rapidapi(date_str=None):
                         if not isinstance(event, dict):
                             continue
                         
-                        home = event.get('homeTeam') or event.get('home') or {}
-                        away = event.get('awayTeam') or event.get('away') or {}
+                        # Extrair jogadores - adaptado para estrutura da API
+                        player1 = None
+                        player2 = None
                         
-                        player1 = home.get('name') or home.get('shortName') if isinstance(home, dict) else str(home)
-                        player2 = away.get('name') or away.get('shortName') if isinstance(away, dict) else str(away)
+                        # Tentar diferentes estruturas possíveis
+                        if 'homeTeam' in event and 'awayTeam' in event:
+                            player1 = event['homeTeam'].get('name') if isinstance(event['homeTeam'], dict) else str(event['homeTeam'])
+                            player2 = event['awayTeam'].get('name') if isinstance(event['awayTeam'], dict) else str(event['awayTeam'])
+                        elif 'players' in event and isinstance(event['players'], list) and len(event['players']) >= 2:
+                            player1 = event['players'][0].get('name') if isinstance(event['players'][0], dict) else str(event['players'][0])
+                            player2 = event['players'][1].get('name') if isinstance(event['players'][1], dict) else str(event['players'][1])
+                        elif 'player1' in event and 'player2' in event:
+                            player1 = event['player1'].get('name') if isinstance(event['player1'], dict) else str(event['player1'])
+                            player2 = event['player2'].get('name') if isinstance(event['player2'], dict) else str(event['player2'])
                         
                         if not player1 or not player2:
                             continue
                         
-                        tournament = event.get('tournament') or {}
-                        torneio = tournament.get('name') if isinstance(tournament, dict) else str(tournament)
+                        # Extrair torneio
+                        tournament = event.get('tournament') or event.get('competition') or {}
+                        torneio = tournament.get('name') if isinstance(tournament, dict) else str(tournament) if tournament else "Torneio Desconhecido"
                         
-                        start_time = event.get('startTimestamp') or event.get('time')
+                        # Extrair horário
+                        start_time = event.get('startTimestamp') or event.get('date') or event.get('time')
                         if start_time:
                             try:
                                 if isinstance(start_time, (int, float)):
                                     horario = datetime.fromtimestamp(start_time).strftime('%H:%M')
+                                elif isinstance(start_time, str) and 'T' in start_time:
+                                    horario = start_time.split('T')[1][:5] if len(start_time.split('T')) > 1 else 'TBD'
                                 else:
                                     horario = str(start_time)
                             except:
@@ -108,32 +140,35 @@ def get_matches_from_rapidapi(date_str=None):
                         else:
                             horario = 'TBD'
                         
-                        surface = event.get('groundType') or event.get('surface') or ''
+                        # Detectar superfície
+                        surface = event.get('groundType') or event.get('surface') or event.get('court') or ''
                         if surface:
                             surface_lower = str(surface).lower()
-                            if 'clay' in surface_lower:
+                            if 'clay' in surface_lower or 'saibro' in surface_lower:
                                 superficie = 'Clay'
-                            elif 'grass' in surface_lower:
+                            elif 'grass' in surface_lower or 'relva' in surface_lower:
                                 superficie = 'Grass'
-                            elif 'hard' in surface_lower:
+                            elif 'hard' in surface_lower or 'duro' in surface_lower:
                                 superficie = 'Hard'
+                            elif 'indoor' in surface_lower or 'coberta' in surface_lower:
+                                superficie = 'Indoor'
                             else:
                                 superficie = detect_surface(torneio)
                         else:
                             superficie = detect_surface(torneio)
                         
                         matches.append({
-                            'torneio': torneio or 'Torneio Desconhecido',
+                            'torneio': torneio,
                             'jogador_1': player1,
                             'jogador_2': player2,
                             'horario': horario,
                             'superficie': superficie
                         })
-                    except:
+                    except Exception as e:
                         continue
-        except:
+        except Exception as e:
             continue
-   
+    
     if matches:
         df = pd.DataFrame(matches)
         df = df.drop_duplicates(subset=['jogador_1', 'jogador_2'])
@@ -144,11 +179,12 @@ def get_matches_from_rapidapi(date_str=None):
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
     if any(k in t for k in ['clay', 'saibro', 'terre', 'barletta', 'marrakech', 'monte-carlo', 'bucarest',
-                           'houston', 'barcelona', 'madrid', 'rome', 'roland garros', 'french']):
+                           'houston', 'barcelona', 'madrid', 'rome', 'roland garros', 'french', 'bastad',
+                           'hamburg', 'geneva', 'lyon']):
         return 'Clay'
-    if any(k in t for k in ['grass', 'relva', 'wimbledon', 'halle', 'queens']):
+    if any(k in t for k in ['grass', 'relva', 'wimbledon', 'halle', 'queens', 'newport', 's-Hertogenbosch']):
         return 'Grass'
-    if any(k in t for k in ['indoor', 'coberta', 'paris masters', 'vienna', 'basel']):
+    if any(k in t for k in ['indoor', 'coberta', 'paris masters', 'vienna', 'basel', 'milan', 'sofia']):
         return 'Indoor'
     return 'Hard'
 
