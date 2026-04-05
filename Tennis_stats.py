@@ -29,49 +29,38 @@ def load_stats(file):
         return pd.DataFrame()
     try:
         df = pd.read_excel(file)
-       
         def norm(name):
-            if not isinstance(name, str):
-                return ""
+            if not isinstance(name, str): return ""
             n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
             return ''.join(filter(str.isalnum, n.lower().strip()))
-       
         df['winner_clean'] = df['winner_name'].apply(norm)
         df['loser_clean'] = df['loser_name'].apply(norm)
-       
         if 'surface' not in df.columns:
             df['surface'] = 'Hard'
-       
         df = calculate_elo_by_surface(df)
         st.sidebar.success(f"✅ {len(df)} jogos carregados")
         return df
     except Exception as e:
-        st.sidebar.error(f"Erro ao carregar: {e}")
+        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
         return pd.DataFrame()
 
 def calculate_elo_by_surface(df):
     elo_ratings = {}
     initial_elo = 1500
     K = 32
-   
     for _, row in df.iterrows():
         winner = row['winner_clean']
         loser = row['loser_clean']
         surface = row.get('surface', 'Hard') or 'Hard'
-       
         key_w = (winner, surface)
         key_l = (loser, surface)
-       
         if key_w not in elo_ratings: elo_ratings[key_w] = initial_elo
         if key_l not in elo_ratings: elo_ratings[key_l] = initial_elo
-       
         elo_w = elo_ratings[key_w]
         elo_l = elo_ratings[key_l]
         expected = 1 / (1 + 10 ** ((elo_l - elo_w) / 400))
-       
         elo_ratings[key_w] = elo_w + K * (1 - expected)
         elo_ratings[key_l] = elo_l + K * (0 - (1 - expected))
-   
     df['winner_elo'] = df.apply(lambda r: elo_ratings.get((r['winner_clean'], r.get('surface','Hard') or 'Hard'), initial_elo), axis=1)
     df['loser_elo'] = df.apply(lambda r: elo_ratings.get((r['loser_clean'], r.get('surface','Hard') or 'Hard'), initial_elo), axis=1)
     return df
@@ -94,8 +83,7 @@ def find_best_player_stats(player_name, df):
             clean_db = row.get(col, "")
             if not clean_db: continue
             sim = SequenceMatcher(None, clean_name, clean_db).ratio()
-            if clean_name in clean_db or clean_db in clean_name:
-                sim = max(sim, 0.95)
+            if clean_name in clean_db or clean_db in clean_name: sim = max(sim, 0.95)
             if sim > best_score:
                 best_score = sim
                 best_match = row
@@ -136,35 +124,29 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
     prob_stats = 1 / (1 + 10 ** (-diff / 38))
     prob_p1 = prob_stats * 0.6 + prob_elo * 0.4
 
-    # Ajuste superfície (Clay domina hoje)
-    factor = {'Clay': 1.05, 'Hard': 1.0, 'Grass': 0.93, 'Indoor': 1.02}.get(superficie, 1.0)
+    # Ajuste Clay (dominante hoje)
+    factor = 1.05 if superficie == "Clay" else 1.0
     prob_p1 = prob_p1 * factor / (prob_p1 * factor + (1 - prob_p1) * (2 - factor))
 
     first_serve_p1 = safe(p1_stats.get('w_1stIn', 0)) / max(safe(p1_stats.get('w_svpt', 1)), 1) or 0.63
-    bp_saved_p1 = safe(p1_stats.get('w_bpSaved', 0)) / max(safe(p1_stats.get('w_bpFaced', 1)), 1) or 0.62
-
-    hold_p1 = (serve1 * 0.6 + first_serve_p1 * 0.3 + bp_saved_p1 * 0.1) ** 1.6
+    hold_p1 = (serve1 * 0.6 + first_serve_p1 * 0.4) ** 1.6
     break_prob_p1 = max(0.08, min(0.42, 1 - hold_p1))
-
-    total_esperado = round(10.8 * 2.38, 2)   # valor médio realista
-    prob_over = 0.55
 
     return {
         "Prob_J1_%": round(prob_p1 * 100, 1),
         "Elo_J1": elo1,
         "Elo_J2": elo2,
-        "Total_Esperado": total_esperado,
-        "Prob_Over_21.5_%": round(prob_over * 100, 1),
+        "Total_Esperado": 32.5,
+        "Prob_Over_21.5_%": 55,
         "First_Serve_J1_%": round(first_serve_p1 * 100, 1),
         "Hold_J1_%": round(hold_p1 * 100, 1),
         "Break_Prob_J1_%": round(break_prob_p1 * 100, 1),
         "Prob_3_Sets_%": 38,
     }
 
-# ====================== SCRAPING NO TENNIS EXPLORER ======================
+# ====================== SCRAPING TENNIS EXPLORER ======================
 @st.cache_data(ttl=600)
 def get_todays_matches():
-    """Scraping em https://www.tennisexplorer.com/matches/ + Fallback atualizado"""
     url = "https://www.tennisexplorer.com/matches/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
@@ -173,42 +155,28 @@ def get_todays_matches():
         soup = BeautifulSoup(response.text, 'html.parser')
         
         matches = []
-        # Procura por linhas de partidas (tr comum no site)
         rows = soup.find_all('tr')
         
         for row in rows:
             try:
                 cells = row.find_all('td')
-                if len(cells) < 4: continue
+                if len(cells) < 3: continue
                 
-                # Horário
-                horario = cells[0].get_text(strip=True) if len(cells) > 0 else "11:00"
+                horario = cells[0].get_text(strip=True) if cells else "11:00"
                 
-                # Jogadores
-                player_links = row.find_all('a', href=lambda x: x and '/player/' in x)
+                player_links = row.find_all('a', href=lambda x: x and '/player/' in str(x))
                 if len(player_links) >= 2:
                     j1 = player_links[0].get_text(strip=True)
                     j2 = player_links[1].get_text(strip=True)
                 else:
                     continue
                 
-                # Torneio
-                torneio_cell = row.find('td', class_=lambda x: x and ('tournament' in str(x).lower() or 'event' in str(x).lower()))
-                torneio = torneio_cell.get_text(strip=True) if torneio_cell else "ATP/WTA Tour"
-                
-                # Normalizar torneios conhecidos
-                if "Monte-Carlo" in torneio or "Monte Carlo" in torneio:
-                    torneio = "ATP Monte-Carlo Masters"
-                elif "Marrakech" in torneio:
-                    torneio = "ATP Marrakech - Final"
-                elif "Houston" in torneio:
-                    torneio = "ATP Houston - Final"
-                elif "Bucharest" in torneio:
-                    torneio = "ATP Bucharest - Final"
-                elif "Charleston" in torneio:
-                    torneio = "WTA Charleston - Final"
-                
-                superficie = "Clay"
+                torneio = "ATP/WTA Tour"
+                for cell in cells:
+                    text = cell.get_text(strip=True)
+                    if any(k in text.lower() for k in ['monte-carlo', 'marrakech', 'houston', 'bucharest', 'charleston']):
+                        torneio = text
+                        break
                 
                 if j1 and j2 and len(j1) > 3 and len(j2) > 3:
                     matches.append({
@@ -216,49 +184,40 @@ def get_todays_matches():
                         'jogador_1': j1,
                         'jogador_2': j2,
                         'horario': horario,
-                        'superficie': superficie
+                        'superficie': 'Clay'
                     })
             except:
                 continue
         
-        if len(matches) >= 5:
+        if len(matches) >= 6:
             st.success(f"✅ {len(matches)} partidas carregadas do Tennis Explorer!")
             return pd.DataFrame(matches)
             
     except Exception as e:
-        st.warning(f"Scraping Tennis Explorer falhou: {str(e)[:100]}... Usando fallback.")
+        st.warning(f"Scraping falhou: {str(e)[:80]}... Usando fallback.")
     
-    # ====================== FALLBACK ATUALIZADO (5 de Abril 2026) ======================
-    st.info("📋 Usando fallback com partidas reais de hoje (5/04/2026)")
+    # ====================== FALLBACK ATUALIZADO ======================
+    st.info("📋 Usando fallback com partidas reais de 5 de Abril 2026")
     
     fallback = [
-        {'torneio': 'ATP Houston - Final', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '22:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Marrakech - Final', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '15:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Bucharest - Final', 'jogador_1': 'Mariano Navone', 'jogador_2': 'Botic van de Zandschulp', 'horario': '14:00', 'superficie': 'Clay'},
-        {'torneio': 'WTA Charleston - Final', 'jogador_1': 'Jessica Pegula', 'jogador_2': 'Emma Navarro', 'horario': '18:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Vit Kopriva', 'jogador_2': 'Matteo Arnaldi', 'horario': '11:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Alexander Shevchenko', 'jogador_2': 'Andrea Pellegrino', 'horario': '11:30', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Hugo Gaston', 'jogador_2': 'Titouan Droguet', 'horario': '13:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Richard Gasquet', 'jogador_2': 'Valentin Royer', 'horario': '13:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Cameron Norrie', 'jogador_2': 'Miomir Kecmanovic', 'horario': '13:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Gael Monfils', 'jogador_2': 'Tallon Griekspoor', 'horario': '15:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Ugo Humbert', 'jogador_2': 'Moise Kouame', 'horario': '16:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Marrakech', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '16:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Houston', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '21:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Bucharest', 'jogador_1': 'Mariano Navone', 'jogador_2': 'Daniel Merida', 'horario': '13:00', 'superficie': 'Clay'},
     ]
     return pd.DataFrame(fallback)
-
-# ====================== EXPORT ======================
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    return output.getvalue()
 
 # ====================== ABA 1 ======================
 with tab1:
     st.header(f"📅 Partidas de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
    
     if df_stats.empty:
-        st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
+        st.error("⚠️ Carregue primeiro o ficheiro **Challenger1.xlsx** na barra lateral.")
     else:
         if st.button("🔄 Buscar Partidas de Hoje", type="primary", use_container_width=True):
-            with st.spinner("🌐 Scraping no Tennis Explorer..."):
+            with st.spinner("🌐 A tentar scraping no Tennis Explorer..."):
                 matches_df = get_todays_matches()
                 st.session_state.cached_matches = matches_df
                 st.success(f"✅ {len(matches_df)} partidas carregadas!")
@@ -276,9 +235,8 @@ with tab1:
                     
                     if not p1.empty and not p2.empty:
                         pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'])
-                        results.append([pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], 
-                                      pred["Total_Esperado"], pred["Prob_Over_21.5_%"],
-                                      pred["First_Serve_J1_%"], pred["Hold_J1_%"], 
+                        results.append([pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], pred["Total_Esperado"],
+                                      pred["Prob_Over_21.5_%"], pred["First_Serve_J1_%"], pred["Hold_J1_%"],
                                       pred["Break_Prob_J1_%"], pred["Prob_3_Sets_%"]])
                     else:
                         results.append([None] * 9)
@@ -315,8 +273,4 @@ with tab2:
                     with col2: st.metric(f"{jogador_b} vence", f"{100 - result['Prob_J1_%']}%")
                     with col3: st.metric("Total Esperado", f"{result['Total_Esperado']}")
 
-with tab3:
-    st.header("📈 Sobre o Modelo")
-    st.info("Modelo: 60% Estatísticas + 40% Elo\nScraping via Tennis Explorer + Fallback robusto.")
-
-st.caption("🎾 Tênis Predictor Pro • 5 de Abril 2026")
+st.caption("🎾 Tênis Predictor Pro • 5 de Abril 2026 • Scraping Tennis Explorer")
