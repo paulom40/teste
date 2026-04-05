@@ -20,7 +20,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
    
     st.markdown("---")
-    st.caption("Dados via Challenger1.xlsx + scraping Tennis Explorer")
+    st.caption("Dados via Challenger1.xlsx + Flashscore scraping")
    
     if st.button("🗑️ Limpar Cache"):
         st.cache_data.clear()
@@ -185,7 +185,7 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
     factor = surface_factors.get(superficie, {'p1_boost': 1.0, 'p2_boost': 1.0})
     prob_p1 = prob_p1 * factor['p1_boost'] / (prob_p1 * factor['p1_boost'] + (1 - prob_p1) * factor['p2_boost'])
 
-    # Restante do cálculo (1st serve, hold, break, total, over/under) mantido igual ao teu original
+    # 1st Serve, Hold, Break, Total, Over/Under (mantido igual ao original)
     first_serve_p1 = safe(p1_stats.get('w_1stIn', 0)) / max(safe(p1_stats.get('w_svpt', 1)), 1)
     first_serve_p2 = safe(p2_stats.get('w_1stIn', 0)) / max(safe(p2_stats.get('w_svpt', 1)), 1)
 
@@ -217,7 +217,6 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
     expected_sets = 2.0 + prob_3_sets
     total_esperado = round(games_per_set * expected_sets, 2)
 
-    # Over 21.5
     surface_baseline = {'Clay': 23.8, 'Hard': 22.3, 'Grass': 20.5, 'Indoor': 21.8}.get(superficie, 22.3)
     surface_std = {'Clay': 5.2, 'Hard': 4.5, 'Grass': 3.8, 'Indoor': 4.2}.get(superficie, 4.5)
     z_score = (total_esperado - surface_baseline) / surface_std
@@ -237,59 +236,85 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
         "Prob_3_Sets_%": round(prob_3_sets * 100, 1),
     }
 
-# ====================== SCRAPING + FALLBACK ======================
-@st.cache_data(ttl=1800)
+# ====================== FLASHSCORE SCRAPING + FALLBACK ======================
+@st.cache_data(ttl=900)
 def get_todays_matches():
-    today = datetime.now()
-    url = f"https://www.tennisexplorer.com/next/?year={today.year}&month={today.month:02d}&day={today.day:02d}"
-    
+    """Flashscore scraping + Fallback atualizado para 5 de Abril 2026"""
+    urls = ["https://www.flashscore.com/tennis/", "https://www.flashscoreusa.com/tennis/"]
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        matches = []
-        rows = soup.find_all('tr')
-        
-        for row in rows:
-            cells = row.find_all('td')
-            if len(cells) < 3:
-                continue
-            try:
-                horario = cells[0].get_text(strip=True)
-                players = row.find_all('a', href=lambda x: x and '/player/' in x.lower())
-                if len(players) >= 2:
-                    j1 = players[0].get_text(strip=True)
-                    j2 = players[1].get_text(strip=True)
-                    torneio = cells[1].get_text(strip=True) if len(cells) > 1 else "ATP/WTA"
-                    superficie = "Clay"
-                    matches.append({
-                        'torneio': torneio,
-                        'jogador_1': j1,
-                        'jogador_2': j2,
-                        'horario': horario or "11:00",
-                        'superficie': superficie
-                    })
-            except:
-                continue
-                
-        if len(matches) > 5:
-            return pd.DataFrame(matches)
-            
-    except:
-        pass
+    matches = []
     
-    # Fallback atualizado para 5 de Abril 2026
+    for url in urls:
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            containers = soup.find_all('div', class_=lambda x: x and any(k in str(x).lower() for k in ['event__match', 'match', 'fixture']))
+            
+            for container in containers:
+                try:
+                    time_elem = container.find(class_=lambda x: x and any(t in str(x).lower() for t in ['time', 'event__time']))
+                    horario = time_elem.get_text(strip=True) if time_elem else "11:00"
+                    
+                    players = container.find_all(class_=lambda x: x and any(p in str(x).lower() for p in ['participant', 'player', 'name']))
+                    if len(players) >= 2:
+                        j1 = players[0].get_text(strip=True)
+                        j2 = players[1].get_text(strip=True)
+                    else:
+                        continue
+                    
+                    tour_elem = container.find(class_=lambda x: x and any(t in str(x).lower() for t in ['tournament', 'league', 'header']))
+                    torneio = tour_elem.get_text(strip=True) if tour_elem else "ATP/WTA Tour"
+                    
+                    # Normalizar torneios conhecidos
+                    if "Monte Carlo" in torneio or "Monte-Carlo" in torneio:
+                        torneio = "ATP Monte-Carlo Masters"
+                    elif "Marrakech" in torneio:
+                        torneio = "ATP Marrakech - Final"
+                    elif "Houston" in torneio:
+                        torneio = "ATP Houston - Final"
+                    elif "Bucharest" in torneio or "Tiriac" in torneio:
+                        torneio = "ATP Bucharest - Final"
+                    elif "Charleston" in torneio:
+                        torneio = "WTA Charleston - Final"
+                    
+                    superficie = "Clay"
+                    
+                    if j1 and j2 and len(j1) > 3 and len(j2) > 3 and j1 != j2:
+                        matches.append({
+                            'torneio': torneio,
+                            'jogador_1': j1,
+                            'jogador_2': j2,
+                            'horario': horario,
+                            'superficie': superficie
+                        })
+                except:
+                    continue
+            
+            if len(matches) >= 8:
+                st.success(f"✅ {len(matches)} partidas carregadas do Flashscore!")
+                return pd.DataFrame(matches)
+                
+        except Exception as e:
+            st.warning(f"Flashscore falhou: {str(e)[:80]}...")
+            continue
+    
+    # ====================== FALLBACK ATUALIZADO ======================
+    st.info("📋 Usando fallback com principais partidas reais de 5 de Abril 2026")
+    
     fallback_data = [
+        {'torneio': 'ATP Houston - Final', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '22:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Marrakech - Final', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '15:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Bucharest - Final', 'jogador_1': 'Mariano Navone', 'jogador_2': 'Botic van de Zandschulp', 'horario': '14:00', 'superficie': 'Clay'},
+        {'torneio': 'WTA Charleston - Final', 'jogador_1': 'Jessica Pegula', 'jogador_2': 'Emma Navarro', 'horario': '18:00', 'superficie': 'Clay'},
         {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Vit Kopriva', 'jogador_2': 'Matteo Arnaldi', 'horario': '11:00', 'superficie': 'Clay'},
         {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Alexander Shevchenko', 'jogador_2': 'Andrea Pellegrino', 'horario': '11:30', 'superficie': 'Clay'},
         {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Hugo Gaston', 'jogador_2': 'Titouan Droguet', 'horario': '13:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Marrakech - Final', 'jogador_1': 'Marco Trungelliti', 'jogador_2': 'Rafael Jodar', 'horario': '15:00', 'superficie': 'Clay'},
-        {'torneio': 'ATP Houston - Final', 'jogador_1': 'Tommy Paul', 'jogador_2': 'Roman Burruchaga', 'horario': '22:00', 'superficie': 'Clay'},
-        {'torneio': 'WTA Charleston - Final', 'jogador_1': 'Jessica Pegula', 'jogador_2': 'Emma Navarro', 'horario': '18:00', 'superficie': 'Clay'},
-        {'torneio': 'Challenger Barletta', 'jogador_1': 'Michele Ribecai', 'jogador_2': 'Lukas Neumayer', 'horario': '10:00', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Richard Gasquet', 'jogador_2': 'Valentin Royer', 'horario': '13:30', 'superficie': 'Clay'},
+        {'torneio': 'ATP Monte-Carlo Masters', 'jogador_1': 'Sebastian Baez', 'jogador_2': 'Stan Wawrinka', 'horario': '14:00', 'superficie': 'Clay'},
     ]
+    
     return pd.DataFrame(fallback_data)
 
 # ====================== EXPORT ======================
@@ -299,15 +324,15 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Previsoes')
     return output.getvalue()
 
-# ====================== ABA 1 ======================
+# ====================== ABA 1 - PARTIDAS HOJE ======================
 with tab1:
     st.header(f"📅 Partidas de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
    
     if df_stats.empty:
-        st.error("⚠️ Por favor, carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
+        st.error("⚠️ Carregue primeiro o ficheiro Challenger1.xlsx na barra lateral.")
     else:
         if st.button("🔄 Buscar Partidas de Hoje", type="primary", use_container_width=True):
-            with st.spinner("Buscando partidas..."):
+            with st.spinner("🌐 Buscando no Flashscore..."):
                 matches_df = get_todays_matches()
                 st.session_state.cached_matches = matches_df
                 st.success(f"✅ {len(matches_df)} partidas carregadas!")
@@ -326,9 +351,8 @@ with tab1:
                     if not p1.empty and not p2.empty:
                         pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'])
                         results.append([
-                            pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], 
-                            pred["Total_Esperado"], pred["Prob_Over_21.5_%"],
-                            pred["First_Serve_J1_%"], pred["Hold_J1_%"], 
+                            pred["Prob_J1_%"], pred["Elo_J1"], pred["Elo_J2"], pred["Total_Esperado"],
+                            pred["Prob_Over_21.5_%"], pred["First_Serve_J1_%"], pred["Hold_J1_%"],
                             pred["Break_Prob_J1_%"], pred["Prob_3_Sets_%"]
                         ])
                     else:
@@ -336,19 +360,17 @@ with tab1:
                     
                     progress_bar.progress((idx + 1) / len(matches_df))
                 
-                # Adicionar colunas ao dataframe
                 cols = ['Prob_J1_%', 'Elo_J1', 'Elo_J2', 'Total_Esperado', 'Prob_Over_21.5_%',
                         '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']
                 matches_df[cols] = pd.DataFrame(results, index=matches_df.index)
                 
-                # Formatação para display
                 display_df = matches_df.copy()
                 for col in ['Prob_J1_%', 'Prob_Over_21.5_%', '1st_Serve_J1%', 'Hold_J1%', 'Break_Prob_J1%', 'Prob_3_Sets%']:
                     display_df[col] = display_df[col].apply(lambda x: f"{x}%" if pd.notna(x) else "N/A")
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-# ====================== ABA 2 e 3 (mantidas simplificadas) ======================
+# ====================== ABA 2 ======================
 with tab2:
     st.header("🔍 Previsão Personalizada")
     if not df_stats.empty:
@@ -367,15 +389,12 @@ with tab2:
                 if not p1.empty and not p2.empty:
                     result = predict_from_stats(p1, p2, superficie, jogador_a, jogador_b)
                     col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
-                    with col2:
-                        st.metric(f"{jogador_b} vence", f"{100 - result['Prob_J1_%']}%")
-                    with col3:
-                        st.metric("Total Esperado", f"{result['Total_Esperado']} jogos")
+                    with col1: st.metric(f"{jogador_a} vence", f"{result['Prob_J1_%']}%")
+                    with col2: st.metric(f"{jogador_b} vence", f"{100 - result['Prob_J1_%']}%")
+                    with col3: st.metric("Total Esperado", f"{result['Total_Esperado']} jogos")
 
 with tab3:
     st.header("📈 Sobre o Modelo")
-    st.info("Modelo combina 60% Estatísticas + 40% Elo por superfície.\nScraping automático do Tennis Explorer com fallback.")
+    st.info("60% Estatísticas + 40% Elo por superfície\nScraping via Flashscore com fallback robusto.")
 
-st.caption("🎾 Tênis Predictor Pro • 5 de Abril 2026")
+st.caption(f"🎾 Tênis Predictor Pro • {datetime.now().strftime('%d/%m/%Y')}")
