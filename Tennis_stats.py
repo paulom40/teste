@@ -7,7 +7,6 @@ from difflib import SequenceMatcher
 import time
 from io import BytesIO
 import math
-import json
 
 st.set_page_config(page_title="Tênis Predictor Pro", page_icon="🎾", layout="wide")
 st.title("🎾 Tennis Predictor Pro")
@@ -251,19 +250,23 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Previsoes')
     return output.getvalue()
 
-# ====================== FUNÇÕES API CORRETAS (POST) ======================
-def call_api_endpoint(endpoint, payload):
-    """Função genérica para chamar endpoints da API via POST"""
+# ====================== FUNÇÕES API CORRETAS ======================
+def test_api_connection():
+    """Testa a conexão com a API usando o endpoint de busca de jogadores"""
     headers = {
         "x-rapidapi-host": RAPIDAPI_HOST,
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "Content-Type": "application/json"
+        "x-rapidapi-key": RAPIDAPI_KEY
     }
     
-    url = f"https://{RAPIDAPI_HOST}/{endpoint}"
+    # Endpoint correto baseado na estrutura do JSON que você mostrou
+    url = f"https://{RAPIDAPI_HOST}/players/search"
+    params = {
+        "query": "Djokovic",
+        "tour": "atp"
+    }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code == 200:
             return True, response.json()
         else:
@@ -271,125 +274,71 @@ def call_api_endpoint(endpoint, payload):
     except Exception as e:
         return False, str(e)
 
-@st.cache_data(ttl=1800)
-def test_api_connection():
-    """Testa a conexão com a API usando singlesRanking [citation:2]"""
-    payload = {
-        "tour": "atp",
-        "limit": 5
+def search_players(query, tour="atp"):
+    """Busca jogadores pelo nome"""
+    headers = {
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": RAPIDAPI_KEY
     }
-    return call_api_endpoint("singlesRanking", payload)
+    
+    url = f"https://{RAPIDAPI_HOST}/players/search"
+    params = {
+        "query": query,
+        "tour": tour
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
 
-@st.cache_data(ttl=1800)
-def get_ranking_from_api(tour="atp", limit=50):
-    """Busca ranking usando singlesRanking [citation:2]"""
-    payload = {
+def search_tournaments(query, tour="atp"):
+    """Busca torneios pelo nome"""
+    headers = {
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": RAPIDAPI_KEY
+    }
+    
+    url = f"https://{RAPIDAPI_HOST}/tournaments/search"
+    params = {
+        "query": query,
+        "tour": tour
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
+
+def get_rankings(tour="atp", limit=50):
+    """Busca rankings de jogadores"""
+    headers = {
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": RAPIDAPI_KEY
+    }
+    
+    url = f"https://{RAPIDAPI_HOST}/rankings"
+    params = {
         "tour": tour,
         "limit": limit
     }
-    success, result = call_api_endpoint("singlesRanking", payload)
-    return result if success else None
-
-@st.cache_data(ttl=1800)
-def get_fixtures_from_api(tour="atp", date=None):
-    """Busca partidas futuras usando getAllFixtures [citation:2]"""
-    payload = {
-        "tour": tour,
-        "limit": 100
-    }
-    if date:
-        payload["date"] = date
     
-    success, result = call_api_endpoint("getAllFixtures", payload)
-    return result if success else None
-
-def parse_fixtures_to_matches(fixtures_data):
-    """Converte dados da API em formato de partidas"""
-    matches = []
-    
-    if not fixtures_data:
-        return matches
-    
-    # A estrutura pode variar, tentamos diferentes formatos
-    fixtures = []
-    
-    if isinstance(fixtures_data, dict):
-        if 'results' in fixtures_data:
-            fixtures = fixtures_data['results']
-        elif 'fixtures' in fixtures_data:
-            fixtures = fixtures_data['fixtures']
-        elif 'data' in fixtures_data:
-            fixtures = fixtures_data['data'] if isinstance(fixtures_data['data'], list) else []
-        elif 'response' in fixtures_data:
-            fixtures = fixtures_data['response']
-    elif isinstance(fixtures_data, list):
-        fixtures = fixtures_data
-    
-    for fixture in fixtures:
-        try:
-            if not isinstance(fixture, dict):
-                continue
-            
-            # Extrair jogadores
-            player1 = None
-            player2 = None
-            
-            if 'player1' in fixture and 'player2' in fixture:
-                p1 = fixture['player1']
-                p2 = fixture['player2']
-                player1 = p1.get('name') if isinstance(p1, dict) else str(p1)
-                player2 = p2.get('name') if isinstance(p2, dict) else str(p2)
-            elif 'home' in fixture and 'away' in fixture:
-                player1 = fixture['home'].get('name') if isinstance(fixture['home'], dict) else str(fixture['home'])
-                player2 = fixture['away'].get('name') if isinstance(fixture['away'], dict) else str(fixture['away'])
-            elif 'players' in fixture and isinstance(fixture['players'], list) and len(fixture['players']) >= 2:
-                player1 = fixture['players'][0].get('name') if isinstance(fixture['players'][0], dict) else str(fixture['players'][0])
-                player2 = fixture['players'][1].get('name') if isinstance(fixture['players'][1], dict) else str(fixture['players'][1])
-            
-            if not player1 or not player2:
-                continue
-            
-            # Torneio
-            tournament = fixture.get('tournament') or fixture.get('competition') or {}
-            torneio = tournament.get('name') if isinstance(tournament, dict) else str(tournament) if tournament else "Torneio"
-            
-            # Horário
-            start_time = fixture.get('start_time') or fixture.get('date') or fixture.get('datetime')
-            horario = 'TBD'
-            if start_time:
-                try:
-                    if isinstance(start_time, str):
-                        if 'T' in start_time:
-                            horario = start_time.split('T')[1][:5]
-                        elif len(start_time) >= 5:
-                            horario = start_time[:5]
-                except:
-                    pass
-            
-            # Superfície
-            superficie = 'Hard'
-            if 'surface' in fixture:
-                s = str(fixture['surface']).lower()
-                if 'clay' in s:
-                    superficie = 'Clay'
-                elif 'grass' in s:
-                    superficie = 'Grass'
-                elif 'indoor' in s:
-                    superficie = 'Indoor'
-            elif torneio:
-                superficie = detect_surface(torneio)
-            
-            matches.append({
-                'torneio': torneio,
-                'jogador_1': player1,
-                'jogador_2': player2,
-                'horario': horario,
-                'superficie': superficie
-            })
-        except Exception as e:
-            continue
-    
-    return matches
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
 
 # ====================== SIDEBAR ======================
 with st.sidebar:
@@ -402,26 +351,35 @@ with st.sidebar:
     tour_type = st.selectbox("Circuito", ["atp", "wta"])
    
     if st.button("🔌 Testar Conexão API", use_container_width=True):
-        with st.spinner("Testando conexão via POST..."):
+        with st.spinner("Testando conexão..."):
             success, result = test_api_connection()
             if success:
-                st.success("✅ API Conectada com sucesso! (singlesRanking)")
+                st.success("✅ API Conectada com sucesso!")
                 if isinstance(result, dict):
                     st.info(f"Resposta: {str(result)[:300]}...")
                 else:
                     st.info(f"Resposta: {result}")
             else:
                 st.error(f"❌ Erro: {result}")
-                st.info("💡 A API requer requisições POST com payload JSON")
+                st.info("💡 A API pode estar com problemas. Use partidas manuais.")
     
     if st.button("📊 Ver Ranking", use_container_width=True):
         with st.spinner("Buscando ranking..."):
-            ranking = get_ranking_from_api(tour_type, 20)
+            ranking = get_rankings(tour_type, 20)
             if ranking:
                 st.success("✅ Ranking obtido!")
                 st.json(ranking)
             else:
                 st.error("❌ Não foi possível obter o ranking")
+    
+    if st.button("🔍 Buscar Jogador", use_container_width=True):
+        with st.spinner("Buscando..."):
+            result = search_players("Djokovic", tour_type)
+            if result:
+                st.success("✅ Busca realizada!")
+                st.json(result)
+            else:
+                st.error("❌ Erro na busca")
    
     st.markdown("---")
     if st.button("🗑️ Limpar Cache", use_container_width=True):
@@ -450,32 +408,13 @@ if df_stats.empty:
     """)
 else:
     # Botões principais
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("➕ Adicionar Partida", type="primary", use_container_width=True):
             st.session_state.show_form = True
     
     with col2:
-        if st.button("🔄 Buscar da API", use_container_width=True):
-            with st.spinner("Buscando partidas da API (POST getAllFixtures)..."):
-                fixtures_data = get_fixtures_from_api(tour_type)
-                if fixtures_data:
-                    matches = parse_fixtures_to_matches(fixtures_data)
-                    if matches:
-                        df_api = pd.DataFrame(matches)
-                        if 'matches' not in st.session_state:
-                            st.session_state.matches = df_api
-                        else:
-                            st.session_state.matches = pd.concat([st.session_state.matches, df_api], ignore_index=True)
-                        st.success(f"✅ {len(matches)} partidas encontradas!")
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Nenhuma partida encontrada")
-                else:
-                    st.error("❌ Erro ao buscar da API. Verifique sua chave e créditos.")
-    
-    with col3:
         if st.button("📋 Exemplo Rápido", use_container_width=True):
             example_matches = pd.DataFrame([
                 {'torneio': 'ATP Masters', 'jogador_1': 'Novak Djokovic', 'jogador_2': 'Carlos Alcaraz', 'horario': '14:00', 'superficie': 'Hard'},
@@ -489,24 +428,13 @@ else:
             st.success("✅ Exemplos adicionados!")
             st.rerun()
     
-    with col4:
-        if st.button("📊 Ver Ranking", use_container_width=True):
-            ranking = get_ranking_from_api(tour_type, 20)
-            if ranking:
-                st.session_state.show_ranking = True
-                st.session_state.ranking_data = ranking
-                st.rerun()
-            else:
-                st.error("❌ Não foi possível obter o ranking")
-    
-    # Modal de Ranking
-    if st.session_state.get('show_ranking', False):
-        with st.expander("📊 Ranking - Clique para fechar", expanded=True):
-            st.subheader(f"Ranking {tour_type.upper()}")
-            st.json(st.session_state.ranking_data)
-            if st.button("Fechar Ranking"):
-                st.session_state.show_ranking = False
-                st.rerun()
+    with col3:
+        if st.button("🗑️ Limpar Partidas", use_container_width=True):
+            if 'matches' in st.session_state:
+                del st.session_state.matches
+            if 'show_form' in st.session_state:
+                del st.session_state.show_form
+            st.rerun()
     
     # Formulário para adicionar partida manualmente
     if st.session_state.get('show_form', False):
@@ -626,7 +554,7 @@ else:
             
             # Exportar
             st.markdown("---")
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             with col1:
                 csv = matches_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
@@ -645,14 +573,8 @@ else:
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-            with col3:
-                if st.button("🗑️ Limpar Todas Partidas", use_container_width=True):
-                    del st.session_state.matches
-                    if 'show_form' in st.session_state:
-                        del st.session_state.show_form
-                    st.rerun()
     else:
-        st.info("👆 Clique em **'+ Adicionar Partida'** ou **'🔄 Buscar da API'** para começar")
+        st.info("👆 Clique em **'+ Adicionar Partida'** para começar")
         
         # Mostrar alguns jogadores disponíveis na base
         if not df_stats.empty:
