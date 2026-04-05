@@ -15,157 +15,12 @@ st.title("🎾 Tennis Predictor Pro - API RapidAPI")
 RAPIDAPI_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
 RAPIDAPI_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
 
-# ====================== SIDEBAR ======================
-with st.sidebar:
-    st.header("📁 Carregar Challenger1.xlsx")
-    uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
-   
-    st.markdown("---")
-    st.markdown("### ⚙️ Configurações API")
-    
-    # Adicionar seleção de tipo de torneio
-    tour_type = st.selectbox("Tipo de Torneio", ["atp", "wta"])
-   
-    if st.button("🔌 Testar Conexão API"):
-        with st.spinner("Testando..."):
-            try:
-                headers = {
-                    "x-rapidapi-host": RAPIDAPI_HOST,
-                    "x-rapidapi-key": RAPIDAPI_KEY
-                }
-                
-                # Tentar endpoint de ranking
-                test_url = f"https://{RAPIDAPI_HOST}/getRanking"
-                params = {"tour": tour_type, "limit": "10"}
-                response = requests.get(test_url, headers=headers, params=params, timeout=10)
-               
-                if response.status_code == 200:
-                    st.success("✅ API Conectada com sucesso!")
-                    data = response.json()
-                    st.json(data)
-                else:
-                    st.error(f"❌ Erro: {response.status_code}")
-                    st.code(f"Resposta: {response.text[:300]}")
-            except Exception as e:
-                st.error(f"❌ Erro de conexão: {str(e)[:150]}")
-   
-    st.markdown("---")
-    if st.button("🗑️ Limpar Cache"):
-        st.cache_data.clear()
-        st.success("Cache limpo!")
-
-# ====================== FUNÇÕES API ======================
-@st.cache_data(ttl=1800)
-def get_matches_from_rapidapi(date_str=None, tour="atp"):
-    """Busca partidas via RapidAPI Tennis"""
-    if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-   
-    headers = {
-        "x-rapidapi-host": RAPIDAPI_HOST,
-        "x-rapidapi-key": RAPIDAPI_KEY
-    }
-   
-    matches = []
-    
-    endpoints_to_try = [
-        {"url": f"https://{RAPIDAPI_HOST}/getAllFixtures", "params": {"tour": tour, "date": date_str}},
-        {"url": f"https://{RAPIDAPI_HOST}/getAllFixtures", "params": {"tour": tour}},
-        {"url": f"https://{RAPIDAPI_HOST}/getTournamentResults", "params": {}},
-    ]
-    
-    for endpoint in endpoints_to_try:
-        try:
-            response = requests.get(endpoint["url"], headers=headers, params=endpoint["params"], timeout=10)
-           
-            if response.status_code == 200:
-                data = response.json()
-                
-                fixtures = []
-                if isinstance(data, dict):
-                    for key in ['results', 'fixtures', 'matches', 'data', 'items']:
-                        if key in data and isinstance(data[key], list):
-                            fixtures = data[key]
-                            break
-                    if not fixtures:
-                        for value in data.values():
-                            if isinstance(value, list) and len(value) > 0:
-                                fixtures = value
-                                break
-                elif isinstance(data, list):
-                    fixtures = data
-                
-                for fixture in fixtures:
-                    try:
-                        if not isinstance(fixture, dict):
-                            continue
-                        
-                        player1 = None
-                        player2 = None
-                        
-                        if 'player1' in fixture and 'player2' in fixture:
-                            p1 = fixture['player1']
-                            p2 = fixture['player2']
-                            player1 = p1.get('name') if isinstance(p1, dict) else str(p1)
-                            player2 = p2.get('name') if isinstance(p2, dict) else str(p2)
-                        elif 'home_team' in fixture and 'away_team' in fixture:
-                            player1 = fixture['home_team'].get('name') if isinstance(fixture['home_team'], dict) else str(fixture['home_team'])
-                            player2 = fixture['away_team'].get('name') if isinstance(fixture['away_team'], dict) else str(fixture['away_team'])
-                        elif 'players' in fixture and isinstance(fixture['players'], list) and len(fixture['players']) >= 2:
-                            player1 = fixture['players'][0].get('name') if isinstance(fixture['players'][0], dict) else str(fixture['players'][0])
-                            player2 = fixture['players'][1].get('name') if isinstance(fixture['players'][1], dict) else str(fixture['players'][1])
-                        
-                        if not player1 or not player2:
-                            continue
-                        
-                        tournament = fixture.get('tournament') or fixture.get('competition') or {}
-                        torneio = tournament.get('name') if isinstance(tournament, dict) else str(tournament) if tournament else "Torneio"
-                        
-                        start_time = fixture.get('start_time') or fixture.get('date') or fixture.get('datetime')
-                        horario = 'TBD'
-                        if start_time:
-                            try:
-                                if isinstance(start_time, str):
-                                    if 'T' in start_time:
-                                        horario = start_time.split('T')[1][:5]
-                                    else:
-                                        horario = start_time[:5] if len(start_time) >= 5 else start_time
-                                elif isinstance(start_time, (int, float)):
-                                    horario = datetime.fromtimestamp(start_time).strftime('%H:%M')
-                            except:
-                                pass
-                        
-                        superficie = detect_surface(torneio)
-                        if 'surface' in fixture:
-                            surface_str = str(fixture['surface']).lower()
-                            if 'clay' in surface_str:
-                                superficie = 'Clay'
-                            elif 'grass' in surface_str:
-                                superficie = 'Grass'
-                            elif 'indoor' in surface_str:
-                                superficie = 'Indoor'
-                        
-                        matches.append({
-                            'torneio': torneio,
-                            'jogador_1': player1,
-                            'jogador_2': player2,
-                            'horario': horario,
-                            'superficie': superficie
-                        })
-                    except Exception:
-                        continue
-                
-                if matches:
-                    break
-        except Exception:
-            continue
-    
-    if matches:
-        df = pd.DataFrame(matches)
-        df = df.drop_duplicates(subset=['jogador_1', 'jogador_2'])
-        return df
-   
-    return pd.DataFrame()
+# ====================== FUNÇÕES AUXILIARES ======================
+def norm(name):
+    if not isinstance(name, str):
+        return ""
+    n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
+    return ''.join(filter(str.isalnum, n.lower().strip()))
 
 def detect_surface(tournament: str) -> str:
     t = str(tournament).lower()
@@ -178,34 +33,7 @@ def detect_surface(tournament: str) -> str:
         return 'Indoor'
     return 'Hard'
 
-# ====================== CARREGAR STATS ======================
-@st.cache_data(ttl=3600)
-def load_stats(file):
-    if not file:
-        return pd.DataFrame()
-    try:
-        df = pd.read_excel(file)
-       
-        def norm(name):
-            if not isinstance(name, str):
-                return ""
-            n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
-            return ''.join(filter(str.isalnum, n.lower().strip()))
-       
-        df['winner_clean'] = df['winner_name'].apply(norm)
-        df['loser_clean'] = df['loser_name'].apply(norm)
-       
-        if 'surface' not in df.columns:
-            df['surface'] = 'Hard'
-       
-        df = calculate_elo_by_surface(df)
-       
-        st.sidebar.success(f"✅ {len(df)} jogos carregados")
-        return df
-    except Exception as e:
-        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
-        return pd.DataFrame()
-
+# ====================== FUNÇÕES DE ESTATÍSTICAS ======================
 def calculate_elo_by_surface(df):
     elo_ratings = {}
     initial_elo = 1500
@@ -236,15 +64,25 @@ def calculate_elo_by_surface(df):
    
     return df
 
-# CARREGAR OS DADOS - IMPORTANTE: Isso define a variável df_stats
-df_stats = load_stats(uploaded_file)
-
-# ====================== FUNÇÕES AUXILIARES ======================
-def norm(name):
-    if not isinstance(name, str):
-        return ""
-    n = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('utf-8')
-    return ''.join(filter(str.isalnum, n.lower().strip()))
+@st.cache_data(ttl=3600)
+def load_stats(file):
+    if not file:
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(file)
+       
+        df['winner_clean'] = df['winner_name'].apply(norm)
+        df['loser_clean'] = df['loser_name'].apply(norm)
+       
+        if 'surface' not in df.columns:
+            df['surface'] = 'Hard'
+       
+        df = calculate_elo_by_surface(df)
+       
+        return df
+    except Exception as e:
+        st.sidebar.error(f"Erro ao carregar ficheiro: {e}")
+        return pd.DataFrame()
 
 def find_best_player_stats(player_name, df):
     if df.empty or not player_name:
@@ -274,7 +112,35 @@ def find_best_player_stats(player_name, df):
    
     return best_match if best_score >= 0.6 else pd.Series(dtype='object')
 
-def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_name=""):
+def get_player_elo_from_stats(player_name, surface, df_stats):
+    if df_stats.empty or not player_name:
+        return 1500
+   
+    clean_name = norm(player_name)
+    surface = surface.capitalize()
+   
+    player_games = df_stats[
+        (df_stats['winner_clean'] == clean_name) |
+        (df_stats['loser_clean'] == clean_name)
+    ]
+   
+    if player_games.empty:
+        return 1500
+   
+    surface_games = player_games[player_games.get('surface', 'Hard') == surface]
+    if surface_games.empty:
+        surface_games = player_games
+   
+    elos = []
+    for _, row in surface_games.iterrows():
+        if row['winner_clean'] == clean_name:
+            elos.append(row.get('winner_elo', 1500))
+        else:
+            elos.append(row.get('loser_elo', 1500))
+   
+    return int(sum(elos) / len(elos)) if elos else 1500
+
+def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_name="", df_stats=None):
     def safe(v):
         try:
             return float(v) if pd.notna(v) else 0.0
@@ -294,8 +160,8 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
     p1_point_win = (serve1 + return1) / 2
     p2_point_win = (serve2 + return2) / 2
    
-    elo1 = get_player_elo(p1_name, superficie)
-    elo2 = get_player_elo(p2_name, superficie)
+    elo1 = get_player_elo_from_stats(p1_name, superficie, df_stats) if df_stats is not None else 1500
+    elo2 = get_player_elo_from_stats(p2_name, superficie, df_stats) if df_stats is not None else 1500
    
     elo_diff = elo1 - elo2
     prob_elo = 1 / (1 + 10 ** (-elo_diff / 400))
@@ -378,47 +244,96 @@ def predict_from_stats(p1_stats, p2_stats, superficie="Hard", p1_name="", p2_nam
         "Under_21.5%": round((1 - prob_over) * 100, 1),
     }
 
-@st.cache_data(ttl=3600)
-def get_player_elo(player_name, surface):
-    if df_stats.empty or not player_name:
-        return 1500
-   
-    clean_name = norm(player_name)
-    surface = surface.capitalize()
-   
-    player_games = df_stats[
-        (df_stats['winner_clean'] == clean_name) |
-        (df_stats['loser_clean'] == clean_name)
-    ]
-   
-    if player_games.empty:
-        return 1500
-   
-    surface_games = player_games[player_games.get('surface', 'Hard') == surface]
-    if surface_games.empty:
-        surface_games = player_games
-   
-    elos = []
-    for _, row in surface_games.iterrows():
-        if row['winner_clean'] == clean_name:
-            elos.append(row.get('winner_elo', 1500))
-        else:
-            elos.append(row.get('loser_elo', 1500))
-   
-    return int(sum(elos) / len(elos)) if elos else 1500
-
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Previsoes')
     return output.getvalue()
 
+# ====================== FUNÇÕES API ======================
+@st.cache_data(ttl=1800)
+def get_matches_from_rapidapi(date_str=None, tour="atp"):
+    """Busca partidas via RapidAPI Tennis"""
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+   
+    headers = {
+        "x-rapidapi-host": RAPIDAPI_HOST,
+        "x-rapidapi-key": RAPIDAPI_KEY
+    }
+    
+    # NOTA: Como a API está retornando 404, vamos retornar DataFrame vazio
+    # e permitir que o usuário adicione partidas manualmente
+    st.warning("⚠️ API não está respondendo. Use o botão '+ Adicionar Partida' para inserir jogos manualmente.")
+    
+    return pd.DataFrame()
+
+# ====================== SIDEBAR ======================
+with st.sidebar:
+    st.header("📁 Carregar Challenger1.xlsx")
+    uploaded_file = st.file_uploader("Escolha o ficheiro Challenger1.xlsx", type=["xlsx", "xls"])
+   
+    st.markdown("---")
+    st.markdown("### ⚙️ Configurações API")
+    
+    tour_type = st.selectbox("Tipo de Torneio", ["atp", "wta"])
+   
+    if st.button("🔌 Testar Conexão API"):
+        with st.spinner("Testando..."):
+            try:
+                headers = {
+                    "x-rapidapi-host": RAPIDAPI_HOST,
+                    "x-rapidapi-key": RAPIDAPI_KEY
+                }
+                
+                # Tentar diferentes endpoints comuns
+                endpoints_to_try = [
+                    f"https://{RAPIDAPI_HOST}/getRanking",
+                    f"https://{RAPIDAPI_HOST}/getAllFixtures",
+                    f"https://{RAPIDAPI_HOST}/singlesRanking",
+                ]
+                
+                working = False
+                for url in endpoints_to_try:
+                    try:
+                        response = requests.get(url, headers=headers, timeout=10)
+                        if response.status_code == 200:
+                            st.success(f"✅ API Conectada! Endpoint funcionando: {url}")
+                            st.json(response.json())
+                            working = True
+                            break
+                    except:
+                        continue
+                
+                if not working:
+                    st.error("❌ Nenhum endpoint da API respondeu. Verifique sua chave API ou use partidas manuais.")
+                    
+            except Exception as e:
+                st.error(f"❌ Erro de conexão: {str(e)[:150]}")
+   
+    st.markdown("---")
+    if st.button("🗑️ Limpar Cache"):
+        st.cache_data.clear()
+        st.success("Cache limpo!")
+
+# ====================== CARREGAR DADOS ======================
+# Isso define a variável df_stats
+df_stats = load_stats(uploaded_file)
+
+# Mostrar status do carregamento
+if not df_stats.empty:
+    st.sidebar.success(f"✅ {len(df_stats)} jogos carregados!")
+else:
+    if uploaded_file is not None:
+        st.sidebar.error("❌ Erro ao carregar o arquivo. Verifique o formato.")
+
 # ====================== INTERFACE PRINCIPAL ======================
 st.markdown(f"## 📅 Partidas de Tênis - {datetime.now().strftime('%d/%m/%Y')}")
 
 # Verificar se os dados foram carregados
 if df_stats.empty:
-    st.warning("⚠️ **Carregue o ficheiro Challenger1.xlsx na barra lateral para começar!**")
+    st.warning("⚠️ **Carregue o ficheiro Challenger1.xlsx na barra lateral!**")
+    st.info("O arquivo deve conter as colunas: 'winner_name', 'loser_name' e opcionalmente 'surface'")
 else:
     # Seleção de data
     col_date1, col_date2, col_date3 = st.columns([2, 1, 1])
@@ -442,7 +357,7 @@ else:
                     st.success(f"✅ {len(matches_df)} partidas encontradas!")
                     st.rerun()
                 else:
-                    st.warning("⚠️ Nenhuma partida encontrada para esta data. Tente outra data ou adicione manualmente.")
+                    st.warning("⚠️ Nenhuma partida encontrada. Use '+ Adicionar Partida' para inserir manualmente.")
    
     with col_date3:
         if st.button("➕ Adicionar Partida", use_container_width=True):
@@ -455,12 +370,14 @@ else:
             col1, col2, col3 = st.columns(3)
             with col1:
                 torneio = st.text_input("Torneio", "ATP Tournament")
-                jogador1 = st.text_input("Jogador 1")
+                jogador1 = st.text_input("Jogador 1 *")
             with col2:
-                jogador2 = st.text_input("Jogador 2")
+                jogador2 = st.text_input("Jogador 2 *")
                 horario = st.text_input("Horário", "14:00")
             with col3:
                 superficie = st.selectbox("Superfície", ["Hard", "Clay", "Grass", "Indoor"])
+           
+            st.caption("* Campos obrigatórios")
            
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -505,7 +422,7 @@ else:
                 p2 = find_best_player_stats(row['jogador_2'], df_stats)
                
                 if not p1.empty and not p2.empty:
-                    pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'])
+                    pred = predict_from_stats(p1, p2, row['superficie'], row['jogador_1'], row['jogador_2'], df_stats)
                     results.append([
                         pred["Prob_J1_%"],
                         pred["Prob_J2_%"],
@@ -574,7 +491,7 @@ else:
                         del st.session_state.show_form
                     st.rerun()
     else:
-        st.info("👆 Clique em **'BUSCAR PARTIDAS'** para carregar jogos da API ou **'+ Adicionar Partida'** para inserir manualmente")
+        st.info("👆 Clique em **'+ Adicionar Partida'** para inserir jogos manualmente ou **'BUSCAR PARTIDAS'** para tentar a API")
 
 st.markdown("---")
-st.caption(f"🎾 Tennis Predictor Pro • RapidAPI • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(f"🎾 Tennis Predictor Pro • {datetime.now().strftime('%d/%m/%Y %H:%M')}")
