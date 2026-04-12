@@ -146,7 +146,6 @@ def build_h2h_dict(df):
         if pd.notna(row[winner_col]) and pd.notna(row[loser_col]):
             h2h[(row[winner_col], row[loser_col])] += 1
     return h2h
-
 # ==============================================================================
 # FEATURE BUILDER
 # ==============================================================================
@@ -281,8 +280,8 @@ def train_models(df, player_stats, h2h):
 
     y_winner = np.array(y_winner)
     y_ou = np.array(y_ou)
-    y_sets = np.array(y_sets) if len(X_sets) > 0 else None
-    y_hcap = np.array(y_hcap) if len(X_hcap) > 0 else None
+    y_sets = np.array(y_sets) if X_sets is not None else None
+    y_hcap = np.array(y_hcap) if X_hcap is not None else None
 
     st.write(f"📊 Amostras Winner: {len(X_winner)} | classes: {np.unique(y_winner)}")
     st.write(f"📊 Amostras O/U: {len(X_ou)} | classes: {np.unique(y_ou)}")
@@ -336,7 +335,6 @@ def train_models(df, player_stats, h2h):
         cross_val_metrics(model_hcap, X_hcap, y_hcap, name="Handicap -2.5")
 
     return model_winner, model_ou, model_sets, model_hcap
-
 # ==============================================================================
 # PREDICTION
 # ==============================================================================
@@ -393,7 +391,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
     }
 
 # ==============================================================================
-# SCRAPER
+# SCRAPER (corrigido para Today/Tomorrow)
 # ==============================================================================
 
 @st.cache_data(ttl=1800)
@@ -407,10 +405,22 @@ def scrape_matches_flashscore(days_ahead=0):
         
         driver = webdriver.Chrome(options=chrome_options)
         driver.get("https://www.flashscore.com/tennis/")
-        time.sleep(12)
+        time.sleep(8)
+
+        # mudar para amanhã se necessário
+        if days_ahead == 1:
+            try:
+                next_button = driver.find_element("css selector", ".calendar__navigation--tomorrow")
+                next_button.click()
+                time.sleep(5)
+            except Exception as e:
+                st.warning(f"Não consegui carregar os jogos de amanhã: {e}")
+
+        # scroll para carregar tudo
         for _ in range(3):
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(4)
+            time.sleep(3)
+
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         driver.quit()
         
@@ -437,8 +447,10 @@ def scrape_matches_flashscore(days_ahead=0):
                 matches.append({'tournament': tournament, 'player1': p1, 'player2': p2, 'surface': surface, 'type': match_type})
             except:
                 continue
+
         st.success(f"✅ Scraped {len(matches)} matches")
         return matches
+
     except Exception as e:
         st.error(f"Scraping failed: {e}")
         return []
@@ -449,7 +461,7 @@ def scrape_matches_flashscore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Versão corrigida com métricas, sets e handicap**")
+    st.markdown("**Versão completa: Winner, O/U, Sets, Handicap, CV**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
