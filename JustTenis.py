@@ -2,10 +2,12 @@ import os
 import re
 import time
 import warnings
-import pandas as pd
-import numpy as np
+import random
 from collections import defaultdict
 from datetime import datetime
+
+import numpy as np
+import pandas as pd
 import streamlit as st
 
 from sklearn.ensemble import GradientBoostingClassifier
@@ -161,7 +163,7 @@ def build_features(p1, p2, surface, player_stats, h2h):
     h2h_p2 = h2h.get((p2, p1), 0)
     h2h_total = h2h_p1 + h2h_p2 + 1
 
-    return [
+    feat = [
         s1['elo'] - s2['elo'],
         s1['welo'] - s2['welo'],
         s1['surface_elo'].get(surf, 1500) - s2['surface_elo'].get(surf, 1500),
@@ -174,12 +176,18 @@ def build_features(p1, p2, surface, player_stats, h2h):
         abs(s1['recent_form'] - s2['recent_form']),
         (s1['avg_games'] + s2['avg_games']) / 2
     ]
+    if any(pd.isna(f) for f in feat):
+        return None
+    return feat
 
 # ==============================================================================
-# TRAINING WITH CV + EXTRA TARGETS
+# CV METRICS
 # ==============================================================================
 
 def cross_val_metrics(model, X, y, name=""):
+    if len(np.unique(y)) < 2:
+        st.write(f"⚠️ {name}: apenas uma classe presente, não é possível calcular métricas.")
+        return
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     aucs, f1s, logs, accs = [], [], [], []
     for train_idx, test_idx in skf.split(X, y):
@@ -203,6 +211,10 @@ def cross_val_metrics(model, X, y, name=""):
         accs.append(accuracy_score(y_te, preds))
     st.write(f"🔍 {name} | AUC: {np.mean(aucs):.3f} | F1: {np.mean(f1s):.3f} | Acc: {np.mean(accs):.3f} | LogLoss: {np.mean(logs):.3f}")
 
+# ==============================================================================
+# TRAINING
+# ==============================================================================
+
 def train_models(df, player_stats, h2h):
     X_winner, y_winner = [], []
     X_ou, y_ou = [], []
@@ -215,46 +227,52 @@ def train_models(df, player_stats, h2h):
     for _, row in df.iterrows():
         w = row[winner_col]
         l = row[loser_col]
+        if pd.isna(w) or pd.isna(l):
+            continue
+
         surf = row.get('surface', 'Hard')
         total_games = row.get('total_games', 22)
-        score = str(row.get('score', ""))
+        score = str(row.get('score', "")) if 'score' in df.columns else ""
 
-        feat = build_features(w, l, surf, player_stats, h2h)
+        # orientação aleatória para evitar viés: p1 pode ser winner ou loser
+        if random.random() < 0.5:
+            p1, p2 = w, l
+        else:
+            p1, p2 = l, w
+
+        feat = build_features(p1, p2, surf, player_stats, h2h)
         if feat is None:
             continue
 
-        # Winner model: p1 = winner, p2 = loser → label 1
-        X_winner.append(feat)
-        y_winner.append(1)
+        # Winner label: 1 se p1 é o winner, 0 se p1 é o loser
+        y_label_winner = 1 if p1 == w else 0
 
-        # Over/Under 21.5
+        X_winner.append(feat)
+        y_winner.append(y_label_winner)
+
+        # Over/Under 21.5 (independente da orientação)
         X_ou.append(feat)
         y_ou.append(1 if total_games > 21.5 else 0)
 
-        # Sets model (best of 3): 2–0 vs 2–1 (apenas se score tiver 2 sets ou 3 sets)
+        # Sets (heurística simples: nº de sets no score)
         sets = score.split()
         if len(sets) >= 2:
-            # heurística simples: se há 2 sets → 2–0, se há 3+ → 2–1 (ou 3–0 em BO5, mas ignoramos BO5)
             if len(sets) == 2:
-                y_sets.append(0)  # 2–0
+                # 2–0
                 X_sets.append(feat)
+                y_sets.append(0)
             elif len(sets) >= 3:
-                y_sets.append(1)  # 2–1 (ou jogo longo)
+                # 2–1 ou jogo longo
                 X_sets.append(feat)
+                y_sets.append(1)
 
-        # Handicap -2.5 jogos para o vencedor
-        # Se vencedor ganhou por margem >= 3 jogos → cobre -2.5
-        # Aproximação: total_games e sets não dão margem exata, mas usamos heurística:
-        # jogos médios por set * diferença de sets
-        # Para simplificar: se total_games <= 20 → provável blowout → cobre -2.5
-        # se total_games >= 24 → jogo equilibrado → não cobre
+        # Handicap -2.5 (heurística com total de jogos)
         if total_games <= 20:
+            X_hcap.append(feat)
             y_hcap.append(1)  # cobre -2.5
-            X_hcap.append(feat)
         elif total_games >= 24:
-            y_hcap.append(0)  # não cobre
             X_hcap.append(feat)
-        # entre 21 e 23 ignoramos (zona cinzenta)
+            y_hcap.append(0)  # não cobre -2.5
 
     X_winner = np.nan_to_num(np.array(X_winner), nan=0.0)
     X_ou = np.nan_to_num(np.array(X_ou), nan=0.0)
@@ -266,12 +284,12 @@ def train_models(df, player_stats, h2h):
     y_sets = np.array(y_sets) if len(X_sets) > 0 else None
     y_hcap = np.array(y_hcap) if len(X_hcap) > 0 else None
 
-    st.write(f"📊 Amostras Winner: {len(X_winner)}")
-    st.write(f"📊 Amostras O/U: {len(X_ou)}")
+    st.write(f"📊 Amostras Winner: {len(X_winner)} | classes: {np.unique(y_winner)}")
+    st.write(f"📊 Amostras O/U: {len(X_ou)} | classes: {np.unique(y_ou)}")
     if X_sets is not None:
-        st.write(f"📊 Amostras Sets (2–0 vs 2–1): {len(X_sets)}")
+        st.write(f"📊 Amostras Sets (2–0 vs 2–1): {len(X_sets)} | classes: {np.unique(y_sets)}")
     if X_hcap is not None:
-        st.write(f"📊 Amostras Handicap -2.5: {len(X_hcap)}")
+        st.write(f"📊 Amostras Handicap -2.5: {len(X_hcap)} | classes: {np.unique(y_hcap)}")
 
     # Winner model
     model_winner = GradientBoostingClassifier(
@@ -349,9 +367,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         prob_20 = probs_sets[0]
         sets_pred = {
             'label': "2–1 / jogo longo" if prob_21 > prob_20 else "2–0 / vitória clara",
-            'conf': max(prob_21, prob_20),
-            'p20': prob_20,
-            'p21': prob_21
+            'conf': max(prob_21, prob_20)
         }
 
     # Handicap -2.5
@@ -361,10 +377,8 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         prob_cover = probs_h[1]
         prob_not = probs_h[0]
         hcap_pred = {
-            'label': "Cobre -2.5" if prob_cover > prob_not else "Não cobre -2.5",
-            'conf': max(prob_cover, prob_not),
-            'p_cover': prob_cover,
-            'p_not': prob_not
+            'label': f"{p1_name} -2.5" if prob_cover > prob_not else f"{p2_name} +2.5",
+            'conf': max(prob_cover, prob_not)
         }
 
     return {
