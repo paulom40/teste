@@ -34,9 +34,7 @@ st.markdown("""
 # ==============================================================================
 
 def calculate_elo_ratings(df, k=32, surface_k=25):
-    winner_col = 'winner'
-    loser_col = 'loser'
-    players = set(df[winner_col].dropna().unique()) | set(df[loser_col].dropna().unique())
+    players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
     
     elo = {p: 1500.0 for p in players}
     welo = {p: 1500.0 for p in players}
@@ -45,8 +43,8 @@ def calculate_elo_ratings(df, k=32, surface_k=25):
     df_sorted = df.sort_values('date').copy()
     
     for _, row in df_sorted.iterrows():
-        p1 = row[winner_col]
-        p2 = row[loser_col]
+        p1 = row['winner']
+        p2 = row['loser']
         surf = row.get('surface', 'Hard')
         if pd.isna(p1) or pd.isna(p2):
             continue
@@ -191,11 +189,14 @@ def cross_val_metrics(model, X, y, name=""):
     if len(np.unique(y)) < 2:
         st.write(f"⚠️ {name}: apenas uma classe presente.")
         return
+
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     aucs, f1s, logs, accs = [], [], [], []
+
     for train_idx, test_idx in skf.split(X, y):
         X_tr, X_te = X[train_idx], X[test_idx]
         y_tr, y_te = y[train_idx], y[test_idx]
+
         m = GradientBoostingClassifier(
             n_estimators=model.n_estimators,
             max_depth=model.max_depth,
@@ -203,24 +204,38 @@ def cross_val_metrics(model, X, y, name=""):
             random_state=42
         )
         m.fit(X_tr, y_tr)
-        probs = m.predict_proba(X_te)[:,1]
+
+        probs = m.predict_proba(X_te)[:, 1]
         preds = (probs >= 0.5).astype(int)
+
         aucs.append(roc_auc_score(y_te, probs))
-        logs.append(log_loss(y_te, probs, eps=1e-7))
+        logs.append(log_loss(y_te, probs))
         f1s.append(f1_score(y_te, preds))
         accs.append(accuracy_score(y_te, preds))
-    st.write(f"🔍 {name} | AUC: {np.mean(aucs):.3f} | F1: {np.mean(f1s):.3f} | Acc: {np.mean(accs):.3f} | LogLoss: {np.mean(logs):.3f}")
+
+    st.write(
+        f"🔍 {name} | AUC: {np.mean(aucs):.3f} | "
+        f"F1: {np.mean(f1s):.3f} | "
+        f"Acc: {np.mean(accs):.3f} | "
+        f"LogLoss: {np.mean(logs):.3f}"
+    )
 
 # ==============================================================================
-# TRAINING
+# TRAINING (COM BARRA DE PROGRESSO)
 # ==============================================================================
 
 def train_models(df, player_stats, h2h):
+
+    progress = st.progress(0)
+    step = 0
+    total_steps = 6
+
     X_winner, y_winner = [], []
     X_ou, y_ou = [], []
     X_sets, y_sets = [], []
     X_hcap, y_hcap = [], []
 
+    # Step 1 — preparar dados
     for _, row in df.iterrows():
         w = row['winner']
         l = row['loser']
@@ -231,7 +246,6 @@ def train_models(df, player_stats, h2h):
         total_games = row.get('total_games', 22)
         score = str(row.get('score', "")) if 'score' in df.columns else ""
 
-        # random orientation
         if random.random() < 0.5:
             p1, p2 = w, l
         else:
@@ -241,16 +255,13 @@ def train_models(df, player_stats, h2h):
         if feat is None:
             continue
 
-        # Winner label
         y_label_winner = 1 if p1 == w else 0
         X_winner.append(feat)
         y_winner.append(y_label_winner)
 
-        # Over/Under
         X_ou.append(feat)
         y_ou.append(1 if total_games > 21.5 else 0)
 
-        # Sets
         sets = score.split()
         if len(sets) == 2:
             X_sets.append(feat)
@@ -259,13 +270,14 @@ def train_models(df, player_stats, h2h):
             X_sets.append(feat)
             y_sets.append(1)
 
-        # Handicap -2.5
         if total_games <= 20:
             X_hcap.append(feat)
             y_hcap.append(1)
         elif total_games >= 24:
             X_hcap.append(feat)
             y_hcap.append(0)
+
+    progress.progress((step := step + 1) / total_steps)
 
     X_winner = np.array(X_winner)
     X_ou = np.array(X_ou)
@@ -277,28 +289,25 @@ def train_models(df, player_stats, h2h):
     y_sets = np.array(y_sets) if X_sets is not None else None
     y_hcap = np.array(y_hcap) if X_hcap is not None else None
 
-    st.write(f"📊 Winner samples: {len(X_winner)}")
-    st.write(f"📊 O/U samples: {len(X_ou)}")
-    if X_sets is not None:
-        st.write(f"📊 Sets samples: {len(X_sets)}")
-    if X_hcap is not None:
-        st.write(f"📊 Handicap samples: {len(X_hcap)}")
-
-    # Winner model
+    # Step 2 — Winner
     model_winner = GradientBoostingClassifier(
         n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
     )
     model_winner.fit(X_winner, y_winner)
-    cross_val_metrics(model_winner, X_winner, y_winner, "Winner")
+    progress.progress((step := step + 1) / total_steps)
 
-    # O/U model
+    cross_val_metrics(model_winner, X_winner, y_winner, "Winner")
+    progress.progress((step := step + 1) / total_steps)
+
+    # Step 3 — O/U
     model_ou = GradientBoostingClassifier(
         n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
     )
     model_ou.fit(X_ou, y_ou)
     cross_val_metrics(model_ou, X_ou, y_ou, "Over/Under 21.5")
+    progress.progress((step := step + 1) / total_steps)
 
-    # Sets model
+    # Step 4 — Sets
     model_sets = None
     if X_sets is not None and len(np.unique(y_sets)) == 2:
         model_sets = GradientBoostingClassifier(
@@ -306,8 +315,9 @@ def train_models(df, player_stats, h2h):
         )
         model_sets.fit(X_sets, y_sets)
         cross_val_metrics(model_sets, X_sets, y_sets, "Sets 2–0 vs 2–1")
+    progress.progress((step := step + 1) / total_steps)
 
-    # Handicap model
+    # Step 5 — Handicap
     model_hcap = None
     if X_hcap is not None and len(np.unique(y_hcap)) == 2:
         model_hcap = GradientBoostingClassifier(
@@ -315,6 +325,7 @@ def train_models(df, player_stats, h2h):
         )
         model_hcap.fit(X_hcap, y_hcap)
         cross_val_metrics(model_hcap, X_hcap, y_hcap, "Handicap -2.5")
+    progress.progress((step := step + 1) / total_steps)
 
     return model_winner, model_ou, model_sets, model_hcap
 # ==============================================================================
@@ -371,7 +382,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 
 # ==============================================================================
-# SCRAPER — API INTERNA FLASHCORE (SEM SELENIUM)
+# SCRAPER — API INTERNA FLASHSCORE (SEM SELENIUM)
 # ==============================================================================
 
 def scrape_matches_flashscore(days_ahead=0):
@@ -434,7 +445,7 @@ def scrape_matches_flashscore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Versão completa: Winner, O/U, Sets, Handicap, CV**")
+    st.markdown("**Versão completa: Winner, O/U, Sets, Handicap, CV + Barra de Progresso**")
 
     # Sidebar
     with st.sidebar:
