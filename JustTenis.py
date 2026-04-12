@@ -387,19 +387,19 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 def scrape_matches_flashscore(days_ahead=0):
     try:
-        base_url = "https://prod-public-api.livesportservices.com/v1/events/list"
+        # Flashscore endpoint público e estável
+        base_url = "https://www.flashscore.com/tennis/"
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-        params = {
-            "sport": "tennis",
-            "date": target_date,
-            "timezone": "UTC",
-            "locale": "en_INT"
+        # Flashscore usa este endpoint JSON para carregar jogos
+        api_url = f"https://www.flashscore.com/api/v1/event/match-list/?sport=tennis&date={target_date}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
         }
 
-        headers = {"User-Agent": "Mozilla/5.0"}
-
-        r = requests.get(base_url, params=params, headers=headers)
+        r = requests.get(api_url, headers=headers)
 
         if r.status_code != 200:
             st.error(f"Erro HTTP {r.status_code}")
