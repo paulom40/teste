@@ -64,7 +64,6 @@ def calculate_elo_ratings(df, k=32, surface_k=25):
     
     return elo, welo, surface_elo
 
-# Load and Stats (same as before)
 @st.cache_data(ttl=3600)
 def load_historical_data(file_path):
     df = pd.read_excel(file_path)
@@ -115,7 +114,7 @@ def build_h2h_dict(df):
     return h2h
 
 # ==============================================================================
-# TRAINING - CORRECTED
+# FIXED TRAINING
 # ==============================================================================
 def train_models(df, player_stats, h2h):
     X_data, y_winner, y_games = [], [], []
@@ -130,7 +129,7 @@ def train_models(df, player_stats, h2h):
         if w not in player_stats or l not in player_stats or pd.isna(w) or pd.isna(l):
             continue
             
-        # Random order - This is the key fix
+        # Random order - Correct way
         if random.random() < 0.5:
             p1, p2, label = w, l, 1
         else:
@@ -145,7 +144,7 @@ def train_models(df, player_stats, h2h):
             s1['win_rate'] - s2['win_rate'],
             (s1['avg_rank'] - s2['avg_rank']) / 50,
             s1['recent_form'] - s2['recent_form'],
-            s1.get(surf.lower(), s1.get('win_rate',0.5)) - s2.get(surf.lower(), s2.get('win_rate',0.5)),
+            s1.get(surf.lower(), s1['win_rate']) - s2.get(surf.lower(), s2['win_rate']),
             (s1['elo'] - s2['elo']) / 80,
             (s1['welo'] - s2['welo']) / 80,
             (s1['surface_elo'].get(surf, 1500) - s2['surface_elo'].get(surf, 1500)) / 80,
@@ -163,15 +162,17 @@ def train_models(df, player_stats, h2h):
     y_g = np.array(y_games)
     
     model_winner = GradientBoostingClassifier(
-        n_estimators=300, max_depth=5, learning_rate=0.08, 
-        subsample=0.9, min_samples_leaf=3, random_state=42
+        n_estimators=250, 
+        max_depth=4, 
+        learning_rate=0.1, 
+        subsample=0.9, 
+        min_samples_leaf=2,
+        random_state=42
     )
     model_winner.fit(X, y_w)
     
-    # Over/Under
-    y_ou = (y_g > 21.5).astype(int)
-    model_ou = GradientBoostingClassifier(n_estimators=200, max_depth=4, random_state=42)
-    model_ou.fit(X, y_ou)
+    model_ou = GradientBoostingClassifier(n_estimators=150, max_depth=4, random_state=42)
+    model_ou.fit(X, (y_g > 21.5).astype(int))
     
     return model_winner, model_ou
 
@@ -185,7 +186,7 @@ def predict_match(model_winner, model_ou, player_stats, h2h, p1, p2, surface):
         s1['win_rate'] - s2['win_rate'],
         (s1['avg_rank'] - s2['avg_rank']) / 50,
         s1['recent_form'] - s2['recent_form'],
-        s1.get(surface.lower(), s1.get('win_rate',0.5)) - s2.get(surface.lower(), s2.get('win_rate',0.5)),
+        s1.get(surface.lower(), s1['win_rate']) - s2.get(surface.lower(), s2['win_rate']),
         (s1['elo'] - s2['elo']) / 80,
         (s1['welo'] - s2['welo']) / 80,
         (s1['surface_elo'].get(surface,1500) - s2['surface_elo'].get(surface,1500)) / 80,
@@ -207,10 +208,9 @@ def predict_match(model_winner, model_ou, player_stats, h2h, p1, p2, surface):
         'exp_games': (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     }
 
-# Scraper and Main (unchanged from previous)
+# Scraper (same as before)
 @st.cache_data(ttl=1800)
 def scrape_matches_flashscore(days_ahead=0):
-    # Same scraper as before...
     matches = []
     try:
         chrome_options = Options()
@@ -232,7 +232,7 @@ def scrape_matches_flashscore(days_ahead=0):
             try:
                 tour = card.find_previous('div', class_=lambda x: x and any(k in str(x).lower() for k in ['tournament','header']))
                 tournament = tour.get_text(strip=True) if tour else ""
-                if any(w in tournament.upper() for w in ['WTA', 'WOMEN']): continue
+                if any(w in tournament.upper() for w in ['WTA', 'WOMEN', 'BILLIE']): continue
                 
                 players = card.find_all('div', class_=lambda x: x and 'participant' in str(x))
                 if len(players) < 2: continue
@@ -255,7 +255,7 @@ def scrape_matches_flashscore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**ELO Model - Fixed Version**")
+    st.markdown("**Fixed ELO Model**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
