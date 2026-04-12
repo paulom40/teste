@@ -382,38 +382,47 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 
 # ==============================================================================
-# SCRAPER — API INTERNA FLASHSCORE (SEM SELENIUM)
+# SCRAPER — API OFICIAL FLASHSCORE (SEM SELENIUM)
 # ==============================================================================
 
 def scrape_matches_flashscore(days_ahead=0):
     try:
-        base_url = "https://www.flashscore.com/api/v1/events/list"
+        base_url = "https://prod-public-api.livesportservices.com/v1/events/list"
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
         params = {
-            "sport_id": 2,          # tennis
-            "locale": "en_INT",
+            "sport": "tennis",
+            "date": target_date,
             "timezone": "UTC",
-            "date": target_date
+            "locale": "en_INT"
         }
 
         headers = {"User-Agent": "Mozilla/5.0"}
 
         r = requests.get(base_url, params=params, headers=headers)
-        data = r.json()
+
+        if r.status_code != 200:
+            st.error(f"Erro HTTP {r.status_code}")
+            return []
+
+        try:
+            data = r.json()
+        except:
+            st.error("Resposta não é JSON válida")
+            return []
 
         matches = []
 
-        for item in data.get("DATA", []):
+        for item in data.get("events", []):
             try:
-                tournament = item["TN"]
+                tournament = item["tournament"]["name"]
 
                 # ignorar WTA
                 if any(w in tournament.upper() for w in ["WTA", "WOMEN", "BILLIE"]):
                     continue
 
-                p1 = item["HT"]
-                p2 = item["AT"]
+                p1 = item["homeTeam"]["name"]
+                p2 = item["awayTeam"]["name"]
 
                 t = tournament.upper()
                 surface = "Clay" if any(x in t for x in ["CLAY","ROLAND","MADRID","ROME"]) else \
