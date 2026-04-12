@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import streamlit as st
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.preprocessing import StandardScaler
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -125,57 +124,66 @@ def build_h2h_dict(df):
             h2h[(row[winner_col], row[loser_col])] += 1
     return h2h
 
-def extract_features(s1, s2, surf, h2h_p1_wins, h2h_p2_wins):
-    """Extract features for player1 vs player2"""
-    h2h_total = h2h_p1_wins + h2h_p2_wins + 1
-    h2h_rate = h2h_p1_wins / h2h_total
-    
-    features = [
-        s1['elo'] - s2['elo'],
-        s1['welo'] - s2['welo'],
-        s1['surface_elo'].get(surf, 1500) - s2['surface_elo'].get(surf, 1500),
-        s1['win_rate'] - s2['win_rate'],
-        s1['recent_form'] - s2['recent_form'],
-        s1['surface_win_rate'].get(surf, s1['win_rate']) - s2['surface_win_rate'].get(surf, s2['win_rate']),
-        s2['avg_rank'] - s1['avg_rank'],  # Lower rank is better
-        h2h_rate,
-        s1['elo'] / (s2['elo'] + 1),
-        abs(s1['elo'] - s2['elo'])
-    ]
-    return features
-
 # ==============================================================================
-# COMPLETELY FIXED TRAINING
+# SIMPLE AND CLEAR APPROACH
 # ==============================================================================
 def train_models(df, player_stats, h2h):
+    """
+    Train with a simple, explicit approach:
+    - Features represent strength differences
+    - Positive features = stronger player
+    - Label: 1 if stronger player listed first, 0 if listed second
+    """
     X_data, y_winner, y_games = [], [], []
     winner_col = 'winner' if 'winner' in df.columns else 'winner_name'
     loser_col = 'loser' if 'loser' in df.columns else 'loser_name'
     
     for _, row in df.iterrows():
-        w = row.get(winner_col)
-        l = row.get(loser_col)
+        winner = row.get(winner_col)
+        loser = row.get(loser_col)
         surf = row.get('surface', 'Hard')
         
-        if w not in player_stats or l not in player_stats or pd.isna(w) or pd.isna(l):
+        if winner not in player_stats or loser not in player_stats or pd.isna(winner) or pd.isna(loser):
             continue
         
-        s_w = player_stats[w]
-        s_l = player_stats[l]
+        w_stats = player_stats[winner]
+        l_stats = player_stats[loser]
         total_games = row.get('total_games', 22)
         
-        # Randomly decide order to avoid position bias
-        if random.random() < 0.5:
-            # Winner is player1
-            features = extract_features(s_w, s_l, surf, h2h.get((w, l), 0), h2h.get((l, w), 0))
-            label = 1  # Player1 wins
-        else:
-            # Loser is player1
-            features = extract_features(s_l, s_w, surf, h2h.get((l, w), 0), h2h.get((w, l), 0))
-            label = 0  # Player1 loses
+        # H2H
+        h2h_w = h2h.get((winner, loser), 0)
+        h2h_l = h2h.get((loser, winner), 0)
+        h2h_total = h2h_w + h2h_l + 1
         
-        X_data.append(features)
-        y_winner.append(label)
+        # Create TWO training examples from each match
+        # Example 1: Winner listed first → label = 1
+        features_w_first = [
+            w_stats['elo'] - l_stats['elo'],
+            w_stats['welo'] - l_stats['welo'],
+            w_stats['surface_elo'].get(surf, 1500) - l_stats['surface_elo'].get(surf, 1500),
+            w_stats['win_rate'] - l_stats['win_rate'],
+            w_stats['recent_form'] - l_stats['recent_form'],
+            w_stats['surface_win_rate'].get(surf, w_stats['win_rate']) - l_stats['surface_win_rate'].get(surf, l_stats['win_rate']),
+            l_stats['avg_rank'] - w_stats['avg_rank'],  # Lower is better
+            h2h_w / h2h_total,
+        ]
+        X_data.append(features_w_first)
+        y_winner.append(1)  # Winner is first
+        y_games.append(total_games)
+        
+        # Example 2: Loser listed first → label = 0
+        features_l_first = [
+            l_stats['elo'] - w_stats['elo'],
+            l_stats['welo'] - w_stats['welo'],
+            l_stats['surface_elo'].get(surf, 1500) - w_stats['surface_elo'].get(surf, 1500),
+            l_stats['win_rate'] - w_stats['win_rate'],
+            l_stats['recent_form'] - w_stats['recent_form'],
+            l_stats['surface_win_rate'].get(surf, l_stats['win_rate']) - w_stats['surface_win_rate'].get(surf, w_stats['win_rate']),
+            w_stats['avg_rank'] - l_stats['avg_rank'],
+            h2h_l / h2h_total,
+        ]
+        X_data.append(features_l_first)
+        y_winner.append(0)  # Winner is second
         y_games.append(total_games)
     
     X = np.array(X_data, dtype=np.float64)
@@ -184,74 +192,92 @@ def train_models(df, player_stats, h2h):
     y_w = np.array(y_winner)
     y_g = np.array(y_games)
     
-    # Check class balance
+    # Diagnostics
+    st.write(f"📊 Training samples: {len(X)}")
     unique, counts = np.unique(y_w, return_counts=True)
-    st.write(f"Training class distribution: {dict(zip(unique, counts))}")
+    st.write(f"📊 Class distribution: {dict(zip(unique, counts))}")
     
     model_winner = GradientBoostingClassifier(
-        n_estimators=200, 
-        max_depth=5, 
-        learning_rate=0.05, 
-        subsample=0.8, 
-        min_samples_leaf=5,
-        max_features='sqrt',
+        n_estimators=150, 
+        max_depth=4, 
+        learning_rate=0.1, 
         random_state=42
     )
     model_winner.fit(X, y_w)
     
-    # Check training accuracy
+    # Training diagnostics
     train_pred = model_winner.predict(X)
     train_acc = (train_pred == y_w).mean()
-    st.write(f"Training accuracy: {train_acc:.2%}")
-    
-    # Check prediction distribution
     train_probs = model_winner.predict_proba(X)[:, 1]
-    st.write(f"Avg predicted prob: {train_probs.mean():.2%}, Min: {train_probs.min():.2%}, Max: {train_probs.max():.2%}")
+    
+    st.write(f"✅ Training accuracy: {train_acc:.1%}")
+    st.write(f"📊 Prob stats - Mean: {train_probs.mean():.1%}, Std: {train_probs.std():.3f}, Min: {train_probs.min():.1%}, Max: {train_probs.max():.1%}")
     
     model_ou = GradientBoostingClassifier(
-        n_estimators=150, 
-        max_depth=4, 
-        learning_rate=0.05,
+        n_estimators=100, 
+        max_depth=3, 
+        learning_rate=0.1,
         random_state=42
     )
     model_ou.fit(X, (y_g > 21.5).astype(int))
     
     return model_winner, model_ou
 
-def predict_match(model_winner, model_ou, player_stats, h2h, p1, p2, surface):
+def predict_match(model_winner, model_ou, player_stats, h2h, p1_name, p2_name, surface):
+    """
+    Predict match outcome.
+    Model predicts: prob that p1 (first player) wins
+    """
     default_stats = {
         'win_rate': 0.5, 'avg_rank': 150, 'recent_form': 0.5, 'elo': 1500, 
         'welo': 1500, 'surface_elo': {'Hard': 1500, 'Clay': 1500, 'Grass': 1500},
         'surface_win_rate': {'Hard': 0.5, 'Clay': 0.5, 'Grass': 0.5}, 'avg_games': 22.0
     }
     
-    s1 = player_stats.get(p1, default_stats)
-    s2 = player_stats.get(p2, default_stats)
+    p1 = player_stats.get(p1_name, default_stats)
+    p2 = player_stats.get(p2_name, default_stats)
     
-    # Extract features: player1 vs player2
-    features = extract_features(s1, s2, surface, h2h.get((p1, p2), 0), h2h.get((p2, p1), 0))
+    # H2H
+    h2h_p1 = h2h.get((p1_name, p2_name), 0)
+    h2h_p2 = h2h.get((p2_name, p1_name), 0)
+    h2h_total = h2h_p1 + h2h_p2 + 1
+    
+    # Features: p1 vs p2 (p1 listed first)
+    features = [
+        p1['elo'] - p2['elo'],
+        p1['welo'] - p2['welo'],
+        p1['surface_elo'].get(surface, 1500) - p2['surface_elo'].get(surface, 1500),
+        p1['win_rate'] - p2['win_rate'],
+        p1['recent_form'] - p2['recent_form'],
+        p1['surface_win_rate'].get(surface, p1['win_rate']) - p2['surface_win_rate'].get(surface, p2['win_rate']),
+        p2['avg_rank'] - p1['avg_rank'],
+        h2h_p1 / h2h_total,
+    ]
     
     X = np.array([features], dtype=np.float64)
     X = np.nan_to_num(X, nan=0.0, posinf=100, neginf=-100)
     
-    # Probability that player1 wins
+    # Get probabilities
     probs = model_winner.predict_proba(X)[0]
+    # probs[0] = probability of class 0 (p2 wins)
+    # probs[1] = probability of class 1 (p1 wins)
+    
     p1_win_prob = probs[1]
     p2_win_prob = probs[0]
     
-    # Over/Under prediction
+    # Over/Under
     ou_probs = model_ou.predict_proba(X)[0]
     over_prob = ou_probs[1]
     under_prob = ou_probs[0]
     
     return {
-        'winner': p1 if p1_win_prob > p2_win_prob else p2,
+        'winner': p1_name if p1_win_prob > p2_win_prob else p2_name,
         'winner_conf': max(p1_win_prob, p2_win_prob),
         'p1_prob': p1_win_prob,
         'p2_prob': p2_win_prob,
         'ou': "Over 21.5" if over_prob > under_prob else "Under 21.5",
         'ou_conf': max(over_prob, under_prob),
-        'exp_games': (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
+        'exp_games': (p1.get('avg_games', 22) + p2.get('avg_games', 22)) / 2
     }
 
 # Scraper
@@ -301,7 +327,7 @@ def scrape_matches_flashscore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Properly Balanced Model - V3**")
+    st.markdown("**Clean Implementation - V4**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
@@ -324,7 +350,11 @@ def main():
                 f.write(uploaded_file.read())
             
             df = load_historical_data(temp_path)
+            st.write(f"📁 Loaded {len(df)} matches")
+            
             player_stats = compute_player_stats(df)
+            st.write(f"👥 Computed stats for {len(player_stats)} players")
+            
             h2h = build_h2h_dict(df)
             model_w, model_ou = train_models(df, player_stats, h2h)
             
@@ -333,14 +363,20 @@ def main():
             st.session_state.model_winner = model_w
             st.session_state.model_ou = model_ou
             st.session_state.models_trained = True
-            st.success("✅ Model trained!")
+            st.success("✅ Model trained successfully!")
 
     if st.session_state.get('matches') and st.session_state.get('models_trained'):
         st.header("🎯 Predictions")
         for m in st.session_state.matches:
-            pred = predict_match(st.session_state.model_winner, st.session_state.model_ou, 
-                               st.session_state.player_stats, st.session_state.h2h, 
-                               m['player1'], m['player2'], m['surface'])
+            pred = predict_match(
+                st.session_state.model_winner, 
+                st.session_state.model_ou, 
+                st.session_state.player_stats, 
+                st.session_state.h2h, 
+                m['player1'], 
+                m['player2'], 
+                m['surface']
+            )
             
             conf_class = "confidence-high" if pred['winner_conf'] >= 0.65 else "confidence-medium" if pred['winner_conf'] >= 0.55 else "confidence-low"
             
