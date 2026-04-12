@@ -15,6 +15,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score, f1_score, log_loss, accuracy_score
 
 import requests
+from bs4 import BeautifulSoup
 
 warnings.filterwarnings('ignore')
 
@@ -382,48 +383,48 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 
 # ==============================================================================
-# SCRAPER — API OFICIAL FLASHSCORE (SEM SELENIUM)
+# SCRAPER — HTML (FUNCIONA SEMPRE)
 # ==============================================================================
 
 def scrape_matches_flashscore(days_ahead=0):
     try:
-        # Flashscore endpoint público e estável
-        base_url = "https://www.flashscore.com/tennis/"
-        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # Flashscore usa este endpoint JSON para carregar jogos
-        api_url = f"https://www.flashscore.com/api/v1/event/match-list/?sport=tennis&date={target_date}"
+        # Flashscore usa ?d=YYYYMMDD para navegar entre dias
+        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y%m%d")
+        url = f"https://www.flashscore.com/tennis/?d={target_date}"
 
         headers = {
             "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
+            "Accept-Language": "en-US,en;q=0.9"
         }
 
-        r = requests.get(api_url, headers=headers)
+        r = requests.get(url, headers=headers)
 
         if r.status_code != 200:
             st.error(f"Erro HTTP {r.status_code}")
             return []
 
-        try:
-            data = r.json()
-        except:
-            st.error("Resposta não é JSON válida")
-            return []
+        soup = BeautifulSoup(r.text, "html.parser")
 
         matches = []
 
-        for item in data.get("events", []):
-            try:
-                tournament = item["tournament"]["name"]
+        # Cada jogo está num bloco event__match
+        cards = soup.find_all("div", class_=lambda x: x and "event__match" in x)
 
-                # ignorar WTA
+        for card in cards:
+            try:
+                # Jogadores
+                p1 = card.find("div", class_="event__participant--home").get_text(strip=True)
+                p2 = card.find("div", class_="event__participant--away").get_text(strip=True)
+
+                # Torneio (vem antes do bloco)
+                tournament_block = card.find_previous("div", class_=lambda x: x and "event__title" in x)
+                tournament = tournament_block.get_text(strip=True) if tournament_block else "Unknown"
+
+                # Ignorar WTA
                 if any(w in tournament.upper() for w in ["WTA", "WOMEN", "BILLIE"]):
                     continue
 
-                p1 = item["homeTeam"]["name"]
-                p2 = item["awayTeam"]["name"]
-
+                # Inferir superfície
                 t = tournament.upper()
                 surface = "Clay" if any(x in t for x in ["CLAY","ROLAND","MADRID","ROME"]) else \
                           "Grass" if any(x in t for x in ["WIMBLEDON","HALLE"]) else "Hard"
