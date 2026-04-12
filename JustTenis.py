@@ -1,4 +1,4 @@
-import os
+7import os
 import re
 import time
 import warnings
@@ -13,27 +13,21 @@ from sklearn.ensemble import GradientBoostingClassifier
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 warnings.filterwarnings('ignore')
 
 # ==============================================================================
-# Streamlit Page Configuration
+# Streamlit Configuration
 # ==============================================================================
 st.set_page_config(
-    page_title="🎾 ATP & Challenger Tennis Predictions",
+    page_title="🎾 ATP & Challenger Tennis Predictor",
     page_icon="🎾",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
 st.markdown("""
     <style>
-    .main {background-color: #0e1117;}
-    .stApp {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);}
     .prediction-card {
         background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
         color: white;
@@ -45,154 +39,155 @@ st.markdown("""
     .confidence-high {color: #00ff88; font-weight: bold; font-size: 1.1em;}
     .confidence-medium {color: #ffd700; font-weight: bold; font-size: 1.1em;}
     .confidence-low {color: #ff6b6b; font-weight: bold; font-size: 1.1em;}
-    .match-header {font-size: 1.3em; font-weight: bold; margin-bottom: 10px; color: #ffffff;}
-    .tournament-badge {
-        background: rgba(255,255,255,0.2);
-        padding: 5px 10px;
-        border-radius: 5px;
-        font-size: 0.9em;
-        display: inline-block;
-        margin-right: 10px;
-    }
+    .match-header {font-size: 1.35em; font-weight: bold; margin-bottom: 10px;}
     </style>
 """, unsafe_allow_html=True)
+
+# ==============================================================================
+# ELO & WELO Calculation
+# ==============================================================================
+def calculate_elo_ratings(df, k=32, surface_k=25):
+    players = set(df['winner'].unique()) | set(df['loser'].unique())
+    elo = {p: 1500.0 for p in players}
+    welo = {p: 1500.0 for p in players}
+    surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0, 'Carpet':1500.0} for p in players}
+    
+    df_sorted = df.sort_values('date').copy()
+    
+    for _, row in df_sorted.iterrows():
+        p1 = row['winner']
+        p2 = row['loser']
+        surf = row.get('surface', 'Hard')
+        
+        if p1 not in elo or p2 not in elo:
+            continue
+            
+        # Main ELO
+        r1, r2 = elo[p1], elo[p2]
+        exp1 = 1 / (1 + 10 ** ((r2 - r1) / 400))
+        elo[p1] += k * (1 - exp1)
+        elo[p2] += k * (0 - (1 - exp1))
+        
+        # Surface ELO
+        if surf in surface_elo[p1]:
+            s1, s2 = surface_elo[p1][surf], surface_elo[p2][surf]
+            exp_s1 = 1 / (1 + 10 ** ((s2 - s1) / 400))
+            surface_elo[p1][surf] += surface_k * (1 - exp_s1)
+            surface_elo[p2][surf] += surface_k * (0 - (1 - exp_s1))
+        
+        # Weighted ELO (recent matches matter more)
+        welo[p1] = welo[p1] * 0.97 + elo[p1] * 0.03
+        welo[p2] = welo[p2] * 0.97 + elo[p2] * 0.03
+    
+    return elo, welo, surface_elo
 
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
 def parse_score_to_games(score):
     if pd.isna(score) or score == "":
-        return 20
+        return 22
     score = re.sub(r'\(\d+\)', '', str(score))
     score = re.sub(r'RET|DEF|W/O', '', score, flags=re.IGNORECASE)
     total = 0
-    for set_score in score.split():
-        if '-' in set_score:
+    for s in score.split():
+        if '-' in s:
             try:
-                parts = set_score.split('-')
-                a = int(re.findall(r'\d+', parts[0])[0])
-                b = int(re.findall(r'\d+', parts[1])[0])
+                a, b = map(int, re.findall(r'\d+', s))
                 total += a + b
             except:
-                continue
-    return total if total > 0 else 20
+                pass
+    return total if total > 0 else 22
 
 @st.cache_data(ttl=3600)
 def load_historical_data(file_path):
-    try:
-        df = pd.read_excel(file_path)
-        df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
-        
-        rename_map = {'tourney_date': 'date', 'winner_name': 'winner', 'loser_name': 'loser',
-                      'winner_rank': 'wrank', 'loser_rank': 'lrank', 't_games': 'total_games'}
-        df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
-        
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'].astype(str), format='%Y%m%d', errors='coerce')
-        
-        if 'total_games' not in df.columns and 'score' in df.columns:
-            df['total_games'] = df['score'].apply(parse_score_to_games)
-        
-        return df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
+    df = pd.read_excel(file_path)
+    df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
+    
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'].astype(str), format='%Y%m%d', errors='coerce')
+    if 'score' in df.columns:
+        df['total_games'] = df['score'].apply(parse_score_to_games)
+    return df
 
 def compute_player_stats(df):
     stats = {}
+    elo, welo, surface_elo = calculate_elo_ratings(df)
+    
     for player in set(df['winner'].unique()) | set(df['loser'].unique()):
-        player_matches = df[(df['winner'] == player) | (df['loser'] == player)]
-        if len(player_matches) == 0:
+        matches = df[(df['winner'] == player) | (df['loser'] == player)]
+        if len(matches) == 0:
             continue
             
         wins = len(df[df['winner'] == player])
-        losses = len(df[df['loser'] == player])
-        total = wins + losses
-        if total == 0: continue
-            
-        win_rate = wins / total
+        total = wins + len(df[df['loser'] == player])
+        win_rate = wins / total if total > 0 else 0.5
         
-        # Surface stats
-        surfaces = {}
-        for surf in ['Hard', 'Clay', 'Grass', 'Carpet']:
-            if 'surface' in player_matches.columns:
-                surf_matches = player_matches[player_matches['surface'] == surf]
-            else:
-                surf_matches = pd.DataFrame()
-            surf_wins = len(surf_matches[surf_matches['winner'] == player])
-            surf_total = len(surf_matches)
-            surfaces[surf] = surf_wins / surf_total if surf_total > 0 else win_rate
-        
-        # Avg rank
-        ranks = []
-        if 'wrank' in df.columns:
-            ranks.extend(df[df['winner'] == player]['wrank'].dropna().tolist())
-            ranks.extend(df[df['loser'] == player]['lrank'].dropna().tolist())
-        avg_rank = np.mean(ranks) if ranks else 200
-        
-        # Recent form
-        recent = player_matches.sort_values('date', ascending=False).head(10)
+        recent = matches.sort_values('date', ascending=False).head(10)
         recent_form = len(recent[recent['winner'] == player]) / len(recent) if len(recent) > 0 else win_rate
         
-        avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
+        avg_rank = matches['wrank'].mean() if 'wrank' in matches.columns else 150
+        avg_games = matches['total_games'].mean() if 'total_games' in matches.columns else 22
+        
+        surfaces = {'Hard': win_rate, 'Clay': win_rate, 'Grass': win_rate, 'Carpet': win_rate}
+        if 'surface' in df.columns:
+            for surf in surfaces:
+                surf_m = matches[matches['surface'] == surf]
+                if len(surf_m) > 0:
+                    surfaces[surf] = len(surf_m[surf_m['winner'] == player]) / len(surf_m)
         
         stats[player] = {
-            'win_rate': win_rate, 'avg_rank': avg_rank, 'recent_form': recent_form,
-            'avg_games': avg_games, 'hard': surfaces.get('Hard', win_rate),
-            'clay': surfaces.get('Clay', win_rate), 'grass': surfaces.get('Grass', win_rate),
-            'carpet': surfaces.get('Carpet', win_rate)
+            'win_rate': win_rate,
+            'avg_rank': avg_rank,
+            'recent_form': recent_form,
+            'avg_games': avg_games,
+            'hard': surfaces['Hard'],
+            'clay': surfaces['Clay'],
+            'grass': surfaces['Grass'],
+            'elo': elo.get(player, 1500),
+            'welo': welo.get(player, 1500),
+            'surface_elo': surface_elo.get(player, {'Hard':1500,'Clay':1500,'Grass':1500,'Carpet':1500})
         }
     return stats
 
 def build_h2h_dict(df):
-    """Build Head-to-Head dictionary"""
     h2h = defaultdict(int)
     for _, row in df.iterrows():
         h2h[(row['winner'], row['loser'])] += 1
     return h2h
 
+# ==============================================================================
+# Model Training
+# ==============================================================================
 def train_models(df, player_stats, h2h):
-    X_data = []
-    y_winner = []
-    y_games = []
+    X_data, y_winner, y_games = [], [], []
     
     for _, row in df.iterrows():
-        winner_name = row['winner']
-        loser_name = row['loser']
+        w, l = row['winner'], row['loser']
         surf = row.get('surface', 'Hard')
-        
-        if winner_name not in player_stats or loser_name not in player_stats:
+        if w not in player_stats or l not in player_stats:
             continue
+            
+        p1, p2, label = (w, l, 1) if random.random() < 0.5 else (l, w, 0)
+        s1, s2 = player_stats[p1], player_stats[p2]
         
-        # Random order to prevent bias
-        if random.random() < 0.5:
-            p1, p2, label = winner_name, loser_name, 1
-        else:
-            p1, p2, label = loser_name, winner_name, 0
+        h2h_rate = h2h.get((p1, p2), 0) / (h2h.get((p1, p2), 0) + h2h.get((p2, p1), 0) + 1)
         
-        p1_stats = player_stats[p1]
-        p2_stats = player_stats[p2]
-        surf_key = surf.lower()
-        
-        # H2H
-        p1_wins_h2h = h2h.get((p1, p2), 0)
-        p2_wins_h2h = h2h.get((p2, p1), 0)
-        total_h2h = p1_wins_h2h + p2_wins_h2h
-        h2h_p1_rate = p1_wins_h2h / total_h2h if total_h2h > 0 else 0.5
-        
-        # Difference features
-        rank_diff = p1_stats['avg_rank'] - p2_stats['avg_rank']
-        wr_diff = p1_stats['win_rate'] - p2_stats['win_rate']
-        form_diff = p1_stats['recent_form'] - p2_stats['recent_form']
+        elo_diff = s1['elo'] - s2['elo']
+        welo_diff = s1['welo'] - s2['welo']
+        surf_elo_diff = s1['surface_elo'].get(surf, 1500) - s2['surface_elo'].get(surf, 1500)
         
         features = [
-            p1_stats['win_rate'], p2_stats['win_rate'],
-            p1_stats['avg_rank'], p2_stats['avg_rank'],
-            p1_stats['recent_form'], p2_stats['recent_form'],
-            p1_stats.get(surf_key, p1_stats['win_rate']),
-            p2_stats.get(surf_key, p2_stats['win_rate']),
-            p1_stats['avg_games'], p2_stats['avg_games'],
-            h2h_p1_rate, rank_diff, wr_diff, form_diff   # ← New features
+            s1['win_rate'] - s2['win_rate'],
+            (s1['avg_rank'] - s2['avg_rank']) / 50,
+            s1['recent_form'] - s2['recent_form'],
+            s1.get(surf.lower(), s1['win_rate']) - s2.get(surf.lower(), s2['win_rate']),
+            elo_diff / 80,
+            welo_diff / 80,
+            surf_elo_diff / 80,
+            h2h_rate,
+            s1['elo'] / (s2['elo'] + 100),
+            abs(elo_diff) / 100
         ]
         
         X_data.append(features)
@@ -200,49 +195,38 @@ def train_models(df, player_stats, h2h):
         y_games.append(row.get('total_games', 22))
     
     X = np.array(X_data)
-    y_w = np.array(y_winner)
-    
-    if len(np.unique(y_w)) < 2:
-        st.error("Not enough variety in training data.")
-        st.stop()
     
     model_winner = GradientBoostingClassifier(
-        n_estimators=300, max_depth=6, subsample=0.85, random_state=42
+        n_estimators=600, max_depth=7, learning_rate=0.04, 
+        subsample=0.82, random_state=42
     )
-    model_winner.fit(X, y_w)
+    model_winner.fit(X, y_winner)
     
-    model_ou = GradientBoostingClassifier(n_estimators=200, random_state=42)
-    y_ou = (np.array(y_games) > 21.5).astype(int)
-    model_ou.fit(X, y_ou)
+    model_ou = GradientBoostingClassifier(n_estimators=400, max_depth=6, random_state=42)
+    model_ou.fit(X, (np.array(y_games) > 21.5).astype(int))
     
     return model_winner, model_ou
 
 def predict_match(model_winner, model_ou, player_stats, h2h, p1, p2, surface):
-    default = {'win_rate': 0.5, 'avg_rank': 200, 'recent_form': 0.5, 'avg_games': 22,
-               'hard':0.5, 'clay':0.5, 'grass':0.5, 'carpet':0.5}
+    default = {'win_rate':0.5, 'avg_rank':150, 'recent_form':0.5, 'avg_games':22,
+               'elo':1500, 'welo':1500, 'surface_elo':{'Hard':1500,'Clay':1500,'Grass':1500}}
     
-    p1_stats = player_stats.get(p1, default)
-    p2_stats = player_stats.get(p2, default)
-    surf_key = surface.lower()
+    s1 = player_stats.get(p1, default)
+    s2 = player_stats.get(p2, default)
     
-    # H2H + difference features (same as training)
-    p1_wins_h2h = h2h.get((p1, p2), 0)
-    p2_wins_h2h = h2h.get((p2, p1), 0)
-    total_h2h = p1_wins_h2h + p2_wins_h2h
-    h2h_p1_rate = p1_wins_h2h / total_h2h if total_h2h > 0 else 0.5
-    
-    rank_diff = p1_stats['avg_rank'] - p2_stats['avg_rank']
-    wr_diff = p1_stats['win_rate'] - p2_stats['win_rate']
-    form_diff = p1_stats['recent_form'] - p2_stats['recent_form']
+    h2h_rate = h2h.get((p1,p2), 0) / (h2h.get((p1,p2),0) + h2h.get((p2,p1),0) + 1)
     
     features = np.array([[ 
-        p1_stats['win_rate'], p2_stats['win_rate'],
-        p1_stats['avg_rank'], p2_stats['avg_rank'],
-        p1_stats['recent_form'], p2_stats['recent_form'],
-        p1_stats.get(surf_key, p1_stats['win_rate']),
-        p2_stats.get(surf_key, p2_stats['win_rate']),
-        p1_stats['avg_games'], p2_stats['avg_games'],
-        h2h_p1_rate, rank_diff, wr_diff, form_diff
+        s1['win_rate'] - s2['win_rate'],
+        (s1['avg_rank'] - s2['avg_rank']) / 50,
+        s1['recent_form'] - s2['recent_form'],
+        s1.get(surface.lower(), s1['win_rate']) - s2.get(surface.lower(), s2['win_rate']),
+        (s1['elo'] - s2['elo']) / 80,
+        (s1['welo'] - s2['welo']) / 80,
+        (s1['surface_elo'].get(surface,1500) - s2['surface_elo'].get(surface,1500)) / 80,
+        h2h_rate,
+        s1['elo'] / (s2['elo'] + 100),
+        abs(s1['elo'] - s2['elo']) / 100
     ]])
     
     p1_prob = model_winner.predict_proba(features)[0][1]
@@ -250,169 +234,129 @@ def predict_match(model_winner, model_ou, player_stats, h2h, p1, p2, surface):
     
     return {
         'winner': p1 if p1_prob > 0.5 else p2,
-        'winner_conf': max(p1_prob, 1-p1_prob),
+        'winner_conf': max(p1_prob, 1 - p1_prob),
         'p1_prob': p1_prob,
-        'p2_prob': 1-p1_prob,
+        'p2_prob': 1 - p1_prob,
         'ou': "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
-        'ou_conf': max(ou_prob, 1-ou_prob),
-        'exp_games': (p1_stats['avg_games'] + p2_stats['avg_games']) / 2,
-        'p1_known': p1 in player_stats,
-        'p2_known': p2 in player_stats
+        'ou_conf': max(ou_prob, 1 - ou_prob),
+        'exp_games': (s1['avg_games'] + s2['avg_games']) / 2
     }
 
-# ====================== WEB SCRAPER ======================
+# ==============================================================================
+# Flashscore Scraper (ATP & Challenger Only)
+# ==============================================================================
 @st.cache_data(ttl=1800)
 def scrape_matches_flashscore(days_ahead=0):
-    # (same as before - unchanged)
     matches = []
     try:
         target_date = datetime.now() + timedelta(days=days_ahead)
-        date_str = target_date.strftime('%d.%m.%Y')
-        st.info(f"🤖 Scraping Flashscore for {date_str}... (15-30 sec)")
+        st.info(f"🤖 Scraping ATP & Challenger matches for {target_date.strftime('%d.%m.%Y')}...")
         
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         
         driver = webdriver.Chrome(options=chrome_options)
         driver.get("https://www.flashscore.com/tennis/")
-        time.sleep(10)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(5)
+        time.sleep(12)
+        
+        for _ in range(3):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(4)
         
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         driver.quit()
         
-        match_cards = soup.find_all('div', {'class': lambda x: x and 'event__match' in str(x)})
+        cards = soup.find_all('div', class_=lambda x: x and 'event__match' in str(x))
         
-        current_tournament = ""
-        for card in match_cards:
+        for card in cards:
             try:
-                tour = card.find_previous('div', class_=lambda x: x and ('tournament' in str(x).lower() or 'header' in str(x).lower()))
-                if tour:
-                    current_tournament = tour.get_text(strip=True)
+                tour_elem = card.find_previous('div', class_=lambda x: x and any(k in str(x).lower() for k in ['tournament','header']))
+                tournament = tour_elem.get_text(strip=True) if tour_elem else ""
+                
+                # Skip WTA and women events
+                if any(w in tournament.upper() for w in ['WTA', 'WOMEN', 'BILLIE JEAN']):
+                    continue
                 
                 players = card.find_all('div', class_=lambda x: x and 'participant' in str(x))
-                if len(players) >= 2:
-                    p1 = players[0].get_text(strip=True)
-                    p2 = players[1].get_text(strip=True)
-                    if len(p1) < 3 or len(p2) < 3: continue
+                if len(players) < 2:
+                    continue
                     
-                    surface = 'Clay' if any(x in current_tournament.upper() for x in ['CLAY','ROLAND','MADRID','ROME']) else \
-                              'Grass' if 'WIMBLEDON' in current_tournament.upper() else 'Hard'
-                    match_type = "Challenger" if "CHALLENGER" in current_tournament.upper() or "CH" in current_tournament.upper() else "ATP"
-                    
-                    matches.append({
-                        'tournament': current_tournament,
-                        'player1': p1, 'player2': p2,
-                        'surface': surface, 'type': match_type
-                    })
+                p1 = players[0].get_text(strip=True)
+                p2 = players[1].get_text(strip=True)
+                
+                # Surface detection
+                tour_u = tournament.upper()
+                surface = "Clay" if any(x in tour_u for x in ['CLAY','ROLAND','MADRID','ROME','BARCELONA','BUENOS','ESTORIL']) else \
+                          "Grass" if any(x in tour_u for x in ['WIMBLEDON','HALLE','QUEEN','EASTBOURNE']) else "Hard"
+                
+                match_type = "Challenger" if "CHALLENGER" in tour_u or "CH " in tour_u else "ATP"
+                
+                matches.append({
+                    'tournament': tournament,
+                    'player1': p1,
+                    'player2': p2,
+                    'surface': surface,
+                    'type': match_type
+                })
             except:
                 continue
+                
         st.success(f"✅ Scraped {len(matches)} matches")
         return matches
     except Exception as e:
         st.error(f"Scraping failed: {e}")
         return []
 
-def get_confidence_class(conf):
-    if conf >= 0.70: return "confidence-high"
-    elif conf >= 0.55: return "confidence-medium"
-    else: return "confidence-low"
-
 # ==============================================================================
 # Main Application
 # ==============================================================================
 def main():
-    st.title("🎾 ATP & Challenger Tennis Match Predictor")
-    st.markdown("### **Enhanced ML Model** with H2H + Difference Features")
+    st.title("🎾 ATP & Challenger Tennis Predictor")
+    st.markdown("**Powered by ELO + WELO Ratings**")
 
-    # Sidebar
     with st.sidebar:
-        st.header("⚙️ Settings")
+        st.header("Settings")
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
         
         st.markdown("---")
         st.subheader("🌐 Live Scraping")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📅 Scrape Today's Matches"):
-                matches = scrape_matches_flashscore(days_ahead=0)
-                if matches:
-                    st.session_state.matches = matches
+            if st.button("📅 Today"):
+                st.session_state.matches = scrape_matches_flashscore(0)
         with col2:
-            if st.button("📅 Scrape Tomorrow's Matches"):
-                matches = scrape_matches_flashscore(days_ahead=1)
-                if matches:
-                    st.session_state.matches = matches
-        
-        st.markdown("---")
-        st.info("✅ Model now uses Head-to-Head + difference features for higher accuracy")
+            if st.button("📅 Tomorrow"):
+                st.session_state.matches = scrape_matches_flashscore(1)
 
-    # Session State
-    if 'models_trained' not in st.session_state:
-        st.session_state.models_trained = False
     if 'matches' not in st.session_state:
         st.session_state.matches = []
+    if 'models_trained' not in st.session_state:
+        st.session_state.models_trained = False
 
-    # Load & Train
-    if uploaded_file is not None:
-        with st.spinner("Training enhanced model..."):
+    # Train Model
+    if uploaded_file:
+        with st.spinner("Training model with ELO & WELO..."):
             temp_path = "/tmp/tennis_data.xlsx"
             with open(temp_path, 'wb') as f:
                 f.write(uploaded_file.read())
             
             df = load_historical_data(temp_path)
-            if df is not None:
-                player_stats = compute_player_stats(df)
-                h2h_dict = build_h2h_dict(df)
-                
-                st.session_state.player_stats = player_stats
-                st.session_state.h2h = h2h_dict
-                
-                model_w, model_ou = train_models(df, player_stats, h2h_dict)
-                st.session_state.model_winner = model_w
-                st.session_state.model_ou = model_ou
-                st.session_state.models_trained = True
-                st.success(f"✅ Enhanced model trained on {len(df)} matches!")
-    else:
-        st.warning("Please upload your historical tennis data to train the model.")
-        return
+            player_stats = compute_player_stats(df)
+            h2h = build_h2h_dict(df)
+            
+            model_w, model_ou = train_models(df, player_stats, h2h)
+            
+            st.session_state.player_stats = player_stats
+            st.session_state.h2h = h2h
+            st.session_state.model_winner = model_w
+            st.session_state.model_ou = model_ou
+            st.session_state.models_trained = True
+            st.success(f"✅ Model trained on {len(df)} matches with ELO + WELO!")
 
-    if not st.session_state.models_trained:
-        return
-
-    # Input Tabs (same as before)
-    st.markdown("---")
-    st.header("🎮 Get Predictions")
-    tab1, tab2 = st.tabs(["Manual Input", "Paste Multiple Matches"])
-
-    with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            tournament = st.text_input("Tournament", "ATP Masters")
-            player1 = st.text_input("Player 1")
-            surface = st.selectbox("Surface", ["Hard", "Clay", "Grass"])
-        with col2:
-            match_type = st.selectbox("Type", ["ATP", "Challenger"])
-            player2 = st.text_input("Player 2")
-        
-        if st.button("Predict Single Match", type="primary"):
-            if player1 and player2:
-                st.session_state.matches = [{
-                    'tournament': tournament, 'player1': player1, 'player2': player2,
-                    'surface': surface, 'type': match_type
-                }]
-
-    with tab2:
-        text_input = st.text_area("Paste matches here", height=150)
-        if st.button("Load Pasted Matches"):
-            st.info("Manual paste support can be added later if needed.")
-
-    # Show Predictions
-    if st.session_state.matches:
+    # Predictions
+    if st.session_state.matches and st.session_state.get('models_trained', False):
         st.markdown("---")
         st.header("🎯 Predictions")
         
@@ -426,57 +370,47 @@ def main():
                 match['player1'], match['player2'], match['surface']
             )
             
-            conf_class = get_confidence_class(pred['winner_conf'])
+            conf_class = "confidence-high" if pred['winner_conf'] >= 0.65 else \
+                        "confidence-medium" if pred['winner_conf'] >= 0.55 else "confidence-low"
             
             st.markdown(f"""
             <div class="prediction-card">
                 <div class="match-header">
-                    <span class="tournament-badge">{match['type']}</span>
-                    <span class="tournament-badge">{match['surface']}</span>
-                    {match['tournament']}
+                    {match['type']} • {match['surface']}
                 </div>
                 <h3>{match['player1']} vs {match['player2']}</h3>
-                <div>
-                    🏆 <strong>Winner:</strong> <span class="{conf_class}">{pred['winner']} ({pred['winner_conf']:.1%})</span><br>
-                    🎲 <strong>O/U 21.5:</strong> {pred['ou']} ({pred['ou_conf']:.1%})<br>
-                    Expected Games: {pred['exp_games']:.1f}
-                </div>
+                🏆 Winner: <span class="{conf_class}">{pred['winner']} ({pred['winner_conf']:.1%})</span><br>
+                🎲 Over/Under 21.5: {pred['ou']} ({pred['ou_conf']:.1%})<br>
+                Expected Games: {pred['exp_games']:.1f}
             </div>
             """, unsafe_allow_html=True)
             
             results_data.append({
                 'Tournament': match['tournament'],
                 'Match': f"{match['player1']} vs {match['player2']}",
+                'Surface': match['surface'],
                 'Predicted Winner': pred['winner'],
-                'Win %': f"{pred['winner_conf']:.1%}",
+                'Win Probability': f"{pred['winner_conf']:.1%}",
                 'Over/Under': pred['ou'],
                 'Expected Games': round(pred['exp_games'], 1)
             })
         
         if results_data:
             df_results = pd.DataFrame(results_data)
-            
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button(
-                    "📥 Download CSV",
-                    df_results.to_csv(index=False),
-                    file_name=f"tennis_predictions_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
+                st.download_button("📥 Download CSV", df_results.to_csv(index=False), 
+                                 f"predictions_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
             with col2:
-                # NEW EXCEL EXPORT
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    df_results.to_excel(writer, index=False, sheet_name='Predictions')
-                excel_buffer.seek(0)
-                
-                st.download_button(
-                    "📊 Download Excel",
-                    data=excel_buffer.getvalue(),
-                    file_name=f"tennis_predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_results.to_excel(writer, index=False)
+                st.download_button("📊 Download Excel", buffer.getvalue(), 
+                                 f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    else:
+        st.info("Upload historical data and scrape matches to get predictions.")
 
 if __name__ == "__main__":
     main()
