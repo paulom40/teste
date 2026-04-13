@@ -425,7 +425,7 @@ def scrape_matches_sofascore(days_ahead=0):
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                                t = tournament.upper()
+                t = tournament.upper()
                 surface = (
                     "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"])
                     else "Grass" if any(x in t for x in ["WIMBLEDON", "HALLE"])
