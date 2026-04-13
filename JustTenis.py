@@ -143,7 +143,7 @@ def build_h2h_dict(df):
 
 
 # ==============================================================================
-# FEATURES (CORRIGIDAS)
+# FEATURES
 # ==============================================================================
 
 def build_features(p1, p2, surface, player_stats, h2h):
@@ -216,7 +216,7 @@ def cross_val_metrics(model, X, y, name=""):
 
 
 # ==============================================================================
-# TREINO DOS MODELOS (CORRIGIDO)
+# TREINO DOS MODELOS (2 AMOSTRAS POR JOGO)
 # ==============================================================================
 
 def train_models(df, player_stats, h2h):
@@ -230,7 +230,6 @@ def train_models(df, player_stats, h2h):
     X_sets, y_sets = [], []
     X_hcap, y_hcap = [], []
 
-    # LOOP CORRIGIDO — SEM RANDOM SWAP
     for _, row in df.iterrows():
         w = row['winner']
         l = row['loser']
@@ -241,37 +240,41 @@ def train_models(df, player_stats, h2h):
         total_games = row.get('total_games', 22)
         score = str(row.get('score', "")) if 'score' in df.columns else ""
 
-        # p1 = winner, p2 = loser (consistente)
+        # --------- AMOSTRA 1: p1 = winner, p2 = loser ---------
         p1, p2 = w, l
+        feat1 = build_features(p1, p2, surf, player_stats, h2h)
+        if feat1 is not None:
+            # Winner model
+            X_winner.append(feat1)
+            y_winner.append(1)
 
-        feat = build_features(p1, p2, surf, player_stats, h2h)
-        if feat is None:
-            continue
+            # Over/Under
+            X_ou.append(feat1)
+            y_ou.append(1 if total_games > 21.5 else 0)
 
-        # WINNER MODEL — 1 = p1 ganha (sempre verdadeiro)
-        X_winner.append(feat)
-        y_winner.append(1)
+            # Sets
+            sets = score.split()
+            if len(sets) == 2:
+                X_sets.append(feat1)
+                y_sets.append(0)
+            elif len(sets) >= 3:
+                X_sets.append(feat1)
+                y_sets.append(1)
 
-        # OVER/UNDER 21.5
-        X_ou.append(feat)
-        y_ou.append(1 if total_games > 21.5 else 0)
+            # Handicap
+            if total_games <= 20:
+                X_hcap.append(feat1)
+                y_hcap.append(1)
+            elif total_games >= 24:
+                X_hcap.append(feat1)
+                y_hcap.append(0)
 
-        # SETS (2–0 vs 2–1+)
-        sets = score.split()
-        if len(sets) == 2:
-            X_sets.append(feat)
-            y_sets.append(0)
-        elif len(sets) >= 3:
-            X_sets.append(feat)
-            y_sets.append(1)
-
-        # HANDICAP -2.5
-        if total_games <= 20:
-            X_hcap.append(feat)
-            y_hcap.append(1)
-        elif total_games >= 24:
-            X_hcap.append(feat)
-            y_hcap.append(0)
+        # --------- AMOSTRA 2: p1 = loser, p2 = winner ---------
+        p1b, p2b = l, w
+        feat2 = build_features(p1b, p2b, surf, player_stats, h2h)
+        if feat2 is not None:
+            X_winner.append(feat2)
+            y_winner.append(0)
 
     progress.progress((step := step + 1) / total_steps)
 
@@ -327,7 +330,7 @@ def train_models(df, player_stats, h2h):
 
 
 # ==============================================================================
-# PREDIÇÃO (CORRIGIDA)
+# PREDIÇÃO
 # ==============================================================================
 
 def predict_match(model_winner, model_ou, model_sets, model_hcap,
@@ -339,7 +342,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
     X = np.array([feat])
 
-    # WINNER — modelo treinado com "1 = p1 ganha"
+    # WINNER — 1 = p1 ganha
     probs_w = model_winner.predict_proba(X)[0]
     p1_prob = probs_w[1]
     p2_prob = 1 - p1_prob
@@ -378,14 +381,12 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         'handicap': hcap_pred
     }
 # ==============================================================================
-# SCRAPER SOFASCORE — VERSÃO FINAL (ESTÁVEL)
+# SCRAPER SOFASCORE
 # ==============================================================================
 
 def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # ENDPOINT CORRETO E ESTÁVEL
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
 
         headers = {
@@ -400,7 +401,6 @@ def scrape_matches_sofascore(days_ahead=0):
             "Referer": "https://www.sofascore.com/"
         }
 
-        # Retry automático com backoff
         for attempt in range(6):
             try:
                 r = requests.get(url, headers=headers, timeout=10)
@@ -434,14 +434,12 @@ def scrape_matches_sofascore(days_ahead=0):
                 tournament = ev["tournament"]["name"]
                 category = ev["tournament"]["category"]["name"]
 
-                # Ignorar WTA
                 if "WTA" in category.upper():
                     continue
 
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                # Inferir superfície
                 t = tournament.upper()
                 surface = (
                     "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"])
@@ -468,14 +466,13 @@ def scrape_matches_sofascore(days_ahead=0):
 
 
 # ==============================================================================
-# APP COMPLETO
+# APP
 # ==============================================================================
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
     st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore matches**")
 
-    # SIDEBAR
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
         st.markdown("---")
@@ -491,7 +488,6 @@ def main():
     if 'matches' not in st.session_state:
         st.session_state.matches = []
 
-    # TREINO DO MODELO
     if uploaded_file:
         with st.spinner("Training model..."):
             temp_path = "/tmp/tennis_data.xlsx"
@@ -518,7 +514,6 @@ def main():
 
             st.success("✅ Model trained successfully!")
 
-    # PREDIÇÕES
     if st.session_state.get('matches') and st.session_state.get('models_trained'):
         st.header("🎯 Predictions")
 
