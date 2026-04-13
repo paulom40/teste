@@ -369,7 +369,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/schedule/tennis/{target_date}"
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
 
         headers = {
             "User-Agent": (
@@ -383,7 +383,7 @@ def scrape_matches_sofascore(days_ahead=0):
             "Referer": "https://www.sofascore.com/"
         }
 
-        # Retry automático
+        # Retry automático com backoff
         for attempt in range(6):
             try:
                 r = requests.get(url, headers=headers, timeout=10)
@@ -446,6 +446,7 @@ def scrape_matches_sofascore(days_ahead=0):
     except Exception as e:
         st.error(f"Erro SofaScore: {e}")
         return []
+
 
 
 
