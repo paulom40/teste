@@ -422,7 +422,8 @@ def main():
                 st.session_state.matches = scrape_matches_sofascore(0)
         with col2:
             if st.button("📅 Tomorrow"):
-                st.session_state.matches = scrape_matches_rapidapi(1)
+                st.session_state.matches = scrape_matches_sofascore(1)
+
 
     if 'matches' not in st.session_state:
         st.session_state.matches = []
