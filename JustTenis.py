@@ -15,7 +15,6 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score, f1_score, log_loss, accuracy_score
 
 import requests
-from bs4 import BeautifulSoup
 
 warnings.filterwarnings('ignore')
 
@@ -29,6 +28,12 @@ st.markdown("""
     .confidence-low {color: #ff6b6b; font-weight: bold; font-size: 1.15em;}
     </style>
 """, unsafe_allow_html=True)
+
+
+# ==============================================================================
+# ELO, LOAD, STATS, H2H
+# ==============================================================================
+
 def calculate_elo_ratings(df, k=32, surface_k=25):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
     
@@ -135,6 +140,12 @@ def build_h2h_dict(df):
         if pd.notna(row['winner']) and pd.notna(row['loser']):
             h2h[(row['winner'], row['loser'])] += 1
     return h2h
+
+
+# ==============================================================================
+# FEATURES, CV, TRAIN
+# ==============================================================================
+
 def build_features(p1, p2, surface, player_stats, h2h):
     if p1 not in player_stats or p2 not in player_stats:
         return None
@@ -300,6 +311,8 @@ def train_models(df, player_stats, h2h):
     progress.progress((step := step + 1) / total_steps)
 
     return model_winner, model_ou, model_sets, model_hcap
+
+
 # ==============================================================================
 # PREDICTION
 # ==============================================================================
@@ -350,7 +363,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 
 # ==============================================================================
-# SCRAPER — RAPIDAPI (ATP/WTA/ITF)
+# SCRAPER SOFASCORE
 # ==============================================================================
 
 def scrape_matches_sofascore(days_ahead=0):
@@ -372,16 +385,14 @@ def scrape_matches_sofascore(days_ahead=0):
         for ev in data["events"]:
             try:
                 tournament = ev["tournament"]["name"]
-                category = ev["tournament"]["category"]["name"]  # "ATP", "Challenger", "ITF"
+                category = ev["tournament"]["category"]["name"]  # "ATP", "Challenger", "ITF", "WTA"
 
-                # ignorar WTA
                 if "WTA" in category.upper():
                     continue
 
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                # superfície (inferida pelo torneio)
                 t = tournament.upper()
                 surface = "Clay" if any(x in t for x in ["CLAY","ROLAND","MADRID","ROME"]) else \
                           "Grass" if any(x in t for x in ["WIMBLEDON","HALLE"]) else "Hard"
@@ -410,7 +421,7 @@ def scrape_matches_sofascore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Versão completa: Winner, O/U, Sets, Handicap, CV + Barra de Progresso**")
+    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore matches**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
@@ -423,7 +434,6 @@ def main():
         with col2:
             if st.button("📅 Tomorrow"):
                 st.session_state.matches = scrape_matches_sofascore(1)
-
 
     if 'matches' not in st.session_state:
         st.session_state.matches = []
