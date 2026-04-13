@@ -353,44 +353,35 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 # SCRAPER — RAPIDAPI (ATP/WTA/ITF)
 # ==============================================================================
 
-def scrape_matches_rapidapi(days_ahead=0):
+def scrape_matches_sofascore(days_ahead=0):
     try:
-        API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
-
-        base_url = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/events/date"
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
 
-        url = f"{base_url}/{target_date}"
-
-        headers = {
-            "x-rapidapi-key": API_KEY,
-            "x-rapidapi-host": "tennis-api-atp-wta-itf.p.rapidapi.com"
-        }
-
-        r = requests.get(url, headers=headers)
-
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200:
             st.error(f"Erro HTTP {r.status_code}")
             return []
 
         data = r.json()
-
         if "events" not in data:
             return []
 
         matches = []
 
-        for event in data["events"]:
+        for ev in data["events"]:
             try:
-                tournament = event["tournament"]["name"]
-                category = event["tournament"]["level"]
+                tournament = ev["tournament"]["name"]
+                category = ev["tournament"]["category"]["name"]  # "ATP", "Challenger", "ITF"
 
+                # ignorar WTA
                 if "WTA" in category.upper():
                     continue
 
-                p1 = event["home"]["name"]
-                p2 = event["away"]["name"]
+                p1 = ev["homeTeam"]["name"]
+                p2 = ev["awayTeam"]["name"]
 
+                # superfície (inferida pelo torneio)
                 t = tournament.upper()
                 surface = "Clay" if any(x in t for x in ["CLAY","ROLAND","MADRID","ROME"]) else \
                           "Grass" if any(x in t for x in ["WIMBLEDON","HALLE"]) else "Hard"
@@ -409,7 +400,7 @@ def scrape_matches_rapidapi(days_ahead=0):
         return matches
 
     except Exception as e:
-        st.error(f"Erro RapidAPI: {e}")
+        st.error(f"Erro SofaScore: {e}")
         return []
 
 
