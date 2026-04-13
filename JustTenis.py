@@ -5,6 +5,7 @@ import warnings
 import random
 from collections import defaultdict
 from datetime import datetime, timedelta
+import io
 
 import numpy as np
 import pandas as pd
@@ -31,39 +32,54 @@ st.markdown("""
 
 
 # ==============================================================================
-# ELO, LOAD, STATS, H2H
+# ELO RECENTE (ÚLTIMOS 10 JOGOS)
 # ==============================================================================
 
-def calculate_elo_ratings(df, k=32, surface_k=25):
+def calculate_recent_elo(df, k=32, surface_k=25, window=10):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
-    
+
     elo = {p: 1500.0 for p in players}
     welo = {p: 1500.0 for p in players}
     surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
-    
+    history = {p: [] for p in players}
+
     df_sorted = df.sort_values('date').copy()
-    
+
     for _, row in df_sorted.iterrows():
-        p1 = row['winner']
-        p2 = row['loser']
+        w = row['winner']
+        l = row['loser']
         surf = row.get('surface', 'Hard')
-        if pd.isna(p1) or pd.isna(p2):
+
+        if pd.isna(w) or pd.isna(l):
             continue
-            
-        r1, r2 = elo[p1], elo[p2]
+
+        history[w].append(1)
+        history[l].append(0)
+
+        w_recent = history[w][-window:]
+        l_recent = history[l][-window:]
+
+        w_form = sum(w_recent) / len(w_recent)
+        l_form = sum(l_recent) / len(l_recent)
+
+        r1 = elo[w] + 50 * (w_form - 0.5)
+        r2 = elo[l] + 50 * (l_form - 0.5)
+
         exp1 = 1 / (1 + 10 ** ((r2 - r1) / 400))
-        elo[p1] += k * (1 - exp1)
-        elo[p2] += k * (0 - (1 - exp1))
-        
-        s1 = surface_elo[p1][surf]
-        s2 = surface_elo[p2][surf]
+
+        elo[w] += k * (1 - exp1)
+        elo[l] += k * (0 - (1 - exp1))
+
+        s1 = surface_elo[w][surf]
+        s2 = surface_elo[l][surf]
         exp_s1 = 1 / (1 + 10 ** ((s2 - s1) / 400))
-        surface_elo[p1][surf] += surface_k * (1 - exp_s1)
-        surface_elo[p2][surf] += surface_k * (0 - (1 - exp_s1))
-        
-        welo[p1] = welo[p1] * 0.96 + elo[p1] * 0.04
-        welo[p2] = welo[p2] * 0.96 + elo[p2] * 0.04
-    
+
+        surface_elo[w][surf] += surface_k * (1 - exp_s1)
+        surface_elo[l][surf] += surface_k * (0 - (1 - exp_s1))
+
+        welo[w] = welo[w] * 0.90 + elo[w] * 0.10
+        welo[l] = welo[l] * 0.90 + elo[l] * 0.10
+
     return elo, welo, surface_elo
 
 
@@ -98,7 +114,7 @@ def load_historical_data(file_path):
 
 def compute_player_stats(df):
     stats = {}
-    elo, welo, surface_elo = calculate_elo_ratings(df)
+    elo, welo, surface_elo = calculate_recent_elo(df)
     
     for player in set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique()):
         matches = df[(df['winner'] == player) | (df['loser'] == player)]
@@ -129,7 +145,8 @@ def compute_player_stats(df):
             'elo': float(elo[player]),
             'welo': float(welo[player]),
             'surface_elo': surface_elo[player],
-            'surface_win_rate': surface_stats
+            'surface_win_rate': surface_stats,
+            'matches_played': float(total)
         }
     return stats
 
@@ -143,7 +160,7 @@ def build_h2h_dict(df):
 
 
 # ==============================================================================
-# FEATURES
+# FEATURES (EQUILIBRADAS)
 # ==============================================================================
 
 def build_features(p1, p2, surface, player_stats, h2h):
@@ -154,37 +171,32 @@ def build_features(p1, p2, surface, player_stats, h2h):
     s2 = player_stats[p2]
     surf = surface if surface in ['Hard', 'Clay', 'Grass'] else 'Hard'
 
-    # Head-to-head
     h2h_p1 = h2h.get((p1, p2), 0)
     h2h_p2 = h2h.get((p2, p1), 0)
     h2h_ratio = (h2h_p1 + 1) / (h2h_p1 + h2h_p2 + 2)
 
     feat = [
-        # ELO
         s1['elo'] / (s2['elo'] + 1),
         s1['welo'] / (s2['welo'] + 1),
         s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1),
 
-        # Win rates
         s1['win_rate'] - s2['win_rate'],
         s1['recent_form'] - s2['recent_form'],
         s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
 
-        # Ranking (quanto maior pior)
         (s2['avg_rank'] + 1) / (s1['avg_rank'] + 1),
 
-        # H2H
         h2h_ratio,
 
-        # Média de jogos
-        (s1['avg_games'] + s2['avg_games']) / 2
+        (s1['avg_games'] + s2['avg_games']) / 2,
+
+        (s1['matches_played'] + 1) / (s2['matches_played'] + 1)
     ]
 
     if any(pd.isna(f) for f in feat):
         return None
 
     return feat
-
 # ==============================================================================
 # CROSS‑VALIDATION
 # ==============================================================================
@@ -250,19 +262,16 @@ def train_models(df, player_stats, h2h):
         total_games = row.get('total_games', 22)
         score = str(row.get('score', "")) if 'score' in df.columns else ""
 
-        # --------- AMOSTRA 1: p1 = winner, p2 = loser ---------
+        # AMOSTRA 1: p1 = winner, p2 = loser
         p1, p2 = w, l
         feat1 = build_features(p1, p2, surf, player_stats, h2h)
         if feat1 is not None:
-            # Winner model
             X_winner.append(feat1)
             y_winner.append(1)
 
-            # Over/Under
             X_ou.append(feat1)
             y_ou.append(1 if total_games > 21.5 else 0)
 
-            # Sets
             sets = score.split()
             if len(sets) == 2:
                 X_sets.append(feat1)
@@ -271,7 +280,6 @@ def train_models(df, player_stats, h2h):
                 X_sets.append(feat1)
                 y_sets.append(1)
 
-            # Handicap
             if total_games <= 20:
                 X_hcap.append(feat1)
                 y_hcap.append(1)
@@ -279,7 +287,7 @@ def train_models(df, player_stats, h2h):
                 X_hcap.append(feat1)
                 y_hcap.append(0)
 
-        # --------- AMOSTRA 2: p1 = loser, p2 = winner ---------
+        # AMOSTRA 2: p1 = loser, p2 = winner
         p1b, p2b = l, w
         feat2 = build_features(p1b, p2b, surf, player_stats, h2h)
         if feat2 is not None:
@@ -298,17 +306,14 @@ def train_models(df, player_stats, h2h):
     y_sets = np.array(y_sets) if X_sets is not None else None
     y_hcap = np.array(y_hcap) if X_hcap is not None else None
 
-    # WINNER MODEL
     model_winner = GradientBoostingClassifier(
         n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
     )
     model_winner.fit(X_winner, y_winner)
     progress.progress((step := step + 1) / total_steps)
-
     cross_val_metrics(model_winner, X_winner, y_winner, "Winner")
     progress.progress((step := step + 1) / total_steps)
 
-    # OVER/UNDER MODEL
     model_ou = GradientBoostingClassifier(
         n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
     )
@@ -316,7 +321,6 @@ def train_models(df, player_stats, h2h):
     cross_val_metrics(model_ou, X_ou, y_ou, "Over/Under 21.5")
     progress.progress((step := step + 1) / total_steps)
 
-    # SETS MODEL
     model_sets = None
     if X_sets is not None and len(np.unique(y_sets)) == 2:
         model_sets = GradientBoostingClassifier(
@@ -326,7 +330,6 @@ def train_models(df, player_stats, h2h):
         cross_val_metrics(model_sets, X_sets, y_sets, "Sets 2–0 vs 2–1")
     progress.progress((step := step + 1) / total_steps)
 
-    # HANDICAP MODEL
     model_hcap = None
     if X_hcap is not None and len(np.unique(y_hcap)) == 2:
         model_hcap = GradientBoostingClassifier(
@@ -352,17 +355,14 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
     X = np.array([feat])
 
-    # WINNER — 1 = p1 ganha
     probs_w = model_winner.predict_proba(X)[0]
     p1_prob = probs_w[1]
     p2_prob = 1 - p1_prob
 
-    # OVER/UNDER
     probs_ou = model_ou.predict_proba(X)[0]
     over_prob = probs_ou[1]
     under_prob = probs_ou[0]
 
-    # SETS
     sets_pred = None
     if model_sets is not None:
         probs_sets = model_sets.predict_proba(X)[0]
@@ -371,7 +371,6 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
             'conf': max(probs_sets)
         }
 
-    # HANDICAP
     hcap_pred = None
     if model_hcap is not None:
         probs_h = model_hcap.predict_proba(X)[0]
@@ -527,6 +526,8 @@ def main():
     if st.session_state.get('matches') and st.session_state.get('models_trained'):
         st.header("🎯 Predictions")
 
+        results_export = []
+
         for m in st.session_state.matches:
             pred = predict_match(
                 st.session_state.model_winner,
@@ -542,6 +543,23 @@ def main():
 
             if pred is None:
                 continue
+
+            results_export.append({
+                "Tournament": m['tournament'],
+                "Player1": m['player1'],
+                "Player2": m['player2'],
+                "Surface": m['surface'],
+                "Winner": pred['winner'],
+                "Winner_Prob": pred['winner_conf'],
+                "P1_Prob": pred['p1_prob'],
+                "P2_Prob": pred['p2_prob'],
+                "OU": pred['ou'],
+                "OU_Prob": pred['ou_conf'],
+                "Sets": pred['sets']['label'] if pred['sets'] else "",
+                "Sets_Prob": pred['sets']['conf'] if pred['sets'] else "",
+                "Handicap": pred['handicap']['label'] if pred['handicap'] else "",
+                "Handicap_Prob": pred['handicap']['conf'] if pred['handicap'] else ""
+            })
 
             conf_class = (
                 "confidence-high" if pred['winner_conf'] >= 0.65 else
@@ -574,6 +592,19 @@ def main():
                 {hcap_line}
             </div>
             """, unsafe_allow_html=True)
+
+        if results_export:
+            df_export = pd.DataFrame(results_export)
+            buffer = io.BytesIO()
+            df_export.to_excel(buffer, index=False, engine='openpyxl')
+            buffer.seek(0)
+
+            st.download_button(
+                label="📥 Exportar previsões para Excel",
+                data=buffer,
+                file_name="tennis_predictions.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 
 if __name__ == "__main__":
