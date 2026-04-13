@@ -22,7 +22,14 @@ st.set_page_config(page_title="🎾 ATP & Challenger Predictor", page_icon="🎾
 
 st.markdown("""
     <style>
-    .prediction-card {background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 20px; border-radius: 15px; margin: 15px 0; box-shadow: 0 8px 16px rgba(0,0,0,0.3);}
+    .prediction-card {
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        margin: 15px 0;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+    }
     .confidence-high {color: #00ff88; font-weight: bold; font-size: 1.15em;}
     .confidence-medium {color: #ffd700; font-weight: bold; font-size: 1.15em;}
     .confidence-low {color: #ff6b6b; font-weight: bold; font-size: 1.15em;}
@@ -88,13 +95,13 @@ def load_historical_data(file_path):
     df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
 
     rename_map = {
-        'winner_name':'winner',
-        'loser_name':'loser',
-        'tourney_date':'date',
-        'winner_rank':'wrank',
-        'loser_rank':'lrank'
+        'winner_name': 'winner',
+        'loser_name': 'loser',
+        'tourney_date': 'date',
+        'winner_rank': 'wrank',
+        'loser_rank': 'lrank'
     }
-    df.rename(columns={k:v for k,v in rename_map.items() if k in df.columns}, inplace=True)
+    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
@@ -115,7 +122,8 @@ def compute_player_stats(df):
     stats = {}
     elo, welo, surface_elo = calculate_recent_elo(df)
     
-    for player in set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique()):
+    players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
+    for player in players:
         matches = df[(df['winner'] == player) | (df['loser'] == player)]
         if len(matches) == 0:
             continue
@@ -126,7 +134,10 @@ def compute_player_stats(df):
         
         surface_stats = {}
         for surf in ['Hard', 'Clay', 'Grass']:
-            surf_matches = matches[matches['surface'] == surf] if 'surface' in matches.columns else pd.DataFrame()
+            if 'surface' in matches.columns:
+                surf_matches = matches[matches['surface'] == surf]
+            else:
+                surf_matches = pd.DataFrame()
             if len(surf_matches) > 0:
                 surf_wins = len(surf_matches[surf_matches['winner'] == player])
                 surface_stats[surf] = surf_wins / len(surf_matches)
@@ -192,7 +203,6 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
         (s1['matches_played'] + 1) / (s2['matches_played'] + 1)
     ]
 
-    # Odds (se existirem no match)
     prob1 = prob2 = 0.5
     if match is not None:
         odd1 = match.get("odd_p1")
@@ -211,12 +221,14 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
         return None
 
     return feat
+
+
 # ==============================================================================
 # CROSS‑VALIDATION
 # ==============================================================================
 
 def cross_val_metrics(model, X, y, name=""):
-    if len(np.unique(y))) < 2:
+    if len(np.unique(y)) < 2:
         st.write(f"⚠️ {name}: apenas uma classe presente.")
         return
 
@@ -407,6 +419,8 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         'sets': sets_pred,
         'handicap': hcap_pred
     }
+
+
 # ==============================================================================
 # SCRAPER SOFASCORE (ODDS PLACEHOLDER)
 # ==============================================================================
