@@ -369,7 +369,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
+        url = f"https://api.sofascore.com/api/v1/schedule/tennis/{target_date}"
 
         headers = {
             "User-Agent": (
@@ -383,7 +383,7 @@ def scrape_matches_sofascore(days_ahead=0):
             "Referer": "https://www.sofascore.com/"
         }
 
-        # Retry automático com backoff exponencial
+        # Retry automático
         for attempt in range(6):
             try:
                 r = requests.get(url, headers=headers, timeout=10)
@@ -391,17 +391,15 @@ def scrape_matches_sofascore(days_ahead=0):
                 if r.status_code == 200:
                     break
 
-                if r.status_code == 503:
-                    wait = 1.5 * (attempt + 1) + random.uniform(0, 1)
-                    time.sleep(wait)
+                if r.status_code in (429, 503):
+                    time.sleep(1.5 * (attempt + 1))
                     continue
 
                 st.error(f"Erro HTTP {r.status_code}")
                 return []
 
-            except Exception:
-                wait = 1.2 * (attempt + 1)
-                time.sleep(wait)
+            except:
+                time.sleep(1.2 * (attempt + 1))
 
         if r.status_code != 200:
             st.error("❌ SofaScore indisponível após várias tentativas.")
@@ -448,6 +446,7 @@ def scrape_matches_sofascore(days_ahead=0):
     except Exception as e:
         st.error(f"Erro SofaScore: {e}")
         return []
+
 
 
 # ==============================================================================
