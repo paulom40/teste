@@ -419,7 +419,7 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 Today"):
-                st.session_state.matches = scrape_matches_rapidapi(0)
+                st.session_state.matches = scrape_matches_sofascore(0)
         with col2:
             if st.button("📅 Tomorrow"):
                 st.session_state.matches = scrape_matches_rapidapi(1)
