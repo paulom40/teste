@@ -471,10 +471,11 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 def scrape_matches_sofascore(days_ahead=0):
     try:
-        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # Endpoint correto e funcional
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
+        # Endpoint funcional
+        if days_ahead == 0:
+            url = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
+        else:
+            url = "https://api.sofascore.com/api/v1/sport/tennis/events/next"
 
         headers = {
             "User-Agent": "Mozilla/5.0",
@@ -493,20 +494,28 @@ def scrape_matches_sofascore(days_ahead=0):
             return []
 
         matches = []
+        now = datetime.utcnow().date()
 
         for ev in data["events"]:
             try:
+                # Filtrar por data correta
+                ts = ev["startTimestamp"]
+                ev_date = datetime.utcfromtimestamp(ts).date()
+
+                if days_ahead == 0 and ev_date != now:
+                    continue
+                if days_ahead == 1 and ev_date != now + timedelta(days=1):
+                    continue
+
                 tournament = ev["tournament"]["name"]
                 category = ev["tournament"]["category"]["name"]
 
-                # Ignorar WTA
                 if "WTA" in category.upper():
                     continue
 
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                # Inferir superfície
                 t = tournament.upper()
                 surface = (
                     "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"]) else
@@ -532,6 +541,7 @@ def scrape_matches_sofascore(days_ahead=0):
     except Exception as e:
         st.error(f"Erro SofaScore: {e}")
         return []
+
 
 
 
