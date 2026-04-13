@@ -288,6 +288,17 @@ def cross_val_metrics(model, X, y, name=""):
 
 
 # ==============================================================================
+# FUNÇÃO PARA LIMPAR NaN / INF
+# ==============================================================================
+
+def clean_xy(X, y):
+    X = np.array(X)
+    y = np.array(y)
+    mask = np.isfinite(X).all(axis=1)
+    return X[mask], y[mask]
+
+
+# ==============================================================================
 # TREINO DOS MODELOS
 # ==============================================================================
 
@@ -344,15 +355,15 @@ def train_models(df, player_stats, h2h):
 
     progress.progress((step := step + 1) / total_steps)
 
-    X_winner = np.array(X_winner)
-    X_ou = np.array(X_ou)
-    X_sets = np.array(X_sets) if len(X_sets) else None
-    X_hcap = np.array(X_hcap) if len(X_hcap) else None
+    # LIMPAR NaN / INF
+    X_winner, y_winner = clean_xy(X_winner, y_winner)
+    X_ou, y_ou = clean_xy(X_ou, y_ou)
 
-    y_winner = np.array(y_winner)
-    y_ou = np.array(y_ou)
-    y_sets = np.array(y_sets) if X_sets is not None else None
-    y_hcap = np.array(y_hcap) if X_hcap is not None else None
+    if len(X_sets):
+        X_sets, y_sets = clean_xy(X_sets, y_sets)
+
+    if len(X_hcap):
+        X_hcap, y_hcap = clean_xy(X_hcap, y_hcap)
 
     model_winner = GradientBoostingClassifier(
         n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
@@ -370,7 +381,7 @@ def train_models(df, player_stats, h2h):
     progress.progress((step := step + 1) / total_steps)
 
     model_sets = None
-    if X_sets is not None and len(np.unique(y_sets)) == 2:
+    if len(X_sets) and len(np.unique(y_sets)) == 2:
         model_sets = GradientBoostingClassifier(
             n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
         )
@@ -379,7 +390,7 @@ def train_models(df, player_stats, h2h):
     progress.progress((step := step + 1) / total_steps)
 
     model_hcap = None
-    if X_hcap is not None and len(np.unique(y_hcap)) == 2:
+    if len(X_hcap) and len(np.unique(y_hcap)) == 2:
         model_hcap = GradientBoostingClassifier(
             n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
         )
@@ -431,26 +442,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         }
 
     # ELO + WELO
-    elo_p1 = player_stats[p1]['elo']
-    elo_p2 = player_stats[p2]['elo']
-    welo_p1 = player_stats[p1]['welo']
-    welo_p2 = player_stats[p2]['welo']
-
-    return {
-        'winner': p1 if p1_prob > p2_prob else p2,
-        'winner_conf': max(p1_prob, p2_prob),
-        'p1_prob': p1_prob,
-        'p2_prob': p2_prob,
-        'ou': "Over 21.5" if over_prob > 0.5 else "Under 21.5",
-        'ou_conf': max(over_prob, 1 - over_prob),
-        'sets': sets_pred,
-        'handicap': hcap_pred,
-        'elo_p1': elo_p1,
-        'elo_p2': elo_p2,
-        'welo_p1': welo_p1,
-        'welo_p2': welo_p2
-    }
-# ==============================================================================
+    elo_p# ==============================================================================
 # SCRAPER SOFASCORE (ODDS PLACEHOLDER)
 # ==============================================================================
 
@@ -523,7 +515,7 @@ def scrape_matches_sofascore(days_ahead=0):
                     "player2": p2,
                     "surface": surface,
                     "type": category,
-                    "odd_p1": None,  # preencher manualmente ou via API externa
+                    "odd_p1": None,
                     "odd_p2": None
                 })
 
