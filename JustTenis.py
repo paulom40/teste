@@ -38,6 +38,21 @@ st.markdown("""
 
 
 # ==============================================================================
+# NORMALIZAÇÃO DE SUPERFÍCIES
+# ==============================================================================
+
+def normalize_surface(s):
+    if pd.isna(s):
+        return "Hard"
+    s = str(s).lower()
+    if "clay" in s:
+        return "Clay"
+    if "grass" in s:
+        return "Grass"
+    return "Hard"
+
+
+# ==============================================================================
 # ELO RECENTE (ÚLTIMOS 20 JOGOS)
 # ==============================================================================
 
@@ -46,7 +61,7 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
 
     elo = {p: 1500.0 for p in players}
     welo = {p: 1500.0 for p in players}
-    surface_elo = {p: {'Hard': 1500.0, 'Clay': 1500.0, 'Grass': 1500.0} for p in players}
+    surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
     history = {p: [] for p in players}
 
     df_sorted = df.sort_values('date').copy()
@@ -56,12 +71,11 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
         l = row['loser']
         surf = row.get('surface', 'Hard')
 
-        if pd.isna(w) or pd.isna(l):
-            continue
-
-        # garantir superfície válida
         if surf not in ['Hard', 'Clay', 'Grass']:
             surf = 'Hard'
+
+        if pd.isna(w) or pd.isna(l):
+            continue
 
         history[w].append(1)
         history[l].append(0)
@@ -80,9 +94,6 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
         elo[w] += k * (1 - exp1)
         elo[l] += k * (0 - (1 - exp1))
 
-        # proteger acesso ao surface_elo
-        if surf not in surface_elo[w]:
-            surf = 'Hard'
         s1 = surface_elo[w][surf]
         s2 = surface_elo[l][surf]
         exp_s1 = 1 / (1 + 10 ** ((s2 - s1) / 400))
@@ -96,16 +107,9 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
     return elo, welo, surface_elo
 
 
-def normalize_surface(s):
-    if pd.isna(s):
-        return "Hard"
-    s = str(s).lower()
-    if "clay" in s:
-        return "Clay"
-    if "grass" in s:
-        return "Grass"
-    return "Hard"
-
+# ==============================================================================
+# LOAD HISTÓRICO
+# ==============================================================================
 
 @st.cache_data(ttl=3600)
 def load_historical_data(file_path):
@@ -113,13 +117,13 @@ def load_historical_data(file_path):
     df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
 
     rename_map = {
-        'winner_name': 'winner',
-        'loser_name': 'loser',
-        'tourney_date': 'date',
-        'winner_rank': 'wrank',
-        'loser_rank': 'lrank'
+        'winner_name':'winner',
+        'loser_name':'loser',
+        'tourney_date':'date',
+        'winner_rank':'wrank',
+        'loser_rank':'lrank'
     }
-    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+    df.rename(columns={k:v for k,v in rename_map.items() if k in df.columns}, inplace=True)
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
@@ -141,6 +145,10 @@ def load_historical_data(file_path):
     return df
 
 
+# ==============================================================================
+# PLAYER STATS
+# ==============================================================================
+
 def compute_player_stats(df):
     stats = {}
     elo, welo, surface_elo = calculate_recent_elo(df)
@@ -157,10 +165,7 @@ def compute_player_stats(df):
         
         surface_stats = {}
         for surf in ['Hard', 'Clay', 'Grass']:
-            if 'surface' in matches.columns:
-                surf_matches = matches[matches['surface'] == surf]
-            else:
-                surf_matches = pd.DataFrame()
+            surf_matches = matches[matches['surface'] == surf]
             if len(surf_matches) > 0:
                 surf_wins = len(surf_matches[surf_matches['winner'] == player])
                 surface_stats[surf] = surf_wins / len(surf_matches)
@@ -184,6 +189,10 @@ def compute_player_stats(df):
     return stats
 
 
+# ==============================================================================
+# H2H
+# ==============================================================================
+
 def build_h2h_dict(df):
     h2h = defaultdict(int)
     for _, row in df.iterrows():
@@ -193,7 +202,7 @@ def build_h2h_dict(df):
 
 
 # ==============================================================================
-# FEATURES (EQUILIBRADAS + ODDS)
+# FEATURES (inclui ODDS)
 # ==============================================================================
 
 def build_features(p1, p2, surface, player_stats, h2h, match=None):
@@ -202,6 +211,7 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
 
     s1 = player_stats[p1]
     s2 = player_stats[p2]
+
     surf = surface if surface in ['Hard', 'Clay', 'Grass'] else 'Hard'
 
     h2h_p1 = h2h.get((p1, p2), 0)
@@ -234,18 +244,9 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
             prob1 = 1.0 / odd1
             prob2 = 1.0 / odd2
 
-    feat.extend([
-        prob1,
-        prob2,
-        prob1 - prob2
-    ])
-
-    if any(pd.isna(f) for f in feat):
-        return None
+    feat.extend([prob1, prob2, prob1 - prob2])
 
     return feat
-
-
 # ==============================================================================
 # CROSS‑VALIDATION
 # ==============================================================================
@@ -287,7 +288,7 @@ def cross_val_metrics(model, X, y, name=""):
 
 
 # ==============================================================================
-# TREINO DOS MODELOS (2 AMOSTRAS POR JOGO)
+# TREINO DOS MODELOS
 # ==============================================================================
 
 def train_models(df, player_stats, h2h):
@@ -311,9 +312,8 @@ def train_models(df, player_stats, h2h):
         total_games = row.get('total_games', 22)
         score = str(row.get('score', "")) if 'score' in df.columns else ""
 
-        # AMOSTRA 1: p1 = winner, p2 = loser
-        p1, p2 = w, l
-        feat1 = build_features(p1, p2, surf, player_stats, h2h, match=None)
+        # AMOSTRA 1: p1 = winner
+        feat1 = build_features(w, l, surf, player_stats, h2h, match=None)
         if feat1 is not None:
             X_winner.append(feat1)
             y_winner.append(1)
@@ -336,9 +336,8 @@ def train_models(df, player_stats, h2h):
                 X_hcap.append(feat1)
                 y_hcap.append(0)
 
-        # AMOSTRA 2: p1 = loser, p2 = winner
-        p1b, p2b = l, w
-        feat2 = build_features(p1b, p2b, surf, player_stats, h2h, match=None)
+        # AMOSTRA 2: p1 = loser
+        feat2 = build_features(l, w, surf, player_stats, h2h, match=None)
         if feat2 is not None:
             X_winner.append(feat2)
             y_winner.append(0)
@@ -392,17 +391,17 @@ def train_models(df, player_stats, h2h):
 
 
 # ==============================================================================
-# PREDIÇÃO (USA ODDS DO MATCH SE EXISTIREM)
+# PREDIÇÃO (inclui ELO + WELO)
 # ==============================================================================
 
 def predict_match(model_winner, model_ou, model_sets, model_hcap,
                   player_stats, h2h, match):
 
-    p1_name = match['player1']
-    p2_name = match['player2']
+    p1 = match['player1']
+    p2 = match['player2']
     surface = match['surface']
 
-    feat = build_features(p1_name, p2_name, surface, player_stats, h2h, match=match)
+    feat = build_features(p1, p2, surface, player_stats, h2h, match=match)
     if feat is None:
         return None
 
@@ -414,7 +413,6 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
     probs_ou = model_ou.predict_proba(X)[0]
     over_prob = probs_ou[1]
-    under_prob = probs_ou[0]
 
     sets_pred = None
     if model_sets is not None:
@@ -428,22 +426,30 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
     if model_hcap is not None:
         probs_h = model_hcap.predict_proba(X)[0]
         hcap_pred = {
-            'label': f"{p1_name} -2.5" if probs_h[1] > probs_h[0] else f"{p2_name} +2.5",
+            'label': f"{p1} -2.5" if probs_h[1] > probs_h[0] else f"{p2} +2.5",
             'conf': max(probs_h)
         }
 
+    # ELO + WELO
+    elo_p1 = player_stats[p1]['elo']
+    elo_p2 = player_stats[p2]['elo']
+    welo_p1 = player_stats[p1]['welo']
+    welo_p2 = player_stats[p2]['welo']
+
     return {
-        'winner': p1_name if p1_prob > p2_prob else p2_name,
+        'winner': p1 if p1_prob > p2_prob else p2,
         'winner_conf': max(p1_prob, p2_prob),
         'p1_prob': p1_prob,
         'p2_prob': p2_prob,
-        'ou': "Over 21.5" if over_prob > under_prob else "Under 21.5",
-        'ou_conf': max(over_prob, under_prob),
+        'ou': "Over 21.5" if over_prob > 0.5 else "Under 21.5",
+        'ou_conf': max(over_prob, 1 - over_prob),
         'sets': sets_pred,
-        'handicap': hcap_pred
+        'handicap': hcap_pred,
+        'elo_p1': elo_p1,
+        'elo_p2': elo_p2,
+        'welo_p1': welo_p1,
+        'welo_p2': welo_p2
     }
-
-
 # ==============================================================================
 # SCRAPER SOFASCORE (ODDS PLACEHOLDER)
 # ==============================================================================
@@ -537,7 +543,7 @@ def scrape_matches_sofascore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore + Export Excel + Odds**")
+    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore + Export Excel + Odds + ELO/WELO**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
@@ -610,6 +616,10 @@ def main():
                 "Winner_Prob": pred['winner_conf'],
                 "P1_Prob": pred['p1_prob'],
                 "P2_Prob": pred['p2_prob'],
+                "ELO_P1": pred['elo_p1'],
+                "ELO_P2": pred['elo_p2'],
+                "WELO_P1": pred['welo_p1'],
+                "WELO_P2": pred['welo_p2'],
                 "OU": pred['ou'],
                 "OU_Prob": pred['ou_conf'],
                 "Sets": pred['sets']['label'] if pred['sets'] else "",
@@ -643,6 +653,9 @@ def main():
 
                 📊 {m['player1']}: {pred['p1_prob']:.1%} |
                 {m['player2']}: {pred['p2_prob']:.1%}<br>
+
+                📈 ELO: {pred['elo_p1']:.0f} | {pred['elo_p2']:.0f}<br>
+                🔥 WELO: {pred['welo_p1']:.0f} | {pred['welo_p2']:.0f}<br>
 
                 🎲 O/U 21.5: {pred['ou']} ({pred['ou_conf']:.1%})
                 {sets_line}
