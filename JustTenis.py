@@ -149,32 +149,42 @@ def build_h2h_dict(df):
 def build_features(p1, p2, surface, player_stats, h2h):
     if p1 not in player_stats or p2 not in player_stats:
         return None
-    
+
     s1 = player_stats[p1]
     s2 = player_stats[p2]
     surf = surface if surface in ['Hard', 'Clay', 'Grass'] else 'Hard'
 
+    # Head-to-head
     h2h_p1 = h2h.get((p1, p2), 0)
     h2h_p2 = h2h.get((p2, p1), 0)
-    h2h_total = h2h_p1 + h2h_p2 + 1
+    h2h_ratio = (h2h_p1 + 1) / (h2h_p1 + h2h_p2 + 2)
 
     feat = [
-        s1['elo'] - s2['elo'],
-        s1['welo'] - s2['welo'],
-        s1['surface_elo'][surf] - s2['surface_elo'][surf],
+        # ELO
+        s1['elo'] / (s2['elo'] + 1),
+        s1['welo'] / (s2['welo'] + 1),
+        s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1),
+
+        # Win rates
         s1['win_rate'] - s2['win_rate'],
         s1['recent_form'] - s2['recent_form'],
         s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
-        s2['avg_rank'] - s1['avg_rank'],
-        h2h_p1 / h2h_total,
-        abs(s1['elo'] - s2['elo']),
-        abs(s1['recent_form'] - s2['recent_form']),
+
+        # Ranking (quanto maior pior)
+        (s2['avg_rank'] + 1) / (s1['avg_rank'] + 1),
+
+        # H2H
+        h2h_ratio,
+
+        # Média de jogos
         (s1['avg_games'] + s2['avg_games']) / 2
     ]
 
     if any(pd.isna(f) for f in feat):
         return None
+
     return feat
+
 # ==============================================================================
 # CROSS‑VALIDATION
 # ==============================================================================
