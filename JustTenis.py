@@ -471,15 +471,20 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 def scrape_matches_sofascore(days_ahead=0):
     try:
-        # Endpoint funcional
-        if days_ahead == 0:
-            url = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
-        else:
-            url = "https://api.sofascore.com/api/v1/sport/tennis/events/next"
+        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
 
         headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/123.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://www.sofascore.com",
+            "Referer": "https://www.sofascore.com/"
         }
 
         r = requests.get(url, headers=headers, timeout=10)
@@ -494,19 +499,9 @@ def scrape_matches_sofascore(days_ahead=0):
             return []
 
         matches = []
-        now = datetime.utcnow().date()
 
         for ev in data["events"]:
             try:
-                # Filtrar por data correta
-                ts = ev["startTimestamp"]
-                ev_date = datetime.utcfromtimestamp(ts).date()
-
-                if days_ahead == 0 and ev_date != now:
-                    continue
-                if days_ahead == 1 and ev_date != now + timedelta(days=1):
-                    continue
-
                 tournament = ev["tournament"]["name"]
                 category = ev["tournament"]["category"]["name"]
 
@@ -541,6 +536,7 @@ def scrape_matches_sofascore(days_ahead=0):
     except Exception as e:
         st.error(f"Erro SofaScore: {e}")
         return []
+
 
 
 
