@@ -363,7 +363,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
 
 # ==============================================================================
-# SCRAPER SOFASCORE
+# SCRAPER SOFASCORE — FINAL COM RETRY
 # ==============================================================================
 
 def scrape_matches_sofascore(days_ahead=0):
@@ -371,12 +371,44 @@ def scrape_matches_sofascore(days_ahead=0):
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
 
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/123.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://www.sofascore.com",
+            "Referer": "https://www.sofascore.com/"
+        }
+
+        # Retry automático com backoff exponencial
+        for attempt in range(6):
+            try:
+                r = requests.get(url, headers=headers, timeout=10)
+
+                if r.status_code == 200:
+                    break
+
+                if r.status_code == 503:
+                    wait = 1.5 * (attempt + 1) + random.uniform(0, 1)
+                    time.sleep(wait)
+                    continue
+
+                st.error(f"Erro HTTP {r.status_code}")
+                return []
+
+            except Exception:
+                wait = 1.2 * (attempt + 1)
+                time.sleep(wait)
+
         if r.status_code != 200:
-            st.error(f"Erro HTTP {r.status_code}")
+            st.error("❌ SofaScore indisponível após várias tentativas.")
             return []
 
         data = r.json()
+
         if "events" not in data:
             return []
 
@@ -385,7 +417,7 @@ def scrape_matches_sofascore(days_ahead=0):
         for ev in data["events"]:
             try:
                 tournament = ev["tournament"]["name"]
-                category = ev["tournament"]["category"]["name"]  # "ATP", "Challenger", "ITF", "WTA"
+                category = ev["tournament"]["category"]["name"]
 
                 if "WTA" in category.upper():
                     continue
@@ -393,9 +425,12 @@ def scrape_matches_sofascore(days_ahead=0):
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                t = tournament.upper()
-                surface = "Clay" if any(x in t for x in ["CLAY","ROLAND","MADRID","ROME"]) else \
-                          "Grass" if any(x in t for x in ["WIMBLEDON","HALLE"]) else "Hard"
+                                t = tournament.upper()
+                surface = (
+                    "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"])
+                    else "Grass" if any(x in t for x in ["WIMBLEDON", "HALLE"])
+                    else "Hard"
+                )
 
                 matches.append({
                     "tournament": tournament,
