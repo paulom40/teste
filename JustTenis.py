@@ -404,7 +404,6 @@ def train_models(df, player_stats, h2h):
 # ==============================================================================
 # PREDIÇÃO (inclui ELO + WELO)
 # ==============================================================================
-
 def predict_match(model_winner, model_ou, model_sets, model_hcap,
                   player_stats, h2h, match):
 
@@ -418,13 +417,16 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
 
     X = np.array([feat])
 
+    # Winner
     probs_w = model_winner.predict_proba(X)[0]
     p1_prob = probs_w[1]
     p2_prob = 1 - p1_prob
 
+    # Over/Under
     probs_ou = model_ou.predict_proba(X)[0]
     over_prob = probs_ou[1]
 
+    # Sets
     sets_pred = None
     if model_sets is not None:
         probs_sets = model_sets.predict_proba(X)[0]
@@ -433,6 +435,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
             'conf': max(probs_sets)
         }
 
+    # Handicap
     hcap_pred = None
     if model_hcap is not None:
         probs_h = model_hcap.predict_proba(X)[0]
@@ -442,7 +445,27 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         }
 
     # ELO + WELO
-    elo_p# ==============================================================================
+    elo_p1 = player_stats[p1]['elo']
+    elo_p2 = player_stats[p2]['elo']
+    welo_p1 = player_stats[p1]['welo']
+    welo_p2 = player_stats[p2]['welo']
+
+    return {
+        'winner': p1 if p1_prob > p2_prob else p2,
+        'winner_conf': max(p1_prob, p2_prob),
+        'p1_prob': p1_prob,
+        'p2_prob': p2_prob,
+        'ou': "Over 21.5" if over_prob > 0.5 else "Under 21.5",
+        'ou_conf': max(over_prob, 1 - over_prob),
+        'sets': sets_pred,
+        'handicap': hcap_pred,
+        'elo_p1': elo_p1,
+        'elo_p2': elo_p2,
+        'welo_p1': welo_p1,
+        'welo_p2': welo_p2
+    }
+
+
 # SCRAPER SOFASCORE (ODDS PLACEHOLDER)
 # ==============================================================================
 
