@@ -46,7 +46,7 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
 
     elo = {p: 1500.0 for p in players}
     welo = {p: 1500.0 for p in players}
-    surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
+    surface_elo = {p: {'Hard': 1500.0, 'Clay': 1500.0, 'Grass': 1500.0} for p in players}
     history = {p: [] for p in players}
 
     df_sorted = df.sort_values('date').copy()
@@ -58,6 +58,10 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
 
         if pd.isna(w) or pd.isna(l):
             continue
+
+        # garantir superfície válida
+        if surf not in ['Hard', 'Clay', 'Grass']:
+            surf = 'Hard'
 
         history[w].append(1)
         history[l].append(0)
@@ -76,6 +80,9 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
         elo[w] += k * (1 - exp1)
         elo[l] += k * (0 - (1 - exp1))
 
+        # proteger acesso ao surface_elo
+        if surf not in surface_elo[w]:
+            surf = 'Hard'
         s1 = surface_elo[w][surf]
         s2 = surface_elo[l][surf]
         exp_s1 = 1 / (1 + 10 ** ((s2 - s1) / 400))
@@ -87,6 +94,17 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
         welo[l] = welo[l] * 0.90 + elo[l] * 0.10
 
     return elo, welo, surface_elo
+
+
+def normalize_surface(s):
+    if pd.isna(s):
+        return "Hard"
+    s = str(s).lower()
+    if "clay" in s:
+        return "Clay"
+    if "grass" in s:
+        return "Grass"
+    return "Hard"
 
 
 @st.cache_data(ttl=3600)
@@ -104,6 +122,11 @@ def load_historical_data(file_path):
     df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
+
+    if 'surface' in df.columns:
+        df['surface'] = df['surface'].apply(normalize_surface)
+    else:
+        df['surface'] = "Hard"
 
     if 'score' in df.columns:
         def total_games_from_score(x):
