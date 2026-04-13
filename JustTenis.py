@@ -473,6 +473,7 @@ def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
+        # Endpoint correto e funcional
         url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
 
         headers = {
@@ -495,20 +496,21 @@ def scrape_matches_sofascore(days_ahead=0):
 
         for ev in data["events"]:
             try:
-                p1 = ev["homeTeam"]["name"]
-                p2 = ev["awayTeam"]["name"]
                 tournament = ev["tournament"]["name"]
                 category = ev["tournament"]["category"]["name"]
 
-                # ignorar WTA
+                # Ignorar WTA
                 if "WTA" in category.upper():
                     continue
 
-                # superfície inferida
+                p1 = ev["homeTeam"]["name"]
+                p2 = ev["awayTeam"]["name"]
+
+                # Inferir superfície
                 t = tournament.upper()
                 surface = (
-                    "Clay" if "CLAY" in t or "ROLAND" in t or "MADRID" in t or "ROME" in t else
-                    "Grass" if "WIMBLEDON" in t or "HALLE" in t else
+                    "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"]) else
+                    "Grass" if any(x in t for x in ["WIMBLEDON", "HALLE"]) else
                     "Hard"
                 )
 
