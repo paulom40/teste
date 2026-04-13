@@ -2,7 +2,6 @@ import os
 import re
 import time
 import warnings
-import random
 from collections import defaultdict
 from datetime import datetime, timedelta
 import io
@@ -32,10 +31,10 @@ st.markdown("""
 
 
 # ==============================================================================
-# ELO RECENTE (ÚLTIMOS 10 JOGOS)
+# ELO RECENTE (ÚLTIMOS 20 JOGOS)
 # ==============================================================================
 
-def calculate_recent_elo(df, k=32, surface_k=25, window=10):
+def calculate_recent_elo(df, k=32, surface_k=25, window=20):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
 
     elo = {p: 1500.0 for p in players}
@@ -160,10 +159,10 @@ def build_h2h_dict(df):
 
 
 # ==============================================================================
-# FEATURES (EQUILIBRADAS)
+# FEATURES (EQUILIBRADAS + ODDS)
 # ==============================================================================
 
-def build_features(p1, p2, surface, player_stats, h2h):
+def build_features(p1, p2, surface, player_stats, h2h, match=None):
     if p1 not in player_stats or p2 not in player_stats:
         return None
 
@@ -193,6 +192,21 @@ def build_features(p1, p2, surface, player_stats, h2h):
         (s1['matches_played'] + 1) / (s2['matches_played'] + 1)
     ]
 
+    # Odds (se existirem no match)
+    prob1 = prob2 = 0.5
+    if match is not None:
+        odd1 = match.get("odd_p1")
+        odd2 = match.get("odd_p2")
+        if odd1 and odd2 and odd1 > 1 and odd2 > 1:
+            prob1 = 1.0 / odd1
+            prob2 = 1.0 / odd2
+
+    feat.extend([
+        prob1,
+        prob2,
+        prob1 - prob2
+    ])
+
     if any(pd.isna(f) for f in feat):
         return None
 
@@ -202,7 +216,7 @@ def build_features(p1, p2, surface, player_stats, h2h):
 # ==============================================================================
 
 def cross_val_metrics(model, X, y, name=""):
-    if len(np.unique(y)) < 2:
+    if len(np.unique(y))) < 2:
         st.write(f"⚠️ {name}: apenas uma classe presente.")
         return
 
@@ -264,7 +278,7 @@ def train_models(df, player_stats, h2h):
 
         # AMOSTRA 1: p1 = winner, p2 = loser
         p1, p2 = w, l
-        feat1 = build_features(p1, p2, surf, player_stats, h2h)
+        feat1 = build_features(p1, p2, surf, player_stats, h2h, match=None)
         if feat1 is not None:
             X_winner.append(feat1)
             y_winner.append(1)
@@ -289,7 +303,7 @@ def train_models(df, player_stats, h2h):
 
         # AMOSTRA 2: p1 = loser, p2 = winner
         p1b, p2b = l, w
-        feat2 = build_features(p1b, p2b, surf, player_stats, h2h)
+        feat2 = build_features(p1b, p2b, surf, player_stats, h2h, match=None)
         if feat2 is not None:
             X_winner.append(feat2)
             y_winner.append(0)
@@ -343,13 +357,17 @@ def train_models(df, player_stats, h2h):
 
 
 # ==============================================================================
-# PREDIÇÃO
+# PREDIÇÃO (USA ODDS DO MATCH SE EXISTIREM)
 # ==============================================================================
 
 def predict_match(model_winner, model_ou, model_sets, model_hcap,
-                  player_stats, h2h, p1_name, p2_name, surface):
+                  player_stats, h2h, match):
 
-    feat = build_features(p1_name, p2_name, surface, player_stats, h2h)
+    p1_name = match['player1']
+    p2_name = match['player2']
+    surface = match['surface']
+
+    feat = build_features(p1_name, p2_name, surface, player_stats, h2h, match=match)
     if feat is None:
         return None
 
@@ -390,7 +408,7 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         'handicap': hcap_pred
     }
 # ==============================================================================
-# SCRAPER SOFASCORE
+# SCRAPER SOFASCORE (ODDS PLACEHOLDER)
 # ==============================================================================
 
 def scrape_matches_sofascore(days_ahead=0):
@@ -461,7 +479,9 @@ def scrape_matches_sofascore(days_ahead=0):
                     "player1": p1,
                     "player2": p2,
                     "surface": surface,
-                    "type": category
+                    "type": category,
+                    "odd_p1": None,  # preencher manualmente ou via API externa
+                    "odd_p2": None
                 })
 
             except:
@@ -480,7 +500,7 @@ def scrape_matches_sofascore(days_ahead=0):
 
 def main():
     st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore matches**")
+    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore + Export Excel + Odds**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
@@ -536,9 +556,7 @@ def main():
                 st.session_state.model_hcap,
                 st.session_state.player_stats,
                 st.session_state.h2h,
-                m['player1'],
-                m['player2'],
-                m['surface']
+                m
             )
 
             if pred is None:
@@ -549,6 +567,8 @@ def main():
                 "Player1": m['player1'],
                 "Player2": m['player2'],
                 "Surface": m['surface'],
+                "Odd_P1": m.get("odd_p1"),
+                "Odd_P2": m.get("odd_p2"),
                 "Winner": pred['winner'],
                 "Winner_Prob": pred['winner_conf'],
                 "P1_Prob": pred['p1_prob'],
