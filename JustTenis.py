@@ -38,10 +38,124 @@ st.markdown("""
 
 
 # ==============================================================================
-# NORMALIZAÇÃO DE SUPERFÍCIES
+# IMPROVED SURFACE DETECTION
 # ==============================================================================
 
+# Comprehensive tournament-to-surface mapping
+TOURNAMENT_SURFACE_MAP = {
+    # ATP 1000 Clay Events
+    'monte carlo': 'Clay',
+    'monaco': 'Clay',
+    'madrid': 'Clay',
+    'rome': 'Clay',
+    'italian': 'Clay',
+    
+    # ATP 500 Clay Events
+    'barcelona': 'Clay',
+    'rio': 'Clay',
+    'de janeiro': 'Clay',
+    'buenos aires': 'Clay',
+    'hamburg': 'Clay',
+    'munich': 'Clay',
+    'estoril': 'Clay',
+    'geneva': 'Clay',
+    'gstaad': 'Clay',
+    'bastad': 'Clay',
+    'umag': 'Clay',
+    'kitzbuhel': 'Clay',
+    
+    # Challenger Clay Events (common locations)
+    'oeiras': 'Clay',
+    'quito': 'Clay',
+    'santiago': 'Clay',
+    'bogota': 'Clay',
+    'santa cruz': 'Clay',
+    'cordenons': 'Clay',
+    'francavilla': 'Clay',
+    'vicenza': 'Clay',
+    'perugia': 'Clay',
+    'prostejov': 'Clay',
+    'bordeaux': 'Clay',
+    'aix': 'Clay',
+    'banja luka': 'Clay',
+    'lyon': 'Clay',
+    'orleans': 'Clay',
+    'mouilleron': 'Clay',
+    
+    # ATP 1000 Grass Events
+    'wimbledon': 'Grass',
+    'queens': 'Grass',
+    'halle': 'Grass',
+    
+    # ATP 500 Grass Events
+    'stuttgart': 'Grass',
+    's-hertogenbosch': 'Grass',
+    'eastbourne': 'Grass',
+    'newport': 'Grass',
+    'mallorca': 'Grass',
+    
+    # All other major tournaments are Hard
+    'australian open': 'Hard',
+    'us open': 'Hard',
+    'indian wells': 'Hard',
+    'miami': 'Hard',
+    'shanghai': 'Hard',
+    'paris': 'Hard',
+    'cincinnati': 'Hard',
+    'canada': 'Hard',
+    'dubai': 'Hard',
+    'doha': 'Hard',
+    'acapulco': 'Hard',
+    'washington': 'Hard',
+    'tokyo': 'Hard',
+    'beijing': 'Hard',
+    'vienna': 'Hard',
+    'basel': 'Hard',
+}
+
+def detect_surface_from_tournament(tournament_name, surface_hint=None):
+    """
+    Enhanced surface detection using tournament name and optional hint.
+    
+    Args:
+        tournament_name: Name of the tournament
+        surface_hint: Optional surface hint from API or data source
+    
+    Returns:
+        'Clay', 'Grass', or 'Hard'
+    """
+    if pd.isna(tournament_name):
+        return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
+    
+    tournament_lower = str(tournament_name).lower()
+    
+    # Check explicit keywords first
+    if any(word in tournament_lower for word in ['clay', 'terre battue', 'antuka']):
+        return 'Clay'
+    if any(word in tournament_lower for word in ['grass', 'lawn', 'rasen']):
+        return 'Grass'
+    
+    # Check tournament mapping
+    for key, surface in TOURNAMENT_SURFACE_MAP.items():
+        if key in tournament_lower:
+            return surface
+    
+    # Check for common patterns
+    # European cities in spring = likely clay
+    if any(month in tournament_lower for month in ['april', 'may', 'june']):
+        if any(country in tournament_lower for country in ['spain', 'portugal', 'italy', 'france', 'croatia', 'serbia']):
+            return 'Clay'
+    
+    # Use surface hint if provided and valid
+    if surface_hint in ['Clay', 'Grass', 'Hard']:
+        return surface_hint
+    
+    # Default to Hard if uncertain
+    return 'Hard'
+
+
 def normalize_surface(s):
+    """Legacy function for backward compatibility"""
     if pd.isna(s):
         return "Hard"
     s = str(s).lower()
@@ -53,16 +167,20 @@ def normalize_surface(s):
 
 
 # ==============================================================================
-# ELO RECENTE (ÚLTIMOS 20 JOGOS)
+# ENHANCED ELO WITH MOMENTUM AND RECENT PERFORMANCE
 # ==============================================================================
 
-def calculate_recent_elo(df, k=32, surface_k=25, window=20):
+def calculate_enhanced_elo(df, k=32, surface_k=30, window=20):
+    """
+    Enhanced ELO calculation with surface-specific ratings and momentum.
+    """
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
 
     elo = {p: 1500.0 for p in players}
     welo = {p: 1500.0 for p in players}
     surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
     history = {p: [] for p in players}
+    surface_history = {p: {'Hard':[], 'Clay':[], 'Grass':[]} for p in players}
 
     df_sorted = df.sort_values('date').copy()
 
@@ -79,21 +197,35 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
 
         history[w].append(1)
         history[l].append(0)
+        
+        surface_history[w][surf].append(1)
+        surface_history[l][surf].append(0)
 
+        # Calculate recent form (last N matches)
         w_recent = history[w][-window:]
         l_recent = history[l][-window:]
 
-        w_form = sum(w_recent) / len(w_recent)
-        l_form = sum(l_recent) / len(l_recent)
+        w_form = sum(w_recent) / len(w_recent) if w_recent else 0.5
+        l_form = sum(l_recent) / len(l_recent) if l_recent else 0.5
 
-        r1 = elo[w] + 50 * (w_form - 0.5)
-        r2 = elo[l] + 50 * (l_form - 0.5)
+        # Calculate surface-specific form
+        w_surf_recent = surface_history[w][surf][-10:]
+        l_surf_recent = surface_history[l][surf][-10:]
+        
+        w_surf_form = sum(w_surf_recent) / len(w_surf_recent) if w_surf_recent else 0.5
+        l_surf_form = sum(l_surf_recent) / len(l_surf_recent) if l_surf_recent else 0.5
+
+        # Momentum bonus (stronger form bonus)
+        r1 = elo[w] + 80 * (w_form - 0.5) + 40 * (w_surf_form - 0.5)
+        r2 = elo[l] + 80 * (l_form - 0.5) + 40 * (l_surf_form - 0.5)
 
         exp1 = 1 / (1 + 10 ** ((r2 - r1) / 400))
 
+        # Update general ELO
         elo[w] += k * (1 - exp1)
         elo[l] += k * (0 - (1 - exp1))
 
+        # Update surface-specific ELO (higher K-factor for surface specialization)
         s1 = surface_elo[w][surf]
         s2 = surface_elo[l][surf]
         exp_s1 = 1 / (1 + 10 ** ((s2 - s1) / 400))
@@ -101,10 +233,11 @@ def calculate_recent_elo(df, k=32, surface_k=25, window=20):
         surface_elo[w][surf] += surface_k * (1 - exp_s1)
         surface_elo[l][surf] += surface_k * (0 - (1 - exp_s1))
 
-        welo[w] = welo[w] * 0.90 + elo[w] * 0.10
-        welo[l] = welo[l] * 0.90 + elo[l] * 0.10
+        # Weighted ELO (more weight on recent)
+        welo[w] = welo[w] * 0.85 + elo[w] * 0.15
+        welo[l] = welo[l] * 0.85 + elo[l] * 0.15
 
-    return elo, welo, surface_elo
+    return elo, welo, surface_elo, surface_history
 
 
 # ==============================================================================
@@ -127,7 +260,16 @@ def load_historical_data(file_path):
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
-    if 'surface' in df.columns:
+    # IMPROVED: Use tournament-aware surface detection
+    if 'surface' in df.columns and 'tourney_name' in df.columns:
+        df['surface'] = df.apply(
+            lambda row: detect_surface_from_tournament(
+                row.get('tourney_name'), 
+                normalize_surface(row.get('surface'))
+            ), 
+            axis=1
+        )
+    elif 'surface' in df.columns:
         df['surface'] = df['surface'].apply(normalize_surface)
     else:
         df['surface'] = "Hard"
@@ -146,12 +288,12 @@ def load_historical_data(file_path):
 
 
 # ==============================================================================
-# PLAYER STATS
+# ENHANCED PLAYER STATS
 # ==============================================================================
 
 def compute_player_stats(df):
     stats = {}
-    elo, welo, surface_elo = calculate_recent_elo(df)
+    elo, welo, surface_elo, surface_history = calculate_enhanced_elo(df)
     
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
     for player in players:
@@ -163,27 +305,46 @@ def compute_player_stats(df):
         total = wins + len(df[df['loser'] == player])
         win_rate = wins / total if total > 0 else 0.5
         
+        # Surface-specific stats
         surface_stats = {}
+        surface_match_counts = {}
         for surf in ['Hard', 'Clay', 'Grass']:
             surf_matches = matches[matches['surface'] == surf]
+            surface_match_counts[surf] = len(surf_matches)
             if len(surf_matches) > 0:
                 surf_wins = len(surf_matches[surf_matches['winner'] == player])
                 surface_stats[surf] = surf_wins / len(surf_matches)
             else:
                 surface_stats[surf] = win_rate
         
+        # Recent form (last 10 matches overall)
         recent = matches.sort_values('date', ascending=False).head(10)
         recent_form = len(recent[recent['winner'] == player]) / len(recent) if len(recent) > 0 else win_rate
         
+        # Very recent form (last 5 matches - for momentum)
+        very_recent = matches.sort_values('date', ascending=False).head(5)
+        very_recent_form = len(very_recent[very_recent['winner'] == player]) / len(very_recent) if len(very_recent) > 0 else win_rate
+        
+        # Average ranking (lower is better)
+        avg_rank = 150.0
+        if 'wrank' in matches.columns:
+            winner_ranks = matches[matches['winner'] == player]['wrank'].dropna()
+            loser_ranks = matches[matches['loser'] == player]['lrank'].dropna()
+            all_ranks = pd.concat([winner_ranks, loser_ranks])
+            if len(all_ranks) > 0:
+                avg_rank = float(all_ranks.mean())
+        
         stats[player] = {
             'win_rate': win_rate,
-            'avg_rank': float(matches['wrank'].mean()) if 'wrank' in matches.columns else 150.0,
+            'avg_rank': avg_rank,
             'recent_form': recent_form,
+            'very_recent_form': very_recent_form,
             'avg_games': float(matches['total_games'].mean()),
             'elo': float(elo[player]),
             'welo': float(welo[player]),
             'surface_elo': surface_elo[player],
             'surface_win_rate': surface_stats,
+            'surface_match_count': surface_match_counts,
             'matches_played': float(total)
         }
     return stats
@@ -195,17 +356,23 @@ def compute_player_stats(df):
 
 def build_h2h_dict(df):
     h2h = defaultdict(int)
+    h2h_surface = defaultdict(lambda: {'Hard': 0, 'Clay': 0, 'Grass': 0})
+    
     for _, row in df.iterrows():
         if pd.notna(row['winner']) and pd.notna(row['loser']):
-            h2h[(row['winner'], row['loser'])] += 1
-    return h2h
+            pair = (row['winner'], row['loser'])
+            surf = row.get('surface', 'Hard')
+            h2h[pair] += 1
+            h2h_surface[pair][surf] += 1
+    
+    return h2h, h2h_surface
 
 
 # ==============================================================================
-# FEATURES (inclui ODDS)
+# ENHANCED FEATURES (with surface-specific h2h and more context)
 # ==============================================================================
 
-def build_features(p1, p2, surface, player_stats, h2h, match=None):
+def build_features(p1, p2, surface, player_stats, h2h, h2h_surface, match=None):
     if p1 not in player_stats or p2 not in player_stats:
         return None
 
@@ -214,28 +381,49 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
 
     surf = surface if surface in ['Hard', 'Clay', 'Grass'] else 'Hard'
 
+    # H2H stats
     h2h_p1 = h2h.get((p1, p2), 0)
     h2h_p2 = h2h.get((p2, p1), 0)
     h2h_ratio = (h2h_p1 + 1) / (h2h_p1 + h2h_p2 + 2)
+    
+    # Surface-specific H2H
+    h2h_surf_p1 = h2h_surface.get((p1, p2), {}).get(surf, 0)
+    h2h_surf_p2 = h2h_surface.get((p2, p1), {}).get(surf, 0)
+    h2h_surf_ratio = (h2h_surf_p1 + 0.5) / (h2h_surf_p1 + h2h_surf_p2 + 1)
+
+    # Surface experience factor
+    surf_exp_p1 = s1['surface_match_count'][surf]
+    surf_exp_p2 = s2['surface_match_count'][surf]
+    surf_exp_ratio = (surf_exp_p1 + 10) / (surf_exp_p2 + 10)
 
     feat = [
+        # ELO ratios (higher weight)
         s1['elo'] / (s2['elo'] + 1),
         s1['welo'] / (s2['welo'] + 1),
         s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1),
 
+        # Win rates and form
         s1['win_rate'] - s2['win_rate'],
         s1['recent_form'] - s2['recent_form'],
+        s1['very_recent_form'] - s2['very_recent_form'],  # NEW: momentum
         s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
 
+        # Rankings (inverse ratio - lower rank is better)
         (s2['avg_rank'] + 1) / (s1['avg_rank'] + 1),
 
+        # H2H features
         h2h_ratio,
+        h2h_surf_ratio,  # NEW: surface-specific H2H
 
+        # Game length prediction
         (s1['avg_games'] + s2['avg_games']) / 2,
 
-        (s1['matches_played'] + 1) / (s2['matches_played'] + 1)
+        # Experience
+        (s1['matches_played'] + 1) / (s2['matches_played'] + 1),
+        surf_exp_ratio,  # NEW: surface experience
     ]
 
+    # Odds-based probability
     prob1 = prob2 = 0.5
     if match is not None:
         odd1 = match.get("odd_p1")
@@ -247,8 +435,10 @@ def build_features(p1, p2, surface, player_stats, h2h, match=None):
     feat.extend([prob1, prob2, prob1 - prob2])
 
     return feat
+
+
 # ==============================================================================
-# CROSS‑VALIDATION
+# CROSS-VALIDATION
 # ==============================================================================
 
 def cross_val_metrics(model, X, y, name=""):
@@ -299,10 +489,10 @@ def clean_xy(X, y):
 
 
 # ==============================================================================
-# TREINO DOS MODELOS
+# ENHANCED MODEL TRAINING
 # ==============================================================================
 
-def train_models(df, player_stats, h2h):
+def train_models(df, player_stats, h2h, h2h_surface):
 
     progress = st.progress(0)
     step = 0
@@ -324,7 +514,7 @@ def train_models(df, player_stats, h2h):
         score = str(row.get('score', "")) if 'score' in df.columns else ""
 
         # AMOSTRA 1: p1 = winner
-        feat1 = build_features(w, l, surf, player_stats, h2h, match=None)
+        feat1 = build_features(w, l, surf, player_stats, h2h, h2h_surface, match=None)
         if feat1 is not None:
             X_winner.append(feat1)
             y_winner.append(1)
@@ -348,7 +538,7 @@ def train_models(df, player_stats, h2h):
                 y_hcap.append(0)
 
         # AMOSTRA 2: p1 = loser
-        feat2 = build_features(l, w, surf, player_stats, h2h, match=None)
+        feat2 = build_features(l, w, surf, player_stats, h2h, h2h_surface, match=None)
         if feat2 is not None:
             X_winner.append(feat2)
             y_winner.append(0)
@@ -365,8 +555,10 @@ def train_models(df, player_stats, h2h):
     if len(X_hcap):
         X_hcap, y_hcap = clean_xy(X_hcap, y_hcap)
 
+    # Enhanced model parameters
     model_winner = GradientBoostingClassifier(
-        n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
+        n_estimators=250, max_depth=5, learning_rate=0.04, random_state=42,
+        subsample=0.8, min_samples_split=20, min_samples_leaf=10
     )
     model_winner.fit(X_winner, y_winner)
     progress.progress((step := step + 1) / total_steps)
@@ -374,7 +566,8 @@ def train_models(df, player_stats, h2h):
     progress.progress((step := step + 1) / total_steps)
 
     model_ou = GradientBoostingClassifier(
-        n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
+        n_estimators=200, max_depth=4, learning_rate=0.04, random_state=42,
+        subsample=0.8
     )
     model_ou.fit(X_ou, y_ou)
     cross_val_metrics(model_ou, X_ou, y_ou, "Over/Under 21.5")
@@ -383,7 +576,8 @@ def train_models(df, player_stats, h2h):
     model_sets = None
     if len(X_sets) and len(np.unique(y_sets)) == 2:
         model_sets = GradientBoostingClassifier(
-            n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
+            n_estimators=200, max_depth=4, learning_rate=0.04, random_state=42,
+            subsample=0.8
         )
         model_sets.fit(X_sets, y_sets)
         cross_val_metrics(model_sets, X_sets, y_sets, "Sets 2–0 vs 2–1")
@@ -392,7 +586,8 @@ def train_models(df, player_stats, h2h):
     model_hcap = None
     if len(X_hcap) and len(np.unique(y_hcap)) == 2:
         model_hcap = GradientBoostingClassifier(
-            n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42
+            n_estimators=200, max_depth=4, learning_rate=0.04, random_state=42,
+            subsample=0.8
         )
         model_hcap.fit(X_hcap, y_hcap)
         cross_val_metrics(model_hcap, X_hcap, y_hcap, "Handicap -2.5")
@@ -405,13 +600,13 @@ def train_models(df, player_stats, h2h):
 # PREDIÇÃO (inclui ELO + WELO)
 # ==============================================================================
 def predict_match(model_winner, model_ou, model_sets, model_hcap,
-                  player_stats, h2h, match):
+                  player_stats, h2h, h2h_surface, match):
 
     p1 = match['player1']
     p2 = match['player2']
     surface = match['surface']
 
-    feat = build_features(p1, p2, surface, player_stats, h2h, match=match)
+    feat = build_features(p1, p2, surface, player_stats, h2h, h2h_surface, match=match)
     if feat is None:
         return None
 
@@ -449,6 +644,10 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
     elo_p2 = player_stats[p2]['elo']
     welo_p1 = player_stats[p1]['welo']
     welo_p2 = player_stats[p2]['welo']
+    
+    # Surface ELO
+    surf_elo_p1 = player_stats[p1]['surface_elo'][surface]
+    surf_elo_p2 = player_stats[p2]['surface_elo'][surface]
 
     return {
         'winner': p1 if p1_prob > p2_prob else p2,
@@ -462,11 +661,14 @@ def predict_match(model_winner, model_ou, model_sets, model_hcap,
         'elo_p1': elo_p1,
         'elo_p2': elo_p2,
         'welo_p1': welo_p1,
-        'welo_p2': welo_p2
+        'welo_p2': welo_p2,
+        'surf_elo_p1': surf_elo_p1,
+        'surf_elo_p2': surf_elo_p2
     }
 
 
-# SCRAPER SOFASCORE (ODDS PLACEHOLDER)
+# ==============================================================================
+# IMPROVED SCRAPER SOFASCORE
 # ==============================================================================
 
 def scrape_matches_sofascore(days_ahead=0):
@@ -511,12 +713,11 @@ def scrape_matches_sofascore(days_ahead=0):
                 p1 = ev["homeTeam"]["name"]
                 p2 = ev["awayTeam"]["name"]
 
-                t = tournament.upper()
-                surface = (
-                    "Clay" if any(x in t for x in ["CLAY", "ROLAND", "MADRID", "ROME"]) else
-                    "Grass" if any(x in t for x in ["WIMBLEDON", "HALLE"]) else
-                    "Hard"
-                )
+                # Get surface from API if available
+                api_surface = ev.get("groundType", "")
+                
+                # IMPROVED: Use tournament-aware surface detection
+                surface = detect_surface_from_tournament(tournament, normalize_surface(api_surface))
 
                 matches.append({
                     "tournament": tournament,
@@ -538,16 +739,13 @@ def scrape_matches_sofascore(days_ahead=0):
         return []
 
 
-
-
-
 # ==============================================================================
 # APP
 # ==============================================================================
 
 def main():
-    st.title("🎾 ATP & Challenger Tennis Predictor")
-    st.markdown("**Winner, O/U, Sets, Handicap + CV + SofaScore + Export Excel + Odds + ELO/WELO**")
+    st.title("🎾 ATP & Challenger Tennis Predictor - ENHANCED")
+    st.markdown("**Improved Surface Detection + Enhanced ELO + Surface-Specific H2H + Momentum**")
 
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
@@ -565,30 +763,35 @@ def main():
         st.session_state.matches = []
 
     if uploaded_file:
-        with st.spinner("Training model..."):
+        with st.spinner("Training enhanced model..."):
             temp_path = "/tmp/tennis_data.xlsx"
             with open(temp_path, 'wb') as f:
                 f.write(uploaded_file.read())
             
             df = load_historical_data(temp_path)
             st.write(f"📁 Loaded {len(df)} matches")
+            
+            # Show surface distribution
+            st.write("🎾 Surface distribution in training data:")
+            st.write(df['surface'].value_counts())
 
             player_stats = compute_player_stats(df)
             st.write(f"👥 Computed stats for {len(player_stats)} players")
 
-            h2h = build_h2h_dict(df)
+            h2h, h2h_surface = build_h2h_dict(df)
 
-            model_w, model_ou, model_sets, model_hcap = train_models(df, player_stats, h2h)
+            model_w, model_ou, model_sets, model_hcap = train_models(df, player_stats, h2h, h2h_surface)
 
             st.session_state.player_stats = player_stats
             st.session_state.h2h = h2h
+            st.session_state.h2h_surface = h2h_surface
             st.session_state.model_winner = model_w
             st.session_state.model_ou = model_ou
             st.session_state.model_sets = model_sets
             st.session_state.model_hcap = model_hcap
             st.session_state.models_trained = True
 
-            st.success("✅ Model trained successfully!")
+            st.success("✅ Enhanced model trained successfully!")
 
     if st.session_state.get('matches') and st.session_state.get('models_trained'):
         st.header("🎯 Predictions")
@@ -603,6 +806,7 @@ def main():
                 st.session_state.model_hcap,
                 st.session_state.player_stats,
                 st.session_state.h2h,
+                st.session_state.h2h_surface,
                 m
             )
 
@@ -624,6 +828,8 @@ def main():
                 "ELO_P2": pred['elo_p2'],
                 "WELO_P1": pred['welo_p1'],
                 "WELO_P2": pred['welo_p2'],
+                "SurfELO_P1": pred['surf_elo_p1'],
+                "SurfELO_P2": pred['surf_elo_p2'],
                 "OU": pred['ou'],
                 "OU_Prob": pred['ou_conf'],
                 "Sets": pred['sets']['label'] if pred['sets'] else "",
@@ -648,7 +854,8 @@ def main():
 
             st.markdown(f"""
             <div class="prediction-card">
-                <b>{m['type']} • {m['surface']}</b><br>
+                <b>{m['type']} • {m['surface']} Surface</b><br>
+                <h3>{m['tournament']}</h3>
                 <h3>{m['player1']} vs {m['player2']}</h3>
 
                 🏆 Winner: <span class="{conf_class}">
@@ -660,6 +867,7 @@ def main():
 
                 📈 ELO: {pred['elo_p1']:.0f} | {pred['elo_p2']:.0f}<br>
                 🔥 WELO: {pred['welo_p1']:.0f} | {pred['welo_p2']:.0f}<br>
+                🎾 {m['surface']} ELO: {pred['surf_elo_p1']:.0f} | {pred['surf_elo_p2']:.0f}<br>
 
                 🎲 O/U 21.5: {pred['ou']} ({pred['ou_conf']:.1%})
                 {sets_line}
@@ -676,7 +884,7 @@ def main():
             st.download_button(
                 label="📥 Exportar previsões para Excel",
                 data=buffer,
-                file_name="tennis_predictions.xlsx",
+                file_name="tennis_predictions_enhanced.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
