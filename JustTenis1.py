@@ -8,11 +8,10 @@ import streamlit as st
 import requests
 from lightgbm import LGBMClassifier
 import re
-from difflib import SequenceMatcher
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v4.4 - Direct Match", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v5.0 - Seu Histórico", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
@@ -37,10 +36,10 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# DATA PROCESSING - MOSTRA OS NOMES REAIS
+# PROCESSAR HISTÓRICO
 # ==============================================================================
 def process_historical_data(df):
-    """Process historical data and show actual names"""
+    """Process historical data"""
     
     # Clean column names
     df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
@@ -62,7 +61,7 @@ def process_historical_data(df):
             date_col = col
     
     if not winner_col or not loser_col:
-        raise ValueError(f"Colunas não encontradas. Colunas disponíveis: {list(df.columns)}")
+        raise ValueError(f"Colunas não encontradas. Colunas: {list(df.columns)}")
     
     # Rename
     df = df.rename(columns={
@@ -78,7 +77,7 @@ def process_historical_data(df):
     else:
         df['date'] = pd.Timestamp.now()
     
-    # Calculate total games (placeholder if not available)
+    # Total games (placeholder)
     if 'total_games' not in df.columns:
         df['total_games'] = 22
     
@@ -88,61 +87,11 @@ def process_historical_data(df):
     else:
         df['surface'] = 'Hard'
     
-    # Clean names - keep as is from the file
+    # Clean names
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
     
     return df
-
-# ==============================================================================
-# SIMPLE NAME MATCHER - USA OS NOMES EXATOS DO HISTÓRICO
-# ==============================================================================
-class SimpleNameMatcher:
-    """Matching simples usando os nomes exatos do histórico"""
-    
-    def __init__(self, historical_names):
-        self.historical_names = list(historical_names)
-        self.name_set = set(historical_names)
-        # Criar índice de sobrenomes
-        self.last_name_index = defaultdict(list)
-        for name in self.historical_names:
-            parts = name.split()
-            if parts:
-                last_name = parts[-1].lower()
-                self.last_name_index[last_name].append(name)
-    
-    def find_match(self, search_name):
-        """Find matching name in historical data"""
-        if not search_name or pd.isna(search_name):
-            return None
-        
-        search_str = str(search_name).strip()
-        
-        # 1. Exact match
-        if search_str in self.name_set:
-            return search_str
-        
-        # 2. Case insensitive
-        search_lower = search_str.lower()
-        for name in self.historical_names:
-            if name.lower() == search_lower:
-                return name
-        
-        # 3. Last name match (if unique)
-        parts = search_str.split()
-        if parts:
-            last_name = parts[-1].lower()
-            if last_name in self.last_name_index:
-                matches = self.last_name_index[last_name]
-                if len(matches) == 1:
-                    return matches[0]
-        
-        # 4. Partial match (contains)
-        for name in self.historical_names:
-            if search_lower in name.lower() or name.lower() in search_lower:
-                return name
-        
-        return None
 
 # ==============================================================================
 # PLAYER STATISTICS
@@ -173,15 +122,17 @@ def calculate_player_stats(df):
             else:
                 surface_stats[surf] = 0.5
         
-        # Recent form
+        # Recent form (last 10)
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
+        # Very recent (last 3)
         very_recent = player_matches.sort_values('date', ascending=False).head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
         
+        # Average games
         avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
         
         stats[player] = {
@@ -316,23 +267,123 @@ def train_model(df, player_stats, h2h, elo):
     return model
 
 # ==============================================================================
+# SMART NAME MATCHER - CONVERTE NOMES DA SOFASCORE PARA SEU FORMATO
+# ==============================================================================
+def create_name_mapping(historical_names):
+    """Create mapping from full names to historical names"""
+    mapping = {}
+    
+    # Mapeamentos manuais comuns
+    manual_mapping = {
+        # Nomes da Sofascore -> Seu formato
+        'Jan-Lennard Struff': 'Jan-Lennard Struff',
+        'Francisco Cerundolo': 'Francisco Cerundolo',
+        'Sumit Nagal': 'Sumit Nagal',
+        'Ben Shelton': 'Ben Shelton',
+        'Alexander Zverev': 'Alexander Zverev',
+        'Joao Fonseca': 'Joao Fonseca',
+        'Alejandro Tabilo': 'Alejandro Tabilo',
+        'Denis Shapovalov': 'Denis Shapovalov',
+        'Tallon Griekspoor': 'Tallon Griekspoor',
+        'Luciano Darderi': 'Luciano Darderi',
+        'Marko Topo': 'Marko Topo',
+        'Arthur Fils': 'Arthur Fils',
+        'Jack Draper': 'Jack Draper',
+        'Cameron Norrie': 'Cameron Norrie',
+        'Stan Wawrinka': 'Stan Wawrinka',
+        'Adrian Mannarino': 'Adrian Mannarino',
+        'Mitchell Krueger': 'Mitchell Krueger',
+        'Trevor Svajda': 'Trevor Svajda',
+        'Yuta Shimizu': 'Yuta Shimizu',
+        'Antoine Escoffier': 'Antoine Escoffier',
+        'Andres Martin': 'Andres Martin',
+        'Rio Noguchi': 'Rio Noguchi',
+        'Nicolas Mejia': 'Nicolas Mejia',
+        'Paul Jubb': 'Paul Jubb',
+        'Stefan Dostanic': 'Stefan Dostanic',
+        'Ilya Ivashka': 'Ilya Ivashka',
+        'Rafael Jodar': 'Rafael Jodar',
+        'Patrick Kypson': 'Patrick Kypson',
+        'Alex Rybakov': 'Alex Rybakov',
+        'Karue Sell': 'Karue Sell',
+        'Yibing Wu': 'Yibing Wu',
+        'Yi Zhou': 'Yi Zhou',
+    }
+    
+    # First, add manual mappings
+    for full, short in manual_mapping.items():
+        if short in historical_names:
+            mapping[full.lower()] = short
+            # Also map last name only
+            last_name = full.split()[-1].lower()
+            mapping[last_name] = short
+    
+    # Then, create automatic mappings based on last names
+    for hist_name in historical_names:
+        hist_lower = hist_name.lower()
+        hist_parts = hist_lower.split()
+        hist_last = hist_parts[-1] if hist_parts else hist_lower
+        
+        # Map by last name
+        mapping[hist_last] = hist_name
+        # Map by full name if same last name
+        mapping[hist_lower] = hist_name
+    
+    return mapping
+
+def smart_match(search_name, name_mapping, historical_names):
+    """Smart matching using the mapping"""
+    if not search_name or pd.isna(search_name):
+        return None
+    
+    search_str = str(search_name).strip()
+    search_lower = search_str.lower()
+    
+    # Direct match with historical names
+    if search_str in historical_names:
+        return search_str
+    
+    # Case insensitive
+    for name in historical_names:
+        if name.lower() == search_lower:
+            return name
+    
+    # Check mapping
+    if search_lower in name_mapping:
+        return name_mapping[search_lower]
+    
+    # Check last name only
+    parts = search_str.split()
+    if parts:
+        last_name = parts[-1].lower()
+        if last_name in name_mapping:
+            return name_mapping[last_name]
+    
+    # Check if search name contains any historical name
+    for hist_name in historical_names:
+        if hist_name.lower() in search_lower or search_lower in hist_name.lower():
+            return hist_name
+    
+    return None
+
+# ==============================================================================
 # PREDICT
 # ==============================================================================
-def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
+def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_mapping, historical_names):
     """Predict a single match"""
     
-    p1_match = name_matcher.find_match(p1)
-    p2_match = name_matcher.find_match(p2)
+    p1_match = smart_match(p1, name_mapping, historical_names)
+    p2_match = smart_match(p2, name_mapping, historical_names)
     
     if not p1_match:
-        return None, f"Não encontrado: '{p1}'"
+        return None, f"❌ '{p1}' não encontrado no histórico"
     if not p2_match:
-        return None, f"Não encontrado: '{p2}'"
+        return None, f"❌ '{p2}' não encontrado no histórico"
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
     
     if features is None:
-        return None, f"Stats não disponíveis"
+        return None, f"Estatísticas não disponíveis"
     
     features = np.array([features])
     prob = model.predict_proba(features)[0][1]
@@ -353,28 +404,26 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     s1, s2 = player_stats.get(p1_match, {}), player_stats.get(p2_match, {})
     momentum_edge = (s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)) * 100
     expected_games = np.clip((s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2, 18, 35)
-    ou_prob = np.clip(0.5 + (expected_games - 21.5) / 20, 0.35, 0.65)
     
     return {
-        'Player1_Original': p1,
-        'Player2_Original': p2,
-        'Matched_As': f"{p1_match} | {p2_match}",
-        'Surface': surface,
-        'P1_Win%': prob_p1,
-        'P2_Win%': prob_p2,
-        'Predicted_Winner': winner,
-        'Confidence': confidence,
-        'Recommendation': rec,
-        'Momentum': round(momentum_edge, 1),
-        'Exp_Games': round(expected_games, 1),
-        'OU': "Over" if ou_prob > 0.5 else "Under"
+        'Jogador1': p1,
+        'Jogador2': p2,
+        'Match_Historico': f"{p1_match} vs {p2_match}",
+        'Superficie': surface,
+        f'Prob_{p1_match.split()[-1]}': f"{prob_p1:.1%}",
+        f'Prob_{p2_match.split()[-1]}': f"{prob_p2:.1%}",
+        'Vencedor': winner,
+        'Confianca': f"{confidence:.1%}",
+        'Recomendacao': rec,
+        'Momentum': f"{momentum_edge:+.0f}%",
+        'Games_Esperados': round(expected_games, 1)
     }, None
 
 # ==============================================================================
 # SCRAPER
 # ==============================================================================
 def scrape_matches():
-    """Scrape matches"""
+    """Scrape matches from Sofascore"""
     try:
         target_date = datetime.now().strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
@@ -402,20 +451,21 @@ def scrape_matches():
                 "surface": surface
             })
         return matches
-    except:
+    except Exception as e:
+        st.error(f"Erro no scraper: {e}")
         return []
 
 # ==============================================================================
 # MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v4.4 - Direct Match")
-    st.caption("Usa EXATAMENTE os nomes do seu arquivo histórico")
+    st.title("🎾 ATP Predictor v5.0 - Seu Histórico")
+    st.caption("Usando EXATAMENTE os nomes do seu arquivo histórico")
     
-    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico", type=['xlsx', 'csv'])
+    uploaded_file = st.file_uploader("📁 Upload do seu ficheiro histórico", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("🔄 Processando..."):
+        with st.spinner("🔄 Processando seu histórico..."):
             try:
                 # Load
                 if uploaded_file.name.endswith('.csv'):
@@ -423,30 +473,28 @@ def main():
                 else:
                     df = pd.read_excel(uploaded_file)
                 
-                # Show original columns
-                st.info(f"Colunas no seu arquivo: {list(df.columns)}")
-                
                 # Process
                 df = process_historical_data(df)
                 
-                # MOSTRA OS NOMES REAIS DO SEU ARQUIVO
-                st.subheader("📋 Nomes no seu histórico (amostra)")
+                # Get historical names
+                historical_names = sorted(list(set(df['winner'].dropna()) | set(df['loser'].dropna())))
                 
-                all_names = list(set(df['winner'].dropna()) | set(df['loser'].dropna()))
-                st.write(f"Total de jogadores únicos: **{len(all_names)}**")
+                st.success(f"✅ Carregados {len(df)} jogos com {len(historical_names)} jogadores")
                 
-                # Show first 50 names
-                with st.expander(f"Ver primeiros 50 nomes ({len(all_names)} total)"):
-                    for i, name in enumerate(sorted(all_names)[:50]):
+                # Show sample
+                with st.expander(f"📋 Jogadores no seu histórico ({len(historical_names)} total)"):
+                    for i, name in enumerate(historical_names[:50]):
                         st.write(f"{i+1}. `{name}`")
+                    if len(historical_names) > 50:
+                        st.write(f"... e mais {len(historical_names) - 50} jogadores")
                 
                 # Calculate stats
                 player_stats = calculate_player_stats(df)
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df)
                 
-                # Create matcher with historical names
-                name_matcher = SimpleNameMatcher(all_names)
+                # Create name mapping
+                name_mapping = create_name_mapping(historical_names)
                 
                 # Train model
                 model = train_model(df, player_stats, h2h, elo)
@@ -456,11 +504,11 @@ def main():
                 st.session_state.player_stats = player_stats
                 st.session_state.h2h = h2h
                 st.session_state.elo = elo
-                st.session_state.name_matcher = name_matcher
-                st.session_state.all_names = all_names
+                st.session_state.name_mapping = name_mapping
+                st.session_state.historical_names = historical_names
                 st.session_state.models_ready = True
                 
-                st.success(f"✅ Modelo treinado com {len(player_stats)} jogadores!")
+                st.success("✅ Modelo treinado com sucesso!")
                 
             except Exception as e:
                 st.error(f"Erro: {str(e)}")
@@ -468,66 +516,48 @@ def main():
                 st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
-        # Show available names for matching
-        with st.expander("🔍 Ver todos os jogadores disponíveis"):
-            search = st.text_input("Buscar jogador:", "")
-            if search:
-                matches = [n for n in st.session_state.all_names if search.lower() in n.lower()]
-                st.write(f"Encontrados {len(matches)} jogadores:")
-                for m in matches[:20]:
-                    stats = st.session_state.player_stats.get(m, {})
-                    st.write(f"• `{m}` - {stats.get('matches',0)} jogos, {stats.get('win_rate',0):.0%} vitórias")
-            else:
-                st.write(f"Total: {len(st.session_state.all_names)} jogadores")
-                for i, name in enumerate(sorted(st.session_state.all_names)[:30]):
-                    stats = st.session_state.player_stats.get(name, {})
-                    st.write(f"{i+1}. `{name}` - {stats.get('matches',0)} jogos")
-        
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📅 HOJE", use_container_width=True):
-                with st.spinner("Buscando..."):
+            if st.button("📅 JOGOS DE HOJE", use_container_width=True):
+                with st.spinner("Buscando jogos..."):
                     st.session_state.matches = scrape_matches()
         with col2:
             if st.button("🔄 LIMPAR", use_container_width=True):
                 st.session_state.matches = []
                 st.rerun()
         
-        # Manual input - AGORA COM SUGESTÕES
-        with st.expander("✏️ Previsão Manual", expanded=True):
-            st.markdown("**Digite o nome EXATAMENTE como aparece no histórico acima**")
-            
+        # Manual prediction with dropdown
+        with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + sorted(st.session_state.all_names)[:100])
+                manual_p1 = st.selectbox("Jogador 1", [""] + st.session_state.historical_names)
             with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + sorted(st.session_state.all_names)[:100])
+                manual_p2 = st.selectbox("Jogador 2", [""] + st.session_state.historical_names)
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
-            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2:
+            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2 and manual_p1 != manual_p2:
                 result, error = predict_match(
                     st.session_state.model,
                     manual_p1, manual_p2, manual_surface,
                     st.session_state.player_stats,
                     st.session_state.h2h,
                     st.session_state.elo,
-                    st.session_state.name_matcher
+                    st.session_state.name_mapping,
+                    st.session_state.historical_names
                 )
                 if result:
-                    df_result = pd.DataFrame([result])
-                    st.dataframe(df_result.style.format({
-                        'P1_Win%': '{:.1%}', 'P2_Win%': '{:.1%}', 'Confidence': '{:.1%}'
-                    }), use_container_width=True)
+                    st.success("✅ Previsão concluída!")
+                    st.table(pd.DataFrame([result]))
                 else:
                     st.error(error)
         
-        # Show predictions
+        # Show predictions for today
         if st.session_state.get('matches'):
-            st.subheader("🎯 Previsões")
+            st.subheader("🎯 PREVISÕES PARA HOJE")
             
             results = []
-            not_found = []
+            errors = []
             
             for match in st.session_state.matches:
                 result, error = predict_match(
@@ -536,19 +566,20 @@ def main():
                     st.session_state.player_stats,
                     st.session_state.h2h,
                     st.session_state.elo,
-                    st.session_state.name_matcher
+                    st.session_state.name_mapping,
+                    st.session_state.historical_names
                 )
                 if result:
-                    result['Tournament'] = match['tournament']
+                    result['Torneio'] = match['tournament']
                     results.append(result)
                 elif error:
-                    not_found.append(error)
+                    errors.append(error)
             
-            # Show not found
-            if not_found:
-                st.warning(f"⚠️ {len(not_found)} jogadores não encontrados no histórico:")
-                for err in set(not_found)[:10]:
-                    st.write(f"• {err}")
+            # Show errors
+            if errors:
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
+                    for err in set(errors):
+                        st.write(err)
             
             if results:
                 df_results = pd.DataFrame(results)
@@ -557,19 +588,12 @@ def main():
                 # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download", buffer.getvalue(),
-                                 f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
                 
-                # Summary
-                col_s1, col_s2, col_s3 = st.columns(3)
-                with col_s1:
-                    strong = sum(1 for r in results if 'STRONG' in r['Recommendation'])
-                    st.metric("STRONG", strong)
-                with col_s2:
-                    avg_conf = df_results['Confidence'].mean()
-                    st.metric("Confiança Média", f"{avg_conf:.1%}")
-                with col_s3:
-                    st.metric("Total", len(results))
+                # Stats
+                strong_count = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
+                st.info(f"🔥 STRONG picks: {strong_count} de {len(results)} jogos")
 
 if __name__ == "__main__":
     main()
