@@ -6,13 +6,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import requests
-from lightgbm import LGBMClassifier, LGBMRanker
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+from lightgbm import LGBMClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import cross_val_score, TimeSeriesSplit
-from scipy.stats import beta, norm
-from scipy.special import expit
-import hashlib
+from scipy.stats import norm
+import re
 
 warnings.filterwarnings('ignore')
 
@@ -30,26 +28,53 @@ ENSEMBLE_WEIGHTS = {
 }
 
 # Calibration agressiva para alta confiança
-WINNER_SMOOTH = 0.35     # Mais conservador para evitar overconfidence
+WINNER_SMOOTH = 0.35
 OU_SMOOTH = 0.45
 
 # Limites de confiança mais rigorosos
-MIN_CONFIDENCE_STRONG = 0.72  # Aumentado
-MIN_CONFIDENCE_GOOD = 0.65     # Aumentado
+MIN_CONFIDENCE_STRONG = 0.72
+MIN_CONFIDENCE_GOOD = 0.65
 MIN_CONFIDENCE_WEAK = 0.58
 
 # CBRF parameters otimizados
 CBRF_MOMENTUM_WINDOW = 4
 CBRF_MOMENTUM_DECAY = 0.92
-CBRF_WEIGHT_RECENT = 0.75
 
 # Betaminic parameters refinados
 BETAMINIC_MIN_SAMPLES = 15
 BETAMINIC_SURFACE_ADJUST = {'Hard': 1.0, 'Clay': 1.04, 'Grass': 0.96}
 
-# Feature selection
-USE_FEATURE_IMPORTANCE = True
-MIN_FEATURE_IMPORTANCE = 0.02
+# ==============================================================================
+# SURFACE DETECTION - CORRIGIDA
+# ==============================================================================
+TOURNAMENT_SURFACE_MAP = {
+    'monte carlo': 'Clay', 'madrid': 'Clay', 'rome': 'Clay', 'barcelona': 'Clay',
+    'munich': 'Clay', 'estoril': 'Clay', 'geneva': 'Clay', 'oeiras': 'Clay',
+    'santa cruz': 'Clay', 'tallahassee': 'Clay', 'busan': 'Hard', 'wuning': 'Hard',
+    'wimbledon': 'Grass', 'queens': 'Grass', 'halle': 'Grass', 'newport': 'Grass',
+    'stuttgart': 'Grass', 's-Hertogenbosch': 'Grass', 'eastbourne': 'Grass'
+}
+
+def detect_surface_from_tournament(tournament_name):
+    """Versão simplificada - apenas 1 argumento"""
+    if pd.isna(tournament_name):
+        return 'Hard'
+    
+    t = str(tournament_name).lower()
+    
+    # Check mapped tournaments first
+    for key, surf in TOURNAMENT_SURFACE_MAP.items():
+        if key in t:
+            return surf
+    
+    # Check by keywords
+    if any(x in t for x in ['clay', 'terre', 'antuka', 'red clay']):
+        return 'Clay'
+    if any(x in t for x in ['grass', 'lawn', 'natural grass']):
+        return 'Grass'
+    
+    # Default to Hard
+    return 'Hard'
 
 # ==============================================================================
 # FEATURE ENGINEERING AVANÇADA
@@ -77,8 +102,7 @@ class AdvancedFeatureEngineer:
         
         # Simular estatísticas avançadas baseadas em resultados
         wins = matches[matches['winner'] == player]
-        losses = matches[matches['loser'] == player]
-        total_matches = len(wins) + len(losses)
+        total_matches = len(matches)
         
         # Serve/hold rate (estimado)
         serve_hold = 0.65 + (len(wins) / total_matches) * 0.15
@@ -87,8 +111,8 @@ class AdvancedFeatureEngineer:
         break_conv = 0.35 + (len(wins) / total_matches) * 0.15
         
         # Tiebreak performance
-        tiebreaks = matches[matches.get('tiebreaks', 0) > 0]
-        tiebreak_wins = len(tiebreaks[tiebreaks['winner'] == player])
+        tiebreaks = matches[matches.get('tiebreaks', 0) > 0] if 'tiebreaks' in matches.columns else pd.DataFrame()
+        tiebreak_wins = len(tiebreaks[tiebreaks['winner'] == player]) if len(tiebreaks) > 0 else 0
         tiebreak_pct = tiebreak_wins / len(tiebreaks) if len(tiebreaks) > 0 else 0.5
         
         return {
@@ -98,8 +122,8 @@ class AdvancedFeatureEngineer:
             'first_serve_pct': 0.60 + np.random.normal(0, 0.05),
             'second_serve_win_pct': 0.45 + (len(wins) / total_matches) * 0.10,
             'return_points_won': 0.35 + (len(wins) / total_matches) * 0.15,
-            'ace_rate': 0.04 + (1 if 'Zverev' in player or 'Isner' in player else 0) * 0.03,
-            'double_fault_rate': 0.03 + (1 if 'Paire' in player else 0) * 0.02
+            'ace_rate': 0.04,
+            'double_fault_rate': 0.03
         }
     
     def calculate_consistency_score(self, player, matches):
@@ -107,29 +131,32 @@ class AdvancedFeatureEngineer:
         if len(matches) < 5:
             return 0.5
         
-        games_played = matches['total_games'].values
-        consistency = 1 - (np.std(games_played) / 15)
-        return np.clip(consistency, 0, 1)
+        if 'total_games' in matches.columns:
+            games_played = matches['total_games'].values
+            consistency = 1 - (np.std(games_played) / 15)
+            return np.clip(consistency, 0, 1)
+        return 0.5
     
     def calculate_clutch_score(self, player, matches):
         """Performance em momentos decisivos"""
         if len(matches) < 10:
             return 0.5
         
-        # Análise de sets decisivos e tiebreaks
-        wins = matches[matches['winner'] == player]
-        three_set_matches = matches[matches.get('best_of', 3) == 3]
+        # Análise de sets decisivos
+        if 'best_of' in matches.columns:
+            three_set_matches = matches[matches.get('best_of', 3) == 3]
+            if len(three_set_matches) > 0:
+                clutch_wins = len(three_set_matches[three_set_matches['winner'] == player])
+                clutch_pct = clutch_wins / len(three_set_matches)
+                return np.clip(clutch_pct, 0.3, 0.8)
         
-        if len(three_set_matches) > 0:
-            clutch_wins = len(three_set_matches[three_set_matches['winner'] == player])
-            clutch_pct = clutch_wins / len(three_set_matches)
-        else:
-            clutch_pct = 0.5
-        
-        return np.clip(clutch_pct, 0.3, 0.8)
+        return 0.5
     
     def calculate_surface_specific_form(self, player, matches, surface, window=10):
         """Forma específica por superfície"""
+        if len(matches) == 0:
+            return 0.5
+        
         surface_matches = matches[matches['surface'] == surface].head(window)
         if len(surface_matches) == 0:
             return 0.5
@@ -148,8 +175,6 @@ class ImprovedCBRFModel:
         self.decay = decay
         self.player_history = defaultdict(lambda: {
             'results': [],
-            'games_won': [],
-            'sets_won': [],
             'momentum_trend': [],
             'confidence_trend': 0.5
         })
@@ -161,11 +186,11 @@ class ImprovedCBRFModel:
                 continue
             
             # Update winner
-            self._add_result(winner, 1, row)
+            self._add_result(winner, 1)
             # Update loser
-            self._add_result(loser, 0, row)
+            self._add_result(loser, 0)
     
-    def _add_result(self, player, result, match_row):
+    def _add_result(self, player, result):
         history = self.player_history[player]
         history['results'].append(result)
         
@@ -175,7 +200,7 @@ class ImprovedCBRFModel:
         # Calculate weighted momentum
         weights = [self.decay ** i for i in range(len(history['results']))]
         weighted_sum = sum(r * w for r, w in zip(history['results'], weights))
-        momentum = weighted_sum / sum(weights)
+        momentum = weighted_sum / sum(weights) if sum(weights) > 0 else 0.5
         
         history['momentum_trend'].append(momentum)
         if len(history['momentum_trend']) > 5:
@@ -207,7 +232,6 @@ class TennisEnsemble:
     def __init__(self):
         self.models = {}
         self.calibrated = False
-        self.feature_engineer = AdvancedFeatureEngineer()
     
     def train(self, X, y):
         # LGBM com hiperparâmetros otimizados
@@ -266,9 +290,7 @@ class TennisEnsemble:
     
     def _bayesian_calibration(self, probs):
         """Calibração Bayesiana para probabilidades mais realistas"""
-        # Beta prior (assumindo viés leve para underdog)
         alpha_prior, beta_prior = 5, 5
-        
         calibrated = (probs * alpha_prior + 0.5 * beta_prior) / (alpha_prior + beta_prior)
         return np.clip(calibrated, 0.05, 0.95)
 
@@ -296,16 +318,17 @@ class ImprovedBetaminicModel:
                 continue
             
             # Base statistics
-            games = matches['total_games'].values
-            self.player_profiles[player]['avg_games'] = np.mean(games)
-            self.player_profiles[player]['games_std'] = np.std(games)
-            self.player_profiles[player]['over_rate'] = np.mean(games > 21.5)
-            self.player_profiles[player]['under_rate'] = np.mean(games <= 21.5)
+            if 'total_games' in matches.columns:
+                games = matches['total_games'].values
+                self.player_profiles[player]['avg_games'] = np.mean(games)
+                self.player_profiles[player]['games_std'] = np.std(games)
+                self.player_profiles[player]['over_rate'] = np.mean(games > 21.5)
+                self.player_profiles[player]['under_rate'] = np.mean(games <= 21.5)
             
             # Surface-specific
             for surf in ['Hard', 'Clay', 'Grass']:
                 surf_matches = matches[matches['surface'] == surf]
-                if len(surf_matches) >= 5:
+                if len(surf_matches) >= 5 and 'total_games' in surf_matches.columns:
                     self.player_profiles[player]['surface_games'][surf] = surf_matches['total_games'].mean()
             
             # Confidence based on sample size
@@ -341,6 +364,45 @@ class ImprovedBetaminicModel:
         final_prob = 0.6 * over_prob + 0.4 * hist_over
         
         return np.clip(final_prob, 0.25, 0.75), exp_games
+
+# ==============================================================================
+# ELO SYSTEM MELHORADO
+# ==============================================================================
+def calculate_advanced_elo(df, recent_matches=15):
+    players = set(df['winner'].dropna()) | set(df['loser'].dropna())
+    surface_elo = {p: {'Hard': 1500, 'Clay': 1500, 'Grass': 1500} for p in players}
+    elo_history = {p: [] for p in players}
+    
+    # K-factors adaptativos
+    K_BASE = 28
+    K_SURPRISE_BONUS = 8
+    
+    for _, row in df.sort_values('date').iterrows():
+        w, l = row['winner'], row['loser']
+        surf = row.get('surface', 'Hard')
+        if surf not in ['Hard', 'Clay', 'Grass']:
+            surf = 'Hard'
+        if pd.isna(w) or pd.isna(l):
+            continue
+        
+        # Calculate expected scores
+        r1 = surface_elo[w][surf]
+        r2 = surface_elo[l][surf]
+        exp_w = 1 / (1 + 10 ** ((r2 - r1) / 400))
+        
+        # Adaptive K-factor based on surprise level
+        surprise = abs(exp_w - 0.5) * 2
+        k = K_BASE + K_SURPRISE_BONUS * surprise
+        
+        # Update ELO
+        surface_elo[w][surf] += k * (1 - exp_w)
+        surface_elo[l][surf] += k * (0 - (1 - exp_w))
+        
+        # Store history
+        elo_history[w].append(surface_elo[w][surf])
+        elo_history[l].append(surface_elo[l][surf])
+    
+    return surface_elo, elo_history
 
 # ==============================================================================
 # FEATURE ENGINEERING COMPLETA
@@ -394,18 +456,20 @@ def build_complete_features(p1, p2, surface, player_stats, h2h_data,
     df_diff = tennis_stats2['double_fault_rate'] - tennis_stats1['double_fault_rate']
     
     # 6. H2H Features (2)
-    h2h_ratio = h2h_data.get((p1, p2), {}).get(surf, 0.5)
-    h2h_confidence = min(0.95, h2h_data.get((p1, p2), {}).get('matches', 0) / 10)
+    h2h_ratio = 0.5
+    h2h_confidence = 0.5
+    if (p1, p2) in h2h_data:
+        surf_data = h2h_data[(p1, p2)].get(surf, 0)
+        total = surf_data + h2h_data.get((p2, p1), {}).get(surf, 0) + 1
+        h2h_ratio = (surf_data + 0.5) / total
+        h2h_confidence = min(0.95, h2h_data[(p1, p2)].get('matches', 0) / 10)
     
     # 7. Betaminic OU Features (2)
     ou_prob, exp_games = betaminic_model.predict_ou(p1, p2, surf)
     normalized_games = (exp_games - 21.5) / 15
     
-    # 8. Advanced features (3)
+    # 8. Advanced features (2)
     volatility_diff = s1.get('volatility', 0.05) - s2.get('volatility', 0.05)
-    age_factor = 0  # Placeholder for age difference
-    ranking_diff = s1.get('ranking', 100) - s2.get('ranking', 100)
-    ranking_diff_norm = np.clip(ranking_diff / 100, -1, 1)
     
     # Combine all features
     features = [
@@ -415,49 +479,10 @@ def build_complete_features(p1, p2, surface, player_stats, h2h_data,
         serve_diff, break_diff, tiebreak_diff, return_diff, ace_diff, df_diff,
         h2h_ratio, h2h_confidence,
         normalized_games, ou_prob,
-        volatility_diff, ranking_diff_norm
+        volatility_diff
     ]
     
     return features
-
-# ==============================================================================
-# ELO SYSTEM MELHORADO
-# ==============================================================================
-def calculate_advanced_elo(df, recent_matches=15):
-    players = set(df['winner'].dropna()) | set(df['loser'].dropna())
-    surface_elo = {p: {'Hard': 1500, 'Clay': 1500, 'Grass': 1500} for p in players}
-    elo_history = {p: [] for p in players}
-    
-    # K-factors adaptativos
-    K_BASE = 28
-    K_SURPRISE_BONUS = 8
-    
-    for _, row in df.sort_values('date').iterrows():
-        w, l = row['winner'], row['loser']
-        surf = row.get('surface', 'Hard')
-        if surf not in ['Hard', 'Clay', 'Grass']:
-            surf = 'Hard'
-        if pd.isna(w) or pd.isna(l):
-            continue
-        
-        # Calculate expected scores
-        r1 = surface_elo[w][surf]
-        r2 = surface_elo[l][surf]
-        exp_w = 1 / (1 + 10 ** ((r2 - r1) / 400))
-        
-        # Adaptive K-factor based on surprise level
-        surprise = abs(exp_w - 0.5) * 2
-        k = K_BASE + K_SURPRISE_BONUS * surprise
-        
-        # Update ELO
-        surface_elo[w][surf] += k * (1 - exp_w)
-        surface_elo[l][surf] += k * (0 - (1 - exp_w))
-        
-        # Store history
-        elo_history[w].append(surface_elo[w][surf])
-        elo_history[l].append(surface_elo[l][surf])
-    
-    return surface_elo, elo_history
 
 # ==============================================================================
 # TRAINING PIPELINE
@@ -466,8 +491,7 @@ def train_advanced_model(df, feature_engineer):
     """Pipeline de treinamento completo"""
     
     # Prepare data
-    df['surface'] = df.apply(lambda row: detect_surface_from_tournament(
-        row.get('tournament'), row.get('surface')), axis=1)
+    df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament')), axis=1)
     
     # Calculate ELO
     surface_elo, elo_history = calculate_advanced_elo(df)
@@ -482,7 +506,7 @@ def train_advanced_model(df, feature_engineer):
     
     # Build player stats
     player_stats = {}
-    h2h_data = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'matches': 0}))
+    h2h_data = defaultdict(lambda: defaultdict(lambda: 0))
     
     for player in set(df['winner'].dropna()) | set(df['loser'].dropna()):
         matches = df[(df['winner'] == player) | (df['loser'] == player)]
@@ -520,7 +544,6 @@ def train_advanced_model(df, feature_engineer):
             'clutch': clutch,
             'elo_trend': elo_trend,
             'volatility': volatility,
-            'ranking': 100,  # Placeholder
             'matches': matches
         }
     
@@ -529,8 +552,8 @@ def train_advanced_model(df, feature_engineer):
         if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
             w, l = row['winner'], row['loser']
             surf = row.get('surface', 'Hard')
-            h2h_data[w][l][surf] = h2h_data[w][l].get(surf, 0) + 1
-            h2h_data[w][l]['matches'] = h2h_data[w][l].get('matches', 0) + 1
+            h2h_data[(w, l)][surf] = h2h_data[(w, l)].get(surf, 0) + 1
+            h2h_data[(w, l)]['matches'] = h2h_data[(w, l)].get('matches', 0) + 1
     
     # Build training dataset
     X_train, y_train = [], []
@@ -558,6 +581,9 @@ def train_advanced_model(df, feature_engineer):
             if features_rev:
                 X_train.append(features_rev)
                 y_train.append(0)
+    
+    if len(X_train) == 0:
+        raise ValueError("No valid training data found")
     
     # Train ensemble
     X_train = np.array(X_train)
@@ -627,11 +653,48 @@ def predict_with_confidence(ensemble, player_stats, h2h_data, cbrf_model,
         'Predicted_Winner': winner_pred,
         'Confidence': confidence,
         'Recommendation': rec,
-        'Momentum_Edge': momentum_diff,
+        'Momentum_Edge': round(momentum_diff, 3),
         'Expected_Games': round(exp_games, 1),
         'OU': "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
         'OU_Prob': ou_prob
     }
+
+# ==============================================================================
+# SCRAPER
+# ==============================================================================
+def scrape_matches_sofascore(days_ahead=0):
+    """Scrape matches from Sofascore API"""
+    try:
+        target_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return []
+        
+        data = r.json()
+        matches = []
+        for ev in data.get("events", []):
+            try:
+                # Skip WTA
+                category = ev.get("tournament", {}).get("category", {}).get("name", "")
+                if "WTA" in str(category).upper():
+                    continue
+                
+                tournament_name = ev["tournament"]["name"]
+                surface = detect_surface_from_tournament(tournament_name)
+                
+                matches.append({
+                    "tournament": tournament_name,
+                    "player1": ev["homeTeam"]["name"],
+                    "player2": ev["awayTeam"]["name"],
+                    "surface": surface
+                })
+            except Exception:
+                continue
+        return matches
+    except Exception:
+        return []
 
 # ==============================================================================
 # MAIN APP
@@ -670,12 +733,16 @@ def main():
                 # Calculate total games
                 if 'total_games' not in df.columns and 'score' in df.columns:
                     def get_games(s):
-                        import re
                         nums = [int(n) for n in re.findall(r'\d+', str(s)) if int(n) < 20]
                         return sum(nums) if nums else 22
                     df['total_games'] = df['score'].apply(get_games)
                 elif 'total_games' not in df.columns:
                     df['total_games'] = 22
+                
+                # Limit data for performance
+                if len(df) > 10000:
+                    df = df.sort_values('date', ascending=False).head(10000)
+                    st.info(f"Limitando para os últimos 10,000 jogos para performance")
                 
                 # Train advanced model
                 ensemble, player_stats, h2h_data, cbrf_model, betaminic_model, _ = train_advanced_model(
@@ -694,16 +761,20 @@ def main():
                 st.info(f"📊 Dados: {len(df)} jogos | {len(player_stats)} jogadores")
                 
             except Exception as e:
-                st.error(f"Erro: {str(e)}")
+                st.error(f"Erro no treinamento: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 HOJE", use_container_width=True):
-                st.session_state.matches = scrape_matches_sofascore(0)
+                with st.spinner("Buscando jogos de hoje..."):
+                    st.session_state.matches = scrape_matches_sofascore(0)
         with col2:
             if st.button("📅 AMANHÃ", use_container_width=True):
-                st.session_state.matches = scrape_matches_sofascore(1)
+                with st.spinner("Buscando jogos de amanhã..."):
+                    st.session_state.matches = scrape_matches_sofascore(1)
         
         # Manual input
         with st.expander("✏️ Previsão Manual"):
@@ -715,31 +786,37 @@ def main():
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
             
-            if st.button("🔮 Prever"):
-                if manual_p1 and manual_p2:
-                    match = {'tournament': 'Manual', 'player1': manual_p1, 
-                            'player2': manual_p2, 'surface': manual_surface}
-                    result = predict_with_confidence(
-                        st.session_state.ensemble,
-                        st.session_state.player_stats,
-                        st.session_state.h2h_data,
-                        st.session_state.cbrf_model,
-                        st.session_state.betaminic_model,
-                        st.session_state.feat_engineer,
-                        match
-                    )
-                    if result:
-                        st.dataframe(pd.DataFrame([result]).style.format({
-                            'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}',
-                            'Confidence': '{:.1%}', 'OU_Prob': '{:.1%}'
-                        }))
+            if st.button("🔮 Prever Jogo Manual") and manual_p1 and manual_p2:
+                match = {
+                    'tournament': 'Manual Entry', 
+                    'player1': manual_p1, 
+                    'player2': manual_p2, 
+                    'surface': manual_surface
+                }
+                result = predict_with_confidence(
+                    st.session_state.ensemble,
+                    st.session_state.player_stats,
+                    st.session_state.h2h_data,
+                    st.session_state.cbrf_model,
+                    st.session_state.betaminic_model,
+                    st.session_state.feat_engineer,
+                    match
+                )
+                if result:
+                    st.dataframe(pd.DataFrame([result]).style.format({
+                        'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}',
+                        'Confidence': '{:.1%}', 'OU_Prob': '{:.1%}'
+                    }), use_container_width=True)
+                else:
+                    st.warning("Jogador não encontrado no histórico. Certifique-se que o nome está correto.")
         
         # Show predictions
         if st.session_state.get('matches'):
-            st.subheader("🎯 Previsões")
-            results = []
+            st.subheader("🎯 Previsões do Dia")
             
-            for match in st.session_state.matches:
+            results = []
+            progress_bar = st.progress(0)
+            for i, match in enumerate(st.session_state.matches):
                 result = predict_with_confidence(
                     st.session_state.ensemble,
                     st.session_state.player_stats,
@@ -751,52 +828,66 @@ def main():
                 )
                 if result:
                     results.append(result)
+                progress_bar.progress((i + 1) / len(st.session_state.matches))
+            
+            progress_bar.empty()
             
             if results:
                 df_results = pd.DataFrame(results)
-                st.dataframe(df_results.style.format({
+                
+                # Color coding
+                def color_recommendation(val):
+                    if 'STRONG' in str(val):
+                        return 'background-color: #2e7d32; color: white'
+                    elif 'GOOD' in str(val):
+                        return 'background-color: #4caf50; color: white'
+                    elif 'WEAK' in str(val):
+                        return 'background-color: #ff9800; color: black'
+                    return 'background-color: #9e9e9e; color: white'
+                
+                styled = df_results.style.format({
                     'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}',
                     'Confidence': '{:.1%}', 'OU_Prob': '{:.1%}'
-                }), use_container_width=True)
+                }).map(color_recommendation, subset=['Recommendation'])
                 
-                # Download
+                st.dataframe(styled, use_container_width=True, hide_index=True, height=700)
+                
+                # Summary statistics
+                st.subheader("📊 Resumo das Previsões")
+                col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+                with col_s1:
+                    st.metric("Total Jogos", len(results))
+                with col_s2:
+                    strong_count = sum(1 for r in results if 'STRONG' in r['Recommendation'])
+                    st.metric("STRONG Picks", strong_count)
+                with col_s3:
+                    good_count = sum(1 for r in results if 'GOOD' in r['Recommendation'])
+                    st.metric("GOOD Picks", good_count)
+                with col_s4:
+                    avg_conf = df_results['Confidence'].mean()
+                    st.metric("Confiança Média", f"{avg_conf:.1%}")
+                with col_s5:
+                    over_count = sum(1 for r in results if r['OU'] == 'Over 21.5')
+                    st.metric("Over 21.5", f"{over_count}/{len(results)}")
+                
+                # Download button
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download Excel", buffer.getvalue(),
-                                 f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
-
-# Scraper function (mesma da versão anterior)
-def scrape_matches_sofascore(days_ahead=0):
-    try:
-        target_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return []
-        
-        data = r.json()
-        matches = []
-        for ev in data.get("events", []):
-            if "WTA" in str(ev.get("tournament", {}).get("category", {}).get("name", "")).upper():
-                continue
-            matches.append({
-                "tournament": ev["tournament"]["name"],
-                "player1": ev["homeTeam"]["name"],
-                "player2": ev["awayTeam"]["name"],
-                "surface": detect_surface_from_tournament(ev["tournament"]["name"])
-            })
-        return matches
-    except:
-        return []
-
-def detect_surface_from_tournament(tournament_name):
-    t = str(tournament_name).lower()
-    if 'clay' in t or 'monte carlo' in t or 'madrid' in t or 'rome' in t:
-        return 'Clay'
-    if 'grass' in t or 'wimbledon' in t or 'queens' in t:
-        return 'Grass'
-    return 'Hard'
+                st.download_button(
+                    "📥 Baixar Excel com Previsões",
+                    buffer.getvalue(),
+                    f"previsoes_atp_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    use_container_width=True
+                )
+    
+    elif not uploaded_file:
+        st.info("📂 Faça upload do ficheiro Excel/CSV com dados históricos para começar")
+        st.markdown("""
+        ### Formato esperado do ficheiro:
+        - Colunas necessárias: `winner_name`, `loser_name`, `tourney_name`, `tourney_date`, `score`
+        - Ou colunas em português: `vencedor`, `perdedor`, `torneio`, `data`, `placar`
+        - O modelo vai tentar mapear automaticamente
+        """)
 
 if __name__ == "__main__":
     main()
