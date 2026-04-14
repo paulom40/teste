@@ -10,14 +10,15 @@ from lightgbm import LGBMClassifier
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v2.9 Fixed", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v2.9 Strong Calibration", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIG
+# CONFIG - CALIBRAÇÃO FORTE
 # ==============================================================================
-RECENT_MATCHES = 20
-WINNER_SMOOTH = 0.68
-OU_SMOOTH = 0.72
+WINNER_SMOOTH = 0.52     # Muito mais conservador
+OU_SMOOTH = 0.58
+MIN_CONFIDENCE_STRONG = 0.69
+MIN_CONFIDENCE_GOOD = 0.62
 
 # ==============================================================================
 # SURFACE DETECTION
@@ -39,15 +40,14 @@ def detect_surface_from_tournament(tournament_name, surface_hint=None):
     return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
 
 # ==============================================================================
-# ELO + STATS (com proteção)
+# ELO + STATS
 # ==============================================================================
 def calculate_recent_elo(df, recent_matches=20):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
     surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
     recent_form = {p: [] for p in players}
     
-    df_sorted = df.sort_values('date').copy()
-    for _, row in df_sorted.iterrows():
+    for _, row in df.sort_values('date').iterrows():
         w, l = row['winner'], row['loser']
         surf = row.get('surface', 'Hard')
         if surf not in ['Hard', 'Clay', 'Grass']: surf = 'Hard'
@@ -61,23 +61,22 @@ def calculate_recent_elo(df, recent_matches=20):
         w_recent = sum(recent_form[w]) / len(recent_form[w]) if recent_form[w] else 0.5
         l_recent = sum(recent_form[l]) / len(recent_form[l]) if recent_form[l] else 0.5
         
-        r1 = surface_elo[w][surf] + 60 * (w_recent - 0.5)
-        r2 = surface_elo[l][surf] + 60 * (l_recent - 0.5)
+        r1 = surface_elo[w][surf] + 55 * (w_recent - 0.5)
+        r2 = surface_elo[l][surf] + 55 * (l_recent - 0.5)
         
         exp = 1 / (1 + 10 ** ((r2 - r1) / 400))
         
-        surface_elo[w][surf] += 32 * (1 - exp)
-        surface_elo[l][surf] += 32 * (0 - (1 - exp))
+        surface_elo[w][surf] += 30 * (1 - exp)
+        surface_elo[l][surf] += 30 * (0 - (1 - exp))
     
     return surface_elo, recent_form
 
 def compute_player_stats(df, recent_matches=20):
     surface_elo, recent_form = calculate_recent_elo(df, recent_matches)
     stats = {}
-    
     for player in set(df['winner'].dropna()) | set(df['loser'].dropna()):
         matches = df[(df['winner'] == player) | (df['loser'] == player)].copy()
-        if len(matches) == 0: 
+        if len(matches) == 0:
             stats[player] = {'surface_elo': {'Hard':1500,'Clay':1500,'Grass':1500},
                            'surface_win_rate': {'Hard':0.5,'Clay':0.5,'Grass':0.5},
                            'very_recent_form': 0.5, 'recent_20_form': 0.5, 'avg_games': 22}
@@ -101,7 +100,7 @@ def compute_player_stats(df, recent_matches=20):
     return stats
 
 # ==============================================================================
-# FEATURES
+# FEATURES + BUILD
 # ==============================================================================
 def build_features(p1, p2, surface, player_stats, h2h_surface):
     if p1 not in player_stats or p2 not in player_stats: return None
@@ -120,13 +119,13 @@ def build_features(p1, p2, surface, player_stats, h2h_surface):
         s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
         s1.get('recent_20_form', 0.5) - s2.get('recent_20_form', 0.5),
         s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5),
-        abs(s1['surface_elo'][surf] - s2['surface_elo'][surf]) / 150,
+        abs(s1['surface_elo'][surf] - s2['surface_elo'][surf]) / 180,
         h2h_surf_ratio,
         (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     ]
 
 # ==============================================================================
-# SCRAPER
+# SCRAPER, TRAINING, PREDICT
 # ==============================================================================
 def scrape_matches_sofascore(days_ahead=0):
     try:
@@ -153,9 +152,6 @@ def scrape_matches_sofascore(days_ahead=0):
     except:
         return []
 
-# ==============================================================================
-# TRAINING + PREDICT (mantido)
-# ==============================================================================
 def train_models(df, player_stats, h2h_surface):
     X, y_winner, y_ou = [], [], []
     for _, row in df.iterrows():
@@ -167,17 +163,16 @@ def train_models(df, player_stats, h2h_surface):
             X.append(feat)
             y_winner.append(1)
             y_ou.append(1 if total_games > 21.5 else 0)
-            
             X.append(build_features(row['loser'], row['winner'], surf, player_stats, h2h_surface))
             y_winner.append(0)
             y_ou.append(1 if total_games > 21.5 else 0)
     
     X = np.array(X)
     
-    model_winner = LGBMClassifier(n_estimators=200, max_depth=5, learning_rate=0.04,
-                                  num_leaves=20, reg_alpha=2.5, reg_lambda=2.5, random_state=42, verbose=-1)
-    model_ou = LGBMClassifier(n_estimators=160, max_depth=5, learning_rate=0.05,
-                              num_leaves=18, reg_alpha=2.0, reg_lambda=2.0, random_state=42, verbose=-1)
+    model_winner = LGBMClassifier(n_estimators=180, max_depth=4, learning_rate=0.035,
+                                  num_leaves=16, reg_alpha=3.0, reg_lambda=3.0, random_state=42, verbose=-1)
+    model_ou = LGBMClassifier(n_estimators=150, max_depth=4, learning_rate=0.04,
+                              num_leaves=16, reg_alpha=2.5, reg_lambda=2.5, random_state=42, verbose=-1)
     
     model_winner.fit(X, y_winner)
     model_ou.fit(X, y_ou)
@@ -193,19 +188,19 @@ def predict_match(model_winner, model_ou, player_stats, h2h_surface, match):
     
     raw_p = model_winner.predict_proba([feat])[0][1]
     prob_p1 = 0.5 + (raw_p - 0.5) * WINNER_SMOOTH
-    prob_p1 = max(0.05, min(0.95, prob_p1))
+    prob_p1 = max(0.08, min(0.92, prob_p1))   # Limites mais conservadores
     prob_p2 = 1 - prob_p1
     
     raw_ou = model_ou.predict_proba([feat])[0][1]
     ou_prob = 0.5 + (raw_ou - 0.5) * OU_SMOOTH
-    ou_prob = max(0.15, min(0.85, ou_prob))
+    ou_prob = max(0.20, min(0.80, ou_prob))
     
     winner_pred = p1 if prob_p1 > prob_p2 else p2
     confidence = max(prob_p1, prob_p2)
     
-    if confidence >= 0.72:
+    if confidence >= MIN_CONFIDENCE_STRONG:
         rec = f"✅ STRONG {winner_pred}"
-    elif confidence >= 0.63:
+    elif confidence >= MIN_CONFIDENCE_GOOD:
         rec = f"🟢 {winner_pred}"
     else:
         rec = f"🟡 {winner_pred}"
@@ -225,16 +220,16 @@ def predict_match(model_winner, model_ou, player_stats, h2h_surface, match):
     }
 
 # ==============================================================================
-# MAIN
+# MAIN APP (mesmo da versão anterior)
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v2.9 Fixed - Últimos 20 Jogos")
-    st.caption("WELO baseado nos últimos 20 jogos + Over/Under calibrado")
+    st.title("🎾 ATP Predictor v2.9 - Calibração Forte")
+    st.caption("Últimos 20 jogos + Probabilidades mais realistas")
 
     uploaded_file = st.file_uploader("📁 Upload do teu ficheiro histórico (Excel)", type=['xlsx'])
     
     if uploaded_file and 'model_winner' not in st.session_state:
-        with st.spinner("A processar..."):
+        with st.spinner("A treinar..."):
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
             
@@ -272,7 +267,7 @@ def main():
             st.session_state.model_ou = model_ou
             st.session_state.player_stats = player_stats
             st.session_state.h2h_surface = h2h_surface
-            st.success("✅ Modelo treinado com sucesso!")
+            st.success("✅ Modelo treinado!")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -283,12 +278,10 @@ def main():
             st.session_state.current_matches = scrape_matches_sofascore(1)
 
     if st.session_state.get('current_matches'):
-        results = []
-        for m in st.session_state.current_matches:
-            pred = predict_match(st.session_state.model_winner, st.session_state.model_ou,
-                               st.session_state.player_stats, st.session_state.h2h_surface, m)
-            if pred:
-                results.append(pred)
+        results = [predict_match(st.session_state.model_winner, st.session_state.model_ou,
+                                st.session_state.player_stats, st.session_state.h2h_surface, m) 
+                  for m in st.session_state.current_matches]
+        results = [r for r in results if r is not None]
         
         if results:
             df_show = pd.DataFrame(results)
