@@ -11,13 +11,15 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
 warnings.filterwarnings('ignore')
-st.set_page_config(page_title="🎾 ATP Predictor v2.2", page_icon="🎾", layout="wide")
+
+st.set_page_config(page_title="🎾 ATP Predictor v2.3", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIG
+# CONFIGURAÇÕES
 # ==============================================================================
-MIN_EDGE = 0.055   # 5.5% de edge mínimo
-KELLY_FRACTION = 0.22
+MIN_CONFIDENCE_STRONG = 0.78
+MIN_CONFIDENCE_GOOD = 0.68
+MIN_CONFIDENCE_MEDIUM = 0.60
 
 # ==============================================================================
 # SURFACE DETECTION
@@ -30,7 +32,7 @@ TOURNAMENT_SURFACE_MAP = {
 }
 
 def detect_surface_from_tournament(tournament_name, surface_hint=None):
-    if pd.isna(tournament_name): 
+    if pd.isna(tournament_name):
         return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
     t = str(tournament_name).lower()
     for key, surf in TOURNAMENT_SURFACE_MAP.items():
@@ -40,7 +42,7 @@ def detect_surface_from_tournament(tournament_name, surface_hint=None):
     return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
 
 # ==============================================================================
-# ELO + PLAYER STATS
+# ELO E STATS
 # ==============================================================================
 def calculate_enhanced_elo(df):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
@@ -75,8 +77,8 @@ def compute_player_stats(df):
         matches = df[(df['winner'] == player) | (df['loser'] == player)].copy()
         if len(matches) == 0: continue
             
-        wins = len(df[df['winner'] == player])
-        total = len(matches)
+        recent = matches.sort_values('date', ascending=False).head(8)
+        very_recent = matches.sort_values('date', ascending=False).head(4)
         
         surface_stats = {}
         surface_count = {}
@@ -84,9 +86,6 @@ def compute_player_stats(df):
             m = matches[matches['surface'] == surf]
             surface_count[surf] = len(m)
             surface_stats[surf] = len(m[m['winner'] == player]) / len(m) if len(m) > 0 else 0.5
-        
-        recent = matches.sort_values('date', ascending=False).head(8)
-        very_recent = matches.sort_values('date', ascending=False).head(4)
         
         stats[player] = {
             'elo': float(elo[player]),
@@ -131,30 +130,21 @@ def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         
-        r = requests.get(url, headers=headers, timeout=12)
+        r = requests.get(url, headers=headers, timeout=15)
         if r.status_code != 200: return []
         
         data = r.json()
         matches = []
-        
         for ev in data.get("events", []):
             try:
-                if "WTA" in ev["tournament"]["category"]["name"].upper(): continue
-                p1 = ev["homeTeam"]["name"]
-                p2 = ev["awayTeam"]["name"]
-                tournament = ev["tournament"]["name"]
-                surface_hint = ev.get("groundType", "")
-                
-                surface = detect_surface_from_tournament(tournament, surface_hint)
-                
+                if "WTA" in str(ev["tournament"]["category"]["name"]).upper(): continue
                 matches.append({
-                    "tournament": tournament,
-                    "player1": p1,
-                    "player2": p2,
-                    "surface": surface,
-                    "date": target_date
+                    "tournament": ev["tournament"]["name"],
+                    "player1": ev["homeTeam"]["name"],
+                    "player2": ev["awayTeam"]["name"],
+                    "surface": detect_surface_from_tournament(ev["tournament"]["name"], ev.get("groundType"))
                 })
             except:
                 continue
@@ -189,7 +179,7 @@ def train_models(df, player_stats, h2h_surface):
     return ensemble
 
 # ==============================================================================
-# PREDICT
+# PREDICT MATCH
 # ==============================================================================
 def predict_match(model, player_stats, h2h_surface, match):
     p1 = match['player1']
@@ -201,46 +191,49 @@ def predict_match(model, player_stats, h2h_surface, match):
     
     prob_p1 = model.predict_proba([feat])[0][1]
     prob_p2 = 1 - prob_p1
+    winner_pred = p1 if prob_p1 > prob_p2 else p2
+    confidence = max(prob_p1, prob_p2)
     
-    # Value Betting
-    recommendation = "Sem Value"
-    edge = 0
-    kelly = 0
-    
-    # Aqui podes adicionar odds manualmente depois se quiseres
+    if confidence >= MIN_CONFIDENCE_STRONG:
+        recommendation = f"✅ STRONG BET {winner_pred}"
+    elif confidence >= MIN_CONFIDENCE_GOOD:
+        recommendation = f"🟢 Bom Valor {winner_pred}"
+    elif confidence >= MIN_CONFIDENCE_MEDIUM:
+        recommendation = f"🟡 {winner_pred}"
+    else:
+        recommendation = "⚪ Sem Recomendação"
     
     return {
-        'tournament': match['tournament'],
-        'player1': p1,
-        'player2': p2,
-        'surface': surface,
-        'prob_p1': prob_p1,
-        'prob_p2': prob_p2,
-        'winner_pred': p1 if prob_p1 > prob_p2 else p2,
-        'recommendation': recommendation,
-        'edge': edge,
-        'confidence': max(prob_p1, prob_p2)
+        'Tournament': match['tournament'],
+        'Player1': p1,
+        'Player2': p2,
+        'Surface': surface,
+        'Prob_P1': prob_p1,
+        'Prob_P2': prob_p2,
+        'Predicted_Winner': winner_pred,
+        'Confidence': confidence,
+        'Recommendation': recommendation
     }
 
 # ==============================================================================
-# STREAMLIT APP
+# MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP & Challenger Predictor v2.2")
-    st.markdown("**Ensemble + Surface ELO + Value Betting**")
+    st.title("🎾 ATP & Challenger Predictor v2.3")
+    st.markdown("**Ensemble Model + Surface ELO + Formatação Avançada**")
 
-    uploaded_file = st.file_uploader("Upload Historical Data (Excel)", type=['xlsx'])
+    uploaded_file = st.file_uploader("📁 Upload do teu ficheiro histórico (Excel)", type=['xlsx'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("Treinando modelo..."):
+        with st.spinner("A carregar dados e treinar modelo..."):
             df = pd.read_excel(uploaded_file)
-            df.columns = [str(c).strip().lower().replace(' ', '_').replace('-','_') for c in df.columns]
+            df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
             
-            # Column mapping
-            if 'tourney_date' in df.columns: df = df.rename(columns={'tourney_date': 'date'})
-            if 'winner_name' in df.columns: df = df.rename(columns={'winner_name': 'winner'})
-            if 'loser_name' in df.columns: df = df.rename(columns={'loser_name': 'loser'})
-            if 'tourney_name' in df.columns: df = df.rename(columns={'tourney_name': 'tournament'})
+            # Renomear colunas comuns
+            if 'tourney_date' in df.columns: df.rename(columns={'tourney_date': 'date'}, inplace=True)
+            if 'winner_name' in df.columns: df.rename(columns={'winner_name': 'winner'}, inplace=True)
+            if 'loser_name' in df.columns: df.rename(columns={'loser_name': 'loser'}, inplace=True)
+            if 'tourney_name' in df.columns: df.rename(columns={'tourney_name': 'tournament'}, inplace=True)
             
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
             df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament'), row.get('surface')), axis=1)
@@ -264,13 +257,12 @@ def main():
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📅 Previsões de HOJE", use_container_width=True):
-            matches = scrape_matches_sofascore(0)
-            st.session_state.current_matches = matches
+            st.session_state.current_matches = scrape_matches_sofascore(0)
     with col2:
         if st.button("📅 Previsões de AMANHÃ", use_container_width=True):
-            matches = scrape_matches_sofascore(1)
-            st.session_state.current_matches = matches
+            st.session_state.current_matches = scrape_matches_sofascore(1)
 
+    # ====================== DISPLAY COM FORMATAÇÃO ======================
     if st.session_state.get('current_matches'):
         results = []
         for m in st.session_state.current_matches:
@@ -279,16 +271,38 @@ def main():
             if pred:
                 results.append(pred)
         
-        df_show = pd.DataFrame(results)
-        df_show = df_show.round(4)
-        st.dataframe(df_show, use_container_width=True)
-        
-        # Export
-        buffer = io.BytesIO()
-        df_show.to_excel(buffer, index=False)
-        st.download_button("📥 Download Excel", buffer.getvalue(), 
-                          f"previsoes_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if results:
+            df_show = pd.DataFrame(results)
+            
+            # Formatação visual
+            def highlight_confidence(val):
+                if val >= 0.78:
+                    return 'background-color: #00c853; color: white; font-weight: bold'
+                elif val >= 0.68:
+                    return 'background-color: #64dd17; color: black; font-weight: bold'
+                elif val >= 0.60:
+                    return 'background-color: #ffeb3b; color: black'
+                return ''
+            
+            styled = df_show.style.format({
+                'Prob_P1': '{:.1%}',
+                'Prob_P2': '{:.1%}',
+                'Confidence': '{:.1%}'
+            }).applymap(highlight_confidence, subset=['Confidence'])
+            
+            st.subheader("🎯 Previsões")
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=720)
+            
+            # Download
+            buffer = io.BytesIO()
+            df_show.to_excel(buffer, index=False)
+            st.download_button(
+                label="📥 Baixar em Excel",
+                data=buffer.getvalue(),
+                file_name=f"previsoes_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
 if __name__ == "__main__":
     main()
