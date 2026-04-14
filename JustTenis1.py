@@ -11,7 +11,7 @@ import re
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v5.0 - Seu Histórico", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v5.0 - Seu Histórico Completo", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
@@ -19,6 +19,178 @@ st.set_page_config(page_title="🎾 ATP Predictor v5.0 - Seu Histórico", page_i
 WINNER_SMOOTH = 0.55
 MIN_CONFIDENCE_STRONG = 0.68
 MIN_CONFIDENCE_GOOD = 0.60
+
+# ==============================================================================
+# NOME DO SEU HISTÓRICO (todos os jogadores)
+# ==============================================================================
+HISTORICAL_PLAYERS = [
+    "Mitchell Krueger", "Trevor Svajda", "Yuta Shimizu", "Antoine Escoffier", "Andres Martin",
+    "Rio Noguchi", "Nicolas Mejia", "Paul Jubb", "Stefan Dostanic", "Ilya Ivashka",
+    "Rafael Jodar", "Patrick Kypson", "Alex Rybakov", "Karue Sell", "Yibing Wu",
+    "Yi Zhou", "Daniel Rincon", "Denis Yevseyev", "Guy Den Ouden", "Valentin Royer",
+    "Emilio Nava", "Francesco Passaro", "Sumit Nagal", "Marko Topo", "Ignacio Buse",
+    "Diego Dedura", "Viktor Durasovic", "Facundo Mena", "Gauthier Onclin", "Rodrigo Pacheco Mendez",
+    "Dominic Stricker", "Marco Trungelliti", "Martin Landaluce", "Adrian Mannarino", "Rinky Hijikata",
+    "Otto Virtanen", "Nicolas Moreno De Alboran", "Brandon Holt", "Zachary Svajda", "Alex Bolt",
+    "Murphy Cassone", "Lloyd Harris", "Marc-Andrea Huesler", "Nicolas Jarry", "Colton Smith",
+    "Li Tu", "Yosuke Watanuki", "Coleman Wong", "Vitaliy Sachko", "Alejandro Tabilo",
+    "Lukas Neumayer", "Hugo Dellien", "Chun-Hsin Tseng", "Alexander Shevchenko", "Norbert Gombos",
+    "Zsombor Piros", "Filip Cristian Jianu", "Milos Karol", "Lukas Klein", "Dimitar Kuzmanov",
+    "Alejandro Moro Canas", "Maxim Mrva", "Jurij Rodionov", "Luca Van Assche", "Mariano Kestelboim",
+    "Santiago Rodriguez Taverna", "Andrea Collarini", "Matheus Pucinelli De Almeida", "Gonzalo Bueno",
+    "Hernan Casanova", "Lautaro Midon", "Dali Blanch", "Luciano Emanuel Ambrogi", "Facundo Bagnis",
+    "Pedro Boscardin Dias", "Maximus Jones", "Bruno Kuzuhara", "Joao Lucas Reis Da Silva", "John Sperle",
+    "Gonzalo Villanueva", "Pablo Carreno Busta", "Yu Hsiou Hsu", "Arthur Cazaux", "Daniel Merida",
+    "Geoffrey Blancaneaux", "Clement Tabur", "Javier Barranco Cosano", "Ivan Gakhov", "Arthur Gea",
+    "Lucas Poullain", "Henri Squire", "Adolfo Daniel Vallejo", "Luca Nardi", "Dusan Lajovic",
+    "Dalibor Svrcina", "Radu Albot", "Taro Daniel", "Andrea Pellegrino", "Federico Arnaboldi",
+    "Pierluigi Basile", "Federico Bondioli", "Nerman Fatic", "Luka Pavlovic", "Stefano Travaglia",
+    "Elias Ymer", "Tomas Barrios Vera", "Matej Dodig", "Cristian Garin", "Jan Choinski",
+    "Federico Cina", "Toby Kodat", "Dino Prizmic", "Henrique Rocha", "Valentin Vacherot",
+    "Sho Shimabukuro", "Oliver Crawford", "Billy Harris", "Marin Cilic", "Johannus Monday",
+    "Tristan Schoolkate", "Jenson Brooksby", "Shintaro Mochizuki", "Jack Pinnington Jones", "Leandro Riedi",
+    "Henry Searle", "James Trotter", "Calvin Hemery", "Titouan Droguet", "Kilian Feldbausch",
+    "Mika Brunold", "Mathys Erhard", "Florent Bax", "Enzo Couacaud", "Buvaysar Gadamauri",
+    "Kalin Ivanovski", "Luka Mikrut", "Tom Paris", "Andres Santamarta Roig", "Jaime Faria",
+    "Ryan Peniston", "Tristan Boyer", "Terence Atmane", "Arthur Fery", "James McCabe",
+    "Thiago Agustin Tirante", "Filip Misolic", "Timofey Skatov", "Hynek Barton", "Lorenzo Giustino",
+    "Zdenek Kolar", "Martin Krumich", "Matteo Martineau", "Daniel Michalski", "Juan Bautista Torres",
+    "Genaro Alberto Olivieri", "Luis Carlos Alvarez", "Juan Carlos Prado Angelo", "Juan Carlos Aguilar",
+    "Alex Barrena", "Lucas Gerch", "Alex Hernandez", "Juan Manuel La Serna", "Franco Roncadelli",
+    "Bautista Vilicich", "Carlos Taberner", "Rei Sakamoto", "Raul Brancaccio", "Francesco Maestrelli",
+    "Albert Ramos-Vinolas", "Oriol Roca Batalla", "Giulio Zeppieri", "Miguel Tobon", "Blaise Bicknell",
+    "Pedro Rodrigues", "Max Houkes", "Tiago Pereira", "Frederico Ferreira Silva", "Mili Poljicak",
+    "Jacopo Berrettini", "Marco Cecchinato", "Thomas Faurel", "Christoph Negritu", "Oleg Prihodko",
+    "Jacopo Vasami", "Harold Mayot", "Cosme Rolland De Ravel", "Tristan Lamasine", "Branko Djuric",
+    "Jelle Sels", "Nikolas Sanchez Izquierdo", "Daniel Elahi Galan", "Juan Manuel Cerundolo",
+    "Thiago Seyboth Wild", "Moez Echargui", "Facundo Diaz Acosta", "Jerome Kym", "Stefanos Sakellaridis",
+    "Juan Pablo Ficovich", "Alvaro Guillen Meza", "Sascha Gueymard Wayenburg", "Murkel Dellien",
+    "Edas Butvilas", "Gabi Adrian Boitan", "Manas Dhamne", "Alexander Donski", "Radu Mihai Papoe",
+    "Liam Draxl", "Michael Zheng", "Alexis Galarneau", "Hiroki Moriya", "Kaylan Bigun",
+    "Daniil Glinka", "Andre Ilagan", "Patrick Maloney", "Aidan Mayo", "Joshua Sheehy",
+    "Lukas Pokorny", "Dennis Novak", "Sandro Kopp", "Chris Rodesch", "Anton Matusevich",
+    "Liam Broady", "Edward Winter", "Kenny De Schepper", "George Loffhagen", "Alastair Gray",
+    "Kyle Edmund", "Lui Maxted", "Hamish Stewart", "Connor Thomson", "Harry Wendelken",
+    "Patrick Zahraj", "Eliot Spizzirri", "Christopher Eubanks", "Antoine Ghibaudo", "Bernard Tomic",
+    "James Watt", "Oscar Weightman", "Tyler Zink", "Roberto Carballes Baena", "Raphael Collignon",
+    "Mariano Navone", "Botic van de Zandschulp", "Tom Gentzsch", "Yannick Hanfmann", "David Jorda Sanchis",
+    "Alex Molcan", "Alexander Blockx", "Andres Andrade", "Nicolas Arseneault", "Moerani Bouzige",
+    "Masamichi Imamura", "Garrett Johns", "Kenta Miyoshi", "Elmer Moller", "Felipe Meligeni Alves",
+    "Stan Wawrinka", "Duje Ajdukovic", "Luca Preda", "Matias Soto", "Michael Vrbensky",
+    "Ugo Blanchet", "Hugo Grenier", "Fajing Sun", "Khumoyun Sultanov", "Darwin Blanch",
+    "Gastao Elias", "Aryan Shah", "August Holmgren", "Omar Jasika", "Marek Gengel",
+    "Kris Van Wyk", "Marvin Moeller", "Benjamin Hassan", "Kimmer Coppejans", "Nicolas Kicker",
+    "Matteo Gigante", "Kyrian Jacquet", "Federico Agustin Gomez", "Carlo Alberto Caniato", "Justin Engel",
+    "Gilles Arnaud Bailly", "Nicolai Budkov Kjaer", "Henry Bernet", "Roman Andres Burruchaga", "Jakub Paul",
+    "Mark Lajal", "Tung-Lin Wu", "Aziz Dougaz", "Adria Soriano Barrera", "Nicolas Alvarez Varona",
+    "Robin Bertrand", "Inaki Montes-De La Torre", "Saba Purtseladze", "Nishesh Basavareddy", "Daniel Evans",
+    "Dhakshineswar Suresh", "Hady Habib", "Giles Hussey", "Alibek Kachmazov", "Ryuki Matsuda",
+    "Federico Coria", "Andrej Martin", "Jakub Nicod", "Cedrik-Marcel Stebe", "Clement Chidekh",
+    "Mukund Sasikumar", "Alexandr Binda", "Abdullah Shelbayh", "Ricardas Berankis", "Aleksandre Bakshi",
+    "Luca Castelnuovo", "Shintaro Imai", "Mitsuki Wei Kang Leong", "Olaf Pieczkowski", "Woobin Shin",
+    "Karan Singh", "Vilius Gaubas", "Niels McDonald", "Daniel Masur", "Dmitry Popko",
+    "Joel Schwaerzler", "Olle Wallin", "Jay Clarke", "Max Alcala Gurri", "Gabriele Piraino",
+    "Carlos Sanchez Jover", "Kamil Majchrzak", "Petr Brunclik", "Maks Kasnikowski", "Tomasz Berkieta",
+    "Jie Cui", "Aslan Karatsev", "Beibit Zhukayev", "Samir Banerjee", "Naoki Nakagawa",
+    "Stefan Adrian Andreescu", "Marat Sharipov", "Sebastian Gima", "Ioannis Xilas", "Pietro Fellin",
+    "Dan Added", "Laurent Lokoli", "Filippo Moroni", "Theo Papamalamis", "Oliver Tarvet",
+    "Max Wiskandt", "Cannon Kingsley", "Peter Bertran", "Juan Sebastian Gomez", "Alfredo Perez",
+    "Johan Alexander Rodriguez", "Facundo Juarez", "Gianmarco Ferrari", "Francesco Forti", "Filippo Romano",
+    "Alexey Vatutin", "Nikoloz Basilashvili", "Mattia Bellucci", "Alexander Vasilev", "Franco Agamenone",
+    "Andrej Nedic", "Stuart Parker", "Christian Langmo", "Pavlos Tsitsipas", "Tadeas Paroulek",
+    "Alexander Ritschard", "Matyas Cerny", "Stefan Popovic", "Benito Sanchez Martinez", "Max Schoenhaus",
+    "Pedro Araujo", "Francisco Rocha", "Tiago Torres", "Thiago Monteiro", "Lorenzo Carboni",
+    "Giovanni Fonio", "Philip Sekulic", "Yasutaka Uchiyama", "Ilia Simakin", "Joshua Charlton",
+    "Tsung-Hao Huang", "Kokoro Isomura", "Filip Peliwo", "Sanhui Shin", "Renta Tokuda",
+    "Kaichi Uchida", "Alberto Barroso Campos", "Eliakim Coulibaly", "Jay Friend", "Andrea Picchione",
+    "Gianluca Cadenasso", "Enrico Dalla Valle", "Luciano Darderi", "Luca Potenza", "Mert Naci Turker",
+    "Pablo Llamas Ruiz", "Jonas Forejtek", "Carlos Lopez Montagud", "Etienne Donnet", "Mae Malige",
+    "Michael Mmoh", "Rudolf Molleker", "Andrew Paulson", "Kai Wehnelt", "Christopher O'Connell",
+    "Petr Bar Biryukov", "Luca Pow", "Aidan Kim", "Quinn Vandecasteele", "Hugo Gaston",
+    "Arthur Bouquier", "Gregoire Barrere", "Maxime Janvier", "Vit Kopriva", "Jozef Kovalik",
+    "Pol Martin Tiffon", "Stefano Napolitano", "Robert Strombachs", "Guido Ivan Justo", "Juan Pablo Varillas",
+    "Sebastian Sorger", "Corentin Denolly", "Miguel Damas", "Jack Loge", "Amaury Raynel",
+    "Justin Boulais", "Mikhail Kukushkin", "Cezar Cretu", "Alex Marti Pujolras", "Maximilian Neuchrist",
+    "Emilien Demanet", "Stefan Palosi", "Remy Bertola", "Pierre-Hugues Herbert", "Andrew Fenty",
+    "Cooper Williams", "Lorenzo Joaquin Rodriguez", "Aristotelis Thanos", "Carlos Maria Zarate",
+    "Mees Rottgering", "Loann Massard", "Emil Ruusuvuori", "Neil Oberleitner", "Johannes Ingildsen",
+    "Charles Broom", "Toby Samuel", "Petros Tsitsipas", "Niels Visker", "Micah Braswell",
+    "Daniel Milavsky", "Roger Pascual Ferra", "Dominique Rolland", "Adam Walton", "Mackenzie McDonald",
+    "Pavel Kotov", "Jordan Thompson", "Jacob Fearnley", "Borna Gojo", "Daniel Dutra da Silva",
+    "Mateus Alves", "Joao Eduardo Schiessl", "Aoran Wang", "Hyeon Chung", "Sergey Fomin",
+    "Jason Jung", "Ye Cong Mo", "Fabrizio Andaloro", "Max Basing", "Erik Arutiunian",
+    "Gustavo Heide", "Naoya Honda", "Takuya Kumasaka", "Yusuke Takahashi", "Kei Nishikori",
+    "Igor Marcondes", "Yusuke Kusuhara", "Yuki Mochizuki", "Hikaru Shiraishi", "Ryotaro Taguchi",
+    "Maxim Zhukov", "Joaquin Aguilar Cardozo", "Juan Estevez", "Luis David Martinez", "Paulo Andre Saraiva Dos Santos",
+    "Andrea Guerrieri", "Lorenzo Sciahbasi", "Pedro Sakamoto", "Bruno Fernandez", "Orlando Luz",
+    "Eduardo Ribeiro", "Maximo Zeitune", "Lucio Ratti", "Alafia Ayeni", "Strong Kirchheimer",
+    "Matt Kuhar", "Daniel Antonio Nunez", "Nicolas Barrientos", "Maxwell Mckennon", "Menelaos Efstathiou",
+    "Aleksandr Braynin", "Philip Henning", "Michele Ribecai", "James Story", "Nikolay Vylegzhanin",
+    "Fares Zakaria", "Vladislav Melnic", "Mirza Basic", "Matisse Bobichon", "Maximilian Homberg",
+    "Dominik Kellovsky", "Ivan Marrero Curbelo", "Semen Pankin", "Eero Vasa", "Nikita Bilozertsev",
+    "Vadym Ursu", "Mert Alkaya", "Leo Borg", "Dominik Palan", "Leonardo Borrelli",
+    "Dragos Nicolae Cazacu", "Timofei Derepasko", "Dinko Dinev", "Muzammil Murtaza", "Johan Nikles",
+    "Zach Stephens", "Gian Luca Tanner", "Pavle Marinkov", "Marton Fucsovics", "Jesper de Jong",
+    "Andrea Vavassori", "Arthur Rinderknech", "Alex Michelsen", "Quentin Halys", "Learner Tien",
+    "Brandon Nakashima", "Jiri Lehecka", "Giovanni Mpetshi Perricard", "Jan-Lennard Struff", "Alexander Zverev",
+    "Felix Auger-Aliassime", "Taylor Fritz", "Ben Shelton", "Hubert Hurkacz", "Zizou Bergs",
+    "Nuno Borges", "Gabriel Diallo", "Daniil Medvedev", "Ugo Humbert", "Karen Khachanov",
+    "Carlos Alcaraz", "Jack Draper", "Corentin Moutet", "Jaume Munar", "Alexei Popyrin",
+    "Holger Rune", "Jakub Mensik", "Roberto Bautista Agut", "Jannik Sinner", "Andrey Rublev",
+    "Tomas Machac", "Flavio Cobolli", "Tomas Martin Etcheverry", "Lorenzo Sonego", "Alexander Bublik",
+    "Fabian Marozsan", "Stefanos Tsitsipas", "Roman Safiullin", "Hamad Medjedovic", "Ethan Quinn",
+    "Daniel Altmaier", "Laslo Djere", "Tallon Griekspoor", "Marcos Giron", "Alejandro Davidovich Fokina",
+    "Joao Fonseca", "Novak Djokovic", "Alex de Minaur", "Tommy Paul", "Gael Monfils",
+    "Grigor Dimitrov", "Miomir Kecmanovic", "Pedro Martinez", "Sebastian Ofner", "Aleksandar Vukic",
+    "Benjamin Bonzi", "Frances Tiafoe", "Cameron Norrie", "Matteo Arnaldi", "Alexandre Muller",
+    "Yoshihito Nishioka", "Lorenzo Musetti", "Casper Ruud", "Francisco Cerundolo", "Sebastian Baez",
+    "Camilo Ugo Carabelli", "Damir Dzumhur", "Juan Pablo Varillas", "Thiago Seyboth Wild", "Facundo Diaz Acosta",
+    "Juan Pablo Ficovich", "Alvaro Guillen Meza", "Sascha Gueymard Wayenburg", "Murkel Dellien", "Edas Butvilas"
+]
+
+# ==============================================================================
+# NAME MATCHER
+# ==============================================================================
+class HistoricalNameMatcher:
+    def __init__(self):
+        self.historical_set = set(HISTORICAL_PLAYERS)
+        self.lower_map = {p.lower(): p for p in HISTORICAL_PLAYERS}
+        self.last_name_map = defaultdict(list)
+        for p in HISTORICAL_PLAYERS:
+            parts = p.split()
+            if parts:
+                last = parts[-1].lower()
+                self.last_name_map[last].append(p)
+    
+    def find_match(self, name):
+        if not name:
+            return None
+        
+        name_str = str(name).strip()
+        
+        # Exact match
+        if name_str in self.historical_set:
+            return name_str
+        
+        # Case insensitive
+        name_lower = name_str.lower()
+        if name_lower in self.lower_map:
+            return self.lower_map[name_lower]
+        
+        # Last name match (if unique)
+        parts = name_str.split()
+        if parts:
+            last = parts[-1].lower()
+            if last in self.last_name_map:
+                if len(self.last_name_map[last]) == 1:
+                    return self.last_name_map[last][0]
+        
+        # Partial match (contains)
+        for p in HISTORICAL_PLAYERS:
+            if name_lower in p.lower() or p.lower() in name_lower:
+                return p
+        
+        return None
 
 # ==============================================================================
 # SURFACE DETECTION
@@ -36,361 +208,173 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# PROCESSAR HISTÓRICO
+# PROCESS DATA
 # ==============================================================================
 def process_historical_data(df):
-    """Process historical data"""
-    
-    # Clean column names
     df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
     
     # Find columns
     winner_col = None
     loser_col = None
-    tournament_col = None
-    date_col = None
-    
     for col in df.columns:
         if 'winner' in col or 'vencedor' in col:
             winner_col = col
         elif 'loser' in col or 'perdedor' in col:
             loser_col = col
-        elif 'tourney' in col or 'torneio' in col or 'tournament' in col:
-            tournament_col = col
-        elif 'date' in col or 'data' in col:
-            date_col = col
     
     if not winner_col or not loser_col:
         raise ValueError(f"Colunas não encontradas. Colunas: {list(df.columns)}")
     
-    # Rename
-    df = df.rename(columns={
-        winner_col: 'winner',
-        loser_col: 'loser',
-        tournament_col: 'tournament' if tournament_col else 'tournament',
-        date_col: 'date' if date_col else 'date'
-    })
+    df = df.rename(columns={winner_col: 'winner', loser_col: 'loser'})
     
-    # Convert date
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    else:
+    if 'date' not in df.columns:
         df['date'] = pd.Timestamp.now()
+    else:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # Total games (placeholder)
     if 'total_games' not in df.columns:
         df['total_games'] = 22
     
-    # Detect surface
-    if 'tournament' in df.columns:
-        df['surface'] = df['tournament'].apply(detect_surface)
-    else:
-        df['surface'] = 'Hard'
+    df['surface'] = 'Hard'
     
-    # Clean names
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
     
     return df
 
 # ==============================================================================
-# PLAYER STATISTICS
+# PLAYER STATS
 # ==============================================================================
 def calculate_player_stats(df):
-    """Calculate player statistics"""
-    
-    all_players = set(df['winner'].dropna()) | set(df['loser'].dropna())
     stats = {}
-    
-    for player in all_players:
-        player_matches = df[(df['winner'] == player) | (df['loser'] == player)]
-        
-        if len(player_matches) == 0:
+    for player in HISTORICAL_PLAYERS:
+        matches = df[(df['winner'] == player) | (df['loser'] == player)]
+        if len(matches) == 0:
+            stats[player] = {
+                'matches': 0, 'wins': 0, 'win_rate': 0.5,
+                'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22
+            }
             continue
         
-        wins = len(player_matches[player_matches['winner'] == player])
-        total = len(player_matches)
+        wins = len(matches[matches['winner'] == player])
+        total = len(matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        # Surface stats
-        surface_stats = {}
-        for surf in ['Hard', 'Clay', 'Grass']:
-            surf_matches = player_matches[player_matches['surface'] == surf]
-            if len(surf_matches) > 0:
-                surf_wins = len(surf_matches[surf_matches['winner'] == player])
-                surface_stats[surf] = surf_wins / len(surf_matches)
-            else:
-                surface_stats[surf] = 0.5
-        
-        # Recent form (last 10)
-        recent = player_matches.sort_values('date', ascending=False).head(10)
+        recent = matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
-        # Very recent (last 3)
-        very_recent = player_matches.sort_values('date', ascending=False).head(3)
+        very_recent = matches.sort_values('date', ascending=False).head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
         
-        # Average games
-        avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
+        avg_games = matches['total_games'].mean() if 'total_games' in matches.columns else 22
         
         stats[player] = {
-            'name': player,
-            'matches': total,
-            'wins': wins,
-            'losses': total - wins,
-            'win_rate': win_rate,
-            'hard_rate': surface_stats['Hard'],
-            'clay_rate': surface_stats['Clay'],
-            'grass_rate': surface_stats['Grass'],
-            'recent_form': recent_form,
-            'very_recent_form': very_recent_form,
-            'avg_games': avg_games
+            'matches': total, 'wins': wins, 'win_rate': win_rate,
+            'recent_form': recent_form, 'very_recent_form': very_recent_form, 'avg_games': avg_games
         }
     
     return stats
 
 # ==============================================================================
-# H2H DATA
+# H2H
 # ==============================================================================
 def calculate_h2h(df):
-    """Calculate head-to-head statistics"""
     h2h = defaultdict(lambda: {'wins': 0, 'total': 0})
-    
     for _, row in df.iterrows():
-        if pd.isna(row.get('winner')) or pd.isna(row.get('loser')):
-            continue
         w, l = row['winner'], row['loser']
-        h2h[(w, l)]['wins'] += 1
-        h2h[(w, l)]['total'] += 1
-    
+        if w and l and w in HISTORICAL_PLAYERS and l in HISTORICAL_PLAYERS:
+            h2h[(w, l)]['wins'] += 1
+            h2h[(w, l)]['total'] += 1
     return h2h
 
 # ==============================================================================
-# ELO RATING
+# ELO
 # ==============================================================================
 def calculate_elo(df, k=32):
-    """Calculate ELO ratings"""
-    players = set(df['winner'].dropna()) | set(df['loser'].dropna())
-    elo = {p: 1500 for p in players}
-    
+    elo = {p: 1500 for p in HISTORICAL_PLAYERS}
     for _, row in df.sort_values('date').iterrows():
         w, l = row['winner'], row['loser']
-        if pd.isna(w) or pd.isna(l):
-            continue
-        exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
-        elo[w] += k * (1 - exp_w)
-        elo[l] += k * (0 - (1 - exp_w))
-    
+        if w in elo and l in elo:
+            exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
+            elo[w] += k * (1 - exp_w)
+            elo[l] += k * (0 - (1 - exp_w))
     return elo
 
 # ==============================================================================
-# FEATURE ENGINEERING
+# FEATURES
 # ==============================================================================
 def build_features(p1, p2, surface, player_stats, h2h, elo):
-    """Build features for prediction"""
+    s1 = player_stats.get(p1, {})
+    s2 = player_stats.get(p2, {})
     
-    s1 = player_stats.get(p1)
-    s2 = player_stats.get(p2)
-    
-    if not s1 or not s2:
+    if s1.get('matches', 0) == 0 or s2.get('matches', 0) == 0:
         return None
     
-    if surface == 'Clay':
-        surf_rate1, surf_rate2 = s1['clay_rate'], s2['clay_rate']
-    elif surface == 'Grass':
-        surf_rate1, surf_rate2 = s1['grass_rate'], s2['grass_rate']
-    else:
-        surf_rate1, surf_rate2 = s1['hard_rate'], s2['hard_rate']
+    elo_diff = (elo.get(p1, 1500) - elo.get(p2, 1500)) / 400
+    form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
+    very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
+    win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
     
-    elo1, elo2 = elo.get(p1, 1500), elo.get(p2, 1500)
-    elo_diff = (elo1 - elo2) / 400
-    
-    form_diff = s1['recent_form'] - s2['recent_form']
-    very_recent_diff = s1['very_recent_form'] - s2['very_recent_form']
-    win_rate_diff = s1['win_rate'] - s2['win_rate']
-    surf_diff = surf_rate1 - surf_rate2
-    
-    # H2H
     h2h_adv = 0.5
     if (p1, p2) in h2h:
         h2h_adv = h2h[(p1, p2)]['wins'] / h2h[(p1, p2)]['total']
-    elif (p2, p1) in h2h:
-        h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / h2h[(p2, p1)]['total'])
     
-    games_avg = (s1['avg_games'] + s2['avg_games']) / 2
+    games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     games_norm = (games_avg - 21.5) / 8
-    exp_diff = (s1['matches'] - s2['matches']) / 200
-    momentum = (s1['very_recent_form'] - s2['very_recent_form']) * 0.6 + form_diff * 0.4
+    exp_diff = (s1.get('matches', 0) - s2.get('matches', 0)) / 200
+    momentum = very_recent_diff * 0.6 + form_diff * 0.4
     
-    return [elo_diff, form_diff, very_recent_diff, win_rate_diff, surf_diff, 
-            h2h_adv, games_norm, exp_diff, momentum]
+    return [elo_diff, form_diff, very_recent_diff, win_rate_diff, h2h_adv, games_norm, exp_diff, momentum]
 
 # ==============================================================================
-# TRAIN MODEL
+# TRAIN
 # ==============================================================================
 def train_model(df, player_stats, h2h, elo):
-    """Train prediction model"""
-    
     X, y = [], []
-    
     for _, row in df.iterrows():
-        if pd.isna(row.get('winner')) or pd.isna(row.get('loser')):
-            continue
-        
-        winner, loser = row['winner'], row['loser']
+        w, l = row['winner'], row['loser']
         surface = row.get('surface', 'Hard')
         
-        features = build_features(winner, loser, surface, player_stats, h2h, elo)
-        if features:
-            X.append(features)
+        feat = build_features(w, l, surface, player_stats, h2h, elo)
+        if feat:
+            X.append(feat)
             y.append(1)
         
-        features_rev = build_features(loser, winner, surface, player_stats, h2h, elo)
-        if features_rev:
-            X.append(features_rev)
+        feat_rev = build_features(l, w, surface, player_stats, h2h, elo)
+        if feat_rev:
+            X.append(feat_rev)
             y.append(0)
     
     if len(X) == 0:
         raise ValueError("No training data")
     
     X = np.array(X)
-    
-    model = LGBMClassifier(
-        n_estimators=150, max_depth=5, learning_rate=0.035,
-        num_leaves=16, reg_alpha=0.8, reg_lambda=0.8,
-        random_state=42, verbose=-1
-    )
-    
+    model = LGBMClassifier(n_estimators=150, max_depth=5, learning_rate=0.035,
+                           num_leaves=16, reg_alpha=0.8, reg_lambda=0.8,
+                           random_state=42, verbose=-1)
     model.fit(X, y)
     return model
 
 # ==============================================================================
-# SMART NAME MATCHER - CONVERTE NOMES DA SOFASCORE PARA SEU FORMATO
-# ==============================================================================
-def create_name_mapping(historical_names):
-    """Create mapping from full names to historical names"""
-    mapping = {}
-    
-    # Mapeamentos manuais comuns
-    manual_mapping = {
-        # Nomes da Sofascore -> Seu formato
-        'Jan-Lennard Struff': 'Jan-Lennard Struff',
-        'Francisco Cerundolo': 'Francisco Cerundolo',
-        'Sumit Nagal': 'Sumit Nagal',
-        'Ben Shelton': 'Ben Shelton',
-        'Alexander Zverev': 'Alexander Zverev',
-        'Joao Fonseca': 'Joao Fonseca',
-        'Alejandro Tabilo': 'Alejandro Tabilo',
-        'Denis Shapovalov': 'Denis Shapovalov',
-        'Tallon Griekspoor': 'Tallon Griekspoor',
-        'Luciano Darderi': 'Luciano Darderi',
-        'Marko Topo': 'Marko Topo',
-        'Arthur Fils': 'Arthur Fils',
-        'Jack Draper': 'Jack Draper',
-        'Cameron Norrie': 'Cameron Norrie',
-        'Stan Wawrinka': 'Stan Wawrinka',
-        'Adrian Mannarino': 'Adrian Mannarino',
-        'Mitchell Krueger': 'Mitchell Krueger',
-        'Trevor Svajda': 'Trevor Svajda',
-        'Yuta Shimizu': 'Yuta Shimizu',
-        'Antoine Escoffier': 'Antoine Escoffier',
-        'Andres Martin': 'Andres Martin',
-        'Rio Noguchi': 'Rio Noguchi',
-        'Nicolas Mejia': 'Nicolas Mejia',
-        'Paul Jubb': 'Paul Jubb',
-        'Stefan Dostanic': 'Stefan Dostanic',
-        'Ilya Ivashka': 'Ilya Ivashka',
-        'Rafael Jodar': 'Rafael Jodar',
-        'Patrick Kypson': 'Patrick Kypson',
-        'Alex Rybakov': 'Alex Rybakov',
-        'Karue Sell': 'Karue Sell',
-        'Yibing Wu': 'Yibing Wu',
-        'Yi Zhou': 'Yi Zhou',
-    }
-    
-    # First, add manual mappings
-    for full, short in manual_mapping.items():
-        if short in historical_names:
-            mapping[full.lower()] = short
-            # Also map last name only
-            last_name = full.split()[-1].lower()
-            mapping[last_name] = short
-    
-    # Then, create automatic mappings based on last names
-    for hist_name in historical_names:
-        hist_lower = hist_name.lower()
-        hist_parts = hist_lower.split()
-        hist_last = hist_parts[-1] if hist_parts else hist_lower
-        
-        # Map by last name
-        mapping[hist_last] = hist_name
-        # Map by full name if same last name
-        mapping[hist_lower] = hist_name
-    
-    return mapping
-
-def smart_match(search_name, name_mapping, historical_names):
-    """Smart matching using the mapping"""
-    if not search_name or pd.isna(search_name):
-        return None
-    
-    search_str = str(search_name).strip()
-    search_lower = search_str.lower()
-    
-    # Direct match with historical names
-    if search_str in historical_names:
-        return search_str
-    
-    # Case insensitive
-    for name in historical_names:
-        if name.lower() == search_lower:
-            return name
-    
-    # Check mapping
-    if search_lower in name_mapping:
-        return name_mapping[search_lower]
-    
-    # Check last name only
-    parts = search_str.split()
-    if parts:
-        last_name = parts[-1].lower()
-        if last_name in name_mapping:
-            return name_mapping[last_name]
-    
-    # Check if search name contains any historical name
-    for hist_name in historical_names:
-        if hist_name.lower() in search_lower or search_lower in hist_name.lower():
-            return hist_name
-    
-    return None
-
-# ==============================================================================
 # PREDICT
 # ==============================================================================
-def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_mapping, historical_names):
-    """Predict a single match"""
-    
-    p1_match = smart_match(p1, name_mapping, historical_names)
-    p2_match = smart_match(p2, name_mapping, historical_names)
+def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
+    p1_match = name_matcher.find_match(p1)
+    p2_match = name_matcher.find_match(p2)
     
     if not p1_match:
-        return None, f"❌ '{p1}' não encontrado no histórico"
+        return None, f"❌ '{p1}' não encontrado"
     if not p2_match:
-        return None, f"❌ '{p2}' não encontrado no histórico"
+        return None, f"❌ '{p2}' não encontrado"
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
+    if not features:
+        return None, f"Estatísticas insuficientes"
     
-    if features is None:
-        return None, f"Estatísticas não disponíveis"
-    
-    features = np.array([features])
-    prob = model.predict_proba(features)[0][1]
-    
+    prob = model.predict_proba(np.array([features]))[0][1]
     prob_p1 = np.clip(0.5 + (prob - 0.5) * 0.55, 0.15, 0.85)
-    prob_p2 = 1 - prob_p1
-    
     confidence = abs(prob_p1 - 0.5) * 2
     winner = p1_match if prob_p1 > 0.5 else p2_match
     
@@ -401,173 +385,136 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_mapping, 
     else:
         rec = f"⚪ AVOID {winner}"
     
-    s1, s2 = player_stats.get(p1_match, {}), player_stats.get(p2_match, {})
+    s1 = player_stats.get(p1_match, {})
+    s2 = player_stats.get(p2_match, {})
     momentum_edge = (s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)) * 100
-    expected_games = np.clip((s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2, 18, 35)
+    exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
     return {
-        'Jogador1': p1,
-        'Jogador2': p2,
+        'Jogador1_Original': p1,
+        'Jogador2_Original': p2,
         'Match_Historico': f"{p1_match} vs {p2_match}",
         'Superficie': surface,
-        f'Prob_{p1_match.split()[-1]}': f"{prob_p1:.1%}",
-        f'Prob_{p2_match.split()[-1]}': f"{prob_p2:.1%}",
+        'Prob_P1': f"{prob_p1:.1%}",
+        'Prob_P2': f"{1-prob_p1:.1%}",
         'Vencedor': winner,
         'Confianca': f"{confidence:.1%}",
         'Recomendacao': rec,
-        'Momentum': f"{momentum_edge:+.0f}%",
-        'Games_Esperados': round(expected_games, 1)
+        'Momentum': f"{momentum_edge:+.0f}",
+        'Games_Esperados': round(exp_games, 1)
     }, None
 
 # ==============================================================================
 # SCRAPER
 # ==============================================================================
 def scrape_matches():
-    """Scrape matches from Sofascore"""
     try:
         target_date = datetime.now().strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
-        
         if r.status_code != 200:
             return []
         
         data = r.json()
         matches = []
-        
         for ev in data.get("events", []):
             category = ev.get("tournament", {}).get("category", {}).get("name", "")
             if "WTA" in str(category).upper():
                 continue
             
-            tournament = ev["tournament"]["name"]
-            surface = detect_surface(tournament)
-            
             matches.append({
-                "tournament": tournament,
+                "tournament": ev["tournament"]["name"],
                 "player1": ev["homeTeam"]["name"],
                 "player2": ev["awayTeam"]["name"],
-                "surface": surface
+                "surface": detect_surface(ev["tournament"]["name"])
             })
         return matches
-    except Exception as e:
-        st.error(f"Erro no scraper: {e}")
+    except:
         return []
 
 # ==============================================================================
-# MAIN APP
+# MAIN
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v5.0 - Seu Histórico")
-    st.caption("Usando EXATAMENTE os nomes do seu arquivo histórico")
+    st.title("🎾 ATP Predictor v5.0 - Seu Histórico Completo")
+    st.caption(f"✅ {len(HISTORICAL_PLAYERS)} jogadores no histórico")
     
-    uploaded_file = st.file_uploader("📁 Upload do seu ficheiro histórico", type=['xlsx', 'csv'])
+    name_matcher = HistoricalNameMatcher()
+    
+    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("🔄 Processando seu histórico..."):
+        with st.spinner("🔄 Processando..."):
             try:
-                # Load
                 if uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_file)
                 else:
                     df = pd.read_excel(uploaded_file)
                 
-                # Process
                 df = process_historical_data(df)
+                st.success(f"✅ {len(df)} jogos carregados")
                 
-                # Get historical names
-                historical_names = sorted(list(set(df['winner'].dropna()) | set(df['loser'].dropna())))
-                
-                st.success(f"✅ Carregados {len(df)} jogos com {len(historical_names)} jogadores")
-                
-                # Show sample
-                with st.expander(f"📋 Jogadores no seu histórico ({len(historical_names)} total)"):
-                    for i, name in enumerate(historical_names[:50]):
-                        st.write(f"{i+1}. `{name}`")
-                    if len(historical_names) > 50:
-                        st.write(f"... e mais {len(historical_names) - 50} jogadores")
-                
-                # Calculate stats
                 player_stats = calculate_player_stats(df)
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df)
-                
-                # Create name mapping
-                name_mapping = create_name_mapping(historical_names)
-                
-                # Train model
                 model = train_model(df, player_stats, h2h, elo)
                 
-                # Store
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
                 st.session_state.h2h = h2h
                 st.session_state.elo = elo
-                st.session_state.name_mapping = name_mapping
-                st.session_state.historical_names = historical_names
+                st.session_state.name_matcher = name_matcher
                 st.session_state.models_ready = True
                 
-                st.success("✅ Modelo treinado com sucesso!")
+                st.success("✅ Modelo treinado!")
                 
             except Exception as e:
-                st.error(f"Erro: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
+                st.error(f"Erro: {e}")
     
     if st.session_state.get('models_ready'):
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📅 JOGOS DE HOJE", use_container_width=True):
-                with st.spinner("Buscando jogos..."):
-                    st.session_state.matches = scrape_matches()
+            if st.button("📅 HOJE", use_container_width=True):
+                st.session_state.matches = scrape_matches()
         with col2:
-            if st.button("🔄 LIMPAR", use_container_width=True):
-                st.session_state.matches = []
-                st.rerun()
+            if st.button("🔄 TESTAR", use_container_width=True):
+                test = st.text_input("Digite um nome para testar:")
+                if test:
+                    result = st.session_state.name_matcher.find_match(test)
+                    st.write(f"Resultado: {result}")
         
-        # Manual prediction with dropdown
-        with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
+        # Manual
+        with st.expander("✏️ Previsão Manual", expanded=True):
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + st.session_state.historical_names)
+                manual_p1 = st.selectbox("Jogador 1", [""] + sorted(HISTORICAL_PLAYERS)[:200])
             with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + st.session_state.historical_names)
+                manual_p2 = st.selectbox("Jogador 2", [""] + sorted(HISTORICAL_PLAYERS)[:200])
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
-            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2 and manual_p1 != manual_p2:
+            if st.button("🔮 PREVER") and manual_p1 and manual_p2:
                 result, error = predict_match(
-                    st.session_state.model,
-                    manual_p1, manual_p2, manual_surface,
-                    st.session_state.player_stats,
-                    st.session_state.h2h,
-                    st.session_state.elo,
-                    st.session_state.name_mapping,
-                    st.session_state.historical_names
+                    st.session_state.model, manual_p1, manual_p2, manual_surface,
+                    st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
+                    st.session_state.name_matcher
                 )
                 if result:
-                    st.success("✅ Previsão concluída!")
-                    st.table(pd.DataFrame([result]))
+                    st.dataframe(pd.DataFrame([result]), use_container_width=True)
                 else:
                     st.error(error)
         
-        # Show predictions for today
+        # Predictions
         if st.session_state.get('matches'):
-            st.subheader("🎯 PREVISÕES PARA HOJE")
-            
+            st.subheader("🎯 Previsões")
             results = []
             errors = []
-            
             for match in st.session_state.matches:
                 result, error = predict_match(
-                    st.session_state.model,
-                    match['player1'], match['player2'], match['surface'],
-                    st.session_state.player_stats,
-                    st.session_state.h2h,
-                    st.session_state.elo,
-                    st.session_state.name_mapping,
-                    st.session_state.historical_names
+                    st.session_state.model, match['player1'], match['player2'], match['surface'],
+                    st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
+                    st.session_state.name_matcher
                 )
                 if result:
                     result['Torneio'] = match['tournament']
@@ -575,25 +522,19 @@ def main():
                 elif error:
                     errors.append(error)
             
-            # Show errors
             if errors:
-                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
-                    for err in set(errors):
-                        st.write(err)
+                with st.expander(f"⚠️ {len(errors)} não encontrados"):
+                    for e in set(errors):
+                        st.write(e)
             
             if results:
                 df_results = pd.DataFrame(results)
                 st.dataframe(df_results, use_container_width=True, hide_index=True)
                 
-                # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download Excel", buffer.getvalue(),
+                st.download_button("📥 Download", buffer.getvalue(),
                                  f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
-                
-                # Stats
-                strong_count = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
-                st.info(f"🔥 STRONG picks: {strong_count} de {len(results)} jogos")
 
 if __name__ == "__main__":
     main()
