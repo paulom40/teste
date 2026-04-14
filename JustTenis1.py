@@ -144,8 +144,7 @@ HISTORICAL_PLAYERS = [
     "Grigor Dimitrov", "Miomir Kecmanovic", "Pedro Martinez", "Sebastian Ofner", "Aleksandar Vukic",
     "Benjamin Bonzi", "Frances Tiafoe", "Cameron Norrie", "Matteo Arnaldi", "Alexandre Muller",
     "Yoshihito Nishioka", "Lorenzo Musetti", "Casper Ruud", "Francisco Cerundolo", "Sebastian Baez",
-    "Camilo Ugo Carabelli", "Damir Dzumhur", "Juan Pablo Varillas", "Thiago Seyboth Wild", "Facundo Diaz Acosta",
-    "Juan Pablo Ficovich", "Alvaro Guillen Meza", "Sascha Gueymard Wayenburg", "Murkel Dellien", "Edas Butvilas"
+    "Camilo Ugo Carabelli", "Damir Dzumhur"
 ]
 
 # ==============================================================================
@@ -371,7 +370,7 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
     if not features:
-        return None, f"Estatísticas insuficientes"
+        return None, f"Estatísticas insuficientes para {p1_match} ou {p2_match}"
     
     prob = model.predict_proba(np.array([features]))[0][1]
     prob_p1 = np.clip(0.5 + (prob - 0.5) * 0.55, 0.15, 0.85)
@@ -391,8 +390,8 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
     return {
-        'Jogador1_Original': p1,
-        'Jogador2_Original': p2,
+        'Jogador1': p1,
+        'Jogador2': p2,
         'Match_Historico': f"{p1_match} vs {p2_match}",
         'Superficie': surface,
         'Prob_P1': f"{prob_p1:.1%}",
@@ -430,7 +429,7 @@ def scrape_matches():
                 "surface": detect_surface(ev["tournament"]["name"])
             })
         return matches
-    except:
+    except Exception as e:
         return []
 
 # ==============================================================================
@@ -440,9 +439,7 @@ def main():
     st.title("🎾 ATP Predictor v5.0 - Seu Histórico Completo")
     st.caption(f"✅ {len(HISTORICAL_PLAYERS)} jogadores no histórico")
     
-    name_matcher = HistoricalNameMatcher()
-    
-    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico", type=['xlsx', 'csv'])
+    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
         with st.spinner("🔄 Processando..."):
@@ -459,6 +456,7 @@ def main():
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df)
                 model = train_model(df, player_stats, h2h, elo)
+                name_matcher = HistoricalNameMatcher()
                 
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
@@ -467,34 +465,49 @@ def main():
                 st.session_state.name_matcher = name_matcher
                 st.session_state.models_ready = True
                 
-                st.success("✅ Modelo treinado!")
+                st.success("✅ Modelo treinado com sucesso!")
+                
+                # Mostrar estatísticas
+                with st.expander("📊 Estatísticas do Histórico"):
+                    players_with_matches = [p for p in HISTORICAL_PLAYERS if player_stats[p]['matches'] > 0]
+                    st.write(f"Jogadores com jogos no histórico: {len(players_with_matches)}")
+                    st.write(f"Total de jogos processados: {len(df)}")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
+                import traceback
+                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📅 HOJE", use_container_width=True):
-                st.session_state.matches = scrape_matches()
+            if st.button("📅 JOGOS DE HOJE", use_container_width=True):
+                with st.spinner("Buscando jogos..."):
+                    st.session_state.matches = scrape_matches()
         with col2:
-            if st.button("🔄 TESTAR", use_container_width=True):
-                test = st.text_input("Digite um nome para testar:")
-                if test:
-                    result = st.session_state.name_matcher.find_match(test)
-                    st.write(f"Resultado: {result}")
+            if st.button("🔄 TESTAR MATCHING", use_container_width=True):
+                test_name = st.text_input("Digite um nome para testar:", key="test_name")
+                if test_name:
+                    result = st.session_state.name_matcher.find_match(test_name)
+                    if result:
+                        st.success(f"✅ Encontrado: {result}")
+                    else:
+                        st.error(f"❌ Não encontrado: {test_name}")
         
-        # Manual
-        with st.expander("✏️ Previsão Manual", expanded=True):
+        # Manual prediction
+        with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
+            # Filter players with matches
+            players_with_stats = [p for p in HISTORICAL_PLAYERS if st.session_state.player_stats[p]['matches'] > 0]
+            
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + sorted(HISTORICAL_PLAYERS)[:200])
+                manual_p1 = st.selectbox("Jogador 1", [""] + sorted(players_with_stats)[:200])
             with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + sorted(HISTORICAL_PLAYERS)[:200])
+                manual_p2 = st.selectbox("Jogador 2", [""] + sorted(players_with_stats)[:200])
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
-            if st.button("🔮 PREVER") and manual_p1 and manual_p2:
+            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2:
                 result, error = predict_match(
                     st.session_state.model, manual_p1, manual_p2, manual_surface,
                     st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
@@ -505,12 +518,15 @@ def main():
                 else:
                     st.error(error)
         
-        # Predictions
+        # Show predictions for today
         if st.session_state.get('matches'):
-            st.subheader("🎯 Previsões")
+            st.subheader("🎯 PREVISÕES PARA HOJE")
+            
             results = []
             errors = []
-            for match in st.session_state.matches:
+            
+            progress_bar = st.progress(0)
+            for i, match in enumerate(st.session_state.matches):
                 result, error = predict_match(
                     st.session_state.model, match['player1'], match['player2'], match['surface'],
                     st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
@@ -521,9 +537,12 @@ def main():
                     results.append(result)
                 elif error:
                     errors.append(error)
+                progress_bar.progress((i + 1) / len(st.session_state.matches))
+            progress_bar.empty()
             
+            # Show errors
             if errors:
-                with st.expander(f"⚠️ {len(errors)} não encontrados"):
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
                     for e in set(errors):
                         st.write(e)
             
@@ -531,10 +550,38 @@ def main():
                 df_results = pd.DataFrame(results)
                 st.dataframe(df_results, use_container_width=True, hide_index=True)
                 
+                # Summary
+                st.subheader("📊 Resumo")
+                col_s1, col_s2, col_s3 = st.columns(3)
+                with col_s1:
+                    strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
+                    st.metric("STRONG Picks", strong)
+                with col_s2:
+                    avg_conf = sum(float(r['Confianca'].replace('%', '')) for r in results) / len(results)
+                    st.metric("Confiança Média", f"{avg_conf:.1f}%")
+                with col_s3:
+                    st.metric("Total Jogos", len(results))
+                
+                # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download", buffer.getvalue(),
-                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                 use_container_width=True)
+    
+    elif not uploaded_file:
+        st.info("📂 Faça upload do seu ficheiro Excel/CSV com dados históricos")
+        st.markdown(f"""
+        ### Seu histórico contém {len(HISTORICAL_PLAYERS)} jogadores únicos!
+        
+        **Colunas esperadas no arquivo:**
+        - `winner` / `vencedor` - nome do vencedor
+        - `loser` / `perdedor` - nome do perdedor
+        - `date` / `data` - data do jogo (opcional)
+        - `score` / `placar` - placar (opcional)
+        
+        O sistema vai automaticamente mapear os nomes dos jogadores.
+        """)
 
 if __name__ == "__main__":
     main()
