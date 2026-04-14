@@ -10,10 +10,10 @@ from lightgbm import LGBMClassifier
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v2.4 - Fast", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v2.5 Fixed", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIGURAÇÕES
+# CONFIG
 # ==============================================================================
 MIN_CONFIDENCE_STRONG = 0.78
 MIN_CONFIDENCE_GOOD = 0.68
@@ -40,7 +40,7 @@ def detect_surface_from_tournament(tournament_name, surface_hint=None):
     return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
 
 # ==============================================================================
-# ELO E STATS (simplificado)
+# ELO + STATS
 # ==============================================================================
 def calculate_enhanced_elo(df):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
@@ -89,7 +89,7 @@ def compute_player_stats(df):
     return stats
 
 # ==============================================================================
-# FEATURES (reduzidas)
+# FEATURES
 # ==============================================================================
 def build_features(p1, p2, surface, player_stats, h2h_surface):
     if p1 not in player_stats or p2 not in player_stats: return None
@@ -119,7 +119,6 @@ def scrape_matches_sofascore(days_ahead=0):
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
         headers = {"User-Agent": "Mozilla/5.0"}
-        
         r = requests.get(url, headers=headers, timeout=12)
         if r.status_code != 200: return []
         
@@ -142,7 +141,7 @@ def scrape_matches_sofascore(days_ahead=0):
         return []
 
 # ==============================================================================
-# TRAINING (LIGHTGBM - RÁPIDO)
+# TRAINING
 # ==============================================================================
 def train_models(df, player_stats, h2h_surface):
     X, y = [], []
@@ -157,14 +156,15 @@ def train_models(df, player_stats, h2h_surface):
             y.append(0)
     
     model = LGBMClassifier(
-        n_estimators=280,
+        n_estimators=250,
         max_depth=6,
-        learning_rate=0.045,
-        num_leaves=32,
+        learning_rate=0.05,
+        num_leaves=28,
         subsample=0.85,
-        colsample_bytree=0.85,
+        colsample_bytree=0.8,
         random_state=42,
-        verbose=-1
+        verbose=-1,
+        n_jobs=-1
     )
     model.fit(np.array(X), np.array(y))
     return model
@@ -210,13 +210,13 @@ def predict_match(model, player_stats, h2h_surface, match):
 # MAIN
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v2.4 - Versão Rápida")
-    st.caption("Treino otimizado com LightGBM (muito mais rápido)")
+    st.title("🎾 ATP Predictor v2.5 - Ultra Rápido (Fixed)")
+    st.caption("Treino otimizado com limite inteligente")
 
     uploaded_file = st.file_uploader("📁 Upload do teu ficheiro histórico (Excel)", type=['xlsx'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("A treinar modelo (versão rápida)..."):
+        with st.spinner("A processar ficheiro..."):
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
             
@@ -226,23 +226,42 @@ def main():
             if 'tourney_name' in df.columns: df.rename(columns={'tourney_name': 'tournament'}, inplace=True)
             
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            st.write(f"📊 Total de jogos: **{len(df):,}**")
+            
+            max_rows = st.slider("Máximo de jogos para treino (recomendado 8000-12000)", 
+                               4000, len(df), min(10000, len(df)), step=1000)
+            
+            if len(df) > max_rows:
+                df = df.sort_values('date', ascending=False).head(max_rows).copy()
+                st.info(f"Usando **{max_rows:,}** jogos mais recentes")
+            
             df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament'), row.get('surface')), axis=1)
             
-            player_stats = compute_player_stats(df)
-            h2h_surface = defaultdict(lambda: {'Hard':0, 'Clay':0, 'Grass':0})
+            progress_bar = st.progress(0)
+            status = st.empty()
             
+            status.text("Calculando ELO e estatísticas...")
+            progress_bar.progress(30)
+            player_stats = compute_player_stats(df)
+            
+            status.text("Construindo H2H...")
+            progress_bar.progress(55)
+            h2h_surface = defaultdict(lambda: {'Hard':0, 'Clay':0, 'Grass':0})
             for _, row in df.iterrows():
                 if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
                     pair = (row['winner'], row['loser'])
-                    surf = row.get('surface', 'Hard')
-                    h2h_surface[pair][surf] += 1
+                    h2h_surface[pair][row.get('surface', 'Hard')] += 1
             
+            status.text("Treinando modelo...")
+            progress_bar.progress(80)
             model = train_models(df, player_stats, h2h_surface)
+            
+            progress_bar.progress(100)
+            status.success("✅ Modelo treinado com sucesso!")
             
             st.session_state.model = model
             st.session_state.player_stats = player_stats
             st.session_state.h2h_surface = h2h_surface
-            st.success("✅ Modelo rápido treinado com sucesso!")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -252,12 +271,14 @@ def main():
         if st.button("📅 AMANHÃ", use_container_width=True):
             st.session_state.current_matches = scrape_matches_sofascore(1)
 
+    # Display Previsões
     if st.session_state.get('current_matches'):
-        results = [predict_match(st.session_state.model, st.session_state.player_stats, 
-                               st.session_state.h2h_surface, m) 
-                  for m in st.session_state.current_matches if predict_match(...) is not None]
-        
-        results = [r for r in results if r is not None]
+        results = []
+        for m in st.session_state.current_matches:
+            pred = predict_match(st.session_state.model, st.session_state.player_stats, 
+                               st.session_state.h2h_surface, m)
+            if pred:
+                results.append(pred)
         
         if results:
             df_show = pd.DataFrame(results)
@@ -273,7 +294,7 @@ def main():
             buffer = io.BytesIO()
             df_show.to_excel(buffer, index=False)
             st.download_button("📥 Baixar Excel", buffer.getvalue(), 
-                             f"previsoes_rapidas_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                             f"previsoes_{datetime.now().strftime('%Y-%m-%d_%H%M')}.xlsx",
                              use_container_width=True)
 
 if __name__ == "__main__":
