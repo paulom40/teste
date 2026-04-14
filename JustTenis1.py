@@ -406,6 +406,9 @@ def train_models_enhanced(df, player_stats, h2h_surface, cbrf_model, betaminic_m
                 y_winner.append(0)
                 y_ou.append(1 if total_games > 21.5 else 0)
     
+    if len(X) == 0:
+        raise ValueError("No valid training data found")
+    
     X = np.array(X)
     
     # Scale features
@@ -563,82 +566,90 @@ def main():
     
     if uploaded_file and 'model_winner' not in st.session_state:
         with st.spinner("🔄 A treinar modelos CBRF + Betaminic..."):
-            df = pd.read_excel(uploaded_file)
-            df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
-            
-            # Column mapping
-            if 'tourney_date' in df.columns:
-                df.rename(columns={'tourney_date': 'date'}, inplace=True)
-            if 'winner_name' in df.columns:
-                df.rename(columns={'winner_name': 'winner'}, inplace=True)
-            if 'loser_name' in df.columns:
-                df.rename(columns={'loser_name': 'loser'}, inplace=True)
-            if 'tourney_name' in df.columns:
-                df.rename(columns={'tourney_name': 'tournament'}, inplace=True)
-            
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            
-            # Calculate total games if not present
-            if 'total_games' not in df.columns and 'score' in df.columns:
-                def get_games(s):
-                    nums = [int(n) for n in str(s).replace(' ', '').split('-') if n.isdigit()]
-                    return sum(nums) if nums else 22
-                df['total_games'] = df['score'].apply(get_games)
-            elif 'total_games' not in df.columns:
-                df['total_games'] = 22
-            
-            # Limit training data
-            max_rows = st.slider("Máximo de jogos para treino", 3000, len(df), min(8000, len(df)), 1000)
-            if len(df) > max_rows:
-                df = df.sort_values('date', ascending=False).head(max_rows).copy()
-            
-            # Detect surfaces
-            df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament'), row.get('surface')), axis=1)
-            
-            # Initialize CBRF and Betaminic models
-            cbrf_model = CBRFModel(momentum_window=CBRF_MOMENTUM_WINDOW, decay_factor=CBRF_MOMENTUM_DECAY)
-            betaminic_model = BetaminicModel(min_samples=BETAMINIC_MIN_SAMPLES)
-            
-            # Update models with historical data
-            cbrf_model.update_player_history(df)
-            betaminic_model.update_player_stats(df)
-            
-            # Compute enhanced player stats
-            player_stats = compute_player_stats_enhanced(df, RECENT_MATCHES)
-            
-            # Build H2H surface data
-            h2h_surface = defaultdict(lambda: {'Hard':0, 'Clay':0, 'Grass':0})
-            for _, row in df.iterrows():
-                if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
-                    pair = (row['winner'], row['loser'])
-                    h2h_surface[pair][row.get('surface', 'Hard')] += 1
-            
-            # Train models
-            model_winner, model_ou, scaler = train_models_enhanced(df, player_stats, h2h_surface, cbrf_model, betaminic_model)
-            
-            # Store in session
-            st.session_state.model_winner = model_winner
-            st.session_state.model_ou = model_ou
-            st.session_state.scaler = scaler
-            st.session_state.player_stats = player_stats
-            st.session_state.h2h_surface = h2h_surface
-            st.session_state.cbrf_model = cbrf_model
-            st.session_state.betaminic_model = betaminic_model
-            
-            st.success("✅ Modelos treinados com sucesso! (CBRF + Betaminic integrados)")
-            
-            # Show model statistics
-            st.info(f"📈 Dados: {len(df)} jogos | {len(player_stats)} jogadores | CBRF window: {CBRF_MOMENTUM_WINDOW}")
+            try:
+                df = pd.read_excel(uploaded_file)
+                df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
+                
+                # Column mapping
+                if 'tourney_date' in df.columns:
+                    df.rename(columns={'tourney_date': 'date'}, inplace=True)
+                if 'winner_name' in df.columns:
+                    df.rename(columns={'winner_name': 'winner'}, inplace=True)
+                if 'loser_name' in df.columns:
+                    df.rename(columns={'loser_name': 'loser'}, inplace=True)
+                if 'tourney_name' in df.columns:
+                    df.rename(columns={'tourney_name': 'tournament'}, inplace=True)
+                
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                
+                # Calculate total games if not present
+                if 'total_games' not in df.columns and 'score' in df.columns:
+                    def get_games(s):
+                        nums = [int(n) for n in str(s).replace(' ', '').split('-') if n.isdigit()]
+                        return sum(nums) if nums else 22
+                    df['total_games'] = df['score'].apply(get_games)
+                elif 'total_games' not in df.columns:
+                    df['total_games'] = 22
+                
+                # Limit training data
+                max_rows = st.slider("Máximo de jogos para treino", 3000, len(df), min(8000, len(df)), 1000)
+                if len(df) > max_rows:
+                    df = df.sort_values('date', ascending=False).head(max_rows).copy()
+                
+                # Detect surfaces
+                df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament'), row.get('surface')), axis=1)
+                
+                # Initialize CBRF and Betaminic models
+                cbrf_model = CBRFModel(momentum_window=CBRF_MOMENTUM_WINDOW, decay_factor=CBRF_MOMENTUM_DECAY)
+                betaminic_model = BetaminicModel(min_samples=BETAMINIC_MIN_SAMPLES)
+                
+                # Update models with historical data
+                cbrf_model.update_player_history(df)
+                betaminic_model.update_player_stats(df)
+                
+                # Compute enhanced player stats
+                player_stats = compute_player_stats_enhanced(df, RECENT_MATCHES)
+                
+                # Build H2H surface data
+                h2h_surface = defaultdict(lambda: {'Hard':0, 'Clay':0, 'Grass':0})
+                for _, row in df.iterrows():
+                    if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
+                        pair = (row['winner'], row['loser'])
+                        h2h_surface[pair][row.get('surface', 'Hard')] += 1
+                
+                # Train models
+                model_winner, model_ou, scaler = train_models_enhanced(df, player_stats, h2h_surface, cbrf_model, betaminic_model)
+                
+                # Store in session
+                st.session_state.model_winner = model_winner
+                st.session_state.model_ou = model_ou
+                st.session_state.scaler = scaler
+                st.session_state.player_stats = player_stats
+                st.session_state.h2h_surface = h2h_surface
+                st.session_state.cbrf_model = cbrf_model
+                st.session_state.betaminic_model = betaminic_model
+                st.session_state.models_ready = True
+                
+                st.success("✅ Modelos treinados com sucesso! (CBRF + Betaminic integrados)")
+                
+                # Show model statistics
+                st.info(f"📈 Dados: {len(df)} jogos | {len(player_stats)} jogadores | CBRF window: {CBRF_MOMENTUM_WINDOW}")
+                
+            except Exception as e:
+                st.error(f"Erro no treinamento: {str(e)}")
+                st.session_state.models_ready = False
 
     # Prediction interface
-    if st.session_state.get('model_winner'):
+    if st.session_state.get('models_ready') and st.session_state.get('model_winner'):
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 HOJE", use_container_width=True):
-                st.session_state.current_matches = scrape_matches_sofascore(0)
+                with st.spinner("Buscando jogos de hoje..."):
+                    st.session_state.current_matches = scrape_matches_sofascore(0)
         with col2:
             if st.button("📅 AMANHÃ", use_container_width=True):
-                st.session_state.current_matches = scrape_matches_sofascore(1)
+                with st.spinner("Buscando jogos de amanhã..."):
+                    st.session_state.current_matches = scrape_matches_sofascore(1)
         
         # Manual match input
         with st.expander("✏️ Ou insere manualmente um jogo"):
@@ -674,6 +685,8 @@ def main():
                         'Confidence': '{:.1%}',
                         'OU_Prob': '{:.1%}'
                     }), use_container_width=True)
+                else:
+                    st.warning("Não foi possível fazer a previsão. Verifique se os jogadores existem no histórico.")
         
         # Show predictions
         if st.session_state.get('current_matches'):
@@ -716,7 +729,7 @@ def main():
                     'Prob_P2': '{:.1%}',
                     'Confidence': '{:.1%}',
                     'OU_Prob': '{:.1%}'
-                }).applymap(color_recommendation, subset=['Recommendation'])
+                }).map(color_recommendation, subset=['Recommendation'])
                 
                 st.dataframe(styled, use_container_width=True, hide_index=True, height=700)
                 
@@ -744,6 +757,10 @@ def main():
                 with col_s4:
                     over_count = sum(1 for r in results if r['OU'] == 'Over 21.5')
                     st.metric("Over 21.5", f"{over_count}/{len(results)}")
+    elif uploaded_file and not st.session_state.get('models_ready'):
+        st.warning("⚠️ Aguarde o treinamento dos modelos ser concluído...")
+    elif not uploaded_file:
+        st.info("📂 Faça upload do ficheiro Excel com dados históricos para começar")
 
 if __name__ == "__main__":
     main()
