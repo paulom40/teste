@@ -7,120 +7,173 @@ import pandas as pd
 import streamlit as st
 import requests
 from lightgbm import LGBMClassifier
-from difflib import get_close_matches
 import re
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v4.2 - Name Matching Fix", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v4.3 - Advanced Name Matching", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
 # ==============================================================================
 WINNER_SMOOTH = 0.55
-OU_SMOOTH = 0.50
-
 MIN_CONFIDENCE_STRONG = 0.68
 MIN_CONFIDENCE_GOOD = 0.60
 MIN_CONFIDENCE_WEAK = 0.52
 
 # ==============================================================================
-# NAME MATCHING SYSTEM
+# ADVANCED NAME MATCHING SYSTEM
 # ==============================================================================
-class PlayerNameMatcher:
-    """Sistema para matching de nomes de jogadores"""
+class AdvancedNameMatcher:
+    """Sistema avançado de matching de nomes de jogadores"""
     
     def __init__(self):
-        self.name_mapping = {}
-        self.name_variations = defaultdict(set)
+        self.player_database = {}  # canonical_name -> stats
+        self.name_index = {}  # search_key -> canonical_name
+        self.last_name_index = defaultdict(list)  # last_name -> [canonical_names]
         
-    def build_mapping(self, player_names):
-        """Build mapping from variations to canonical names"""
+    def build_database(self, player_names):
+        """Build search index from player names"""
         for name in player_names:
-            # Store original
-            self.name_mapping[name] = name
-            
-            # Generate variations
-            variations = self._generate_variations(name)
-            for var in variations:
-                self.name_variations[var].add(name)
+            self.player_database[name] = name
+            self._index_name(name)
     
-    def _generate_variations(self, name):
-        """Generate common name variations"""
-        variations = set()
-        variations.add(name.lower())
-        variations.add(name.upper())
+    def _index_name(self, name):
+        """Index a player name with multiple variations"""
+        name_lower = name.lower()
         
-        # Handle first name initial + last name (J. Struff -> Jan-Lennard Struff)
+        # Store original
+        self.name_index[name_lower] = name
+        
+        # Store by last name only
         parts = name.split()
-        if len(parts) >= 2:
-            # First initial + last name
-            first_initial = parts[0][0] + "."
-            variations.add(f"{first_initial} {parts[-1]}")
-            variations.add(f"{first_initial}{parts[-1]}")
-            
-            # Just last name
-            variations.add(parts[-1])
-            
-            # Full first name (if we have mapping)
-            full_first = self._get_full_first_name(parts[0])
-            if full_first:
-                variations.add(f"{full_first} {parts[-1]}")
+        if len(parts) >= 1:
+            last_name = parts[-1].lower()
+            self.last_name_index[last_name].append(name)
         
-        return variations
+        # Store by first name initial + last name
+        if len(parts) >= 2:
+            first_initial = parts[0][0].lower()
+            last_name = parts[-1].lower()
+            key = f"{first_initial}. {last_name}"
+            self.name_index[key] = name
+            key2 = f"{first_initial}{last_name}"
+            self.name_index[key2] = name
+        
+        # Store by last name with common prefixes removed
+        prefixes = ['van', 'de', 'den', 'der', 'dos', 'das', 'le', 'la']
+        for prefix in prefixes:
+            if name_lower.startswith(prefix + ' '):
+                without_prefix = ' '.join(name_lower.split()[1:])
+                self.name_index[without_prefix] = name
+                # Also index last name from without_prefix
+                if len(without_prefix.split()) >= 1:
+                    self.last_name_index[without_prefix.split()[-1]].append(name)
     
-    def _get_full_first_name(self, short_name):
-        """Map short first names to full names"""
-        first_names = {
-            'Jan-Lennard': 'Jan-Lennard', 'Jan': 'Jan-Lennard',
-            'Francisco': 'Francisco', 'Fran': 'Francisco',
-            'Alejandro': 'Alejandro', 'Alex': 'Alejandro',
-            'Alexander': 'Alexander', 'Alex': 'Alexander',
-            'Benjamin': 'Ben', 'Ben': 'Benjamin',
-            'Denis': 'Denis', 'Denys': 'Denis',
-            'Tallon': 'Tallon', 'Tal': 'Tallon',
-            'Zhizhen': 'Zhizhen', 'Zhen': 'Zhizhen',
-            'Luciano': 'Luciano', 'Lucho': 'Luciano',
-            'Zizou': 'Zizou', 'Zizo': 'Zizou',
-            'Marko': 'Marko', 'Marco': 'Marko',
-            'Joao': 'Joao', 'João': 'Joao',
-            'Arthur': 'Arthur', 'Art': 'Arthur',
-            'Flavio': 'Flavio', 'Flávio': 'Flavio',
-            'Brandon': 'Brandon', 'Brand': 'Brandon',
-            'Cameron': 'Cameron', 'Cam': 'Cameron',
-            'Stan': 'Stan', 'Stanislas': 'Stan',
-            'Adrian': 'Adrian', 'Adri': 'Adrian',
-            'Jaume': 'Jaume', 'Jau': 'Jaume'
-        }
-        return first_names.get(short_name, short_name)
-    
-    def find_player(self, name, threshold=0.7):
-        """Find matching player name"""
-        if not name:
+    def find_player(self, search_name, threshold=0.8):
+        """Find matching player using multiple strategies"""
+        if not search_name or pd.isna(search_name):
             return None
         
-        name_lower = name.lower().strip()
+        search_str = str(search_name).strip().lower()
         
-        # Direct match
-        if name_lower in self.name_mapping:
-            return self.name_mapping[name_lower]
+        # Strategy 1: Direct match
+        if search_str in self.name_index:
+            return self.name_index[search_str]
         
-        # Check variations
-        for var in self._generate_variations(name):
-            if var.lower() in self.name_variations:
-                matches = self.name_variations[var.lower()]
-                if matches:
-                    return list(matches)[0]
+        # Strategy 2: Match by full name (case insensitive)
+        for canonical in self.player_database.keys():
+            if canonical.lower() == search_str:
+                return canonical
         
-        # Fuzzy matching
-        all_names = list(self.name_mapping.keys())
-        matches = get_close_matches(name_lower, [n.lower() for n in all_names], n=1, cutoff=threshold)
-        if matches:
-            for original in all_names:
-                if original.lower() == matches[0]:
-                    return original
+        # Strategy 3: Match by last name only (if unique)
+        parts = search_str.split()
+        last_name = parts[-1] if parts else search_str
+        
+        if last_name in self.last_name_index:
+            matches = self.last_name_index[last_name]
+            if len(matches) == 1:
+                return matches[0]
+        
+        # Strategy 4: Fuzzy matching on last name
+        from difflib import get_close_matches
+        all_last_names = list(self.last_name_index.keys())
+        close_matches = get_close_matches(last_name, all_last_names, n=1, cutoff=threshold)
+        
+        if close_matches:
+            matches = self.last_name_index[close_matches[0]]
+            if len(matches) == 1:
+                return matches[0]
+        
+        # Strategy 5: Try to match with reversed name (Struff J. -> Jan-Lennard Struff)
+        if len(parts) >= 2 and len(parts[0]) <= 3 and '.' in parts[0]:
+            # Format: "Struff J." -> search for "J. Struff"
+            last = parts[0]
+            first_initial = parts[1].replace('.', '')
+            reversed_name = f"{first_initial}. {last}"
+            if reversed_name.lower() in self.name_index:
+                return self.name_index[reversed_name.lower()]
+        
+        # Strategy 6: Remove accents and special characters
+        import unicodedata
+        search_normalized = unicodedata.normalize('NFKD', search_str).encode('ASCII', 'ignore').decode('ASCII')
+        for canonical in self.player_database.keys():
+            canon_normalized = unicodedata.normalize('NFKD', canonical.lower()).encode('ASCII', 'ignore').decode('ASCII')
+            if canon_normalized == search_normalized:
+                return canonical
         
         return None
+
+# ==============================================================================
+# COMMON PLAYER NAME MAPPINGS (FALLBACK)
+# ==============================================================================
+COMMON_MAPPINGS = {
+    # Struff
+    'Struff J': 'Jan-Lennard Struff',
+    'J. Struff': 'Jan-Lennard Struff',
+    'Jan Struff': 'Jan-Lennard Struff',
+    'Struff': 'Jan-Lennard Struff',
+    
+    # Cerundolo
+    'Cerundolo F': 'Francisco Cerundolo',
+    'F. Cerundolo': 'Francisco Cerundolo',
+    'Cerundolo': 'Francisco Cerundolo',
+    
+    # Nagal
+    'Nagal S': 'Sumit Nagal',
+    'S. Nagal': 'Sumit Nagal',
+    'Nagal': 'Sumit Nagal',
+    
+    # Shelton
+    'Shelton B': 'Ben Shelton',
+    'B. Shelton': 'Ben Shelton',
+    'Shelton': 'Ben Shelton',
+    
+    # Zverev
+    'Zverev A': 'Alexander Zverev',
+    'A. Zverev': 'Alexander Zverev',
+    'Zverev': 'Alexander Zverev',
+    
+    # Fonseca
+    'Fonseca J': 'Joao Fonseca',
+    'J. Fonseca': 'Joao Fonseca',
+    'Fonseca': 'Joao Fonseca',
+    
+    # Tabilo
+    'Tabilo A': 'Alejandro Tabilo',
+    'A. Tabilo': 'Alejandro Tabilo',
+    'Tabilo': 'Alejandro Tabilo',
+    
+    # Shapovalov
+    'Shapovalov D': 'Denis Shapovalov',
+    'D. Shapovalov': 'Denis Shapovalov',
+    'Shapovalov': 'Denis Shapovalov',
+    
+    # Griekspoor
+    'Griekspoor T': 'Tallon Griekspoor',
+    'T. Griekspoor': 'Tallon Griekspoor',
+    'Griekspoor': 'Tallon Griekspoor',
+}
 
 # ==============================================================================
 # SURFACE DETECTION
@@ -133,10 +186,9 @@ def detect_surface(tournament_name):
     t = str(tournament_name).lower()
     
     clay_keywords = ['clay', 'monte carlo', 'madrid', 'rome', 'barcelona', 'munich', 
-                     'estoril', 'geneva', 'hamburg', 'bastad', 'gstaad', 'umag', 'kitzbuhel',
-                     'roland garros', 'french open', 'rio', 'buenos aires', 'santiago']
-    grass_keywords = ['grass', 'wimbledon', 'queens', 'halle', 'newport', 'stuttgart', 
-                      's-Hertogenbosch', 'eastbourne', 'mallorca']
+                     'estoril', 'geneva', 'hamburg', 'bastad', 'gstaad', 'roland garros',
+                     'french open', 'rio', 'buenos aires']
+    grass_keywords = ['grass', 'wimbledon', 'queens', 'halle', 'newport', 'stuttgart']
     
     if any(k in t for k in clay_keywords):
         return 'Clay'
@@ -149,12 +201,12 @@ def detect_surface(tournament_name):
 # DATA PROCESSING
 # ==============================================================================
 def process_historical_data(df):
-    """Process historical data and build player database"""
+    """Process historical data"""
     
     # Clean column names
     df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
     
-    # Find correct column names
+    # Find columns
     winner_col = None
     loser_col = None
     tournament_col = None
@@ -162,22 +214,21 @@ def process_historical_data(df):
     score_col = None
     
     for col in df.columns:
-        col_lower = col.lower()
-        if 'winner' in col_lower or 'vencedor' in col_lower:
+        if 'winner' in col or 'vencedor' in col:
             winner_col = col
-        elif 'loser' in col_lower or 'perdedor' in col_lower:
+        elif 'loser' in col or 'perdedor' in col:
             loser_col = col
-        elif 'tourney' in col_lower or 'torneio' in col_lower or 'tournament' in col_lower:
+        elif 'tourney' in col or 'torneio' in col or 'tournament' in col:
             tournament_col = col
-        elif 'date' in col_lower or 'data' in col_lower:
+        elif 'date' in col or 'data' in col:
             date_col = col
-        elif 'score' in col_lower or 'placar' in col_lower:
+        elif 'score' in col or 'placar' in col:
             score_col = col
     
     if not winner_col or not loser_col:
-        raise ValueError("Não foi possível encontrar colunas de vencedor/perdedor")
+        raise ValueError("Colunas de vencedor/perdedor não encontradas")
     
-    # Rename to standard names
+    # Rename
     df = df.rename(columns={
         winner_col: 'winner',
         loser_col: 'loser',
@@ -210,9 +261,19 @@ def process_historical_data(df):
     else:
         df['surface'] = 'Hard'
     
-    # Clean player names
-    df['winner'] = df['winner'].astype(str).str.strip()
-    df['loser'] = df['loser'].astype(str).str.strip()
+    # Clean names - remove common suffixes
+    def clean_name(name):
+        if pd.isna(name):
+            return name
+        name = str(name).strip()
+        # Remove ranking numbers like " (1)" or " [1]"
+        name = re.sub(r'\s*[\(\[]\d+[\)\]]', '', name)
+        # Remove country codes
+        name = re.sub(r'\s*\([A-Z]{2,3}\)', '', name)
+        return name
+    
+    df['winner'] = df['winner'].apply(clean_name)
+    df['loser'] = df['loser'].apply(clean_name)
     
     return df
 
@@ -220,7 +281,7 @@ def process_historical_data(df):
 # PLAYER STATISTICS
 # ==============================================================================
 def calculate_player_stats(df):
-    """Calculate comprehensive player statistics"""
+    """Calculate player statistics"""
     
     all_players = set(df['winner'].dropna()) | set(df['loser'].dropna())
     stats = {}
@@ -246,12 +307,12 @@ def calculate_player_stats(df):
             else:
                 surface_stats[surf] = 0.5
         
-        # Recent form (last 10 matches)
+        # Recent form (last 10)
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
-        # Very recent form (last 3 matches)
+        # Very recent (last 3)
         very_recent = player_matches.sort_values('date', ascending=False).head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
@@ -262,15 +323,15 @@ def calculate_player_stats(df):
         stats[player] = {
             'name': player,
             'matches': total,
+            'wins': wins,
+            'losses': total - wins,
             'win_rate': win_rate,
             'hard_rate': surface_stats['Hard'],
             'clay_rate': surface_stats['Clay'],
             'grass_rate': surface_stats['Grass'],
             'recent_form': recent_form,
             'very_recent_form': very_recent_form,
-            'avg_games': avg_games,
-            'wins': wins,
-            'losses': total - wins
+            'avg_games': avg_games
         }
     
     return stats
@@ -280,18 +341,15 @@ def calculate_player_stats(df):
 # ==============================================================================
 def calculate_h2h(df):
     """Calculate head-to-head statistics"""
-    h2h = defaultdict(lambda: {'wins': 0, 'total': 0, 'surface_wins': defaultdict(int)})
+    h2h = defaultdict(lambda: {'wins': 0, 'total': 0})
     
     for _, row in df.iterrows():
         if pd.isna(row.get('winner')) or pd.isna(row.get('loser')):
             continue
         
         w, l = row['winner'], row['loser']
-        surface = row.get('surface', 'Hard')
-        
         h2h[(w, l)]['wins'] += 1
         h2h[(w, l)]['total'] += 1
-        h2h[(w, l)]['surface_wins'][surface] += 1
     
     return h2h
 
@@ -309,7 +367,6 @@ def calculate_elo(df, k=32):
             continue
         
         exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
-        
         elo[w] += k * (1 - exp_w)
         elo[l] += k * (0 - (1 - exp_w))
     
@@ -321,7 +378,6 @@ def calculate_elo(df, k=32):
 def build_features(p1, p2, surface, player_stats, h2h, elo):
     """Build features for prediction"""
     
-    # Get player stats
     s1 = player_stats.get(p1)
     s2 = player_stats.get(p2)
     
@@ -344,14 +400,12 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     elo2 = elo.get(p2, 1500)
     elo_diff = (elo1 - elo2) / 400
     
-    # Form difference
+    # Form differences
     form_diff = s1['recent_form'] - s2['recent_form']
     very_recent_diff = s1['very_recent_form'] - s2['very_recent_form']
     
-    # Overall win rate difference
+    # Win rate differences
     win_rate_diff = s1['win_rate'] - s2['win_rate']
-    
-    # Surface win rate difference
     surf_diff = surf_rate1 - surf_rate2
     
     # H2H advantage
@@ -361,26 +415,20 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     elif (p2, p1) in h2h:
         h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / h2h[(p2, p1)]['total'])
     
-    # Games average
+    # Games
     games_avg = (s1['avg_games'] + s2['avg_games']) / 2
     games_norm = (games_avg - 21.5) / 8
     
-    # Experience difference
+    # Experience
     exp_diff = (s1['matches'] - s2['matches']) / 200
     
-    # Momentum (recent form weighted)
-    momentum = (s1['very_recent_form'] - s2['very_recent_form']) * 0.6 + (form_diff) * 0.4
+    # Momentum
+    momentum = (s1['very_recent_form'] - s2['very_recent_form']) * 0.6 + form_diff * 0.4
     
     features = [
-        elo_diff,
-        form_diff,
-        very_recent_diff,
-        win_rate_diff,
-        surf_diff,
-        h2h_adv,
-        games_norm,
-        exp_diff,
-        momentum
+        elo_diff, form_diff, very_recent_diff,
+        win_rate_diff, surf_diff, h2h_adv,
+        games_norm, exp_diff, momentum
     ]
     
     return features
@@ -389,7 +437,7 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
 # TRAIN MODEL
 # ==============================================================================
 def train_model(df, player_stats, h2h, elo):
-    """Train the prediction model"""
+    """Train prediction model"""
     
     X, y = [], []
     
@@ -401,36 +449,28 @@ def train_model(df, player_stats, h2h, elo):
         loser = row['loser']
         surface = row.get('surface', 'Hard')
         
-        # Winner features
         features = build_features(winner, loser, surface, player_stats, h2h, elo)
         if features:
             X.append(features)
             y.append(1)
         
-        # Loser features (reverse)
         features_rev = build_features(loser, winner, surface, player_stats, h2h, elo)
         if features_rev:
             X.append(features_rev)
             y.append(0)
     
     if len(X) == 0:
-        raise ValueError("No training data available")
+        raise ValueError("No training data")
     
     X = np.array(X)
     
     model = LGBMClassifier(
-        n_estimators=150,
-        max_depth=5,
-        learning_rate=0.035,
-        num_leaves=16,
-        reg_alpha=0.8,
-        reg_lambda=0.8,
-        random_state=42,
-        verbose=-1
+        n_estimators=150, max_depth=5, learning_rate=0.035,
+        num_leaves=16, reg_alpha=0.8, reg_lambda=0.8,
+        random_state=42, verbose=-1
     )
     
     model.fit(X, y)
-    
     return model
 
 # ==============================================================================
@@ -439,21 +479,25 @@ def train_model(df, player_stats, h2h, elo):
 def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     """Predict a single match"""
     
-    # Find matching players in database
+    # Try to find players
     p1_match = name_matcher.find_player(p1)
     p2_match = name_matcher.find_player(p2)
     
+    # Try common mappings as fallback
+    if not p1_match and p1 in COMMON_MAPPINGS:
+        p1_match = COMMON_MAPPINGS[p1]
+    if not p2_match and p2 in COMMON_MAPPINGS:
+        p2_match = COMMON_MAPPINGS[p2]
+    
     if not p1_match:
-        st.warning(f"Jogador não encontrado: {p1}")
-        return None
+        return None, f"Jogador não encontrado: {p1}"
     if not p2_match:
-        st.warning(f"Jogador não encontrado: {p2}")
-        return None
+        return None, f"Jogador não encontrado: {p2}"
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
     
     if features is None:
-        return None
+        return None, f"Estatísticas não disponíveis"
     
     features = np.array([features])
     
@@ -486,15 +530,13 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     
     momentum_edge = (s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)) * 100
     
-    # Expected games (simple estimate)
     expected_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     expected_games = np.clip(expected_games, 18, 35)
     
-    # OU prediction (simplified)
     ou_prob = 0.5 + (expected_games - 21.5) / 20
     ou_prob = np.clip(ou_prob, 0.35, 0.65)
     
-    return {
+    result = {
         'Player1': p1,
         'Player2': p2,
         'Matched_As': f"{p1_match} vs {p2_match}",
@@ -507,14 +549,18 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
         'Momentum_Edge': round(momentum_edge, 1),
         'Expected_Games': round(expected_games, 1),
         'OU': "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
-        'OU_Prob': ou_prob
+        'OU_Prob': ou_prob,
+        'P1_Stats': f"{s1.get('matches',0)}j {s1.get('win_rate',0):.0%}",
+        'P2_Stats': f"{s2.get('matches',0)}j {s2.get('win_rate',0):.0%}"
     }
+    
+    return result, None
 
 # ==============================================================================
 # SCRAPER
 # ==============================================================================
 def scrape_matches():
-    """Scrape matches from Sofascore API"""
+    """Scrape matches"""
     try:
         target_date = datetime.now().strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
@@ -553,13 +599,13 @@ def scrape_matches():
 # MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v4.2 - Name Matching")
-    st.caption("Sistema de matching de nomes | Previsões baseadas em histórico")
+    st.title("🎾 ATP Predictor v4.3 - Advanced Name Matching")
+    st.caption("Sistema avançado de matching | Suporte a múltiplos formatos de nome")
     
     uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("🔄 Processando dados e treinando modelo..."):
+        with st.spinner("🔄 Processando dados..."):
             try:
                 # Load data
                 if uploaded_file.name.endswith('.csv'):
@@ -567,25 +613,24 @@ def main():
                 else:
                     df = pd.read_excel(uploaded_file)
                 
-                # Process data
+                # Process
                 df = process_historical_data(df)
                 
-                st.info(f"📊 {len(df)} jogos carregados")
-                st.info(f"👥 {len(set(df['winner']) | set(df['loser']))} jogadores únicos")
+                st.info(f"📊 {len(df)} jogos | {len(set(df['winner']) | set(df['loser']))} jogadores")
                 
-                # Calculate statistics
+                # Calculate stats
                 player_stats = calculate_player_stats(df)
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df)
                 
                 # Build name matcher
-                name_matcher = PlayerNameMatcher()
-                name_matcher.build_mapping(list(player_stats.keys()))
+                name_matcher = AdvancedNameMatcher()
+                name_matcher.build_database(list(player_stats.keys()))
                 
                 # Train model
                 model = train_model(df, player_stats, h2h, elo)
                 
-                # Store in session
+                # Store
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
                 st.session_state.h2h = h2h
@@ -593,14 +638,14 @@ def main():
                 st.session_state.name_matcher = name_matcher
                 st.session_state.models_ready = True
                 
-                st.success(f"✅ Modelo treinado com {len(player_stats)} jogadores!")
+                st.success(f"✅ Modelo treinado!")
                 
-                # Show sample players
-                with st.expander("📋 Jogadores no histórico"):
-                    players_list = sorted(list(player_stats.keys()))[:20]
-                    st.write(", ".join(players_list))
-                    if len(player_stats) > 20:
-                        st.write(f"... e mais {len(player_stats) - 20} jogadores")
+                # Show sample
+                with st.expander("📋 Jogadores no histórico (primeiros 30)"):
+                    players_list = sorted(list(player_stats.keys()))[:30]
+                    for p in players_list:
+                        stats = player_stats[p]
+                        st.write(f"• {p}: {stats['matches']} jogos, {stats['win_rate']:.0%} vitórias")
                 
             except Exception as e:
                 st.error(f"Erro: {str(e)}")
@@ -611,24 +656,35 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 HOJE", use_container_width=True):
-                with st.spinner("Buscando jogos..."):
+                with st.spinner("Buscando..."):
                     st.session_state.matches = scrape_matches()
         with col2:
-            if st.button("🔄 ATUALIZAR", use_container_width=True):
+            if st.button("🔄 TESTAR MATCHING", use_container_width=True):
                 st.rerun()
+        
+        # Manual test
+        with st.expander("🔍 Testar Matching de Nomes", expanded=True):
+            test_name = st.text_input("Digite um nome para testar:", placeholder="Ex: Struff ou Cerundolo")
+            if test_name:
+                found = st.session_state.name_matcher.find_player(test_name)
+                if found:
+                    stats = st.session_state.player_stats.get(found, {})
+                    st.success(f"✅ Encontrado: {found} ({stats.get('matches', 0)} jogos)")
+                else:
+                    st.error(f"❌ Não encontrado: {test_name}")
         
         # Manual input
         with st.expander("✏️ Previsão Manual", expanded=True):
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.text_input("Jogador 1", placeholder="Ex: Carlos Alcaraz")
+                manual_p1 = st.text_input("Jogador 1", placeholder="Ex: Struff")
             with col_b:
-                manual_p2 = st.text_input("Jogador 2", placeholder="Ex: Novak Djokovic")
+                manual_p2 = st.text_input("Jogador 2", placeholder="Ex: Cerundolo")
             with col_c:
-                manual_surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
+                manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
             if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2:
-                result = predict_match(
+                result, error = predict_match(
                     st.session_state.model,
                     manual_p1, manual_p2, manual_surface,
                     st.session_state.player_stats,
@@ -638,23 +694,25 @@ def main():
                 )
                 if result:
                     df_result = pd.DataFrame([result])
-                    styled = df_result.style.format({
-                        'Prob_P1': '{:.1%}',
-                        'Prob_P2': '{:.1%}',
-                        'Confidence': '{:.1%}',
-                        'OU_Prob': '{:.1%}'
+                    display_cols = ['Player1', 'Player2', 'Matched_As', 'Surface', 
+                                   'Prob_P1', 'Prob_P2', 'Predicted_Winner', 'Confidence',
+                                   'Recommendation', 'Expected_Games', 'OU']
+                    styled = df_result[display_cols].style.format({
+                        'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}', 'Confidence': '{:.1%}'
                     })
                     st.dataframe(styled, use_container_width=True)
                 else:
-                    st.error("Não foi possível fazer a previsão. Verifique os nomes dos jogadores.")
+                    st.error(f"Erro: {error}")
         
-        # Show predictions for scraped matches
+        # Show predictions
         if st.session_state.get('matches'):
-            st.subheader("🎯 Previsões para Hoje")
+            st.subheader("🎯 Previsões")
             
             results = []
+            errors = []
+            
             for match in st.session_state.matches:
-                result = predict_match(
+                result, error = predict_match(
                     st.session_state.model,
                     match['player1'], match['player2'], match['surface'],
                     st.session_state.player_stats,
@@ -665,21 +723,26 @@ def main():
                 if result:
                     result['Tournament'] = match['tournament']
                     results.append(result)
+                elif error:
+                    errors.append(error)
+            
+            # Show errors
+            if errors:
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
+                    for err in set(errors):
+                        st.write(f"• {err}")
             
             if results:
                 df_results = pd.DataFrame(results)
                 
-                # Select columns
-                cols = ['Tournament', 'Player1', 'Player2', 'Surface', 'Matched_As',
+                cols = ['Tournament', 'Player1', 'Player2', 'Matched_As', 'Surface',
                        'Prob_P1', 'Prob_P2', 'Predicted_Winner', 'Confidence', 
-                       'Recommendation', 'Momentum_Edge', 'Expected_Games', 'OU']
+                       'Recommendation', 'Expected_Games', 'OU']
                 
                 df_display = df_results[[c for c in cols if c in df_results.columns]]
                 
                 styled = df_display.style.format({
-                    'Prob_P1': '{:.1%}',
-                    'Prob_P2': '{:.1%}',
-                    'Confidence': '{:.1%}'
+                    'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}', 'Confidence': '{:.1%}'
                 })
                 
                 st.dataframe(styled, use_container_width=True, hide_index=True)
@@ -687,38 +750,19 @@ def main():
                 # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button(
-                    "📥 Download Excel",
-                    buffer.getvalue(),
-                    f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    use_container_width=True
-                )
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
                 
                 # Summary
-                st.subheader("📊 Resumo")
-                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                col_s1, col_s2, col_s3 = st.columns(3)
                 with col_s1:
                     strong = sum(1 for r in results if 'STRONG' in r['Recommendation'])
-                    st.metric("STRONG", strong)
+                    st.metric("STRONG Picks", strong)
                 with col_s2:
-                    good = sum(1 for r in results if 'GOOD' in r['Recommendation'])
-                    st.metric("GOOD", good)
-                with col_s3:
                     avg_conf = df_results['Confidence'].mean()
                     st.metric("Confiança Média", f"{avg_conf:.1%}")
-                with col_s4:
-                    st.metric("Total", len(results))
-                
-                # Show unmatched players
-                unmatched = [r for r in results if 'AVOID' in r['Recommendation'] and r['Confidence'] < 0.5]
-                if unmatched:
-                    st.warning(f"⚠️ {len(unmatched)} jogos com baixa confiança (jogadores podem não estar no histórico)")
-        
-        # Debug info
-        if st.checkbox("Mostrar debug info"):
-            st.subheader("Debug Information")
-            st.write(f"Players in database: {len(st.session_state.player_stats)}")
-            st.write("Sample players:", list(st.session_state.player_stats.keys())[:10])
+                with col_s3:
+                    st.metric("Total Jogos", len(results))
 
 if __name__ == "__main__":
     main()
