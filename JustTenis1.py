@@ -6,248 +6,431 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import requests
-from lightgbm import LGBMClassifier
-from scipy.stats import beta
-from sklearn.preprocessing import StandardScaler
+from lightgbm import LGBMClassifier, LGBMRanker
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import cross_val_score, TimeSeriesSplit
+from scipy.stats import beta, norm
+from scipy.special import expit
+import hashlib
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v3.0 - CBRF + Betaminic", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v4.0 - 80% Accuracy Goal", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIG - CBRF + BETAMINIC INTEGRATION
+# CONFIG - OTIMIZADA PARA ALTA PRECISÃO
 # ==============================================================================
-# CBRF (Momentum-based) parameters
-CBRF_MOMENTUM_WINDOW = 5
-CBRF_MOMENTUM_DECAY = 0.85
-CBRF_SET_WEIGHT = 0.3
-CBRF_GAME_WEIGHT = 0.2
+# Ensemble weights
+ENSEMBLE_WEIGHTS = {
+    'lightgbm': 0.40,
+    'random_forest': 0.30,
+    'gradient_boosting': 0.20,
+    'cbrf': 0.10
+}
 
-# Betaminic parameters
-BETAMINIC_OVER_BASELINE = 0.52
-BETAMINIC_UNDER_BASELINE = 0.48
-BETAMINIC_MIN_SAMPLES = 10
+# Calibration agressiva para alta confiança
+WINNER_SMOOTH = 0.35     # Mais conservador para evitar overconfidence
+OU_SMOOTH = 0.45
 
-# Calibration
-WINNER_SMOOTH = 0.48     # Ajustado para CBRF
-OU_SMOOTH = 0.52
-MIN_CONFIDENCE_STRONG = 0.68
-MIN_CONFIDENCE_GOOD = 0.61
+# Limites de confiança mais rigorosos
+MIN_CONFIDENCE_STRONG = 0.72  # Aumentado
+MIN_CONFIDENCE_GOOD = 0.65     # Aumentado
+MIN_CONFIDENCE_WEAK = 0.58
+
+# CBRF parameters otimizados
+CBRF_MOMENTUM_WINDOW = 4
+CBRF_MOMENTUM_DECAY = 0.92
+CBRF_WEIGHT_RECENT = 0.75
+
+# Betaminic parameters refinados
+BETAMINIC_MIN_SAMPLES = 15
+BETAMINIC_SURFACE_ADJUST = {'Hard': 1.0, 'Clay': 1.04, 'Grass': 0.96}
+
+# Feature selection
+USE_FEATURE_IMPORTANCE = True
+MIN_FEATURE_IMPORTANCE = 0.02
 
 # ==============================================================================
-# CBRF MODEL (Momentum-based)
+# FEATURE ENGINEERING AVANÇADA
 # ==============================================================================
-class CBRFModel:
-    """
-    Case-Based Reasoning with Recency Frequency
-    Detects momentum shifts in tennis matches
-    """
+class AdvancedFeatureEngineer:
+    """Feature engineering avançada para tênis"""
     
-    def __init__(self, momentum_window=5, decay_factor=0.85):
-        self.momentum_window = momentum_window
-        self.decay_factor = decay_factor
-        self.player_momentum = defaultdict(lambda: {
-            'recent_games': [],
-            'momentum_score': 0.5,
-            'set_streak': 0,
-            'game_streak': 0,
-            'breaking_points': 0
+    def __init__(self):
+        self.feature_names = []
+        self.feature_importance = {}
+    
+    def calculate_tennis_specific_features(self, player, matches, surface):
+        """Features específicas do tênis"""
+        if len(matches) == 0:
+            return {
+                'serve_hold_pct': 0.65,
+                'break_point_conversion': 0.40,
+                'tiebreak_win_pct': 0.50,
+                'first_serve_pct': 0.62,
+                'second_serve_win_pct': 0.48,
+                'return_points_won': 0.40,
+                'ace_rate': 0.05,
+                'double_fault_rate': 0.03
+            }
+        
+        # Simular estatísticas avançadas baseadas em resultados
+        wins = matches[matches['winner'] == player]
+        losses = matches[matches['loser'] == player]
+        total_matches = len(wins) + len(losses)
+        
+        # Serve/hold rate (estimado)
+        serve_hold = 0.65 + (len(wins) / total_matches) * 0.15
+        
+        # Break point conversion (estimado)
+        break_conv = 0.35 + (len(wins) / total_matches) * 0.15
+        
+        # Tiebreak performance
+        tiebreaks = matches[matches.get('tiebreaks', 0) > 0]
+        tiebreak_wins = len(tiebreaks[tiebreaks['winner'] == player])
+        tiebreak_pct = tiebreak_wins / len(tiebreaks) if len(tiebreaks) > 0 else 0.5
+        
+        return {
+            'serve_hold_pct': np.clip(serve_hold, 0.55, 0.85),
+            'break_point_conversion': np.clip(break_conv, 0.25, 0.60),
+            'tiebreak_win_pct': tiebreak_pct,
+            'first_serve_pct': 0.60 + np.random.normal(0, 0.05),
+            'second_serve_win_pct': 0.45 + (len(wins) / total_matches) * 0.10,
+            'return_points_won': 0.35 + (len(wins) / total_matches) * 0.15,
+            'ace_rate': 0.04 + (1 if 'Zverev' in player or 'Isner' in player else 0) * 0.03,
+            'double_fault_rate': 0.03 + (1 if 'Paire' in player else 0) * 0.02
+        }
+    
+    def calculate_consistency_score(self, player, matches):
+        """Calcula consistência do jogador (baixa variância = consistente)"""
+        if len(matches) < 5:
+            return 0.5
+        
+        games_played = matches['total_games'].values
+        consistency = 1 - (np.std(games_played) / 15)
+        return np.clip(consistency, 0, 1)
+    
+    def calculate_clutch_score(self, player, matches):
+        """Performance em momentos decisivos"""
+        if len(matches) < 10:
+            return 0.5
+        
+        # Análise de sets decisivos e tiebreaks
+        wins = matches[matches['winner'] == player]
+        three_set_matches = matches[matches.get('best_of', 3) == 3]
+        
+        if len(three_set_matches) > 0:
+            clutch_wins = len(three_set_matches[three_set_matches['winner'] == player])
+            clutch_pct = clutch_wins / len(three_set_matches)
+        else:
+            clutch_pct = 0.5
+        
+        return np.clip(clutch_pct, 0.3, 0.8)
+    
+    def calculate_surface_specific_form(self, player, matches, surface, window=10):
+        """Forma específica por superfície"""
+        surface_matches = matches[matches['surface'] == surface].head(window)
+        if len(surface_matches) == 0:
+            return 0.5
+        
+        wins = len(surface_matches[surface_matches['winner'] == player])
+        return wins / len(surface_matches)
+
+# ==============================================================================
+# CBRF MODEL MELHORADO
+# ==============================================================================
+class ImprovedCBRFModel:
+    """CBRF com análise de momentum mais sofisticada"""
+    
+    def __init__(self, window=4, decay=0.92):
+        self.window = window
+        self.decay = decay
+        self.player_history = defaultdict(lambda: {
+            'results': [],
+            'games_won': [],
+            'sets_won': [],
+            'momentum_trend': [],
+            'confidence_trend': 0.5
         })
     
-    def update_player_history(self, df):
-        """Update player history with match results"""
+    def update_history(self, df):
         for _, row in df.sort_values('date').iterrows():
-            winner = row.get('winner')
-            loser = row.get('loser')
+            winner, loser = row.get('winner'), row.get('loser')
             if pd.isna(winner) or pd.isna(loser):
                 continue
             
-            # Update winner momentum
-            self._update_momentum(winner, True, row)
-            # Update loser momentum
-            self._update_momentum(loser, False, row)
+            # Update winner
+            self._add_result(winner, 1, row)
+            # Update loser
+            self._add_result(loser, 0, row)
     
-    def _update_momentum(self, player, won, match_row):
-        """Update momentum metrics for a player"""
-        momentum_data = self.player_momentum[player]
+    def _add_result(self, player, result, match_row):
+        history = self.player_history[player]
+        history['results'].append(result)
         
-        # Add result to recent games
-        momentum_data['recent_games'].append(1 if won else 0)
-        if len(momentum_data['recent_games']) > self.momentum_window:
-            momentum_data['recent_games'].pop(0)
+        if len(history['results']) > self.window:
+            history['results'].pop(0)
         
-        # Calculate momentum with decay
-        weighted_sum = 0
-        weight_sum = 0
-        for i, result in enumerate(reversed(momentum_data['recent_games'])):
-            weight = self.decay_factor ** i
-            weighted_sum += result * weight
-            weight_sum += weight
+        # Calculate weighted momentum
+        weights = [self.decay ** i for i in range(len(history['results']))]
+        weighted_sum = sum(r * w for r, w in zip(history['results'], weights))
+        momentum = weighted_sum / sum(weights)
         
-        momentum_data['momentum_score'] = weighted_sum / weight_sum if weight_sum > 0 else 0.5
+        history['momentum_trend'].append(momentum)
+        if len(history['momentum_trend']) > 5:
+            history['momentum_trend'].pop(0)
         
-        # Update streaks
-        if won:
-            momentum_data['set_streak'] = max(1, momentum_data['set_streak'] + 1)
-            momentum_data['game_streak'] = max(1, momentum_data['game_streak'] + 1)
-        else:
-            momentum_data['set_streak'] = min(-1, momentum_data['set_streak'] - 1)
-            momentum_data['game_streak'] = min(-1, momentum_data['game_streak'] - 1)
-        
-        # Track breaking points (close games)
-        if 'total_games' in match_row and not pd.isna(match_row['total_games']):
-            if abs(match_row['total_games'] - 21.5) < 3:
-                if won:
-                    momentum_data['breaking_points'] += 1
-                else:
-                    momentum_data['breaking_points'] -= 1
+        # Calculate trend (aceleração/desaceleração)
+        if len(history['momentum_trend']) >= 3:
+            trend = history['momentum_trend'][-1] - history['momentum_trend'][-3]
+            history['confidence_trend'] = 0.5 + trend * 0.5
     
-    def get_momentum_features(self, player1, player2, surface):
-        """Extract CBRF features for match prediction"""
-        p1 = self.player_momentum[player1]
-        p2 = self.player_momentum[player2]
+    def get_momentum_score(self, player):
+        history = self.player_history[player]
+        if not history['results']:
+            return 0.5
         
-        # Momentum difference
-        momentum_diff = p1['momentum_score'] - p2['momentum_score']
+        weights = [self.decay ** i for i in range(len(history['results']))]
+        momentum = sum(r * w for r, w in zip(history['results'], weights)) / sum(weights)
         
-        # Streak features
-        set_streak_diff = p1['set_streak'] - p2['set_streak']
-        game_streak_diff = p1['game_streak'] - p2['game_streak']
-        
-        # Recent form (last 5 games)
-        p1_recent = sum(p1['recent_games']) / len(p1['recent_games']) if p1['recent_games'] else 0.5
-        p2_recent = sum(p2['recent_games']) / len(p2['recent_games']) if p2['recent_games'] else 0.5
-        recent_diff = p1_recent - p2_recent
-        
-        # Breaking point advantage
-        bp_diff = p1['breaking_points'] - p2['breaking_points']
-        
-        # CBRF probability calculation
-        cbrf_prob = 0.5 + (momentum_diff * 0.3) + (recent_diff * 0.25) + (set_streak_diff * 0.025) + (bp_diff * 0.02)
-        cbrf_prob = np.clip(cbrf_prob, 0.05, 0.95)
-        
-        return {
-            'cbrf_probability': cbrf_prob,
-            'momentum_diff': momentum_diff,
-            'recent_form_diff': recent_diff,
-            'set_streak_diff': set_streak_diff,
-            'game_streak_diff': game_streak_diff,
-            'breaking_points_diff': bp_diff
-        }
+        # Add trend adjustment
+        trend_adj = (history['confidence_trend'] - 0.5) * 0.15
+        return np.clip(momentum + trend_adj, 0.1, 0.9)
 
 # ==============================================================================
-# BETAMINIC MODEL (Over/Under 21.5)
+# ENSEMBLE MODEL
 # ==============================================================================
-class BetaminicModel:
-    """
-    Betaminic-style statistical model for Over/Under 21.5 games
-    Uses player-specific serve/hold rates and set distribution
-    """
+class TennisEnsemble:
+    """Ensemble de múltiplos modelos para maior precisão"""
     
-    def __init__(self, min_samples=10):
+    def __init__(self):
+        self.models = {}
+        self.calibrated = False
+        self.feature_engineer = AdvancedFeatureEngineer()
+    
+    def train(self, X, y):
+        # LGBM com hiperparâmetros otimizados
+        lgbm = LGBMClassifier(
+            n_estimators=350, max_depth=6, learning_rate=0.025,
+            num_leaves=24, reg_alpha=1.5, reg_lambda=1.5,
+            subsample=0.8, colsample_bytree=0.7,
+            min_child_samples=20, class_weight='balanced',
+            random_state=42, verbose=-1
+        )
+        
+        # Random Forest para capturar interações não-lineares
+        rf = RandomForestClassifier(
+            n_estimators=200, max_depth=8, min_samples_split=15,
+            min_samples_leaf=8, max_features='sqrt',
+            class_weight='balanced', random_state=42, n_jobs=-1
+        )
+        
+        # Gradient Boosting
+        gb = GradientBoostingClassifier(
+            n_estimators=180, max_depth=5, learning_rate=0.03,
+            subsample=0.8, min_samples_split=20,
+            random_state=42
+        )
+        
+        # Train all models
+        self.models['lightgbm'] = lgbm.fit(X, y)
+        self.models['random_forest'] = rf.fit(X, y)
+        self.models['gradient_boosting'] = gb.fit(X, y)
+        
+        # Calibration para probabilidades mais precisas
+        self.models['lightgbm_calibrated'] = CalibratedClassifierCV(
+            self.models['lightgbm'], method='sigmoid', cv=5
+        ).fit(X, y)
+        
+        self.calibrated = True
+    
+    def predict_proba(self, X):
+        probas = []
+        weights = []
+        
+        for name, weight in ENSEMBLE_WEIGHTS.items():
+            model_key = name if name in self.models else f"{name}_calibrated"
+            if model_key in self.models:
+                proba = self.models[model_key].predict_proba(X)[:, 1]
+                probas.append(proba)
+                weights.append(weight)
+        
+        # Weighted average
+        proba_ensemble = np.average(probas, weights=weights, axis=0)
+        
+        # Apply Bayesian calibration
+        proba_calibrated = self._bayesian_calibration(proba_ensemble)
+        
+        return np.column_stack([1 - proba_calibrated, proba_calibrated])
+    
+    def _bayesian_calibration(self, probs):
+        """Calibração Bayesiana para probabilidades mais realistas"""
+        # Beta prior (assumindo viés leve para underdog)
+        alpha_prior, beta_prior = 5, 5
+        
+        calibrated = (probs * alpha_prior + 0.5 * beta_prior) / (alpha_prior + beta_prior)
+        return np.clip(calibrated, 0.05, 0.95)
+
+# ==============================================================================
+# BETAMINIC MODEL MELHORADO
+# ==============================================================================
+class ImprovedBetaminicModel:
+    """Betaminic com análise estatística mais profunda"""
+    
+    def __init__(self, min_samples=15):
         self.min_samples = min_samples
-        self.player_stats = defaultdict(lambda: {
-            'avg_games_per_match': 22.0,
-            'over_21_5_rate': 0.5,
-            'serve_hold_rate': 0.65,
-            'tiebreak_frequency': 0.25,
-            'three_set_rate': 0.35,
-            'games_std': 5.0
+        self.player_profiles = defaultdict(lambda: {
+            'avg_games': 22.0,
+            'over_rate': 0.5,
+            'under_rate': 0.5,
+            'games_std': 4.0,
+            'surface_games': {'Hard': 22.0, 'Clay': 22.0, 'Grass': 22.0},
+            'confidence': 0.5
         })
     
-    def update_player_stats(self, df):
-        """Update player statistics from historical data"""
+    def update_stats(self, df):
         for player in set(df['winner'].dropna()) | set(df['loser'].dropna()):
             matches = df[(df['winner'] == player) | (df['loser'] == player)]
             if len(matches) < self.min_samples:
                 continue
             
-            # Average games per match
-            if 'total_games' in matches.columns:
-                self.player_stats[player]['avg_games_per_match'] = matches['total_games'].mean()
-                self.player_stats[player]['games_std'] = matches['total_games'].std()
-                self.player_stats[player]['over_21_5_rate'] = (matches['total_games'] > 21.5).mean()
+            # Base statistics
+            games = matches['total_games'].values
+            self.player_profiles[player]['avg_games'] = np.mean(games)
+            self.player_profiles[player]['games_std'] = np.std(games)
+            self.player_profiles[player]['over_rate'] = np.mean(games > 21.5)
+            self.player_profiles[player]['under_rate'] = np.mean(games <= 21.5)
             
-            # Estimate serve hold rate from games won/lost
-            # Simplified: if player wins, they likely held serve more
-            wins = matches[matches['winner'] == player]
-            if len(wins) > 0:
-                self.player_stats[player]['serve_hold_rate'] = 0.65 + (len(wins) / len(matches)) * 0.15
+            # Surface-specific
+            for surf in ['Hard', 'Clay', 'Grass']:
+                surf_matches = matches[matches['surface'] == surf]
+                if len(surf_matches) >= 5:
+                    self.player_profiles[player]['surface_games'][surf] = surf_matches['total_games'].mean()
             
-            # Estimate three-set frequency
-            if 'best_of' in matches.columns:
-                three_set_matches = matches[matches.get('best_of', 3) == 3]
-                if len(three_set_matches) > 0:
-                    self.player_stats[player]['three_set_rate'] = len(three_set_matches) / len(matches)
+            # Confidence based on sample size
+            self.player_profiles[player]['confidence'] = min(0.95, len(matches) / 50)
     
-    def predict_over_under(self, player1, player2, surface='Hard'):
-        """Predict probability of Over 21.5 games"""
-        p1 = self.player_stats[player1]
-        p2 = self.player_stats[player2]
+    def predict_ou(self, p1, p2, surface):
+        prof1 = self.player_profiles[p1]
+        prof2 = self.player_profiles[p2]
         
-        # Combined expected games
-        expected_games = (p1['avg_games_per_match'] + p2['avg_games_per_match']) / 2
+        # Weighted by confidence
+        w1 = prof1['confidence']
+        w2 = prof2['confidence']
         
-        # Surface adjustment
-        surface_multiplier = 1.0
-        if surface == 'Clay':
-            surface_multiplier = 1.08  # Clay has longer rallies, more games
-        elif surface == 'Grass':
-            surface_multiplier = 0.92  # Grass has shorter points
+        # Expected games (using surface-specific when available)
+        exp_games_p1 = prof1['surface_games'].get(surface, prof1['avg_games'])
+        exp_games_p2 = prof2['surface_games'].get(surface, prof2['avg_games'])
         
-        expected_games *= surface_multiplier
+        exp_games = (exp_games_p1 * w1 + exp_games_p2 * w2) / (w1 + w2 + 1e-6)
         
-        # Historical over rate
-        historical_over = (p1['over_21_5_rate'] + p2['over_21_5_rate']) / 2
+        # Apply surface adjustment
+        exp_games *= BETAMINIC_SURFACE_ADJUST.get(surface, 1.0)
         
-        # Serve hold impact - higher hold rates = more games
-        serve_factor = (p1['serve_hold_rate'] + p2['serve_hold_rate']) / 2
-        serve_adjustment = (serve_factor - 0.65) * 0.5
+        # Clamp to realistic range
+        exp_games = np.clip(exp_games, 18, 35)
         
-        # Three-set probability
-        three_set_prob = (p1['three_set_rate'] + p2['three_set_rate']) / 2
-        three_set_adjustment = (three_set_prob - 0.35) * 0.3
+        # Calculate over probability using normal distribution assumption
+        combined_std = np.sqrt(prof1['games_std']**2 + prof2['games_std']**2) / 2
+        z_score = (21.5 - exp_games) / (combined_std + 1e-6)
+        over_prob = 1 - norm.cdf(z_score)
         
-        # Calculate final probability using Bayesian approach
-        base_prob = 0.5
-        expected_diff = (expected_games - 21.5) / 8
-        over_prob = base_prob + expected_diff * 0.4 + serve_adjustment + three_set_adjustment
-        over_prob = 0.3 * over_prob + 0.7 * historical_over  # Blend with historical
-        over_prob = np.clip(over_prob, 0.15, 0.85)
+        # Blend with historical rates
+        hist_over = (prof1['over_rate'] * w1 + prof2['over_rate'] * w2) / (w1 + w2 + 1e-6)
+        final_prob = 0.6 * over_prob + 0.4 * hist_over
         
-        return over_prob, expected_games
+        return np.clip(final_prob, 0.25, 0.75), exp_games
 
 # ==============================================================================
-# SURFACE DETECTION
+# FEATURE ENGINEERING COMPLETA
 # ==============================================================================
-TOURNAMENT_SURFACE_MAP = {
-    'monte carlo': 'Clay', 'madrid': 'Clay', 'rome': 'Clay', 'barcelona': 'Clay',
-    'munich': 'Clay', 'estoril': 'Clay', 'geneva': 'Clay', 'oeiras': 'Clay',
-    'santa cruz': 'Clay', 'tallahassee': 'Clay', 'busan': 'Hard', 'wuning': 'Hard',
-    'wimbledon': 'Grass', 'queens': 'Grass', 'halle': 'Grass', 'newport': 'Grass'
-}
+def build_complete_features(p1, p2, surface, player_stats, h2h_data, 
+                            cbrf_model, betaminic_model, feat_engineer):
+    """Constrói features completas para o modelo"""
+    
+    if p1 not in player_stats or p2 not in player_stats:
+        return None
+    
+    s1 = player_stats[p1]
+    s2 = player_stats[p2]
+    surf = surface if surface in ['Hard', 'Clay', 'Grass'] else 'Hard'
+    
+    # Get match history for both players
+    matches_p1 = s1.get('matches', pd.DataFrame())
+    matches_p2 = s2.get('matches', pd.DataFrame())
+    
+    # 1. ELO Features (4)
+    elo_ratio = s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1)
+    elo_diff = (s1['surface_elo'][surf] - s2['surface_elo'][surf]) / 200
+    win_rate_diff = s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf]
+    elo_trend = (s1.get('elo_trend', 0) - s2.get('elo_trend', 0)) * 2
+    
+    # 2. Form Features (4)
+    recent_form_diff = s1.get('recent_20_form', 0.5) - s2.get('recent_20_form', 0.5)
+    very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
+    consistency_diff = s1.get('consistency', 0.5) - s2.get('consistency', 0.5)
+    clutch_diff = s1.get('clutch', 0.5) - s2.get('clutch', 0.5)
+    
+    # 3. CBRF Momentum Features (3)
+    momentum_p1 = cbrf_model.get_momentum_score(p1)
+    momentum_p2 = cbrf_model.get_momentum_score(p2)
+    momentum_diff = momentum_p1 - momentum_p2
+    
+    # 4. Surface-specific form (2)
+    surface_form_p1 = feat_engineer.calculate_surface_specific_form(p1, matches_p1, surf)
+    surface_form_p2 = feat_engineer.calculate_surface_specific_form(p2, matches_p2, surf)
+    surface_form_diff = surface_form_p1 - surface_form_p2
+    
+    # 5. Tennis-specific stats (6)
+    tennis_stats1 = feat_engineer.calculate_tennis_specific_features(p1, matches_p1, surf)
+    tennis_stats2 = feat_engineer.calculate_tennis_specific_features(p2, matches_p2, surf)
+    
+    serve_diff = tennis_stats1['serve_hold_pct'] - tennis_stats2['serve_hold_pct']
+    break_diff = tennis_stats1['break_point_conversion'] - tennis_stats2['break_point_conversion']
+    tiebreak_diff = tennis_stats1['tiebreak_win_pct'] - tennis_stats2['tiebreak_win_pct']
+    return_diff = tennis_stats1['return_points_won'] - tennis_stats2['return_points_won']
+    ace_diff = tennis_stats1['ace_rate'] - tennis_stats2['ace_rate']
+    df_diff = tennis_stats2['double_fault_rate'] - tennis_stats1['double_fault_rate']
+    
+    # 6. H2H Features (2)
+    h2h_ratio = h2h_data.get((p1, p2), {}).get(surf, 0.5)
+    h2h_confidence = min(0.95, h2h_data.get((p1, p2), {}).get('matches', 0) / 10)
+    
+    # 7. Betaminic OU Features (2)
+    ou_prob, exp_games = betaminic_model.predict_ou(p1, p2, surf)
+    normalized_games = (exp_games - 21.5) / 15
+    
+    # 8. Advanced features (3)
+    volatility_diff = s1.get('volatility', 0.05) - s2.get('volatility', 0.05)
+    age_factor = 0  # Placeholder for age difference
+    ranking_diff = s1.get('ranking', 100) - s2.get('ranking', 100)
+    ranking_diff_norm = np.clip(ranking_diff / 100, -1, 1)
+    
+    # Combine all features
+    features = [
+        elo_ratio, elo_diff, win_rate_diff, elo_trend,
+        recent_form_diff, very_recent_diff, consistency_diff, clutch_diff,
+        momentum_diff, surface_form_diff,
+        serve_diff, break_diff, tiebreak_diff, return_diff, ace_diff, df_diff,
+        h2h_ratio, h2h_confidence,
+        normalized_games, ou_prob,
+        volatility_diff, ranking_diff_norm
+    ]
+    
+    return features
 
-def detect_surface_from_tournament(tournament_name, surface_hint=None):
-    if pd.isna(tournament_name):
-        return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
-    t = str(tournament_name).lower()
-    for key, surf in TOURNAMENT_SURFACE_MAP.items():
-        if key in t:
-            return surf
-    if any(x in t for x in ['clay', 'terre', 'antuka']):
-        return 'Clay'
-    if any(x in t for x in ['grass', 'lawn']):
-        return 'Grass'
-    return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
-
 # ==============================================================================
-# ENHANCED ELO WITH MOMENTUM
+# ELO SYSTEM MELHORADO
 # ==============================================================================
-def calculate_enhanced_elo(df, recent_matches=20):
-    players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
-    surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
-    recent_form = {p: [] for p in players}
+def calculate_advanced_elo(df, recent_matches=15):
+    players = set(df['winner'].dropna()) | set(df['loser'].dropna())
+    surface_elo = {p: {'Hard': 1500, 'Clay': 1500, 'Grass': 1500} for p in players}
     elo_history = {p: [] for p in players}
+    
+    # K-factors adaptativos
+    K_BASE = 28
+    K_SURPRISE_BONUS = 8
     
     for _, row in df.sort_values('date').iterrows():
         w, l = row['winner'], row['loser']
@@ -257,237 +440,182 @@ def calculate_enhanced_elo(df, recent_matches=20):
         if pd.isna(w) or pd.isna(l):
             continue
         
-        recent_form[w].append(1)
-        recent_form[l].append(0)
-        if len(recent_form[w]) > recent_matches:
-            recent_form[w].pop(0)
-        if len(recent_form[l]) > recent_matches:
-            recent_form[l].pop(0)
+        # Calculate expected scores
+        r1 = surface_elo[w][surf]
+        r2 = surface_elo[l][surf]
+        exp_w = 1 / (1 + 10 ** ((r2 - r1) / 400))
         
-        w_recent = sum(recent_form[w]) / len(recent_form[w]) if recent_form[w] else 0.5
-        l_recent = sum(recent_form[l]) / len(recent_form[l]) if recent_form[l] else 0.5
+        # Adaptive K-factor based on surprise level
+        surprise = abs(exp_w - 0.5) * 2
+        k = K_BASE + K_SURPRISE_BONUS * surprise
         
-        # Add momentum boost
-        momentum_boost = (w_recent - 0.5) * 15
+        # Update ELO
+        surface_elo[w][surf] += k * (1 - exp_w)
+        surface_elo[l][surf] += k * (0 - (1 - exp_w))
         
-        r1 = surface_elo[w][surf] + 45 * (w_recent - 0.5) + momentum_boost
-        r2 = surface_elo[l][surf] + 45 * (l_recent - 0.5)
-        
-        exp = 1 / (1 + 10 ** ((r2 - r1) / 400))
-        
-        # Adaptive K-factor
-        k_factor = 28 + 12 * (1 - abs(exp - 0.5) * 2)
-        
-        surface_elo[w][surf] += k_factor * (1 - exp)
-        surface_elo[l][surf] += k_factor * (0 - (1 - exp))
-        
-        # Store history for trend analysis
+        # Store history
         elo_history[w].append(surface_elo[w][surf])
         elo_history[l].append(surface_elo[l][surf])
     
-    return surface_elo, recent_form, elo_history
+    return surface_elo, elo_history
 
-def compute_player_stats_enhanced(df, recent_matches=20):
-    surface_elo, recent_form, elo_history = calculate_enhanced_elo(df, recent_matches)
-    stats = {}
+# ==============================================================================
+# TRAINING PIPELINE
+# ==============================================================================
+def train_advanced_model(df, feature_engineer):
+    """Pipeline de treinamento completo"""
+    
+    # Prepare data
+    df['surface'] = df.apply(lambda row: detect_surface_from_tournament(
+        row.get('tournament'), row.get('surface')), axis=1)
+    
+    # Calculate ELO
+    surface_elo, elo_history = calculate_advanced_elo(df)
+    
+    # Initialize models
+    cbrf_model = ImprovedCBRFModel(window=CBRF_MOMENTUM_WINDOW, decay=CBRF_MOMENTUM_DECAY)
+    betaminic_model = ImprovedBetaminicModel(min_samples=BETAMINIC_MIN_SAMPLES)
+    
+    # Update models with historical data
+    cbrf_model.update_history(df)
+    betaminic_model.update_stats(df)
+    
+    # Build player stats
+    player_stats = {}
+    h2h_data = defaultdict(lambda: defaultdict(lambda: {'wins': 0, 'matches': 0}))
     
     for player in set(df['winner'].dropna()) | set(df['loser'].dropna()):
-        matches = df[(df['winner'] == player) | (df['loser'] == player)].copy()
-        if len(matches) == 0:
-            stats[player] = {
-                'surface_elo': {'Hard':1500,'Clay':1500,'Grass':1500},
-                'surface_win_rate': {'Hard':0.5,'Clay':0.5,'Grass':0.5},
-                'very_recent_form': 0.5, 'recent_20_form': 0.5, 'avg_games': 22,
-                'elo_trend': 0, 'volatility': 0.05
-            }
-            continue
+        matches = df[(df['winner'] == player) | (df['loser'] == player)]
         
-        recent = matches.sort_values('date', ascending=False).head(recent_matches)
+        # Calculate stats for each surface
+        surface_win_rate = {}
+        for surf in ['Hard', 'Clay', 'Grass']:
+            surf_matches = matches[matches['surface'] == surf]
+            if len(surf_matches) > 0:
+                wins = len(surf_matches[surf_matches['winner'] == player])
+                surface_win_rate[surf] = wins / len(surf_matches)
+            else:
+                surface_win_rate[surf] = 0.5
+        
+        # Recent form
+        recent = matches.sort_values('date', ascending=False).head(15)
         very_recent = matches.sort_values('date', ascending=False).head(5)
         
-        surface_stats = {}
-        for surf in ['Hard', 'Clay', 'Grass']:
-            m = matches[matches['surface'] == surf]
-            surface_stats[surf] = len(m[m['winner'] == player]) / len(m) if len(m) > 0 else 0.5
+        # Advanced metrics
+        consistency = feature_engineer.calculate_consistency_score(player, matches)
+        clutch = feature_engineer.calculate_clutch_score(player, matches)
         
-        # Calculate ELO trend
-        elo_vals = elo_history.get(player, [1500] * 5)
+        # ELO trend
+        elo_vals = elo_history.get(player, [1500])
         elo_trend = (elo_vals[-1] - elo_vals[0]) / 100 if len(elo_vals) > 1 else 0
         volatility = np.std(elo_vals[-10:]) / 100 if len(elo_vals) >= 10 else 0.05
         
-        stats[player] = {
+        player_stats[player] = {
             'surface_elo': surface_elo[player],
-            'surface_win_rate': surface_stats,
-            'very_recent_form': len(very_recent[very_recent['winner'] == player]) / len(very_recent) if len(very_recent) > 0 else 0.5,
+            'surface_win_rate': surface_win_rate,
             'recent_20_form': len(recent[recent['winner'] == player]) / len(recent) if len(recent) > 0 else 0.5,
-            'avg_games': float(matches.get('total_games', pd.Series([22])).mean()),
+            'very_recent_form': len(very_recent[very_recent['winner'] == player]) / len(very_recent) if len(very_recent) > 0 else 0.5,
+            'avg_games': matches['total_games'].mean() if 'total_games' in matches.columns else 22,
+            'consistency': consistency,
+            'clutch': clutch,
             'elo_trend': elo_trend,
-            'volatility': volatility
+            'volatility': volatility,
+            'ranking': 100,  # Placeholder
+            'matches': matches
         }
     
-    return stats
-
-# ==============================================================================
-# ENHANCED FEATURES WITH CBRF + BETAMINIC
-# ==============================================================================
-def build_features_enhanced(p1, p2, surface, player_stats, h2h_surface, cbrf_model, betaminic_model):
-    if p1 not in player_stats or p2 not in player_stats:
-        return None
+    # Build H2H data
+    for _, row in df.iterrows():
+        if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
+            w, l = row['winner'], row['loser']
+            surf = row.get('surface', 'Hard')
+            h2h_data[w][l][surf] = h2h_data[w][l].get(surf, 0) + 1
+            h2h_data[w][l]['matches'] = h2h_data[w][l].get('matches', 0) + 1
     
-    s1 = player_stats[p1]
-    s2 = player_stats[p2]
-    surf = surface if surface in ['Hard','Clay','Grass'] else 'Hard'
-    
-    # H2H features
-    h2h_surf_ratio = 0.5
-    pair = (p1, p2)
-    if pair in h2h_surface:
-        total = h2h_surface[pair].get(surf, 0) + h2h_surface.get((p2,p1), {}).get(surf, 0) + 1
-        h2h_surf_ratio = (h2h_surface[pair].get(surf, 0) + 0.5) / total
-    
-    # CBRF momentum features
-    cbrf_features = cbrf_model.get_momentum_features(p1, p2, surf)
-    
-    # Betaminic OU features
-    betaminic_over_prob, expected_games = betaminic_model.predict_over_under(p1, p2, surf)
-    
-    # Combined features array
-    features = [
-        # ELO based (4 features)
-        s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1),
-        s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
-        abs(s1['surface_elo'][surf] - s2['surface_elo'][surf]) / 180,
-        s1['elo_trend'] - s2['elo_trend'],
-        
-        # Form based (3 features)
-        s1.get('recent_20_form', 0.5) - s2.get('recent_20_form', 0.5),
-        s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5),
-        s1['volatility'] - s2['volatility'],
-        
-        # CBRF features (5 features)
-        cbrf_features['momentum_diff'],
-        cbrf_features['recent_form_diff'],
-        cbrf_features['set_streak_diff'] / 5,
-        cbrf_features['breaking_points_diff'] / 10,
-        cbrf_features['cbrf_probability'],
-        
-        # H2H (1 feature)
-        h2h_surf_ratio,
-        
-        # Games/OU (2 features)
-        (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 44,
-        betaminic_over_prob
-    ]
-    
-    return features
-
-# ==============================================================================
-# TRAINING WITH ENHANCED MODELS
-# ==============================================================================
-def train_models_enhanced(df, player_stats, h2h_surface, cbrf_model, betaminic_model):
-    X, y_winner, y_ou = [], [], []
+    # Build training dataset
+    X_train, y_train = [], []
     
     for _, row in df.iterrows():
         if pd.isna(row.get('winner')) or pd.isna(row.get('loser')):
             continue
-        surf = row.get('surface', 'Hard')
-        total_games = row.get('total_games', 22)
         
-        feat = build_features_enhanced(row['winner'], row['loser'], surf, player_stats, h2h_surface, cbrf_model, betaminic_model)
-        if feat:
-            X.append(feat)
-            y_winner.append(1)
-            y_ou.append(1 if total_games > 21.5 else 0)
+        surf = row.get('surface', 'Hard')
+        
+        features = build_complete_features(
+            row['winner'], row['loser'], surf, player_stats, h2h_data,
+            cbrf_model, betaminic_model, feature_engineer
+        )
+        
+        if features:
+            X_train.append(features)
+            y_train.append(1)  # Winner
             
-            # Add reverse match for symmetry
-            feat_rev = build_features_enhanced(row['loser'], row['winner'], surf, player_stats, h2h_surface, cbrf_model, betaminic_model)
-            if feat_rev:
-                X.append(feat_rev)
-                y_winner.append(0)
-                y_ou.append(1 if total_games > 21.5 else 0)
+            # Add reverse match
+            features_rev = build_complete_features(
+                row['loser'], row['winner'], surf, player_stats, h2h_data,
+                cbrf_model, betaminic_model, feature_engineer
+            )
+            if features_rev:
+                X_train.append(features_rev)
+                y_train.append(0)
     
-    if len(X) == 0:
-        raise ValueError("No valid training data found")
+    # Train ensemble
+    X_train = np.array(X_train)
+    ensemble = TennisEnsemble()
+    ensemble.train(X_train, y_train)
     
-    X = np.array(X)
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Train winner prediction model (with CBRF focus)
-    model_winner = LGBMClassifier(
-        n_estimators=220, max_depth=5, learning_rate=0.03,
-        num_leaves=18, reg_alpha=2.5, reg_lambda=2.5,
-        subsample=0.85, colsample_bytree=0.8,
-        random_state=42, verbose=-1
-    )
-    
-    # Train OU prediction model (with Betaminic focus)
-    model_ou = LGBMClassifier(
-        n_estimators=180, max_depth=4, learning_rate=0.035,
-        num_leaves=14, reg_alpha=2.0, reg_lambda=2.0,
-        subsample=0.8, colsample_bytree=0.75,
-        random_state=42, verbose=-1
-    )
-    
-    model_winner.fit(X_scaled, y_winner)
-    model_ou.fit(X_scaled, y_ou)
-    
-    return model_winner, model_ou, scaler
+    return ensemble, player_stats, h2h_data, cbrf_model, betaminic_model, feature_engineer
 
 # ==============================================================================
-# PREDICTION WITH MODEL ENSEMBLE
+# PREDICTION WITH HIGH ACCURACY
 # ==============================================================================
-def predict_match_enhanced(model_winner, model_ou, scaler, player_stats, h2h_surface, 
-                           cbrf_model, betaminic_model, match):
-    p1 = match['player1']
-    p2 = match['player2']
-    surface = match['surface']
+def predict_with_confidence(ensemble, player_stats, h2h_data, cbrf_model, 
+                           betaminic_model, feature_engineer, match):
+    """Predição com alta precisão e métricas de confiança"""
     
-    feat = build_features_enhanced(p1, p2, surface, player_stats, h2h_surface, cbrf_model, betaminic_model)
-    if feat is None:
+    p1, p2, surface = match['player1'], match['player2'], match['surface']
+    
+    features = build_complete_features(
+        p1, p2, surface, player_stats, h2h_data,
+        cbrf_model, betaminic_model, feature_engineer
+    )
+    
+    if features is None:
         return None
     
-    feat_scaled = scaler.transform([feat])
+    features = np.array([features])
     
-    # Winner prediction with CBRF ensemble
-    raw_p = model_winner.predict_proba(feat_scaled)[0][1]
+    # Get ensemble probability
+    proba = ensemble.predict_proba(features)[0][1]
     
-    # Blend with CBRF probability
-    cbrf_features = cbrf_model.get_momentum_features(p1, p2, surface)
-    cbrf_prob = cbrf_features['cbrf_probability']
-    
-    # Weighted ensemble (70% ML, 30% CBRF)
-    blended_prob = 0.7 * raw_p + 0.3 * cbrf_prob
-    
-    # Apply calibration
-    prob_p1 = 0.5 + (blended_prob - 0.5) * WINNER_SMOOTH
-    prob_p1 = max(0.08, min(0.92, prob_p1))
+    # Apply final calibration
+    prob_p1 = 0.5 + (proba - 0.5) * WINNER_SMOOTH
+    prob_p1 = np.clip(prob_p1, 0.10, 0.90)
     prob_p2 = 1 - prob_p1
     
-    # Over/Under with Betaminic ensemble
-    raw_ou = model_ou.predict_proba(feat_scaled)[0][1]
-    betaminic_over_prob, expected_games = betaminic_model.predict_over_under(p1, p2, surface)
+    # Calculate confidence score
+    confidence = abs(prob_p1 - 0.5) * 2
+    confidence = np.clip(confidence, 0.4, 0.95)
     
-    # Weighted ensemble (60% ML, 40% Betaminic)
-    blended_ou = 0.6 * raw_ou + 0.4 * betaminic_over_prob
-    ou_prob = 0.5 + (blended_ou - 0.5) * OU_SMOOTH
-    ou_prob = max(0.20, min(0.80, ou_prob))
+    # Get CBRF momentum for reference
+    momentum_p1 = cbrf_model.get_momentum_score(p1)
+    momentum_p2 = cbrf_model.get_momentum_score(p2)
+    momentum_diff = momentum_p1 - momentum_p2
+    
+    # OU prediction
+    ou_prob, exp_games = betaminic_model.predict_ou(p1, p2, surface)
     
     winner_pred = p1 if prob_p1 > prob_p2 else p2
-    confidence = max(prob_p1, prob_p2)
     
-    # Enhanced recommendation with CBRF confidence boost
-    cbrf_confidence_boost = abs(cbrf_features['momentum_diff']) * 0.1
-    final_confidence = min(0.95, confidence + cbrf_confidence_boost)
-    
-    if final_confidence >= MIN_CONFIDENCE_STRONG:
-        rec = f"✅ STRONG {winner_pred} (CBRF: {cbrf_features['momentum_diff']:.2f})"
-    elif final_confidence >= MIN_CONFIDENCE_GOOD:
-        rec = f"🟢 {winner_pred}"
+    # Recommendation based on confidence
+    if confidence >= MIN_CONFIDENCE_STRONG:
+        rec = f"🔥 STRONG {winner_pred}"
+    elif confidence >= MIN_CONFIDENCE_GOOD:
+        rec = f"✅ GOOD {winner_pred}"
+    elif confidence >= MIN_CONFIDENCE_WEAK:
+        rec = f"🟡 WEAK {winner_pred}"
     else:
-        rec = f"🟡 {winner_pred}"
+        rec = f"⚪ AVOID {winner_pred}"
     
     return {
         'Tournament': match['tournament'],
@@ -497,162 +625,88 @@ def predict_match_enhanced(model_winner, model_ou, scaler, player_stats, h2h_sur
         'Prob_P1': prob_p1,
         'Prob_P2': prob_p2,
         'Predicted_Winner': winner_pred,
-        'Confidence': final_confidence,
+        'Confidence': confidence,
         'Recommendation': rec,
-        'CBRF_Momentum': cbrf_features['momentum_diff'],
-        'Expected_Games': round(expected_games, 1),
+        'Momentum_Edge': momentum_diff,
+        'Expected_Games': round(exp_games, 1),
         'OU': "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
         'OU_Prob': ou_prob
     }
 
 # ==============================================================================
-# SCRAPER
-# ==============================================================================
-def scrape_matches_sofascore(days_ahead=0):
-    try:
-        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=12)
-        if r.status_code != 200:
-            return []
-        
-        data = r.json()
-        matches = []
-        for ev in data.get("events", []):
-            try:
-                if "WTA" in str(ev.get("tournament", {}).get("category", {}).get("name", "")).upper():
-                    continue
-                matches.append({
-                    "tournament": ev["tournament"]["name"],
-                    "player1": ev["homeTeam"]["name"],
-                    "player2": ev["awayTeam"]["name"],
-                    "surface": detect_surface_from_tournament(ev["tournament"]["name"], ev.get("groundType"))
-                })
-            except:
-                continue
-        return matches
-    except:
-        return []
-
-# ==============================================================================
 # MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v3.0 - CBRF + Betaminic Integration")
-    st.caption("Modelos: CBRF (Momentum Detection) | Betaminic (Over/Under) | ELO Avançado")
+    st.title("🎾 ATP Predictor v4.0 - 80% Accuracy Goal")
+    st.caption("Ensemble de Modelos | Análise de Momentum Avançada | Calibração Bayesiana")
     
-    with st.expander("📊 Sobre os Modelos"):
-        st.markdown("""
-        **CBRF (Case-Based Reasoning with Recency Frequency)**
-        - Detecta mudanças de momentum em jogos recentes
-        - Analisa streaks de sets e games
-        - Avalia pontos de quebra e viradas
-        
-        **Betaminic Statistics**
-        - Especializado em Over/Under 21.5 games
-        - Baseado em taxas de saque e hold
-        - Considera distribuição de sets e superfície
-        
-        **ELO Avançado**
-        - Fator K adaptativo
-        - Histórico de tendência
-        - Volatilidade do jogador
-        """)
-
-    uploaded_file = st.file_uploader("📁 Upload do teu ficheiro histórico (Excel)", type=['xlsx'])
+    # Initialize feature engineer
+    feat_engineer = AdvancedFeatureEngineer()
     
-    RECENT_MATCHES = st.slider("📊 Número de jogos recentes para análise", 10, 30, 20, 5)
+    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
-    if uploaded_file and 'model_winner' not in st.session_state:
-        with st.spinner("🔄 A treinar modelos CBRF + Betaminic..."):
+    if uploaded_file and 'ensemble' not in st.session_state:
+        with st.spinner("🔄 Treinando ensemble de alta precisão... (pode levar alguns minutos)"):
             try:
-                df = pd.read_excel(uploaded_file)
+                # Load data
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
                 df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
                 
                 # Column mapping
-                if 'tourney_date' in df.columns:
-                    df.rename(columns={'tourney_date': 'date'}, inplace=True)
-                if 'winner_name' in df.columns:
-                    df.rename(columns={'winner_name': 'winner'}, inplace=True)
-                if 'loser_name' in df.columns:
-                    df.rename(columns={'loser_name': 'loser'}, inplace=True)
-                if 'tourney_name' in df.columns:
-                    df.rename(columns={'tourney_name': 'tournament'}, inplace=True)
+                col_mapping = {
+                    'tourney_date': 'date', 'winner_name': 'winner', 'loser_name': 'loser',
+                    'tourney_name': 'tournament', 'score': 'score'
+                }
+                for old, new in col_mapping.items():
+                    if old in df.columns:
+                        df.rename(columns={old: new}, inplace=True)
                 
                 df['date'] = pd.to_datetime(df['date'], errors='coerce')
                 
-                # Calculate total games if not present
+                # Calculate total games
                 if 'total_games' not in df.columns and 'score' in df.columns:
                     def get_games(s):
-                        nums = [int(n) for n in str(s).replace(' ', '').split('-') if n.isdigit()]
+                        import re
+                        nums = [int(n) for n in re.findall(r'\d+', str(s)) if int(n) < 20]
                         return sum(nums) if nums else 22
                     df['total_games'] = df['score'].apply(get_games)
                 elif 'total_games' not in df.columns:
                     df['total_games'] = 22
                 
-                # Limit training data
-                max_rows = st.slider("Máximo de jogos para treino", 3000, len(df), min(8000, len(df)), 1000)
-                if len(df) > max_rows:
-                    df = df.sort_values('date', ascending=False).head(max_rows).copy()
+                # Train advanced model
+                ensemble, player_stats, h2h_data, cbrf_model, betaminic_model, _ = train_advanced_model(
+                    df, feat_engineer
+                )
                 
-                # Detect surfaces
-                df['surface'] = df.apply(lambda row: detect_surface_from_tournament(row.get('tournament'), row.get('surface')), axis=1)
-                
-                # Initialize CBRF and Betaminic models
-                cbrf_model = CBRFModel(momentum_window=CBRF_MOMENTUM_WINDOW, decay_factor=CBRF_MOMENTUM_DECAY)
-                betaminic_model = BetaminicModel(min_samples=BETAMINIC_MIN_SAMPLES)
-                
-                # Update models with historical data
-                cbrf_model.update_player_history(df)
-                betaminic_model.update_player_stats(df)
-                
-                # Compute enhanced player stats
-                player_stats = compute_player_stats_enhanced(df, RECENT_MATCHES)
-                
-                # Build H2H surface data
-                h2h_surface = defaultdict(lambda: {'Hard':0, 'Clay':0, 'Grass':0})
-                for _, row in df.iterrows():
-                    if pd.notna(row.get('winner')) and pd.notna(row.get('loser')):
-                        pair = (row['winner'], row['loser'])
-                        h2h_surface[pair][row.get('surface', 'Hard')] += 1
-                
-                # Train models
-                model_winner, model_ou, scaler = train_models_enhanced(df, player_stats, h2h_surface, cbrf_model, betaminic_model)
-                
-                # Store in session
-                st.session_state.model_winner = model_winner
-                st.session_state.model_ou = model_ou
-                st.session_state.scaler = scaler
+                st.session_state.ensemble = ensemble
                 st.session_state.player_stats = player_stats
-                st.session_state.h2h_surface = h2h_surface
+                st.session_state.h2h_data = h2h_data
                 st.session_state.cbrf_model = cbrf_model
                 st.session_state.betaminic_model = betaminic_model
+                st.session_state.feat_engineer = feat_engineer
                 st.session_state.models_ready = True
                 
-                st.success("✅ Modelos treinados com sucesso! (CBRF + Betaminic integrados)")
-                
-                # Show model statistics
-                st.info(f"📈 Dados: {len(df)} jogos | {len(player_stats)} jogadores | CBRF window: {CBRF_MOMENTUM_WINDOW}")
+                st.success("✅ Ensemble treinado com sucesso!")
+                st.info(f"📊 Dados: {len(df)} jogos | {len(player_stats)} jogadores")
                 
             except Exception as e:
-                st.error(f"Erro no treinamento: {str(e)}")
-                st.session_state.models_ready = False
-
-    # Prediction interface
-    if st.session_state.get('models_ready') and st.session_state.get('model_winner'):
+                st.error(f"Erro: {str(e)}")
+    
+    if st.session_state.get('models_ready'):
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 HOJE", use_container_width=True):
-                with st.spinner("Buscando jogos de hoje..."):
-                    st.session_state.current_matches = scrape_matches_sofascore(0)
+                st.session_state.matches = scrape_matches_sofascore(0)
         with col2:
             if st.button("📅 AMANHÃ", use_container_width=True):
-                with st.spinner("Buscando jogos de amanhã..."):
-                    st.session_state.current_matches = scrape_matches_sofascore(1)
+                st.session_state.matches = scrape_matches_sofascore(1)
         
-        # Manual match input
-        with st.expander("✏️ Ou insere manualmente um jogo"):
+        # Manual input
+        with st.expander("✏️ Previsão Manual"):
             col_a, col_b, col_c = st.columns(3)
             with col_a:
                 manual_p1 = st.text_input("Jogador 1")
@@ -661,106 +715,88 @@ def main():
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
             
-            if st.button("🔮 Prever Jogo Manual") and manual_p1 and manual_p2:
-                manual_match = {
-                    'tournament': 'Manual Entry',
-                    'player1': manual_p1,
-                    'player2': manual_p2,
-                    'surface': manual_surface
-                }
-                result = predict_match_enhanced(
-                    st.session_state.model_winner,
-                    st.session_state.model_ou,
-                    st.session_state.scaler,
-                    st.session_state.player_stats,
-                    st.session_state.h2h_surface,
-                    st.session_state.cbrf_model,
-                    st.session_state.betaminic_model,
-                    manual_match
-                )
-                if result:
-                    st.dataframe(pd.DataFrame([result]).style.format({
-                        'Prob_P1': '{:.1%}',
-                        'Prob_P2': '{:.1%}',
-                        'Confidence': '{:.1%}',
-                        'OU_Prob': '{:.1%}'
-                    }), use_container_width=True)
-                else:
-                    st.warning("Não foi possível fazer a previsão. Verifique se os jogadores existem no histórico.")
+            if st.button("🔮 Prever"):
+                if manual_p1 and manual_p2:
+                    match = {'tournament': 'Manual', 'player1': manual_p1, 
+                            'player2': manual_p2, 'surface': manual_surface}
+                    result = predict_with_confidence(
+                        st.session_state.ensemble,
+                        st.session_state.player_stats,
+                        st.session_state.h2h_data,
+                        st.session_state.cbrf_model,
+                        st.session_state.betaminic_model,
+                        st.session_state.feat_engineer,
+                        match
+                    )
+                    if result:
+                        st.dataframe(pd.DataFrame([result]).style.format({
+                            'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}',
+                            'Confidence': '{:.1%}', 'OU_Prob': '{:.1%}'
+                        }))
         
         # Show predictions
-        if st.session_state.get('current_matches'):
-            st.subheader("🎯 Previsões do Dia")
-            
+        if st.session_state.get('matches'):
+            st.subheader("🎯 Previsões")
             results = []
-            progress_bar = st.progress(0)
-            for i, match in enumerate(st.session_state.current_matches):
-                result = predict_match_enhanced(
-                    st.session_state.model_winner,
-                    st.session_state.model_ou,
-                    st.session_state.scaler,
+            
+            for match in st.session_state.matches:
+                result = predict_with_confidence(
+                    st.session_state.ensemble,
                     st.session_state.player_stats,
-                    st.session_state.h2h_surface,
+                    st.session_state.h2h_data,
                     st.session_state.cbrf_model,
                     st.session_state.betaminic_model,
+                    st.session_state.feat_engineer,
                     match
                 )
                 if result:
                     results.append(result)
-                progress_bar.progress((i + 1) / len(st.session_state.current_matches))
-            
-            progress_bar.empty()
             
             if results:
-                df_show = pd.DataFrame(results)
+                df_results = pd.DataFrame(results)
+                st.dataframe(df_results.style.format({
+                    'Prob_P1': '{:.1%}', 'Prob_P2': '{:.1%}',
+                    'Confidence': '{:.1%}', 'OU_Prob': '{:.1%}'
+                }), use_container_width=True)
                 
-                # Color coding for recommendations
-                def color_recommendation(val):
-                    if 'STRONG' in str(val):
-                        return 'background-color: #2e7d32; color: white'
-                    elif '🟢' in str(val):
-                        return 'background-color: #4caf50; color: white'
-                    elif '🟡' in str(val):
-                        return 'background-color: #ff9800; color: black'
-                    return ''
-                
-                styled = df_show.style.format({
-                    'Prob_P1': '{:.1%}',
-                    'Prob_P2': '{:.1%}',
-                    'Confidence': '{:.1%}',
-                    'OU_Prob': '{:.1%}'
-                }).map(color_recommendation, subset=['Recommendation'])
-                
-                st.dataframe(styled, use_container_width=True, hide_index=True, height=700)
-                
-                # Download button
+                # Download
                 buffer = io.BytesIO()
-                df_show.to_excel(buffer, index=False)
-                st.download_button(
-                    "📥 Baixar Excel com Previsões",
-                    buffer.getvalue(),
-                    f"previsoes_atp_{datetime.now().strftime('%Y-%m-%d_%H%M')}.xlsx",
-                    use_container_width=True
-                )
-                
-                # Summary statistics
-                st.subheader("📊 Resumo das Previsões")
-                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                with col_s1:
-                    st.metric("Total Jogos", len(results))
-                with col_s2:
-                    strong_count = sum(1 for r in results if 'STRONG' in r['Recommendation'])
-                    st.metric("STRONG Picks", strong_count)
-                with col_s3:
-                    avg_conf = df_show['Confidence'].mean()
-                    st.metric("Confiança Média", f"{avg_conf:.1%}")
-                with col_s4:
-                    over_count = sum(1 for r in results if r['OU'] == 'Over 21.5')
-                    st.metric("Over 21.5", f"{over_count}/{len(results)}")
-    elif uploaded_file and not st.session_state.get('models_ready'):
-        st.warning("⚠️ Aguarde o treinamento dos modelos ser concluído...")
-    elif not uploaded_file:
-        st.info("📂 Faça upload do ficheiro Excel com dados históricos para começar")
+                df_results.to_excel(buffer, index=False)
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+
+# Scraper function (mesma da versão anterior)
+def scrape_matches_sofascore(days_ahead=0):
+    try:
+        target_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return []
+        
+        data = r.json()
+        matches = []
+        for ev in data.get("events", []):
+            if "WTA" in str(ev.get("tournament", {}).get("category", {}).get("name", "")).upper():
+                continue
+            matches.append({
+                "tournament": ev["tournament"]["name"],
+                "player1": ev["homeTeam"]["name"],
+                "player2": ev["awayTeam"]["name"],
+                "surface": detect_surface_from_tournament(ev["tournament"]["name"])
+            })
+        return matches
+    except:
+        return []
+
+def detect_surface_from_tournament(tournament_name):
+    t = str(tournament_name).lower()
+    if 'clay' in t or 'monte carlo' in t or 'madrid' in t or 'rome' in t:
+        return 'Clay'
+    if 'grass' in t or 'wimbledon' in t or 'queens' in t:
+        return 'Grass'
+    return 'Hard'
 
 if __name__ == "__main__":
     main()
