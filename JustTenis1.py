@@ -6,13 +6,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import requests
-from sklearn.ensemble import VotingClassifier, GradientBoostingClassifier
-from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v2.3", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v2.4 - Fast", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIGURAÇÕES
@@ -42,12 +40,11 @@ def detect_surface_from_tournament(tournament_name, surface_hint=None):
     return surface_hint if surface_hint in ['Clay', 'Grass', 'Hard'] else 'Hard'
 
 # ==============================================================================
-# ELO E STATS
+# ELO E STATS (simplificado)
 # ==============================================================================
 def calculate_enhanced_elo(df):
     players = set(df['winner'].dropna().unique()) | set(df['loser'].dropna().unique())
     elo = {p: 1500.0 for p in players}
-    welo = {p: 1500.0 for p in players}
     surface_elo = {p: {'Hard':1500.0, 'Clay':1500.0, 'Grass':1500.0} for p in players}
     
     df_sorted = df.sort_values('date').copy()
@@ -61,45 +58,38 @@ def calculate_enhanced_elo(df):
         r2 = surface_elo[l][surf]
         exp = 1 / (1 + 10 ** ((r2 - r1) / 400))
         
-        surface_elo[w][surf] += 35 * (1 - exp)
-        surface_elo[l][surf] += 35 * (0 - (1 - exp))
-        elo[w] += 28 * (1 - exp)
-        elo[l] += 28 * (0 - (1 - exp))
-        
-        welo[w] = welo[w] * 0.78 + surface_elo[w][surf] * 0.22
-        welo[l] = welo[l] * 0.78 + surface_elo[l][surf] * 0.22
-    return elo, welo, surface_elo
+        surface_elo[w][surf] += 32 * (1 - exp)
+        surface_elo[l][surf] += 32 * (0 - (1 - exp))
+        elo[w] += 25 * (1 - exp)
+        elo[l] += 25 * (0 - (1 - exp))
+    return elo, surface_elo
 
 def compute_player_stats(df):
-    elo, welo, surface_elo = calculate_enhanced_elo(df)
+    elo, surface_elo = calculate_enhanced_elo(df)
     stats = {}
     for player in set(df['winner'].dropna()) | set(df['loser'].dropna()):
         matches = df[(df['winner'] == player) | (df['loser'] == player)].copy()
         if len(matches) == 0: continue
             
-        recent = matches.sort_values('date', ascending=False).head(8)
+        recent = matches.sort_values('date', ascending=False).head(7)
         very_recent = matches.sort_values('date', ascending=False).head(4)
         
         surface_stats = {}
-        surface_count = {}
         for surf in ['Hard', 'Clay', 'Grass']:
             m = matches[matches['surface'] == surf]
-            surface_count[surf] = len(m)
             surface_stats[surf] = len(m[m['winner'] == player]) / len(m) if len(m) > 0 else 0.5
         
         stats[player] = {
             'elo': float(elo[player]),
-            'welo': float(welo[player]),
             'surface_elo': surface_elo[player],
             'surface_win_rate': surface_stats,
-            'surface_match_count': surface_count,
             'very_recent_form': len(very_recent[very_recent['winner'] == player]) / len(very_recent) if len(very_recent)>0 else 0.5,
             'recent_form': len(recent[recent['winner'] == player]) / len(recent) if len(recent)>0 else 0.5,
         }
     return stats
 
 # ==============================================================================
-# FEATURES
+# FEATURES (reduzidas)
 # ==============================================================================
 def build_features(p1, p2, surface, player_stats, h2h_surface):
     if p1 not in player_stats or p2 not in player_stats: return None
@@ -115,31 +105,30 @@ def build_features(p1, p2, surface, player_stats, h2h_surface):
     
     return [
         s1['surface_elo'][surf] / (s2['surface_elo'][surf] + 1),
-        s1['welo'] / (s2['welo'] + 1),
         s1['surface_win_rate'][surf] - s2['surface_win_rate'][surf],
         s1['very_recent_form'] - s2['very_recent_form'],
-        s1['recent_form'] - s2['recent_form'],
         abs(s1['elo'] - s2['elo']) / 100,
         h2h_surf_ratio,
     ]
 
 # ==============================================================================
-# SOFASCORE SCRAPER
+# SCRAPER
 # ==============================================================================
 def scrape_matches_sofascore(days_ahead=0):
     try:
         target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         
-        r = requests.get(url, headers=headers, timeout=15)
+        r = requests.get(url, headers=headers, timeout=12)
         if r.status_code != 200: return []
         
         data = r.json()
         matches = []
         for ev in data.get("events", []):
             try:
-                if "WTA" in str(ev["tournament"]["category"]["name"]).upper(): continue
+                if "WTA" in str(ev.get("tournament", {}).get("category", {}).get("name", "")).upper(): 
+                    continue
                 matches.append({
                     "tournament": ev["tournament"]["name"],
                     "player1": ev["homeTeam"]["name"],
@@ -153,7 +142,7 @@ def scrape_matches_sofascore(days_ahead=0):
         return []
 
 # ==============================================================================
-# TRAINING
+# TRAINING (LIGHTGBM - RÁPIDO)
 # ==============================================================================
 def train_models(df, player_stats, h2h_surface):
     X, y = [], []
@@ -167,19 +156,21 @@ def train_models(df, player_stats, h2h_surface):
             X.append(build_features(row['loser'], row['winner'], surf, player_stats, h2h_surface))
             y.append(0)
     
-    X, y = np.array(X), np.array(y)
-    
-    ensemble = VotingClassifier([
-        ('gb', GradientBoostingClassifier(n_estimators=320, max_depth=5, learning_rate=0.035, random_state=42)),
-        ('xgb', XGBClassifier(n_estimators=380, max_depth=5, learning_rate=0.028, random_state=42)),
-        ('lgb', LGBMClassifier(n_estimators=380, max_depth=5, learning_rate=0.03, verbose=-1, random_state=42))
-    ], voting='soft')
-    
-    ensemble.fit(X, y)
-    return ensemble
+    model = LGBMClassifier(
+        n_estimators=280,
+        max_depth=6,
+        learning_rate=0.045,
+        num_leaves=32,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        random_state=42,
+        verbose=-1
+    )
+    model.fit(np.array(X), np.array(y))
+    return model
 
 # ==============================================================================
-# PREDICT MATCH
+# PREDICT
 # ==============================================================================
 def predict_match(model, player_stats, h2h_surface, match):
     p1 = match['player1']
@@ -216,20 +207,19 @@ def predict_match(model, player_stats, h2h_surface, match):
     }
 
 # ==============================================================================
-# MAIN APP
+# MAIN
 # ==============================================================================
 def main():
-    st.title("🎾 ATP & Challenger Predictor v2.3")
-    st.markdown("**Ensemble Model + Surface ELO + Formatação Avançada**")
+    st.title("🎾 ATP Predictor v2.4 - Versão Rápida")
+    st.caption("Treino otimizado com LightGBM (muito mais rápido)")
 
     uploaded_file = st.file_uploader("📁 Upload do teu ficheiro histórico (Excel)", type=['xlsx'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("A carregar dados e treinar modelo..."):
+        with st.spinner("A treinar modelo (versão rápida)..."):
             df = pd.read_excel(uploaded_file)
             df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
             
-            # Renomear colunas comuns
             if 'tourney_date' in df.columns: df.rename(columns={'tourney_date': 'date'}, inplace=True)
             if 'winner_name' in df.columns: df.rename(columns={'winner_name': 'winner'}, inplace=True)
             if 'loser_name' in df.columns: df.rename(columns={'loser_name': 'loser'}, inplace=True)
@@ -252,57 +242,39 @@ def main():
             st.session_state.model = model
             st.session_state.player_stats = player_stats
             st.session_state.h2h_surface = h2h_surface
-            st.success("✅ Modelo treinado com sucesso!")
+            st.success("✅ Modelo rápido treinado com sucesso!")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📅 Previsões de HOJE", use_container_width=True):
+        if st.button("📅 HOJE", use_container_width=True):
             st.session_state.current_matches = scrape_matches_sofascore(0)
     with col2:
-        if st.button("📅 Previsões de AMANHÃ", use_container_width=True):
+        if st.button("📅 AMANHÃ", use_container_width=True):
             st.session_state.current_matches = scrape_matches_sofascore(1)
 
-    # ====================== DISPLAY COM FORMATAÇÃO ======================
     if st.session_state.get('current_matches'):
-        results = []
-        for m in st.session_state.current_matches:
-            pred = predict_match(st.session_state.model, st.session_state.player_stats, 
-                               st.session_state.h2h_surface, m)
-            if pred:
-                results.append(pred)
+        results = [predict_match(st.session_state.model, st.session_state.player_stats, 
+                               st.session_state.h2h_surface, m) 
+                  for m in st.session_state.current_matches if predict_match(...) is not None]
+        
+        results = [r for r in results if r is not None]
         
         if results:
             df_show = pd.DataFrame(results)
-            
-            # Formatação visual
-            def highlight_confidence(val):
-                if val >= 0.78:
-                    return 'background-color: #00c853; color: white; font-weight: bold'
-                elif val >= 0.68:
-                    return 'background-color: #64dd17; color: black; font-weight: bold'
-                elif val >= 0.60:
-                    return 'background-color: #ffeb3b; color: black'
-                return ''
-            
             styled = df_show.style.format({
                 'Prob_P1': '{:.1%}',
                 'Prob_P2': '{:.1%}',
                 'Confidence': '{:.1%}'
-            }).applymap(highlight_confidence, subset=['Confidence'])
+            })
             
             st.subheader("🎯 Previsões")
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=720)
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=650)
             
-            # Download
             buffer = io.BytesIO()
             df_show.to_excel(buffer, index=False)
-            st.download_button(
-                label="📥 Baixar em Excel",
-                data=buffer.getvalue(),
-                file_name=f"previsoes_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            st.download_button("📥 Baixar Excel", buffer.getvalue(), 
+                             f"previsoes_rapidas_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                             use_container_width=True)
 
 if __name__ == "__main__":
     main()
