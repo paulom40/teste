@@ -9,8 +9,6 @@ import unicodedata
 from datetime import datetime, timedelta
 from difflib import get_close_matches
 from xgboost import XGBClassifier
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score
 
 st.set_page_config(page_title="🎾 Tennis Predictor PRO", layout="wide")
 
@@ -64,7 +62,7 @@ def normalize_surface(s):
     return "Hard"
 
 # =========================
-# 📂 LOAD DATA (ROBUSTO)
+# 📂 LOAD DATA
 # =========================
 @st.cache_data
 def load_data(file):
@@ -72,25 +70,22 @@ def load_data(file):
 
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # DEBUG
-    st.write("📊 Colunas encontradas:", df.columns.tolist())
-
-    # mapear automaticamente
+    # rename automático
     if "winner_name" in df.columns:
         df.rename(columns={"winner_name":"winner"}, inplace=True)
     if "loser_name" in df.columns:
         df.rename(columns={"loser_name":"loser"}, inplace=True)
 
-    # DATA (resolve teu erro)
+    # DATA FIX
     if "tourney_date" in df.columns:
         df["date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
     elif "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     else:
-        st.error("❌ Coluna de data não encontrada!")
+        st.error("❌ Coluna de data não encontrada")
         st.stop()
 
-    # superfície
+    # surface
     if "surface" in df.columns:
         df["surface"] = df["surface"].apply(normalize_surface)
     else:
@@ -102,18 +97,17 @@ def load_data(file):
     else:
         df["total_games"] = 22
 
-    # normalizar nomes
+    # nomes
     df["winner"] = df["winner"].apply(normalize_name)
     df["loser"] = df["loser"].apply(normalize_name)
 
     return df
 
 # =========================
-# 🎾 SURFACE ELO (FIX BUG)
+# 🎾 SURFACE ELO
 # =========================
 def calculate_surface_elo(df):
     players = set(df["winner"]) | set(df["loser"])
-
     elo = {p: {"Hard":1500,"Clay":1500,"Grass":1500} for p in players}
 
     df = df.sort_values("date")
@@ -125,7 +119,6 @@ def calculate_surface_elo(df):
         if surf not in ["Hard","Clay","Grass"]:
             surf = "Hard"
 
-        # FIX: garantir player existe
         if w not in elo:
             elo[w] = {"Hard":1500,"Clay":1500,"Grass":1500}
         if l not in elo:
@@ -154,7 +147,6 @@ def compute_stats(df):
             continue
 
         wins = (m["winner"] == p).sum()
-
         recent = m.sort_values("date", ascending=False).head(10)
         recent_form = (recent["winner"] == p).mean()
 
@@ -183,25 +175,37 @@ def build_features(p1, p2, surf, stats):
         s1["elo"][surf] - s2["elo"][surf],
         s1["win_rate"] - s2["win_rate"],
         s1["recent"] - s2["recent"],
-        np.log(s1["matches"]+1) - np.log(s2["matches"]+1)
+        np.log(s1["matches"]+1) - np.log(s2["matches"]+1),
+        (s1["win_rate"] + s2["win_rate"]) / 2,
+        abs(s1["elo"][surf] - s2["elo"][surf])
     ]
 
 # =========================
-# 🤖 MODEL
+# 🤖 TRAIN
 # =========================
 def train(df, stats):
     X, y = [], []
+    X_ou, y_ou = [], []
 
     for _, r in df.iterrows():
         f1 = build_features(r["winner"], r["loser"], r["surface"], stats)
-        f2 = build_features(r["loser"], r["winner"], r["surface"], stats)
 
         if f1:
-            X.append(f1); y.append(1)
+            X.append(f1)
+            y.append(1)
+
+            total = r.get("total_games", 22)
+            X_ou.append(f1)
+            y_ou.append(1 if total > 21.5 else 0)
+
+        f2 = build_features(r["loser"], r["winner"], r["surface"], stats)
+
         if f2:
-            X.append(f2); y.append(0)
+            X.append(f2)
+            y.append(0)
 
     X, y = np.array(X), np.array(y)
+    X_ou, y_ou = np.array(X_ou), np.array(y_ou)
 
     model = XGBClassifier(
         n_estimators=300,
@@ -212,23 +216,27 @@ def train(df, stats):
         random_state=42
     )
 
-    tscv = TimeSeriesSplit(n_splits=5)
-    scores = []
-
-    for tr, te in tscv.split(X):
-        model.fit(X[tr], y[tr])
-        pred = model.predict(X[te])
-        scores.append(accuracy_score(y[te], pred))
-
-    st.write(f"📊 Accuracy: {np.mean(scores):.3f}")
+    model_ou = XGBClassifier(
+        n_estimators=250,
+        max_depth=4,
+        learning_rate=0.03,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42
+    )
 
     model.fit(X, y)
-    return model
+    model_ou.fit(X_ou, y_ou)
+
+    st.write(f"📊 Winner samples: {len(X)}")
+    st.write(f"🎲 OU samples: {len(X_ou)}")
+
+    return model, model_ou
 
 # =========================
 # 🎯 PREDICT
 # =========================
-def predict(model, stats, p1, p2, surf):
+def predict(model, model_ou, stats, p1, p2, surf):
 
     players = list(stats.keys())
 
@@ -246,10 +254,13 @@ def predict(model, stats, p1, p2, surf):
         return None, raw_p1, raw_p2
 
     prob = model.predict_proba([f])[0][1]
+    ou_prob = model_ou.predict_proba([f])[0][1]
 
     return {
         "winner": p1 if prob > 0.5 else p2,
-        "prob": max(prob, 1 - prob)
+        "prob": max(prob, 1 - prob),
+        "ou_label": "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
+        "ou_prob": max(ou_prob, 1 - ou_prob)
     }, raw_p1, raw_p2
 
 # =========================
@@ -258,13 +269,12 @@ def predict(model, stats, p1, p2, surf):
 def get_matches(days_ahead=0):
     try:
         date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
         url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date}"
 
         r = requests.get(url, timeout=10)
 
         if r.status_code != 200:
-            st.error(f"Erro API: {r.status_code}")
+            st.error("Erro API")
             return []
 
         data = r.json()
@@ -289,12 +299,10 @@ def get_matches(days_ahead=0):
             except:
                 continue
 
-        st.write(f"🎾 ATP jogos: {len(matches)}")
-
         return matches
 
     except Exception as e:
-        st.error(f"Erro API: {e}")
+        st.error(f"Erro: {e}")
         return []
 
 # =========================
@@ -308,7 +316,7 @@ if file:
     df = load_data(file)
 
     stats = compute_stats(df)
-    model = train(df, stats)
+    model, model_ou = train(df, stats)
 
     st.success("✅ Modelo pronto!")
 
@@ -333,22 +341,30 @@ if file:
             st.write(f"🎾 {m['player1']} vs {m['player2']}")
 
             pred, raw_p1, raw_p2 = predict(
-                model, stats, m["player1"], m["player2"], m["surface"]
+                model, model_ou, stats,
+                m["player1"], m["player2"], m["surface"]
             )
 
             if pred:
-                st.success(f"🏆 {pred['winner']} ({pred['prob']:.1%})")
+                st.success(f"""
+                🏆 {pred['winner']} ({pred['prob']:.1%})
+
+                🎲 {pred['ou_label']} ({pred['ou_prob']:.1%})
+                """)
 
                 results.append({
                     "Match": f"{raw_p1} vs {raw_p2}",
                     "Winner": pred["winner"],
-                    "Prob": pred["prob"]
+                    "Prob": pred["prob"],
+                    "OU": pred["ou_label"],
+                    "OU_Prob": pred["ou_prob"]
                 })
             else:
-                st.warning("Sem previsão (player não encontrado)")
+                st.warning("Sem previsão")
 
         if results:
             df_exp = pd.DataFrame(results)
+
             buffer = io.BytesIO()
             df_exp.to_excel(buffer, index=False)
             buffer.seek(0)
