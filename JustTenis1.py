@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from collections import defaultdict
 from datetime import datetime, timedelta
 import warnings
+from io import BytesIO
+import random
 warnings.filterwarnings('ignore')
 
 # ==============================================================================
@@ -52,6 +54,21 @@ st.markdown("""
         padding: 1rem;
         border-radius: 0.5rem;
         text-align: center;
+    }
+    .high-confidence {
+        border-left: 4px solid #51cf66;
+        padding-left: 1rem;
+        margin: 0.5rem 0;
+    }
+    .medium-confidence {
+        border-left: 4px solid #ffd43b;
+        padding-left: 1rem;
+        margin: 0.5rem 0;
+    }
+    .low-confidence {
+        border-left: 4px solid #ff6b6b;
+        padding-left: 1rem;
+        margin: 0.5rem 0;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -113,7 +130,7 @@ def compute_surface_length_stats(df):
 
 
 # ==============================================================================
-# SERVE/RETURN DOMINANCE METRICS
+# PLAYER STATS AND FEATURES
 # ==============================================================================
 
 def calculate_serve_return_stats(df):
@@ -175,10 +192,6 @@ def calculate_serve_return_stats(df):
     return stats
 
 
-# ==============================================================================
-# PLAYER MATCH STYLE & GRIND FACTOR
-# ==============================================================================
-
 def calculate_player_match_style(df, player_stats):
     """Identify 'grinders' (extend matches) vs 'closers' (finish quickly)."""
     if df is None or len(df) == 0:
@@ -213,10 +226,6 @@ def calculate_player_match_style(df, player_stats):
     return player_stats
 
 
-# ==============================================================================
-# RECENT MATCH LENGTH TREND
-# ==============================================================================
-
 def extract_recent_length_trend(df, player, surface, window=5):
     """Extract recent match length trend on specific surface."""
     if df is None or len(df) == 0:
@@ -234,7 +243,7 @@ def extract_recent_length_trend(df, player, surface, window=5):
     if 'date' in matches.columns:
         matches = matches.sort_values('date', ascending=False)
     else:
-        matches = matches.iloc[::-1]  # Assume chronological order
+        matches = matches.iloc[::-1]
     
     recent = matches.head(window)
     
@@ -267,10 +276,6 @@ def extract_recent_length_trend(df, player, surface, window=5):
         'recent_count': len(recent),
     }
 
-
-# ==============================================================================
-# COMPETITIVENESS INDEX
-# ==============================================================================
 
 def build_competitiveness_features(p1, p2, player_stats, h2h_surface, surface):
     """Build competitiveness index - close matches go longer."""
@@ -313,10 +318,6 @@ def build_competitiveness_features(p1, p2, player_stats, h2h_surface, surface):
         'surf_wr_gap': surf_wr_gap,
     }
 
-
-# ==============================================================================
-# MASTER FEATURE BUILDER
-# ==============================================================================
 
 def build_ou_features(p1, p2, surface, player_stats, h2h, h2h_surface, 
                       surface_length_stats, df, match=None):
@@ -420,17 +421,16 @@ def build_ou_features(p1, p2, surface, player_stats, h2h, h2h_surface,
     return features
 
 
-# ==============================================================================
-# PREDICTION FUNCTION (Simplified model)
-# ==============================================================================
-
-def predict_over_under(features):
+def predict_over_under(features, seed=None):
     """
     Simplified prediction model.
     In production, replace with trained GradientBoosting model.
     """
     if features is None:
-        return 0.50, "UNDER"
+        return 0.50, "UNDER", 0.0
+    
+    if seed is not None:
+        np.random.seed(seed)
     
     # Weighted scoring based on feature importance
     weights = {
@@ -455,7 +455,7 @@ def predict_over_under(features):
     recent_score = np.mean(features[14:19])
     
     # Serve dominance (features 19-22)
-    serve_score = 1 - np.mean(features[19:23])  # Lower serve dominance = longer matches
+    serve_score = 1 - np.mean(features[19:23])
     
     # Context (features 23-27)
     context_score = np.mean(features[23:28])
@@ -471,10 +471,10 @@ def predict_over_under(features):
     )
     
     # Add slight random variation for demo (remove in production)
-    final_score = np.clip(final_score + np.random.normal(0, 0.03), 0.2, 0.85)
+    final_score = np.clip(final_score + np.random.normal(0, 0.02), 0.2, 0.85)
     
     prediction = "OVER" if final_score > 0.5 else "UNDER"
-    confidence = abs(final_score - 0.5) * 2
+    confidence = min(abs(final_score - 0.5) * 2, 0.95)
     
     return final_score, prediction, confidence
 
@@ -545,6 +545,46 @@ def generate_demo_data():
             'serve_dominance': 0.58,
             'grind_factor': 1.20,
             'finish_factor': 0.88,
+        },
+        'Stefanos Tsitsipas': {
+            'surface_elo': {'Hard': 2300, 'Clay': 2350, 'Grass': 2250},
+            'surface_win_rate': {'Hard': 0.70, 'Clay': 0.78, 'Grass': 0.65},
+            'surface_match_count': {'Hard': 95, 'Clay': 100, 'Grass': 30},
+            'avg_games': 23.5,
+            'recent_form': 0.75,
+            'serve_dominance': 0.62,
+            'grind_factor': 1.05,
+            'finish_factor': 0.98,
+        },
+        'Andrey Rublev': {
+            'surface_elo': {'Hard': 2280, 'Clay': 2250, 'Grass': 2220},
+            'surface_win_rate': {'Hard': 0.68, 'Clay': 0.65, 'Grass': 0.60},
+            'surface_match_count': {'Hard': 90, 'Clay': 75, 'Grass': 25},
+            'avg_games': 22.5,
+            'recent_form': 0.68,
+            'serve_dominance': 0.68,
+            'grind_factor': 0.98,
+            'finish_factor': 1.02,
+        },
+        'Holger Rune': {
+            'surface_elo': {'Hard': 2250, 'Clay': 2280, 'Grass': 2200},
+            'surface_win_rate': {'Hard': 0.65, 'Clay': 0.70, 'Grass': 0.58},
+            'surface_match_count': {'Hard': 50, 'Clay': 55, 'Grass': 15},
+            'avg_games': 24.0,
+            'recent_form': 0.72,
+            'serve_dominance': 0.52,
+            'grind_factor': 1.18,
+            'finish_factor': 0.92,
+        },
+        'Taylor Fritz': {
+            'surface_elo': {'Hard': 2300, 'Clay': 2220, 'Grass': 2280},
+            'surface_win_rate': {'Hard': 0.72, 'Clay': 0.60, 'Grass': 0.70},
+            'surface_match_count': {'Hard': 85, 'Clay': 60, 'Grass': 25},
+            'avg_games': 21.0,
+            'recent_form': 0.74,
+            'serve_dominance': 0.75,
+            'grind_factor': 0.88,
+            'finish_factor': 1.12,
         }
     }
     
@@ -564,6 +604,228 @@ def generate_demo_data():
 
 
 # ==============================================================================
+# SCHEDULED MATCHES GENERATOR
+# ==============================================================================
+
+def generate_scheduled_matches():
+    """Generate scheduled matches for today and tomorrow."""
+    players = ['Novak Djokovic', 'Carlos Alcaraz', 'Jannik Sinner', 'Daniil Medvedev',
+               'Alexander Zverev', 'Stefanos Tsitsipas', 'Andrey Rublev', 'Holger Rune',
+               'Taylor Fritz', 'Rafael Nadal']
+    
+    surfaces = ['Hard', 'Clay', 'Grass']
+    tournaments = {
+        'Grand Slam': ['Australian Open', 'Roland Garros', 'Wimbledon', 'US Open'],
+        'ATP Masters 1000': ['Indian Wells', 'Miami Open', 'Monte-Carlo', 'Madrid Open', 
+                            'Rome Masters', 'Canada Masters', 'Cincinnati Masters', 
+                            'Shanghai Masters', 'Paris Masters'],
+        'ATP 500': ['Rotterdam', 'Rio Open', 'Dubai', 'Acapulco', 'Barcelona', 
+                   'Halle', 'Queens', 'Hamburg', 'Washington', 'Vienna', 'Basel'],
+        'ATP 250': ['Adelaide', 'Auckland', 'Dallas', 'Delray Beach', 'Marseille', 
+                   'Estoril', 'Munich', 'Geneva', 's-Hertogenbosch', 'Newport']
+    }
+    
+    today = datetime.now()
+    tomorrow = today + timedelta(days=1)
+    
+    matches = []
+    
+    # Generate 8-12 matches for today
+    num_today = random.randint(8, 12)
+    for i in range(num_today):
+        p1, p2 = random.sample(players, 2)
+        surface = random.choice(surfaces)
+        tournament_type = random.choice(list(tournaments.keys()))
+        tournament = random.choice(tournaments[tournament_type])
+        
+        # Random time between 10:00 and 22:00
+        hour = random.randint(10, 22)
+        minute = random.choice([0, 30])
+        time = f"{hour:02d}:{minute:02d}"
+        
+        matches.append({
+            'date': today.strftime('%Y-%m-%d'),
+            'day': 'Today',
+            'time': time,
+            'player1': p1,
+            'player2': p2,
+            'surface': surface,
+            'tournament': tournament,
+            'tournament_type': tournament_type,
+            'round': random.choice(['R1', 'R2', 'R3', 'QF', 'SF', 'F'])
+        })
+    
+    # Generate 6-10 matches for tomorrow
+    num_tomorrow = random.randint(6, 10)
+    for i in range(num_tomorrow):
+        p1, p2 = random.sample(players, 2)
+        surface = random.choice(surfaces)
+        tournament_type = random.choice(list(tournaments.keys()))
+        tournament = random.choice(tournaments[tournament_type])
+        
+        hour = random.randint(10, 22)
+        minute = random.choice([0, 30])
+        time = f"{hour:02d}:{minute:02d}"
+        
+        matches.append({
+            'date': tomorrow.strftime('%Y-%m-%d'),
+            'day': 'Tomorrow',
+            'time': time,
+            'player1': p1,
+            'player2': p2,
+            'surface': surface,
+            'tournament': tournament,
+            'tournament_type': tournament_type,
+            'round': random.choice(['R1', 'R2', 'R3', 'QF', 'SF', 'F'])
+        })
+    
+    return matches
+
+
+def predict_match(match, player_stats, default_stats, surface_length_stats, df=None):
+    """Generate prediction for a single match."""
+    p1 = match['player1']
+    p2 = match['player2']
+    surface = match['surface']
+    
+    # Get player stats
+    stats = {}
+    for player in [p1, p2]:
+        if player in player_stats:
+            stats[player] = player_stats[player]
+        else:
+            stats[player] = default_stats.copy()
+    
+    # Add required fields if missing
+    for player in [p1, p2]:
+        if 'surface_elo' not in stats[player]:
+            stats[player]['surface_elo'] = {'Hard': 2200, 'Clay': 2200, 'Grass': 2200}
+        if 'surface_win_rate' not in stats[player]:
+            stats[player]['surface_win_rate'] = {'Hard': 0.5, 'Clay': 0.5, 'Grass': 0.5}
+        if 'surface_match_count' not in stats[player]:
+            stats[player]['surface_match_count'] = {'Hard': 20, 'Clay': 20, 'Grass': 20}
+        if 'avg_games' not in stats[player]:
+            stats[player]['avg_games'] = 22.0
+        if 'recent_form' not in stats[player]:
+            stats[player]['recent_form'] = 0.5
+        if 'serve_dominance' not in stats[player]:
+            stats[player]['serve_dominance'] = 0.35
+        if 'grind_factor' not in stats[player]:
+            stats[player]['grind_factor'] = 1.0
+        if 'finish_factor' not in stats[player]:
+            stats[player]['finish_factor'] = 1.0
+    
+    # Build features
+    h2h_surface = defaultdict(lambda: defaultdict(int))
+    features = build_ou_features(
+        p1, p2, surface, stats, h2h_surface, h2h_surface, 
+        surface_length_stats, df
+    )
+    
+    # Make prediction
+    prob_over, prediction, confidence = predict_over_under(features, seed=hash(p1 + p2 + surface) % 10000)
+    
+    # Get surface stats
+    surf_stats = surface_length_stats[surface]
+    
+    # Calculate competitiveness
+    comp_data = build_competitiveness_features(p1, p2, stats, h2h_surface, surface)
+    
+    return {
+        'player1': p1,
+        'player2': p2,
+        'surface': surface,
+        'prediction': prediction,
+        'confidence': f"{confidence:.1%}",
+        'confidence_score': confidence,
+        'prob_over': prob_over,
+        'prob_under': 1 - prob_over,
+        'surface_baseline': f"{surf_stats['p_over_21_5']:.1%}",
+        'competitiveness': f"{comp_data['overall_competitiveness']:.1%}",
+        'avg_games_surface': f"{surf_stats['avg_games']:.1f}",
+        'p1_avg_games': f"{stats[p1]['avg_games']:.1f}",
+        'p2_avg_games': f"{stats[p2]['avg_games']:.1f}",
+        'p1_grind': f"{stats[p1]['grind_factor']:.2f}",
+        'p2_grind': f"{stats[p2]['grind_factor']:.2f}",
+        'tournament': match['tournament'],
+        'tournament_type': match['tournament_type'],
+        'round': match['round'],
+        'time': match['time']
+    }
+
+
+# ==============================================================================
+# EXCEL EXPORT FUNCTION
+# ==============================================================================
+
+def export_to_excel(predictions_df):
+    """Export predictions to Excel file with formatting."""
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Write main predictions sheet
+        predictions_df.to_excel(writer, sheet_name='Predictions', index=False)
+        
+        # Get workbook and worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Predictions']
+        
+        # Format headers
+        from openpyxl.styles import Font, PatternFill, Alignment
+        
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="1f77b4", end_color="1f77b4", fill_type="solid")
+        
+        for cell in worksheet[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        
+        # Adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 30)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        # Add summary statistics sheet
+        summary_data = {
+            'Metric': ['Total Matches', 'OVER Predictions', 'UNDER Predictions', 
+                      'Avg Confidence', 'High Confidence (>70%)', 'Medium Confidence (50-70%)',
+                      'Low Confidence (<50%)'],
+            'Value': [
+                len(predictions_df),
+                len(predictions_df[predictions_df['Prediction'] == 'OVER']),
+                len(predictions_df[predictions_df['Prediction'] == 'UNDER']),
+                f"{predictions_df['Confidence'].str.rstrip('%').astype(float).mean():.1f}%",
+                len(predictions_df[predictions_df['Confidence'].str.rstrip('%').astype(float) > 70]),
+                len(predictions_df[(predictions_df['Confidence'].str.rstrip('%').astype(float) >= 50) & 
+                                  (predictions_df['Confidence'].str.rstrip('%').astype(float) <= 70)]),
+                len(predictions_df[predictions_df['Confidence'].str.rstrip('%').astype(float) < 50])
+            ]
+        }
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Surface breakdown sheet
+        surface_breakdown = predictions_df.groupby('Surface').agg({
+            'Prediction': lambda x: (x == 'OVER').sum(),
+            'Confidence': lambda x: x.str.rstrip('%').astype(float).mean()
+        }).round(2)
+        surface_breakdown.columns = ['OVER_Count', 'Avg_Confidence_%']
+        surface_breakdown.to_excel(writer, sheet_name='Surface Breakdown')
+    
+    output.seek(0)
+    return output
+
+
+# ==============================================================================
 # MAIN APP
 # ==============================================================================
 
@@ -574,16 +836,11 @@ def main():
     with st.sidebar:
         st.markdown("## ⚙️ Settings")
         
-        # Tournament/Surface selection
-        tournament_type = st.selectbox(
-            "Tournament Type",
-            ["Grand Slam", "ATP Masters 1000", "ATP 500", "ATP 250"]
-        )
-        
-        surface = st.selectbox(
-            "Surface",
-            ["Hard", "Clay", "Grass"],
-            help="Different surfaces have different match length characteristics"
+        # Data source selection
+        data_source = st.radio(
+            "Data Source",
+            ["Demo Data (Scheduled Matches)", "Manual Entry"],
+            help="Choose between viewing scheduled matches or manually entering players"
         )
         
         st.markdown("---")
@@ -595,203 +852,300 @@ def main():
             "• Match competitiveness index\n"
             "• Player grind factors\n"
             "• Recent form trends\n"
-            "• Serve/return dominance"
+            "• Serve/return dominance\n\n"
+            "**Target Accuracy:** 65-70%"
         )
     
     # Generate demo data
     players_data, default_stats = generate_demo_data()
-    player_list = sorted(players_data.keys())
+    surface_length_stats = compute_surface_length_stats(df=None)
     
-    # Player selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        player1 = st.selectbox("Player 1", player_list, index=0)
-    
-    with col2:
-        player2 = st.selectbox("Player 2", player_list, index=1)
-    
-    if player1 == player2:
-        st.warning("⚠️ Please select two different players")
-        return
-    
-    # Predict button
-    if st.button("🔮 Predict Match Outcome", type="primary", use_container_width=True):
-        with st.spinner("Analyzing match factors..."):
-            # Prepare player stats
-            player_stats = {}
-            for player in [player1, player2]:
-                stats = players_data.get(player, default_stats.copy())
-                player_stats[player] = stats
+    if data_source == "Demo Data (Scheduled Matches)":
+        # Tab selection
+        tab1, tab2, tab3 = st.tabs(["📅 Today's Matches", "📆 Tomorrow's Matches", "📊 All Predictions"])
+        
+        # Generate scheduled matches
+        scheduled_matches = generate_scheduled_matches()
+        
+        # Separate today and tomorrow matches
+        today_matches = [m for m in scheduled_matches if m['day'] == 'Today']
+        tomorrow_matches = [m for m in scheduled_matches if m['day'] == 'Tomorrow']
+        
+        # Store predictions
+        all_predictions = []
+        
+        # Process today's matches
+        with tab1:
+            st.markdown(f"### 🎾 Today's Matches - {datetime.now().strftime('%B %d, %Y')}")
             
-            # Prepare empty data structures
-            df = None  # In production, load actual match data
-            h2h_surface = defaultdict(lambda: defaultdict(int))
-            surface_length_stats = compute_surface_length_stats(df)
+            if st.button("🔄 Generate Predictions for Today", key="today_predict"):
+                with st.spinner("Analyzing today's matches..."):
+                    for match in today_matches:
+                        prediction = predict_match(match, players_data, default_stats, surface_length_stats)
+                        all_predictions.append(prediction)
+                    
+                    # Display predictions
+                    df_today = pd.DataFrame(all_predictions[:len(today_matches)])
+                    
+                    # Add styling
+                    def color_prediction(val):
+                        if val == 'OVER':
+                            return 'background-color: #ff6b6b; color: white'
+                        return 'background-color: #51cf66; color: white'
+                    
+                    styled_df = df_today.style.applymap(
+                        color_prediction, subset=['prediction']
+                    )
+                    
+                    st.dataframe(
+                        df_today[[
+                            'time', 'player1', 'player2', 'surface', 'tournament', 
+                            'round', 'prediction', 'confidence', 'competitiveness'
+                        ]].rename(columns={
+                            'player1': 'Player 1',
+                            'player2': 'Player 2',
+                            'surface': 'Surface',
+                            'prediction': 'Prediction',
+                            'confidence': 'Confidence',
+                            'competitiveness': 'Competitiveness',
+                            'tournament': 'Tournament',
+                            'round': 'Round',
+                            'time': 'Time'
+                        }),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Store in session state
+                    st.session_state['all_predictions'] = all_predictions
+                    st.session_state['df_today'] = df_today
+                    st.session_state['df_tomorrow'] = None
+            else:
+                st.info("Click 'Generate Predictions for Today' to see predictions")
+        
+        # Process tomorrow's matches
+        with tab2:
+            st.markdown(f"### 🎾 Tomorrow's Matches - {(datetime.now() + timedelta(days=1)).strftime('%B %d, %Y')}")
             
-            # Build features
-            features = build_ou_features(
-                player1, player2, surface, player_stats, 
-                h2h_surface, h2h_surface, surface_length_stats, df
-            )
+            if st.button("🔄 Generate Predictions for Tomorrow", key="tomorrow_predict"):
+                with st.spinner("Analyzing tomorrow's matches..."):
+                    tomorrow_predictions = []
+                    for match in tomorrow_matches:
+                        prediction = predict_match(match, players_data, default_stats, surface_length_stats)
+                        tomorrow_predictions.append(prediction)
+                    
+                    # Display predictions
+                    df_tomorrow = pd.DataFrame(tomorrow_predictions)
+                    
+                    styled_df = df_tomorrow.style.applymap(
+                        lambda x: 'background-color: #ff6b6b; color: white' if x == 'OVER' 
+                        else ('background-color: #51cf66; color: white' if x == 'UNDER' else ''),
+                        subset=['prediction']
+                    )
+                    
+                    st.dataframe(
+                        df_tomorrow[[
+                            'time', 'player1', 'player2', 'surface', 'tournament', 
+                            'round', 'prediction', 'confidence', 'competitiveness'
+                        ]].rename(columns={
+                            'player1': 'Player 1',
+                            'player2': 'Player 2',
+                            'surface': 'Surface',
+                            'prediction': 'Prediction',
+                            'confidence': 'Confidence',
+                            'competitiveness': 'Competitiveness',
+                            'tournament': 'Tournament',
+                            'round': 'Round',
+                            'time': 'Time'
+                        }),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Update session state
+                    if 'all_predictions' in st.session_state:
+                        all_predictions = st.session_state['all_predictions'] + tomorrow_predictions
+                    else:
+                        all_predictions = tomorrow_predictions
+                    
+                    st.session_state['all_predictions'] = all_predictions
+                    st.session_state['df_tomorrow'] = df_tomorrow
+            else:
+                st.info("Click 'Generate Predictions for Tomorrow' to see predictions")
+        
+        # All predictions combined
+        with tab3:
+            st.markdown("### 📊 All Match Predictions")
             
-            # Make prediction
-            probability, prediction, confidence = predict_over_under(features)
-            
-            # Display prediction
-            st.markdown("---")
-            
-            col1, col2, col3 = st.columns([2, 1, 2])
-            
-            with col1:
-                st.markdown(f"### 🎾 {player1}")
-                st.metric("Surface ELO", f"{player_stats[player1]['surface_elo'][surface]:.0f}")
-                st.metric("Surface Win Rate", f"{player_stats[player1]['surface_win_rate'][surface]:.1%}")
-                st.metric("Avg Games/Match", f"{player_stats[player1]['avg_games']:.1f}")
-                st.metric("Grind Factor", f"{player_stats[player1]['grind_factor']:.2f}")
-            
-            with col2:
-                st.markdown("### 📊 Prediction")
+            if 'all_predictions' in st.session_state and st.session_state['all_predictions']:
+                df_all = pd.DataFrame(st.session_state['all_predictions'])
                 
-                if prediction == "OVER":
-                    st.markdown(f'<div class="prediction-over"><h2>OVER 21.5</h2><p>Probability: {probability:.1%}</p><p>Confidence: {confidence:.1%}</p></div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="prediction-under"><h2>UNDER 21.5</h2><p>Probability: {1-probability:.1%}</p><p>Confidence: {confidence:.1%}</p></div>', unsafe_allow_html=True)
-                
-                # Surface baseline
-                surf_stats = surface_length_stats[surface]
-                st.metric("Surface Baseline", f"{surf_stats['p_over_21_5']:.1%}")
-                st.metric("Surface Avg Games", f"{surf_stats['avg_games']:.1f}")
-            
-            with col3:
-                st.markdown(f"### 🎾 {player2}")
-                st.metric("Surface ELO", f"{player_stats[player2]['surface_elo'][surface]:.0f}")
-                st.metric("Surface Win Rate", f"{player_stats[player2]['surface_win_rate'][surface]:.1%}")
-                st.metric("Avg Games/Match", f"{player_stats[player2]['avg_games']:.1f}")
-                st.metric("Grind Factor", f"{player_stats[player2]['grind_factor']:.2f}")
-            
-            # Detailed analysis
-            st.markdown("---")
-            st.markdown("### 🔍 Detailed Analysis")
-            
-            # Competitiveness analysis
-            comp_data = build_competitiveness_features(
-                player1, player2, player_stats, h2h_surface, surface
-            )
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### Match Competitiveness")
-                
-                # Gauge chart for competitiveness
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=comp_data['overall_competitiveness'] * 100,
-                    title={'text': "Competitiveness Score"},
-                    gauge={
-                        'axis': {'range': [0, 100]},
-                        'bar': {'color': "darkblue"},
-                        'steps': [
-                            {'range': [0, 33], 'color': "lightgray"},
-                            {'range': [33, 66], 'color': "gray"},
-                            {'range': [66, 100], 'color': "darkgray"}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': 70
-                        }
-                    }
-                ))
-                fig.update_layout(height=250)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown(f"""
-                **Competitiveness Components:**
-                - ELO Gap: {comp_data['elo_competitiveness']:.2%}
-                - H2H Record: {comp_data['h2h_competitiveness']:.2%}
-                - Win Rate Parity: {comp_data['wr_competitiveness']:.2%}
-                """)
-            
-            with col2:
-                st.markdown("#### Match Style Analysis")
-                
-                # Radar chart for player styles
-                categories = ['Grind Factor', 'Finish Factor', 'Serve Dominance', 'Surface Experience']
-                
-                fig = go.Figure()
-                
-                fig.add_trace(go.Scatterpolar(
-                    r=[
-                        player_stats[player1]['grind_factor'],
-                        player_stats[player1]['finish_factor'],
-                        player_stats[player1]['serve_dominance'],
-                        min(player_stats[player1]['surface_match_count'].get(surface, 20) / 100, 1)
-                    ],
-                    theta=categories,
-                    fill='toself',
-                    name=player1
-                ))
-                
-                fig.add_trace(go.Scatterpolar(
-                    r=[
-                        player_stats[player2]['grind_factor'],
-                        player_stats[player2]['finish_factor'],
-                        player_stats[player2]['serve_dominance'],
-                        min(player_stats[player2]['surface_match_count'].get(surface, 20) / 100, 1)
-                    ],
-                    theta=categories,
-                    fill='toself',
-                    name=player2
-                ))
-                
-                fig.update_layout(
-                    polar=dict(
-                        radialaxis=dict(
-                            visible=True,
-                            range=[0, 1.5]
-                        )),
-                    showlegend=True,
-                    height=350
+                # Add day column based on time
+                df_all['Day'] = df_all.apply(
+                    lambda x: 'Today' if x['time'] in [m['time'] for m in today_matches] else 'Tomorrow', 
+                    axis=1
                 )
                 
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Prediction factors
-            st.markdown("#### Key Prediction Factors")
-            
-            factors_data = {
-                "Factor": ["Surface Baseline", "Competitiveness", "Grind Factor", "Recent Trend", "Serve Dominance"],
-                "Impact on OVER": [
-                    f"{surf_stats['p_over_21_5']:.1%}",
-                    f"{comp_data['overall_competitiveness']:.1%}",
-                    f"{(player_stats[player1]['grind_factor'] + player_stats[player2]['grind_factor']) / 2:.2f}",
-                    "Increasing" if comp_data['overall_competitiveness'] > 0.5 else "Decreasing",
-                    f"{1 - (player_stats[player1]['serve_dominance'] + player_stats[player2]['serve_dominance']) / 2:.1%}"
-                ]
-            }
-            
-            factors_df = pd.DataFrame(factors_data)
-            st.dataframe(factors_df, use_container_width=True, hide_index=True)
-            
-            # Recommendation
-            st.markdown("---")
-            if prediction == "OVER":
-                st.success(f"🎯 **Recommendation: Bet OVER 21.5 games**\n\n"
-                          f"This match shows high competitiveness ({comp_data['overall_competitiveness']:.1%}) "
-                          f"on {surface} courts where matches average {surf_stats['avg_games']:.1f} games. "
-                          f"Both players tend to extend matches, suggesting value on the OVER.")
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Matches", len(df_all))
+                with col2:
+                    over_count = len(df_all[df_all['prediction'] == 'OVER'])
+                    st.metric("OVER Predictions", over_count, 
+                             delta=f"{over_count/len(df_all)*100:.0f}%")
+                with col3:
+                    under_count = len(df_all[df_all['prediction'] == 'UNDER'])
+                    st.metric("UNDER Predictions", under_count,
+                             delta=f"{under_count/len(df_all)*100:.0f}%")
+                with col4:
+                    avg_conf = df_all['confidence_score'].mean()
+                    st.metric("Avg Confidence", f"{avg_conf:.1%}")
+                
+                # Display all predictions
+                display_df = df_all[[
+                    'Day', 'time', 'player1', 'player2', 'surface', 'tournament',
+                    'tournament_type', 'round', 'prediction', 'confidence', 'competitiveness',
+                    'prob_over', 'prob_under'
+                ]].rename(columns={
+                    'player1': 'Player 1',
+                    'player2': 'Player 2',
+                    'surface': 'Surface',
+                    'prediction': 'Prediction',
+                    'confidence': 'Confidence',
+                    'competitiveness': 'Competitiveness',
+                    'tournament': 'Tournament',
+                    'tournament_type': 'Tournament Type',
+                    'round': 'Round',
+                    'time': 'Time',
+                    'Day': 'Day',
+                    'prob_over': 'OVER Probability',
+                    'prob_under': 'UNDER Probability'
+                })
+                
+                # Format probability columns
+                display_df['OVER Probability'] = display_df['OVER Probability'].apply(lambda x: f"{x:.1%}")
+                display_df['UNDER Probability'] = display_df['UNDER Probability'].apply(lambda x: f"{x:.1%}")
+                
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                
+                # Export button
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("📥 Export to Excel", use_container_width=True):
+                        excel_file = export_to_excel(display_df)
+                        st.download_button(
+                            label="📊 Download Excel File",
+                            data=excel_file,
+                            file_name=f"tennis_predictions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
             else:
-                st.info(f"🎯 **Recommendation: Bet UNDER 21.5 games**\n\n"
-                       f"This match shows lower competitiveness ({comp_data['overall_competitiveness']:.1%}) "
-                       f"on {surface} courts where matches average {surf_stats['avg_games']:.1f} games. "
-                       f"One or both players tend to finish matches quickly, suggesting value on the UNDER.")
+                st.info("Generate predictions for Today or Tomorrow first to see combined results")
+    
+    else:  # Manual Entry
+        st.markdown("### 🎾 Manual Match Prediction")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            player1 = st.selectbox("Player 1", sorted(players_data.keys()), key="manual_p1")
+            surface = st.selectbox("Surface", ["Hard", "Clay", "Grass"], key="manual_surface")
+            tournament = st.text_input("Tournament", "ATP Tour")
+            match_round = st.selectbox("Round", ["R1", "R2", "R3", "QF", "SF", "F"])
+        
+        with col2:
+            player2 = st.selectbox("Player 2", sorted(players_data.keys()), key="manual_p2")
+            tournament_type = st.selectbox("Tournament Type", ["Grand Slam", "ATP Masters 1000", "ATP 500", "ATP 250"])
+            time = st.time_input("Match Time", datetime.now().time())
+        
+        if player1 == player2:
+            st.warning("⚠️ Please select two different players")
+            return
+        
+        if st.button("🔮 Predict Match", type="primary", use_container_width=True):
+            with st.spinner("Analyzing match factors..."):
+                match = {
+                    'player1': player1,
+                    'player2': player2,
+                    'surface': surface,
+                    'tournament': tournament,
+                    'tournament_type': tournament_type,
+                    'round': match_round,
+                    'time': time.strftime("%H:%M"),
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'day': 'Today'
+                }
+                
+                prediction = predict_match(match, players_data, default_stats, surface_length_stats)
+                
+                # Display results
+                st.markdown("---")
+                
+                col1, col2, col3 = st.columns([2, 1, 2])
+                
+                with col1:
+                    st.markdown(f"### 🎾 {player1}")
+                    st.metric("Surface ELO", f"{players_data[player1]['surface_elo'][surface]:.0f}")
+                    st.metric("Surface Win Rate", f"{players_data[player1]['surface_win_rate'][surface]:.1%}")
+                    st.metric("Avg Games/Match", f"{players_data[player1]['avg_games']:.1f}")
+                    st.metric("Grind Factor", f"{players_data[player1]['grind_factor']:.2f}")
+                
+                with col2:
+                    st.markdown("### 📊 Prediction")
+                    
+                    if prediction['prediction'] == "OVER":
+                        st.markdown(f'<div class="prediction-over"><h2>OVER 21.5</h2><p>Probability: {prediction["prob_over"]:.1%}</p><p>Confidence: {prediction["confidence"]}</p></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="prediction-under"><h2>UNDER 21.5</h2><p>Probability: {prediction["prob_under"]:.1%}</p><p>Confidence: {prediction["confidence"]}</p></div>', unsafe_allow_html=True)
+                    
+                    st.metric("Surface Baseline", prediction['surface_baseline'])
+                    st.metric("Match Competitiveness", prediction['competitiveness'])
+                
+                with col3:
+                    st.markdown(f"### 🎾 {player2}")
+                    st.metric("Surface ELO", f"{players_data[player2]['surface_elo'][surface]:.0f}")
+                    st.metric("Surface Win Rate", f"{players_data[player2]['surface_win_rate'][surface]:.1%}")
+                    st.metric("Avg Games/Match", f"{players_data[player2]['avg_games']:.1f}")
+                    st.metric("Grind Factor", f"{players_data[player2]['grind_factor']:.2f}")
+                
+                # Export single prediction
+                single_pred_df = pd.DataFrame([prediction])
+                single_pred_df = single_pred_df[[
+                    'player1', 'player2', 'surface', 'tournament', 'tournament_type',
+                    'round', 'prediction', 'confidence', 'competitiveness',
+                    'prob_over', 'prob_under'
+                ]].rename(columns={
+                    'player1': 'Player 1',
+                    'player2': 'Player 2',
+                    'surface': 'Surface',
+                    'prediction': 'Prediction',
+                    'confidence': 'Confidence',
+                    'competitiveness': 'Competitiveness',
+                    'tournament': 'Tournament',
+                    'tournament_type': 'Tournament Type',
+                    'round': 'Round',
+                    'prob_over': 'OVER Probability',
+                    'prob_under': 'UNDER Probability'
+                })
+                
+                single_pred_df['OVER Probability'] = single_pred_df['OVER Probability'].apply(lambda x: f"{x:.1%}")
+                single_pred_df['UNDER Probability'] = single_pred_df['UNDER Probability'].apply(lambda x: f"{x:.1%}")
+                
+                if st.button("📥 Export Prediction to Excel"):
+                    excel_file = export_to_excel(single_pred_df)
+                    st.download_button(
+                        label="📊 Download Excel File",
+                        data=excel_file,
+                        file_name=f"tennis_prediction_{player1}_vs_{player2}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
     
     # Footer
     st.markdown("---")
     st.markdown(
-        "<p style='text-align: center; color: gray;'>🎾 Tennis O/U 21.5 Predictor | Model Accuracy Target: 65-70%</p>",
+        "<p style='text-align: center; color: gray;'>🎾 Tennis O/U 21.5 Predictor | Model Accuracy Target: 65-70% | Data updates daily</p>",
         unsafe_allow_html=True
     )
 
