@@ -1,372 +1,346 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
-import re
-import io
-import requests
-import unicodedata
-
-from datetime import datetime, timedelta
+import re, io, requests, unicodedata, os
+from datetime import datetime
 from difflib import get_close_matches
 from xgboost import XGBClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.preprocessing import StandardScaler
 
-st.set_page_config(page_title="🎾 Tennis Predictor PRO", layout="wide")
+st.set_page_config(page_title="🎾 Tennis Hedge Fund PRO", layout="wide")
 
-# =========================
-# 🎨 UI
-# =========================
-st.markdown("""
-<style>
-.card {
-    background: linear-gradient(135deg, #1e3c72, #2a5298);
-    padding: 20px;
-    border-radius: 15px;
-    color: white;
-    margin-bottom: 15px;
-}
-.high {color:#00ff88; font-weight:bold;}
-.medium {color:#ffd700; font-weight:bold;}
-.low {color:#ff6b6b; font-weight:bold;}
-</style>
-""", unsafe_allow_html=True)
+BET_LOG = "bet_log.csv"
 
-# =========================
-# 🧠 NORMALIZAÇÃO NOMES
-# =========================
-def normalize_name(name):
-    if pd.isna(name):
-        return None
+# ================= INIT =================
+if not os.path.exists(BET_LOG):
+    pd.DataFrame(columns=[
+        "date","match","pick","odd","prob","stake","result","profit"
+    ]).to_csv(BET_LOG, index=False)
 
-    name = str(name).lower().strip()
-    name = unicodedata.normalize('NFKD', name)
-    name = ''.join([c for c in name if not unicodedata.combining(c)])
-    name = re.sub(r'[^a-z\s]', '', name)
-    name = re.sub(r'\s+', ' ', name).strip()
+# ================= NORMALIZE =================
+def normalize(x):
+    if pd.isna(x): return None
+    x = str(x).lower()
+    x = unicodedata.normalize('NFKD', x)
+    x = ''.join(c for c in x if not unicodedata.combining(c))
+    return re.sub(r'[^a-z ]','', x)
 
-    return name
+def match_name(name, players):
+    name = normalize(name)
+    m = get_close_matches(name, players, n=1, cutoff=0.7)
+    return m[0] if m else None
 
-def match_player(name, players):
-    name = normalize_name(name)
-    match = get_close_matches(name, players, n=1, cutoff=0.7)
-    return match[0] if match else None
-
-# =========================
-# 🎾 SURFACE
-# =========================
-def normalize_surface(s):
-    if pd.isna(s):
-        return "Hard"
-    s = str(s).lower()
-    if "clay" in s: return "Clay"
-    if "grass" in s: return "Grass"
-    return "Hard"
-
-# =========================
-# 📂 LOAD DATA
-# =========================
+# ================= LOAD =================
 @st.cache_data
-def load_data(file):
+def load(file):
     df = pd.read_excel(file)
+    df.columns = [c.lower().replace(" ","_") for c in df.columns]
 
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    df.rename(columns={
+        "winner_name":"winner",
+        "loser_name":"loser"
+    }, inplace=True, errors="ignore")
 
-    # rename automático
-    if "winner_name" in df.columns:
-        df.rename(columns={"winner_name":"winner"}, inplace=True)
-    if "loser_name" in df.columns:
-        df.rename(columns={"loser_name":"loser"}, inplace=True)
+    df["date"] = pd.to_datetime(df.get("tourney_date", df.get("date")), errors="coerce")
+    df["surface"] = df.get("surface","Hard").fillna("Hard")
+    df["total_games"] = df.get("t_games",22)
 
-    # DATA FIX
-    if "tourney_date" in df.columns:
-        df["date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
-    elif "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    else:
-        st.error("❌ Coluna de data não encontrada")
-        st.stop()
+    df["winner"] = df["winner"].apply(normalize)
+    df["loser"] = df["loser"].apply(normalize)
 
-    # surface
-    if "surface" in df.columns:
-        df["surface"] = df["surface"].apply(normalize_surface)
-    else:
-        df["surface"] = "Hard"
+    return df.dropna(subset=["winner","loser","date"])
 
-    # total games
-    if "t_games" in df.columns:
-        df["total_games"] = df["t_games"]
-    else:
-        df["total_games"] = 22
-
-    # nomes
-    df["winner"] = df["winner"].apply(normalize_name)
-    df["loser"] = df["loser"].apply(normalize_name)
-
-    return df
-
-# =========================
-# 🎾 SURFACE ELO
-# =========================
-def calculate_surface_elo(df):
-    players = set(df["winner"]) | set(df["loser"])
-    elo = {p: {"Hard":1500,"Clay":1500,"Grass":1500} for p in players}
-
-    df = df.sort_values("date")
-
-    for _, row in df.iterrows():
-        w, l = row["winner"], row["loser"]
-        surf = row["surface"]
-
-        if surf not in ["Hard","Clay","Grass"]:
-            surf = "Hard"
-
-        if w not in elo:
-            elo[w] = {"Hard":1500,"Clay":1500,"Grass":1500}
-        if l not in elo:
-            elo[l] = {"Hard":1500,"Clay":1500,"Grass":1500}
-
-        r1, r2 = elo[w][surf], elo[l][surf]
-
-        exp = 1 / (1 + 10 ** ((r2 - r1)/400))
-
-        elo[w][surf] += 32 * (1 - exp)
-        elo[l][surf] -= 32 * (1 - exp)
-
-    return elo
-
-# =========================
-# 📊 STATS
-# =========================
+# ================= STATS =================
 def compute_stats(df):
     stats = {}
-    surface_elo = calculate_surface_elo(df)
+    df = df.sort_values("date")
 
-    for p in set(df["winner"]) | set(df["loser"]):
-        m = df[(df["winner"]==p) | (df["loser"]==p)]
+    players = set(df["winner"]) | set(df["loser"])
 
-        if len(m) < 5:
-            continue
+    for p in players:
+        m = df[(df["winner"]==p)|(df["loser"]==p)]
+        if len(m) < 15: continue
 
-        wins = (m["winner"] == p).sum()
-        recent = m.sort_values("date", ascending=False).head(10)
-        recent_form = (recent["winner"] == p).mean()
+        last20 = m.tail(20)
+        last10 = m.tail(10)
+
+        surf_wr = {}
+        surf_welo = {}
+        surf_trend = {}
+
+        for s in ["Hard","Clay","Grass"]:
+            sm = m[m["surface"]==s]
+            if len(sm) == 0:
+                surf_wr[s] = 0.5
+                surf_welo[s] = 1500
+                surf_trend[s] = 0
+                continue
+
+            l20 = sm.tail(20)
+            l10 = sm.tail(10)
+            wr = (l20["winner"]==p).mean()
+            wr_recent = (l10["winner"]==p).mean() if len(l10) > 0 else 0.5
+
+            surf_wr[s] = wr
+            surf_welo[s] = 1500 + (wr - 0.5)*400
+            surf_trend[s] = wr_recent - wr  # recent vs overall trend
+
+        # Head-to-head (if available)
+        h2h_wins = 0
+        h2h_total = 0
 
         stats[p] = {
-            "elo": surface_elo[p],
-            "win_rate": wins / len(m),
-            "recent": recent_form,
-            "matches": len(m)
+            "win": (m["winner"]==p).mean(),
+            "last20": (last20["winner"]==p).mean(),
+            "last10": (last10["winner"]==p).mean(),
+            "surf_wr": surf_wr,
+            "surf_welo": surf_welo,
+            "surf_trend": surf_trend,
+            "matches": len(m),
+            "momentum": (last10["winner"]==p).mean() - (m["winner"]==p).mean()
         }
 
     return stats
 
-# =========================
-# 🧩 FEATURES
-# =========================
-def build_features(p1, p2, surf, stats):
-    if p1 not in stats or p2 not in stats:
-        return None
-
-    if surf not in ["Hard","Clay","Grass"]:
-        surf = "Hard"
-
-    s1, s2 = stats[p1], stats[p2]
+# ================= FEATURES =================
+def features(p1,p2,s,stats):
+    if p1 not in stats or p2 not in stats: return None
+    s1,s2 = stats[p1], stats[p2]
 
     return [
-        s1["elo"][surf] - s2["elo"][surf],
-        s1["win_rate"] - s2["win_rate"],
-        s1["recent"] - s2["recent"],
+        s1["surf_welo"][s] - s2["surf_welo"][s],
+        s1["last20"] - s2["last20"],
+        s1["last10"] - s2["last10"],
+        s1["surf_wr"][s] - s2["surf_wr"][s],
+        s1["win"] - s2["win"],
         np.log(s1["matches"]+1) - np.log(s2["matches"]+1),
-        (s1["win_rate"] + s2["win_rate"]) / 2,
-        abs(s1["elo"][surf] - s2["elo"][surf])
+        abs(s1["surf_welo"][s] - s2["surf_welo"][s]),
+        s1["momentum"] - s2["momentum"],
+        s1["surf_trend"][s] - s2["surf_trend"][s],
     ]
 
-# =========================
-# 🤖 TRAIN
-# =========================
-def train(df, stats):
-    X, y = [], []
-    X_ou, y_ou = [], []
+# ================= TRAIN =================
+def train(df,stats):
+    split = df["date"].quantile(0.8)
+    train_df = df[df["date"] <= split]
 
-    for _, r in df.iterrows():
-        f1 = build_features(r["winner"], r["loser"], r["surface"], stats)
+    X,y = [],[]
 
-        if f1:
-            X.append(f1)
-            y.append(1)
+    for _,r in train_df.iterrows():
+        f = features(r["winner"], r["loser"], r["surface"], stats)
+        if f:
+            X.append(f); y.append(1)
 
-            total = r.get("total_games", 22)
-            X_ou.append(f1)
-            y_ou.append(1 if total > 21.5 else 0)
-
-        f2 = build_features(r["loser"], r["winner"], r["surface"], stats)
-
+        f2 = features(r["loser"], r["winner"], r["surface"], stats)
         if f2:
-            X.append(f2)
-            y.append(0)
+            X.append(f2); y.append(0)
 
-    X, y = np.array(X), np.array(y)
-    X_ou, y_ou = np.array(X_ou), np.array(y_ou)
+    X = np.array(X)
+    y = np.array(y)
+    
+    # Standardize features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-    model = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.03,
+    # Train base model
+    base_model = XGBClassifier(
+        n_estimators=500, 
+        max_depth=6, 
+        learning_rate=0.02,
         subsample=0.8,
         colsample_bytree=0.8,
+        min_child_weight=1,
         random_state=42
     )
+    
+    # Use calibrated classifier for better probability estimates
+    model = CalibratedClassifierCV(base_model, method='sigmoid', cv=5)
+    model.fit(X_scaled, y)
 
-    model_ou = XGBClassifier(
-        n_estimators=250,
-        max_depth=4,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42
-    )
+    return model, scaler
 
-    model.fit(X, y)
-    model_ou.fit(X_ou, y_ou)
+# ================= BETTING =================
+def edge(p,o): return p - (1/o)
 
-    st.write(f"📊 Winner samples: {len(X)}")
-    st.write(f"🎲 OU samples: {len(X_ou)}")
+def kelly(p,o):
+    b = o - 1
+    q = 1 - p
+    return max((b*p - q)/b, 0) * 0.25  # Reduced from 0.5 to 0.25 for conservative betting
 
-    return model, model_ou
-
-# =========================
-# 🎯 PREDICT
-# =========================
-def predict(model, model_ou, stats, p1, p2, surf):
-
+# ================= PREDICT =================
+def predict(model, scaler, stats,p1,p2,s,o1,o2):
     players = list(stats.keys())
 
-    raw_p1, raw_p2 = p1, p2
+    raw1, raw2 = p1, p2
+    p1 = match_name(p1, players)
+    p2 = match_name(p2, players)
 
-    p1 = match_player(p1, players)
-    p2 = match_player(p2, players)
+    if not p1 or not p2: return None
 
-    if not p1 or not p2:
-        return None, raw_p1, raw_p2
+    f = features(p1,p2,s,stats)
+    if not f: return None
 
-    f = build_features(p1, p2, surf, stats)
+    f_scaled = scaler.transform([f])
+    prob = model.predict_proba(f_scaled)[0][1]
 
-    if f is None:
-        return None, raw_p1, raw_p2
+    winner = p1 if prob > 0.5 else p2
+    win_prob = max(prob, 1-prob)
 
-    prob = model.predict_proba([f])[0][1]
-    ou_prob = model_ou.predict_proba([f])[0][1]
+    odd = o1 if winner==p1 else o2
 
     return {
-        "winner": p1 if prob > 0.5 else p2,
-        "prob": max(prob, 1 - prob),
-        "ou_label": "Over 21.5" if ou_prob > 0.5 else "Under 21.5",
-        "ou_prob": max(ou_prob, 1 - ou_prob)
-    }, raw_p1, raw_p2
+        "Match": f"{raw1} vs {raw2}",
+        "Pick": winner,
+        "Prob": win_prob,
+        "Odd": odd,
+        "Edge": edge(win_prob, odd),
+        "Stake": kelly(win_prob, odd)
+    }
 
-# =========================
-# 📡 SCRAPER
-# =========================
-def get_matches(days_ahead=0):
+# ================= SCRAPER =================
+def get_matches():
     try:
-        date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date}"
-
-        r = requests.get(url, timeout=10)
-
-        if r.status_code != 200:
-            st.error("Erro API")
-            return []
-
-        data = r.json()
-        events = data.get("events", [])
-
-        st.write(f"📡 Total jogos API: {len(events)}")
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{datetime.utcnow().strftime('%Y-%m-%d')}"
+        data = requests.get(url, timeout=5).json()
 
         matches = []
-
-        for ev in events:
-            try:
-                cat = ev["tournament"]["category"]["name"]
-                if "WTA" in cat.upper():
-                    continue
-
-                matches.append({
-                    "tournament": ev["tournament"]["name"],
-                    "player1": ev["homeTeam"]["name"],
-                    "player2": ev["awayTeam"]["name"],
-                    "surface": "Hard"
-                })
-            except:
-                continue
-
+        for e in data.get("events",[]):
+            if "WTA" in e["tournament"]["category"]["name"]: continue
+            matches.append({
+                "p1": e["homeTeam"]["name"],
+                "p2": e["awayTeam"]["name"],
+                "surface": "Hard"
+            })
         return matches
-
-    except Exception as e:
-        st.error(f"Erro: {e}")
+    except:
         return []
 
-# =========================
-# 🚀 APP
-# =========================
-st.title("🎾 Tennis Predictor PRO FINAL")
+# ================= APP =================
+st.title("🎾 Tennis Hedge Fund PRO v2")
 
-file = st.file_uploader("Upload ATP dataset", type=["xlsx"])
+file = st.file_uploader("Upload dataset", type=["xlsx"])
 
 if file:
-    df = load_data(file)
-
+    df = load(file)
     stats = compute_stats(df)
-    model, model_ou = train(df, stats)
+    model, scaler = train(df, stats)
 
-    st.success("✅ Modelo pronto!")
+    st.success("✅ Model trained with calibration & new features")
 
-    col1, col2 = st.columns(2)
+    if st.button("📅 Load Today Matches"):
+        st.session_state.matches = get_matches()
 
-    with col1:
-        if st.button("📅 Hoje"):
-            st.session_state.matches = get_matches(0)
+    bankroll = st.number_input("💰 Bankroll (€)", value=1000)
+    
+    # Min edge threshold
+    min_edge = st.slider("Min Edge (%)", 2, 10, 5) / 100
+    min_prob = st.slider("Min Probability (%)", 55, 80, 67) / 100
 
-    with col2:
-        if st.button("📅 Amanhã"):
-            st.session_state.matches = get_matches(1)
+    picks = []
 
     if "matches" in st.session_state:
 
-        st.header("🎯 Jogos")
-
-        results = []
-
         for m in st.session_state.matches:
 
-            st.write(f"🎾 {m['player1']} vs {m['player2']}")
+            st.subheader(f"{m['p1']} vs {m['p2']}")
 
-            pred, raw_p1, raw_p2 = predict(
-                model, model_ou, stats,
-                m["player1"], m["player2"], m["surface"]
-            )
+            col1,col2 = st.columns(2)
+            with col1:
+                o1 = st.number_input("Odd P1",1.01,10.0,1.8,key=m['p1'])
+            with col2:
+                o2 = st.number_input("Odd P2",1.01,10.0,2.0,key=m['p2'])
 
-            if pred:
+            pred = predict(model, scaler, stats, m["p1"], m["p2"], m["surface"], o1, o2)
+
+            if pred and pred["Prob"] > min_prob and pred["Edge"] > min_edge:
+
+                stake = pred["Stake"] * bankroll
+                pred["Stake €"] = stake
+
                 st.success(f"""
-                🏆 {pred['winner']} ({pred['prob']:.1%})
-
-                🎲 {pred['ou_label']} ({pred['ou_prob']:.1%})
+                🏆 {pred['Pick']} @ {pred['Odd']}
+                📊 Prob: {pred['Prob']:.2%}
+                💰 Edge: {pred['Edge']:.2%}
+                🎯 Stake: €{stake:.2f}
                 """)
 
-                results.append({
-                    "Match": f"{raw_p1} vs {raw_p2}",
-                    "Winner": pred["winner"],
-                    "Prob": pred["prob"],
-                    "OU": pred["ou_label"],
-                    "OU_Prob": pred["ou_prob"]
-                })
-            else:
-                st.warning("Sem previsão")
+                picks.append(pred)
 
-        if results:
-            df_exp = pd.DataFrame(results)
+                if st.button(f"Log {pred['Match']}"):
+                    log = pd.read_csv(BET_LOG)
+                    log.loc[len(log)] = [
+                        datetime.now(),
+                        pred["Match"],
+                        pred["Pick"],
+                        pred["Odd"],
+                        pred["Prob"],
+                        stake,
+                        None,
+                        0
+                    ]
+                    log.to_csv(BET_LOG,index=False)
+                    st.success("✅ Logged")
 
-            buffer = io.BytesIO()
-            df_exp.to_excel(buffer, index=False)
-            buffer.seek(0)
+    # ================= EXPORT PICKS =================
+    if picks:
+        st.subheader("📥 Export Picks")
+        df_exp = pd.DataFrame(picks)
+        buffer = io.BytesIO()
+        df_exp.to_excel(buffer, index=False)
+        buffer.seek(0)
 
-            st.download_button("📥 Export Picks", buffer, "picks.xlsx")
+        st.download_button(
+            "📥 Download Picks Excel",
+            buffer,
+            "picks.xlsx"
+        )
+
+# ================= DASHBOARD =================
+st.header("📊 Performance Dashboard")
+
+log = pd.read_csv(BET_LOG)
+
+if len(log) > 0:
+
+    total_profit = log["profit"].sum()
+    total_stake = log["stake"].sum()
+    roi = total_profit / total_stake if total_stake>0 else 0
+    winrate = len(log[log["result"]==1]) / len(log) if len(log)>0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Profit", f"{total_profit:.2f}€")
+    col2.metric("ROI", f"{roi:.2%}")
+    col3.metric("Winrate", f"{winrate:.2%}")
+    col4.metric("Bets", len(log))
+
+    st.dataframe(log, use_container_width=True)
+
+    # ================= EXPORT LOG =================
+    st.subheader("📥 Export Bet Log")
+    buffer2 = io.BytesIO()
+    log.to_excel(buffer2, index=False)
+    buffer2.seek(0)
+
+    st.download_button(
+        "📥 Download Bet Log Excel",
+        buffer2,
+        "bet_log.xlsx"
+    )
+
+    st.subheader("Update Result")
+
+    idx = st.number_input("Index",0,len(log)-1,0)
+    res = st.selectbox("Result",[1,0])
+
+    if st.button("Update Bet"):
+        if res == 1:
+            profit = log.loc[idx,"stake"]*(log.loc[idx,"odd"]-1)
+        else:
+            profit = -log.loc[idx,"stake"]
+
+        log.loc[idx,"result"] = res
+        log.loc[idx,"profit"] = profit
+        log.to_csv(BET_LOG,index=False)
+
+        st.success("✅ Updated")
