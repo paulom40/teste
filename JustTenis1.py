@@ -241,16 +241,21 @@ if file:
 
     if "matches" in st.session_state:
 
-        for m in st.session_state.matches:
+        for idx, m in enumerate(st.session_state.matches):
 
             st.subheader(f"{m['p1']} vs {m['p2']}")
 
-            col1,col2 = st.columns(2)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                o1 = st.number_input("Odd P1",1.01,10.0,1.8,key=m['p1'])
+                o1 = st.number_input("Odd P1",1.01,10.0,1.8,key=f"p1_{idx}")
             with col2:
-                o2 = st.number_input("Odd P2",1.01,10.0,2.0,key=m['p2'])
+                o2 = st.number_input("Odd P2",1.01,10.0,2.0,key=f"p2_{idx}")
+            with col3:
+                o_under = st.number_input("Odd U21.5",1.01,5.0,2.0,key=f"ou_{idx}")
+            with col4:
+                o_over = st.number_input("Odd O21.5",1.01,5.0,1.7,key=f"oo_{idx}")
 
+            # Winner prediction
             pred = predict(model, scaler, stats, m["p1"], m["p2"], m["surface"], o1, o2)
 
             if pred and pred["Prob"] > min_prob and pred["Edge"] > min_edge:
@@ -259,15 +264,14 @@ if file:
                 pred["Stake €"] = stake
 
                 st.success(f"""
-                🏆 {pred['Pick']} @ {pred['Odd']}
-                📊 Prob: {pred['Prob']:.2%}
-                💰 Edge: {pred['Edge']:.2%}
+                🏆 **{pred['Pick']}** @ {pred['Odd']}
+                📊 Prob: {pred['Prob']:.2%} | 💰 Edge: {pred['Edge']:.2%}
                 🎯 Stake: €{stake:.2f}
                 """)
 
                 picks.append(pred)
 
-                if st.button(f"Log {pred['Match']}"):
+                if st.button(f"Log {pred['Match']}", key=f"log_winner_{idx}"):
                     log = pd.read_csv(BET_LOG)
                     log.loc[len(log)] = [
                         datetime.now(),
@@ -280,7 +284,7 @@ if file:
                         0
                     ]
                     log.to_csv(BET_LOG,index=False)
-                    st.success("✅ Logged")
+                    st.success("✅ Bet logged")
 
     # ================= EXPORT PICKS =================
     if picks:
