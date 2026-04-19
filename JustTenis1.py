@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import re, io, requests, unicodedata, os
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import get_close_matches
 from xgboost import XGBClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -65,16 +65,14 @@ def compute_stats(df):
     
     for p in players:
         m = df[(df["winner"]==p)|(df["loser"]==p)]
-        if len(m) < 10:  # Lowered from 15 to 10 for faster processing
+        if len(m) < 10:
             continue
 
-        # Slice instead of tail for speed
         last20_idx = max(0, len(m)-20)
         last10_idx = max(0, len(m)-10)
         last20 = m.iloc[last20_idx:]
         last10 = m.iloc[last10_idx:]
 
-        # Pre-calculate win indicators (vectorized)
         is_winner = (m["winner"]==p).values
         is_winner_l20 = (last20["winner"]==p).values
         is_winner_l10 = (last10["winner"]==p).values
@@ -87,7 +85,7 @@ def compute_stats(df):
         ou_volatility = ou_std / (ou_avg + 1)
         ou_over_pct = np.mean(games > 21.5)
 
-        # ===== SURFACE STATS (DICT COMPREHENSION) =====
+        # ===== SURFACE STATS =====
         surf_wr = {}
         surf_welo = {}
         surf_trend = {}
@@ -165,13 +163,11 @@ def features_ou(p1,p2,s,stats):
 
 # ================= TRAIN (OPTIMIZED) =================
 def train_winner(df, stats):
-    """Faster training with less data processing"""
     split = df["date"].quantile(0.8)
     train_df = df[df["date"] <= split]
 
     X, y = [], []
     
-    # Vectorized iteration
     for _, r in train_df.iterrows():
         f = features_winner(r["winner"], r["loser"], r["surface"], stats)
         if f:
@@ -186,31 +182,30 @@ def train_winner(df, stats):
     if len(X) < 10:
         return None, None
 
-    X = np.array(X, dtype=np.float32)  # Use float32 to save memory
+    X = np.array(X, dtype=np.float32)
     y = np.array(y)
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
     base_model = XGBClassifier(
-        n_estimators=200,  # Reduced from 500
-        max_depth=5,       # Reduced from 6
-        learning_rate=0.05,  # Increased from 0.02 for faster convergence
+        n_estimators=200,
+        max_depth=5,
+        learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
         min_child_weight=1,
         random_state=42,
-        n_jobs=-1,  # Use all cores
-        tree_method='hist'  # Faster than default
+        n_jobs=-1,
+        tree_method='hist'
     )
     
-    model = CalibratedClassifierCV(base_model, method='sigmoid', cv=3)  # Reduced from 5
+    model = CalibratedClassifierCV(base_model, method='sigmoid', cv=3)
     model.fit(X_scaled, y)
 
     return model, scaler
 
 def train_ou(df, stats):
-    """Faster O/U training"""
     split = df["date"].quantile(0.8)
     train_df = df[df["date"] <= split]
 
@@ -233,7 +228,7 @@ def train_ou(df, stats):
 
     base_model = XGBClassifier(
         n_estimators=200,
-        max_depth=4,  # Reduced from 5
+        max_depth=4,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
@@ -329,15 +324,18 @@ def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
     }
 
 # ================= SCRAPER (OPTIMIZED) =================
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_matches():
-    """Fast match fetching with timeout"""
+@st.cache_data(ttl=300)
+def get_matches(days_ahead=0):
+    """Fast match fetching with timeout
+    days_ahead: 0 = today, 1 = tomorrow, etc.
+    """
     try:
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{datetime.utcnow().strftime('%Y-%m-%d')}"
-        data = requests.get(url, timeout=3).json()  # 3 second timeout
+        target_date = (datetime.utcnow() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
+        data = requests.get(url, timeout=3).json()
 
         matches = []
-        for e in data.get("events",[])[:20]:  # Limit to first 20 matches
+        for e in data.get("events",[])[:20]:
             if "WTA" in e["tournament"]["category"]["name"]: 
                 continue
             matches.append({
@@ -369,15 +367,42 @@ if file:
         st.warning("⚠️ Not enough data to train models")
         st.stop()
 
-    # Sidebar for match loading
+    # Sidebar for controls
     with st.sidebar:
-        if st.button("📅 Load Today's Matches (Fast API)", use_container_width=True):
-            with st.spinner("Fetching today's matches... (3 sec timeout)"):
-                st.session_state.matches = get_matches()
-                if st.session_state.matches:
-                    st.success(f"✅ Loaded {len(st.session_state.matches)} matches")
-                else:
-                    st.warning("No matches found or API timeout. Enter matches manually.")
+        st.subheader("📅 Match Selection")
+        
+        # Create 3 buttons for today, tomorrow, etc.
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📅 TODAY", use_container_width=True, key="today_btn"):
+                with st.spinner("Fetching today's matches... (3 sec timeout)"):
+                    st.session_state.matches = get_matches(days_ahead=0)
+                    st.session_state.current_date = "TODAY"
+                    if st.session_state.matches:
+                        st.success(f"✅ Loaded {len(st.session_state.matches)} matches for today")
+                    else:
+                        st.warning("No matches found or API timeout")
+
+        with col2:
+            if st.button("📆 TOMORROW", use_container_width=True, key="tomorrow_btn"):
+                with st.spinner("Fetching tomorrow's matches... (3 sec timeout)"):
+                    st.session_state.matches = get_matches(days_ahead=1)
+                    st.session_state.current_date = "TOMORROW"
+                    if st.session_state.matches:
+                        st.success(f"✅ Loaded {len(st.session_state.matches)} matches for tomorrow")
+                    else:
+                        st.warning("No matches found or API timeout")
+
+        with col3:
+            if st.button("📅 +2 DAYS", use_container_width=True, key="twodays_btn"):
+                with st.spinner("Fetching matches in 2 days... (3 sec timeout)"):
+                    st.session_state.matches = get_matches(days_ahead=2)
+                    st.session_state.current_date = "IN 2 DAYS"
+                    if st.session_state.matches:
+                        st.success(f"✅ Loaded {len(st.session_state.matches)} matches")
+                    else:
+                        st.warning("No matches found or API timeout")
 
     bankroll = st.number_input("💰 Bankroll (€)", value=1000, min_value=100)
     min_edge = st.slider("Min Edge (%)", 2, 10, 5) / 100
@@ -385,10 +410,10 @@ if file:
 
     all_picks = []
 
-    if "matches" in st.session_state:
-        st.subheader(f"📊 Predictions ({len(st.session_state.matches)} matches)")
+    if "matches" in st.session_state and st.session_state.matches:
+        date_label = st.session_state.get("current_date", "Selected Date")
+        st.subheader(f"📊 Predictions - {date_label} ({len(st.session_state.matches)} matches)")
         
-        # Use columns for faster rendering
         cols = st.columns(2)
         col_idx = 0
 
@@ -433,6 +458,9 @@ if file:
                         st.success("✅ Logged")
 
                 col_idx += 1
+
+    elif "matches" in st.session_state:
+        st.warning("⚠️ No matches found for selected date. Try another date or enter matches manually.")
 
     if all_picks:
         st.subheader("📥 Export Picks")
