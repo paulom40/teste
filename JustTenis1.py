@@ -273,7 +273,11 @@ def predict_winner(model_w, scaler_w, stats, p1, p2, s, o1, o2):
 
     winner = p1 if prob > 0.5 else p2
     win_prob = max(prob, 1-prob)
-    odd = o1 if winner==p1 else o2
+    odd = float(o1) if winner==p1 else float(o2)
+
+    # Calculate edge correctly
+    implied_prob = 1.0 / odd
+    edge_value = win_prob - implied_prob
 
     return {
         "Match": f"{raw1} vs {raw2}",
@@ -281,7 +285,7 @@ def predict_winner(model_w, scaler_w, stats, p1, p2, s, o1, o2):
         "Type": "Winner",
         "Prob": win_prob,
         "Odd": odd,
-        "Edge": edge(win_prob, odd),
+        "Edge": edge_value,
         "Stake": kelly(win_prob, odd)
     }
 
@@ -307,11 +311,15 @@ def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
     if prob_over > 0.5:
         pick = "OVER 21.5"
         pick_prob = prob_over
-        odd = o_over
+        odd = float(o_over)
     else:
         pick = "UNDER 21.5"
         pick_prob = 1 - prob_over
-        odd = o_under
+        odd = float(o_under)
+
+    # Calculate edge correctly
+    implied_prob = 1.0 / odd
+    edge_value = pick_prob - implied_prob
 
     return {
         "Match": f"{raw1} vs {raw2}",
@@ -319,7 +327,7 @@ def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
         "Type": "O/U 21.5",
         "Prob": pick_prob,
         "Odd": odd,
-        "Edge": edge(pick_prob, odd),
+        "Edge": edge_value,
         "Stake": kelly(pick_prob, odd)
     }
 
