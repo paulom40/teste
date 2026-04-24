@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -26,6 +27,7 @@ def scrape_sofascore_tomorrow():
     chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     
     matches = []
+    driver = None
     
     try:
         # Initialize driver (Streamlit Cloud uses chromium)
@@ -36,123 +38,118 @@ def scrape_sofascore_tomorrow():
         
         # Wait for page to load
         wait = WebDriverWait(driver, 15)
-        time.sleep(3)  # Allow initial JS load
+        time.sleep(5)  # Allow initial JS load
         
-        # Try to click on date selector and select tomorrow
+        # Try to find tournament filter and select ATP/Challenger
         try:
-            # Look for date picker and click tomorrow's date
-            date_picker = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-testid='date-picker']")))
-            date_picker.click()
-            time.sleep(1)
-            
-            # Find and click tomorrow's date
-            tomorrow_date = (datetime.now() + timedelta(days=1)).day
-            date_buttons = driver.find_elements(By.CSS_SELECTOR, "[role='button']")
-            for btn in date_buttons:
-                if str(tomorrow_date) in btn.text and "tomorrow" in btn.text.lower():
+            # Look for filter buttons
+            filter_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class*='filter'], div[class*='Filter']")
+            for btn in filter_buttons:
+                if "ATP" in btn.text or "Challenger" in btn.text:
                     btn.click()
-                    break
-            time.sleep(2)
+                    time.sleep(2)
         except:
-            # If date picker fails, try to find tournament switcher
             pass
         
-        # Wait for matches to load
-        time.sleep(3)
-        
-        # Find all match containers - Sofascore uses specific structure for tennis matches
-        # Common selectors (may need adjustment based on current site structure)
+        # Find all match containers
         match_elements = driver.find_elements(By.CSS_SELECTOR, 
             "div[class*='event'], div[class*='match'], div[data-testid*='match']")
         
-        for match in match_elements:
+        for match in match_elements[:100]:  # Limit to first 100 matches
             try:
-                # Extract tournament name (usually contains ATP or Challenger)
-                tournament_text = ""
-                tournament_elements = match.find_elements(By.CSS_SELECTOR, 
-                    "div[class*='tournament'], div[class*='category'], span[class*='tournament']")
-                if tournament_elements:
-                    tournament_text = tournament_elements[0].text
+                # Get all text from match element
+                match_text = match.text
                 
                 # Only process ATP and Challenger matches
-                if "ATP" in tournament_text or "CHALLENGER" in tournament_text.upper():
+                if "ATP" in match_text or "CHALLENGER" in match_text.upper():
                     
-                    # Extract player names
-                    player_elements = match.find_elements(By.CSS_SELECTOR, 
-                        "div[class*='participant'], span[class*='player'], a[href*='player']")
+                    # Extract lines from text
+                    lines = match_text.split('\n')
                     
-                    players = []
-                    for p in player_elements:
-                        player_name = p.text.strip()
-                        if player_name and len(player_name) > 1:
-                            players.append(player_name)
+                    # Find tournament name (usually first line with ATP/Challenger)
+                    tournament = "Unknown Tournament"
+                    for line in lines:
+                        if "ATP" in line or "CHALLENGER" in line.upper():
+                            tournament = line
+                            break
                     
-                    # Determine surface (try to extract from tournament name or class)
-                    surface = "Unknown"
-                    if "Clay" in tournament_text or "CLAY" in tournament_text.upper():
+                    # Determine surface
+                    surface = "Hard"  # Default
+                    if "Clay" in tournament or "CLAY" in tournament.upper():
                         surface = "Clay"
-                    elif "Grass" in tournament_text:
+                    elif "Grass" in tournament:
                         surface = "Grass"
-                    elif "Hard" in tournament_text:
-                        surface = "Hard"
-                    else:
-                        # Try to find surface info in other elements
-                        surface_elements = match.find_elements(By.CSS_SELECTOR, 
-                            "div[class*='surface'], span[class*='surface']")
-                        if surface_elements:
-                            surface = surface_elements[0].text
+                    
+                    # Find player names using common patterns
+                    players = []
+                    for line in lines:
+                        # Look for player names (usually lines with vs, -, or two names)
+                        if " vs " in line or " - " in line or re.search(r'[A-Z][a-z]+ [A-Z]\.?\s*[vV][sS]', line):
+                            # Split by common separators
+                            if " vs " in line:
+                                parts = line.split(" vs ")
+                            elif " - " in line:
+                                parts = line.split(" - ")
+                            else:
+                                # Use regex to find player names
+                                player_match = re.findall(r'([A-Z][a-z]+ [A-Z]\.?)', line)
+                                parts = player_match if len(player_match) >= 2 else []
+                            
+                            if len(parts) >= 2:
+                                players = [parts[0].strip(), parts[1].strip()]
+                                break
                     
                     # If we found at least 2 players, add the match
                     if len(players) >= 2:
                         matches.append({
-                            "tournament": tournament_text,
+                            "tournament": tournament,
                             "surface": surface,
                             "player1": players[0],
-                            "player2": players[1],
-                            "time": ""  # Can add match time if available
+                            "player2": players[1]
                         })
                         
             except Exception as e:
-                continue  # Skip if parsing fails for this match
+                continue
         
-        # Alternative: Try direct URL with date parameter
+        # If still no matches, try alternative approach
         if not matches:
-            # Try the daily schedule URL
-            driver.get(f"https://www.sofascore.com/tennis/{tomorrow}")
-            time.sleep(3)
+            # Try searching for specific match patterns
+            page_text = driver.find_element(By.TAG_NAME, "body").text
+            lines = page_text.split('\n')
             
-            # Re-attempt to extract matches
-            match_elements = driver.find_elements(By.CSS_SELECTOR, 
-                "div[class*='event'], div[class*='match']")
-            
-            for match in match_elements[:50]:  # Limit to first 50 matches
-                try:
-                    match_text = match.text
-                    if "ATP" in match_text or "CHALLENGER" in match_text.upper():
-                        lines = match_text.split('\n')
-                        tournament = lines[0] if lines else "Unknown Tournament"
-                        
-                        # Extract player names from the text
-                        player_match = re.search(r'([A-Z][a-z]+ [A-Z]\.?)\s*[vV][sS]\s*([A-Z][a-z]+ [A-Z]\.?)', match_text)
-                        if player_match:
-                            matches.append({
-                                "tournament": tournament,
-                                "surface": "Hard",  # Default, can be enhanced
-                                "player1": player_match.group(1),
-                                "player2": player_match.group(2),
-                                "time": ""
-                            })
-                except:
-                    continue
+            for i, line in enumerate(lines):
+                if ("ATP" in line or "CHALLENGER" in line.upper()) and i+1 < len(lines):
+                    tournament = line
+                    
+                    # Look for match line in next few lines
+                    for j in range(i+1, min(i+10, len(lines))):
+                        if " vs " in lines[j] or " - " in lines[j]:
+                            match_line = lines[j]
+                            if " vs " in match_line:
+                                players = match_line.split(" vs ")
+                            elif " - " in match_line:
+                                players = match_line.split(" - ")
+                            else:
+                                continue
+                            
+                            if len(players) >= 2:
+                                matches.append({
+                                    "tournament": tournament,
+                                    "surface": "Hard",
+                                    "player1": players[0].strip(),
+                                    "player2": players[1].strip()
+                                })
+                            break
                     
     except Exception as e:
         st.error(f"Scraping error: {str(e)}")
         return []
     
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
     
-    # Remove duplicates (by player names)
+    # Remove duplicates
     unique_matches = []
     seen = set()
     for match in matches:
@@ -163,24 +160,17 @@ def scrape_sofascore_tomorrow():
     
     return unique_matches
 
-# Alternative: Use simpler approach with requests + regex if Selenium fails
-def scrape_alternative_api():
-    """
-    Fallback method using a free tennis API (no API key needed)
-    """
-    # Using public FlashScore API endpoint (undocumented but often works)
-    # Note: More reliable than scraping directly
-    matches = []
-    
-    # Example demo data - in production you'd use a real API
-    # For now, return demo data as placeholder
+# Fallback demo data if scraping fails
+def get_demo_matches():
+    """Returns demo match data for testing"""
     demo_matches = [
         {"tournament": "Mutua Madrid Open ATP", "surface": "Clay", "player1": "Carlos Alcaraz", "player2": "Jannik Sinner"},
+        {"tournament": "Mutua Madrid Open ATP", "surface": "Clay", "player1": "Novak Djokovic", "player2": "Casper Ruud"},
         {"tournament": "BNP Paribas Challenger", "surface": "Hard", "player1": "Dominic Thiem", "player2": "Andy Murray"},
-        {"tournament": "Rome ATP Masters", "surface": "Clay", "player1": "Novak Djokovic", "player2": "Casper Ruud"},
+        {"tournament": "Rome ATP Masters", "surface": "Clay", "player1": "Daniil Medvedev", "player2": "Alexander Zverev"},
         {"tournament": "Oeiras Challenger", "surface": "Clay", "player1": "Richard Gasquet", "player2": "Stan Wawrinka"},
+        {"tournament": "Oeiras Challenger", "surface": "Clay", "player1": "Joao Sousa", "player2": "Ben Shelton"},
     ]
-    
     return demo_matches
 
 def export_to_txt(matches):
@@ -190,7 +180,7 @@ def export_to_txt(matches):
     
     lines = []
     current_tournament = None
-    tournament_counter = {}
+    match_counter = 0
     
     for match in matches:
         tourney_name = match["tournament"]
@@ -198,21 +188,15 @@ def export_to_txt(matches):
         player1 = match["player1"]
         player2 = match["player2"]
         
-        # Handle tournament names and add counter for duplicates
+        # Add tournament header if it's a new tournament
         if current_tournament != tourney_name:
-            # Add counter if tournament appears multiple times
-            if tourney_name in tournament_counter:
-                tournament_counter[tourney_name] += 1
-                display_name = f"{tourney_name} (Match {tournament_counter[tourney_name]})"
-            else:
-                tournament_counter[tourney_name] = 1
-                display_name = tourney_name
-            
-            lines.append(f"{display_name} ({surface})")
+            lines.append(f"{tourney_name} ({surface})")
             current_tournament = tourney_name
+            match_counter = 0
         
         # Add match line
         lines.append(f"{player1} vs {player2}")
+        match_counter += 1
     
     return "\n".join(lines)
 
@@ -226,13 +210,17 @@ st.set_page_config(
 st.title("🎾 ATP & Challenger Matches Scraper")
 st.markdown("Scrapes tomorrow's tennis matches from Sofascore using Chromium")
 
+# Initialize session state
+if "matches" not in st.session_state:
+    st.session_state["matches"] = []
+
 # Sidebar for options
 with st.sidebar:
     st.header("⚙️ Settings")
     method = st.radio(
         "Scraping Method",
-        ["Chromium WebDriver (Sofascore)", "API Fallback (Demo Data)"],
-        help="Chromium method tries to scrape live from Sofascore. Fallback uses demo data if live scraping fails."
+        ["Chromium WebDriver (Sofascore)", "Demo Data (For Testing)"],
+        help="Chromium method tries to scrape live from Sofascore. Use demo data if live scraping fails."
     )
     
     st.markdown("---")
@@ -254,10 +242,10 @@ with col1:
                 
                 # If scraping fails or returns empty, use fallback
                 if not matches_data:
-                    st.warning("⚠️ Live scraping returned no data. Using fallback demo data.")
-                    matches_data = scrape_alternative_api()
+                    st.warning("⚠️ Live scraping returned no data. Using demo data.")
+                    matches_data = get_demo_matches()
             else:
-                matches_data = scrape_alternative_api()
+                matches_data = get_demo_matches()
             
             if matches_data:
                 st.session_state["matches"] = matches_data
@@ -267,7 +255,7 @@ with col1:
                 df = pd.DataFrame(matches_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
-                st.error("❌ No matches found. Sofascore might have changed their structure.")
+                st.error("❌ No matches found.")
                 st.session_state["matches"] = []
 
 with col2:
@@ -291,24 +279,7 @@ with col2:
 if not st.session_state.get("matches"):
     st.info("👈 Click 'Fetch Tomorrow's Matches' to start scraping")
 
-# Requirements file
-st.markdown("---")
-st.caption("⚠️ **Note**: Web scraping depends on Sofascore's current HTML structure. If scraping fails, the site may have changed. Use the API fallback option for demo data.")
-
-# Installation instructions for local running
-with st.expander("📦 Installation Instructions (for local development)"):
-    st.code("""
-# Install required packages
-pip install streamlit selenium pandas webdriver-manager
-
-# For Chromium driver (Ubuntu/Debian):
-sudo apt-get update
-sudo apt-get install chromium-browser chromium-chromedriver
-
-# For macOS:
-brew install chromium chromedriver
-
-# For Windows:
-# Download ChromeDriver from https://chromedriver.chromium.org/
-# Add to PATH
-    """, language="bash")
+# Requirements for deployment
+with st.expander("📦 Deployment Requirements (for Streamlit Cloud)"):
+    st.markdown("""
+    **Create a `packages.txt` file:**
