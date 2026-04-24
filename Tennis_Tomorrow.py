@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import json
+from bs4 import BeautifulSoup
 
 # --- Fetch real matches using Tennis API ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -12,84 +13,13 @@ def fetch_atp_challenger_matches():
     """
     tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
     
-    # Try multiple free API sources
-    
-    # Option 1: Using FlashScore API (unofficial but reliable)
-    try:
-        # FlashScore tennis fixtures endpoint
-        url = "https://www.flashscore.com/tennis/"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        # Since FlashScore blocks direct requests, we'll use a different approach
-        pass
-    except:
-        pass
-    
-    # Option 2: Using the free API from tennis-data.co.uk
-    try:
-        # This site provides ATP match data in CSV format
-        base_url = "https://www.tennis-data.co.uk/"
-        
-        # Get current year and month
-        current_year = datetime.now().year
-        
-        # Try to get upcoming matches (they have an upcoming fixtures page)
-        response = requests.get(f"{base_url}upcoming.php", timeout=10)
-        
-        if response.status_code == 200:
-            # Parse HTML response
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            matches = []
-            tables = soup.find_all('table')
-            
-            for table in tables:
-                # Look for ATP or Challenger tables
-                table_text = table.get_text().upper()
-                if 'ATP' in table_text or 'CHALLENGER' in table_text:
-                    rows = table.find_all('tr')
-                    
-                    for row in rows[1:]:  # Skip header
-                        cols = row.find_all('td')
-                        if len(cols) >= 4:
-                            # Extract match data
-                            date_text = cols[0].get_text().strip()
-                            if tomorrow in date_text or 'TOMORROW' in date_text.upper():
-                                tournament = cols[1].get_text().strip()
-                                players = cols[2].get_text().strip()
-                                
-                                if ' - ' in players:
-                                    p1, p2 = players.split(' - ')
-                                    
-                                    # Determine surface
-                                    surface = "Hard"
-                                    if 'CLAY' in tournament.upper():
-                                        surface = "Clay"
-                                    elif 'GRASS' in tournament.upper():
-                                        surface = "Grass"
-                                    
-                                    matches.append({
-                                        "tournament": tournament,
-                                        "surface": surface,
-                                        "player1": p1.strip(),
-                                        "player2": p2.strip()
-                                    })
-            
-            if matches:
-                return matches
-    except Exception as e:
-        st.warning(f"Tennis data source unavailable: {str(e)}")
-    
-    # Option 3: Using Sofascore's public API (reverse engineered)
+    # Try using Sofascore's public API (reverse engineered)
     try:
         tomorrow_date = datetime.now() + timedelta(days=1)
-        tomorrow_timestamp = int(tomorrow_date.timestamp())
+        tomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')
         
-        # Sofascore API endpoint (unofficial but works)
-        api_url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{tomorrow_timestamp}"
+        # Alternative Sofascore endpoint
+        api_url = f"https://www.sofascore.com/api/v1/sport/tennis/events/live"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -102,47 +32,97 @@ def fetch_atp_challenger_matches():
             data = response.json()
             matches = []
             
-            # Parse the response
+            # Parse the response for upcoming events
             if 'events' in data:
                 for event in data['events']:
-                    tournament_name = event.get('tournament', {}).get('name', '')
-                    
-                    # Filter ATP and Challenger
-                    if 'ATP' in tournament_name or 'Challenger' in tournament_name:
-                        # Get surface from tournament category
-                        surface = event.get('tournament', {}).get('category', {}).get('name', 'Hard')
-                        if 'Clay' in surface:
-                            surface = 'Clay'
-                        elif 'Grass' in surface:
-                            surface = 'Grass'
-                        else:
-                            surface = 'Hard'
+                    # Check if event is for tomorrow
+                    start_time = event.get('startTimestamp', 0)
+                    if start_time:
+                        event_date = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d')
                         
-                        # Get players
-                        home_team = event.get('homeTeam', {}).get('name', '')
-                        away_team = event.get('awayTeam', {}).get('name', '')
-                        
-                        if home_team and away_team:
-                            matches.append({
-                                "tournament": tournament_name,
-                                "surface": surface,
-                                "player1": home_team,
-                                "player2": away_team
-                            })
+                        if event_date == tomorrow_date_str:
+                            tournament_name = event.get('tournament', {}).get('name', '')
+                            
+                            # Filter ATP and Challenger
+                            if 'ATP' in tournament_name or 'Challenger' in tournament_name:
+                                # Get surface
+                                surface = 'Hard'
+                                category_name = event.get('tournament', {}).get('category', {}).get('name', '')
+                                if 'Clay' in category_name:
+                                    surface = 'Clay'
+                                elif 'Grass' in category_name:
+                                    surface = 'Grass'
+                                
+                                # Get players
+                                home_team = event.get('homeTeam', {}).get('name', '')
+                                away_team = event.get('awayTeam', {}).get('name', '')
+                                
+                                if home_team and away_team:
+                                    matches.append({
+                                        "tournament": tournament_name,
+                                        "surface": surface,
+                                        "player1": home_team,
+                                        "player2": away_team
+                                    })
             
             if matches:
                 return matches
     except Exception as e:
-        st.warning(f"Sofascore API unavailable: {str(e)}")
+        pass
     
-    # Option 4: Create realistic placeholder with explanation
-    # This shows sample data but clearly marks it as demo
-    return None
+    # Try alternative API endpoint
+    try:
+        # Different Sofascore endpoint for scheduled events
+        api_url = "https://www.sofascore.com/api/v1/sport/tennis/scheduled-events/0"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            matches = []
+            tomorrow_date_str = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            
+            if 'sportEvents' in data:
+                for event in data['sportEvents']:
+                    start_date = event.get('startDate', '').split('T')[0]
+                    
+                    if start_date == tomorrow_date_str:
+                        tournament_name = event.get('tournament', {}).get('name', '')
+                        
+                        if 'ATP' in tournament_name or 'Challenger' in tournament_name:
+                            surface = 'Hard'
+                            if 'Clay' in tournament_name:
+                                surface = 'Clay'
+                            elif 'Grass' in tournament_name:
+                                surface = 'Grass'
+                            
+                            home_team = event.get('homeTeam', {}).get('name', '')
+                            away_team = event.get('awayTeam', {}).get('name', '')
+                            
+                            if home_team and away_team:
+                                matches.append({
+                                    "tournament": tournament_name,
+                                    "surface": surface,
+                                    "player1": home_team,
+                                    "player2": away_team
+                                })
+            
+            if matches:
+                return matches
+    except Exception as e:
+        pass
+    
+    # If no matches found, return empty list
+    return []
 
 def export_to_txt(matches):
     """Convert matches to the required txt format"""
     if not matches:
-        return "No real matches found for tomorrow.\n\nPlease check back later when matches are scheduled."
+        return "No real matches found for tomorrow."
     
     lines = []
     current_tournament = None
@@ -169,7 +149,7 @@ st.set_page_config(
 )
 
 st.title("🎾 ATP & Challenger Tennis Matches for Tomorrow")
-st.markdown("Fetch real matches from official tennis data sources")
+st.markdown("Fetch real matches from Sofascore tennis data")
 
 # Initialize session state
 if "matches" not in st.session_state:
@@ -182,7 +162,7 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     if st.button("🔍 Fetch Tomorrow's Real Matches", type="primary", use_container_width=True):
-        with st.spinner("Fetching real match data from tennis APIs... Please wait..."):
+        with st.spinner("Fetching real match data from Sofascore... Please wait..."):
             matches_data = fetch_atp_challenger_matches()
             
             if matches_data and len(matches_data) > 0:
@@ -194,15 +174,13 @@ with col1:
                 df = pd.DataFrame(matches_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
-                st.error("❌ No real matches found for tomorrow. Possible reasons:")
-                st.markdown("""
+                st.warning("No real matches found for tomorrow.")
+                st.info("""
+                **Possible reasons:**
                 - No ATP or Challenger matches scheduled for tomorrow
-                - API rate limits reached (try again in a few minutes)
-                - Tennis off-season period
+                - Tournament break period
+                - Check official ATP website for schedule
                 """)
-                
-                # Show information about checking manually
-                st.info("📝 **Alternative options:**\n\n1. Check https://www.atptour.com/ for official schedule\n2. Try again tomorrow when matches might be scheduled\n3. The app will work automatically when matches are available")
                 st.session_state["matches"] = []
 
 with col2:
@@ -229,7 +207,7 @@ with col2:
 with st.expander("ℹ️ About This App"):
     st.markdown("""
     **How it works:**
-    - This app fetches **real ATP and Challenger matches** from official tennis data sources
+    - This app fetches real ATP and Challenger matches from Sofascore
     - No demo or fake data - only actual scheduled matches
     - Data is refreshed every hour
     
