@@ -273,20 +273,36 @@ def predict_winner(model_w, scaler_w, stats, p1, p2, s, o1, o2):
 
     winner = p1 if prob > 0.5 else p2
     win_prob = max(prob, 1-prob)
+    
+    # ===== CALIBRATION FIX: Reduce overconfidence =====
+    # Based on actual results: model predicts 77% avg but gets 60% winrate
+    # Apply graduated adjustment based on confidence level
+    if win_prob < 0.65:
+        calibrated_prob = win_prob * 0.95  # Small adjustment for low confidence
+    elif win_prob < 0.75:
+        calibrated_prob = win_prob * 0.88  # Moderate adjustment  
+    elif win_prob < 0.85:
+        calibrated_prob = win_prob * 0.85  # Higher adjustment
+    else:
+        calibrated_prob = win_prob * 0.80  # Maximum adjustment for high confidence
+    
+    # Ensure probability stays in valid range
+    calibrated_prob = max(0.50, min(0.95, calibrated_prob))
+    
     odd = float(o1) if winner==p1 else float(o2)
 
-    # Calculate edge correctly
+    # Calculate edge with calibrated probability
     implied_prob = 1.0 / odd
-    edge_value = win_prob - implied_prob
+    edge_value = calibrated_prob - implied_prob
 
     return {
         "Match": f"{raw1} vs {raw2}",
         "Pick": winner,
         "Type": "Winner",
-        "Prob": win_prob,
+        "Prob": calibrated_prob,  # Use calibrated probability
         "Odd": odd,
         "Edge": edge_value,
-        "Stake": kelly(win_prob, odd)
+        "Stake": kelly(calibrated_prob, odd)
     }
 
 def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
@@ -317,18 +333,32 @@ def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
         pick_prob = 1 - prob_over
         odd = float(o_under)
 
-    # Calculate edge correctly
+    # ===== CALIBRATION FIX: Reduce overconfidence =====
+    # Apply same calibration as winner predictions
+    if pick_prob < 0.65:
+        calibrated_prob = pick_prob * 0.95
+    elif pick_prob < 0.75:
+        calibrated_prob = pick_prob * 0.88
+    elif pick_prob < 0.85:
+        calibrated_prob = pick_prob * 0.85
+    else:
+        calibrated_prob = pick_prob * 0.80
+    
+    # Ensure probability stays in valid range
+    calibrated_prob = max(0.50, min(0.95, calibrated_prob))
+
+    # Calculate edge with calibrated probability
     implied_prob = 1.0 / odd
-    edge_value = pick_prob - implied_prob
+    edge_value = calibrated_prob - implied_prob
 
     return {
         "Match": f"{raw1} vs {raw2}",
         "Pick": pick,
         "Type": "O/U 21.5",
-        "Prob": pick_prob,
+        "Prob": calibrated_prob,  # Use calibrated probability
         "Odd": odd,
         "Edge": edge_value,
-        "Stake": kelly(pick_prob, odd)
+        "Stake": kelly(calibrated_prob, odd)
     }
 
 # ================= SCRAPER (OPTIMIZED) =================
