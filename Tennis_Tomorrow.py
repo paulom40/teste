@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import json
-from bs4 import BeautifulSoup
 
 # --- Fetch real matches using Tennis API ---
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -175,12 +174,7 @@ with col1:
                 st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.warning("No real matches found for tomorrow.")
-                st.info("""
-                **Possible reasons:**
-                - No ATP or Challenger matches scheduled for tomorrow
-                - Tournament break period
-                - Check official ATP website for schedule
-                """)
+                st.info("Possible reasons: No ATP or Challenger matches scheduled for tomorrow, or tournament break period.")
                 st.session_state["matches"] = []
 
 with col2:
@@ -205,12 +199,32 @@ with col2:
 
 # Information section
 with st.expander("ℹ️ About This App"):
-    st.markdown("""
-    **How it works:**
-    - This app fetches real ATP and Challenger matches from Sofascore
-    - No demo or fake data - only actual scheduled matches
-    - Data is refreshed every hour
-    
-    **Requirements for deployment on Streamlit Cloud:**
-    
-    Create `requirements.txt`:
+    st.markdown("**How it works:**")
+    st.markdown("- This app fetches real ATP and Challenger matches from Sofascore")
+    st.markdown("- No demo or fake data - only actual scheduled matches")
+    st.markdown("- Data is refreshed every hour")
+    st.markdown("")
+    st.markdown("**Requirements for deployment on Streamlit Cloud:**")
+    st.markdown("")
+    st.markdown("Create `requirements.txt`:")
+    st.code("""
+streamlit>=1.28.0
+pandas>=2.0.0
+requests>=2.31.0
+    """, language="text")
+    st.markdown("")
+    st.markdown("**Note:** If no matches are found for tomorrow, it means no ATP/Challenger events are scheduled for that date.")
+
+# Show helpful links
+st.markdown("---")
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown("📅 [Official ATP Schedule](https://www.atptour.com/en/scores/schedule)")
+with col2:
+    st.markdown("🎾 [Challenger Tour](https://www.atptour.com/en/tournaments/challenger)")
+with col3:
+    st.markdown("📊 [Live Tennis Scores](https://www.sofascore.com/tennis)")
+
+# Display message if no matches
+if not st.session_state.get("matches"):
+    st.info("👈 Click 'Fetch Tomorrow's Real Matches' to get ATP and Challenger matches for tomorrow")
