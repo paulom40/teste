@@ -38,79 +38,111 @@ def scrape_tennis24_matches():
         wait = WebDriverWait(driver, 20)
         time.sleep(5)
         
-        # Try to find and click "Upcoming" tab for tomorrow's matches
-        try:
-            upcoming_buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Upcoming')]")
-            for btn in upcoming_buttons:
-                if btn.is_displayed() and btn.is_enabled():
-                    btn.click()
-                    time.sleep(3)
-                    break
-        except:
-            pass
+        # Find all match elements directly using Tennis24's structure
+        # Look for elements with match information
+        match_elements = driver.find_elements(By.CSS_SELECTOR, "div[class*='event__match'], div[class*='matchRow'], tr[class*='match']")
         
-        # Get all text from the page
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        lines = page_text.split('\n')
-        
-        # Parse for ATP and Challenger matches
         current_tournament = None
-        current_surface = "Hard"
         
-        for i, line in enumerate(lines):
-            line_upper = line.upper()
-            
-            # Detect tournament (contains ATP or CHALLENGER)
-            if "ATP" in line_upper or "CHALLENGER" in line_upper:
-                current_tournament = line.strip()
+        for element in match_elements:
+            try:
+                # Get the text content
+                text = element.text
                 
-                # Determine surface
-                if "CLAY" in line_upper or "CLAY" in current_tournament:
-                    current_surface = "Clay"
-                elif "GRASS" in line_upper or "GRASS" in current_tournament:
-                    current_surface = "Grass"
-                else:
-                    current_surface = "Hard"
+                # Look for tournament names in parent or previous elements
+                parent = element.find_element(By.XPATH, "..")
+                parent_text = parent.text
                 
-                # Look for matches in the next few lines
-                for j in range(i+1, min(i+20, len(lines))):
-                    match_line = lines[j].strip()
+                # Find tournament name if not set
+                if "ATP" in parent_text or "Challenger" in parent_text:
+                    lines = parent_text.split('\n')
+                    for line in lines:
+                        if ("ATP" in line or "Challenger" in line) and len(line) < 100:
+                            current_tournament = line.strip()
+                            break
+                
+                # Check if this element contains a match (has vs or - with player names)
+                if " vs " in text or " - " in text:
+                    # Split to get potential player names
+                    if " vs " in text:
+                        parts = text.split(" vs ")
+                    else:
+                        parts = text.split(" - ")
                     
-                    # Check if this line contains a match (has vs or -)
-                    if " vs " in match_line.lower() or " - " in match_line:
-                        # Split to get players
-                        if " vs " in match_line:
-                            players = match_line.split(" vs ")
-                        else:
-                            players = match_line.split(" - ")
+                    if len(parts) >= 2:
+                        player1 = parts[0].strip()
+                        player2 = parts[1].strip()
                         
-                        if len(players) >= 2:
-                            player1 = players[0].strip()
-                            player2 = players[1].strip()
+                        # Clean up - remove scores, odds, and extra numbers
+                        player1 = re.sub(r'\s+[\d\.]+\s*$', '', player1)
+                        player1 = re.sub(r'\s+\d+:\d+', '', player1)
+                        player1 = re.sub(r'^\d+\s+', '', player1)
+                        
+                        player2 = re.sub(r'\s+[\d\.]+\s*$', '', player2)
+                        player2 = re.sub(r'\s+\d+:\d+', '', player2)
+                        player2 = re.sub(r'^\d+\s+', '', player2)
+                        
+                        # Validate that these look like real player names
+                        # Real names have letters and are not generic terms
+                        if (player1 and player2 and 
+                            len(player1) > 2 and len(player2) > 2 and
+                            not any(term in player1.upper() for term in ['CHALLENGER', 'ATP', 'WTA', 'ITF', 'SINGLES', 'DOUBLES', 'RACE']) and
+                            not any(term in player2.upper() for term in ['CHALLENGER', 'ATP', 'WTA', 'ITF', 'SINGLES', 'DOUBLES', 'RACE'])):
                             
-                            # Remove any scores or extra numbers
-                            player1 = re.sub(r'\s+\d+.*$', '', player1)
-                            player2 = re.sub(r'\s+\d+.*$', '', player2)
+                            # Determine surface from tournament name
+                            surface = "Hard"
+                            if current_tournament and "Clay" in current_tournament:
+                                surface = "Clay"
+                            elif current_tournament and "Grass" in current_tournament:
+                                surface = "Grass"
                             
-                            # Clean up player names (remove odds if present)
-                            player1 = re.sub(r'\s+[\d\.]+$', '', player1)
-                            player2 = re.sub(r'\s+[\d\.]+$', '', player2)
-                            
-                            if player1 and player2 and len(player1) > 1 and len(player2) > 1:
-                                matches.append({
-                                    "tournament": current_tournament,
-                                    "surface": current_surface,
-                                    "player1": player1,
-                                    "player2": player2
-                                })
-                            break  # Move to next tournament
+                            matches.append({
+                                "tournament": current_tournament if current_tournament else "ATP Tournament",
+                                "surface": surface,
+                                "player1": player1,
+                                "player2": player2
+                            })
+            except:
+                continue
         
-        # Remove duplicates
+        # Alternative approach: Get all text and parse line by line with context
+        if len(matches) < 3:
+            page_text = driver.find_element(By.TAG_NAME, "body").text
+            lines = page_text.split('\n')
+            
+            for i, line in enumerate(lines):
+                # Look for actual player names (two words, capital letters)
+                if " vs " in line and len(line) < 100:
+                    players = line.split(" vs ")
+                    if len(players) == 2:
+                        player1 = players[0].strip()
+                        player2 = players[1].strip()
+                        
+                        # Check if these look like real names (not category headers)
+                        if (re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?$', player1) and
+                            re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?$', player2)):
+                            
+                            # Look for tournament name in surrounding lines
+                            tournament = "ATP Challenger"
+                            for j in range(max(0, i-5), min(len(lines), i+5)):
+                                if "ATP" in lines[j] or "Challenger" in lines[j]:
+                                    if len(lines[j]) < 100 and " vs " not in lines[j]:
+                                        tournament = lines[j].strip()
+                                        break
+                            
+                            matches.append({
+                                "tournament": tournament,
+                                "surface": "Hard",
+                                "player1": player1,
+                                "player2": player2
+                            })
+        
+        # Remove duplicates and filter out invalid matches
         unique_matches = []
         seen = set()
         for match in matches:
             key = f"{match['player1']} vs {match['player2']}"
-            if key not in seen:
+            if key not in seen and len(match['player1']) > 2 and len(match['player2']) > 2:
                 seen.add(key)
                 unique_matches.append(match)
         
@@ -127,7 +159,7 @@ def scrape_tennis24_matches():
 def export_to_txt(matches):
     """Convert matches to the required txt format"""
     if not matches:
-        return "No matches found for tomorrow."
+        return "No real matches found for tomorrow.\n\nTry again during active tournament times."
     
     lines = []
     current_tournament = None
@@ -164,9 +196,10 @@ if "matches" not in st.session_state:
 with st.sidebar:
     st.header("ℹ️ About")
     st.markdown("This scraper fetches real ATP and Challenger matches from Tennis24.com")
-    st.markdown("Source: Tennis24.com")
-    st.markdown("Data: Live and upcoming matches")
-    st.markdown("Filter: ATP Tour & Challenger events only")
+    st.markdown("**Source:** Tennis24.com")
+    st.markdown("**Filter:** Only real player matches (no category headers)")
+    st.markdown("---")
+    st.markdown("**Current date:** " + datetime.now().strftime("%Y-%m-%d"))
 
 # Main area
 col1, col2 = st.columns([2, 1])
@@ -178,19 +211,20 @@ with col1:
             
             if matches_data and len(matches_data) > 0:
                 st.session_state.matches = matches_data
-                st.success(f"Found {len(matches_data)} ATP/Challenger matches!")
+                st.success(f"Found {len(matches_data)} real ATP/Challenger matches!")
                 
                 # Display matches in a table
                 df = pd.DataFrame(matches_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 
-                # Show sample of what was found
+                # Show match list
                 st.subheader("Match List")
-                for i, match in enumerate(matches_data[:10], 1):
-                    st.write(f"{i}. **{match['player1']}** vs **{match['player2']}** ({match['tournament']})")
+                for i, match in enumerate(matches_data, 1):
+                    st.write(f"{i}. **{match['player1']}** vs **{match['player2']}**")
+                    st.caption(f"   Tournament: {match['tournament']} ({match['surface']})")
             else:
-                st.warning("No ATP or Challenger matches found on Tennis24 right now.")
-                st.info("Tip: Try again during active tournament hours (typically 10:00 - 20:00 CET)")
+                st.warning("No real matches found on Tennis24 right now.")
+                st.info("Tips:\n- Try during active tournament hours (10:00 - 20:00 CET)\n- Check if tournaments are currently running\n- The scraper filters out category headers and only shows real player matches")
                 st.session_state.matches = []
 
 with col2:
@@ -213,8 +247,10 @@ with col2:
 # Display message when no matches
 if not st.session_state.matches:
     st.info("Click the button above to fetch current ATP and Challenger matches from Tennis24.com")
+    st.markdown("---")
+    st.markdown("**Note:** The scraper now filters out category headers like 'CHALLENGER MEN - SINGLES' and only shows real matches with actual player names.")
 
-# Instructions for deployment
+# Deployment instructions
 with st.expander("Deployment on Streamlit Cloud"):
     st.markdown("**Create packages.txt:**")
     st.code("chromium-browser", language="text")
