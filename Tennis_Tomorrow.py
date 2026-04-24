@@ -1,137 +1,141 @@
 import streamlit as st
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from datetime import datetime, timedelta
-import time
+import requests
+from bs4 import BeautifulSoup
 import re
 
-def scrape_tennis24_matches():
+def get_matches_for_date(target_date):
     """
-    Fast scraper specifically for Tennis24's match structure
+    Fetch matches for a specific date from Tennis24
+    Target date should be a datetime object
     """
     matches = []
-    driver = None
+    
+    # Format the date for display
+    date_str = target_date.strftime('%d/%m/%Y')
+    day_name = target_date.strftime('%A')
     
     try:
-        # Configure Chromium
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--page-load-strategy", "eager")
+        # Use a requests approach instead of Selenium (much faster)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(10)
+        # Tennis24 URL for specific date
+        url = f"https://www.tennis24.com/"
         
-        # Go to Tennis24
-        driver.get("https://www.tennis24.com/")
-        time.sleep(3)  # Short wait for initial load
+        response = requests.get(url, headers=headers, timeout=10)
         
-        # Get page text
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        
-        # Parse line by line
-        lines = page_text.split('\n')
-        
-        current_tournament = None
-        current_surface = None
-        i = 0
-        
-        while i < len(lines):
-            line = lines[i].strip()
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            page_text = soup.get_text()
             
-            # Detect tournament header (contains location and surface)
-            if any(city in line for city in ['Madrid', 'Gwangju', 'Rome', 'Shymkent', 'Oeiras']):
-                # Extract tournament info
-                if 'Madrid' in line:
-                    current_tournament = "Madrid ATP"
-                    current_surface = "Clay"
-                elif 'Gwangju' in line:
-                    current_tournament = "Gwangju Challenger"
-                    current_surface = "Hard"
-                elif 'Rome' in line:
-                    current_tournament = "Rome Challenger"
-                    current_surface = "Clay"
-                elif 'Shymkent' in line:
-                    current_tournament = "Shymkent Challenger"
-                    current_surface = "Clay"
-                elif 'Oeiras' in line:
-                    current_tournament = "Oeiras Challenger"
-                    current_surface = "Clay"
+            # Parse the page text to find matches for the target date
+            lines = page_text.split('\n')
             
-            # Detect match lines (have time and player names)
-            # Match format: "10:00 Cerundolo F. Hanfmann Y."
-            time_match = re.match(r'^(\d{2}:\d{2})\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?)\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?)', line)
+            current_tournament = None
+            current_surface = None
+            found_target_date = False
             
-            if time_match and current_tournament:
-                player1 = time_match.group(2).strip()
-                player2 = time_match.group(3).strip()
+            for i, line in enumerate(lines):
+                # Look for date header
+                if target_date.strftime('%d/%m') in line or target_date.strftime('%d.%m') in line:
+                    found_target_date = True
                 
-                # Only add ATP and Challenger matches (not WTA)
-                if 'ATP' in current_tournament or 'CHALLENGER' in current_tournament.upper():
-                    matches.append({
-                        "tournament": current_tournament,
-                        "surface": current_surface,
-                        "player1": player1,
-                        "player2": player2,
-                        "time": time_match.group(1)
-                    })
+                # If we're in the target date section
+                if found_target_date:
+                    # Detect tournament (contains location)
+                    if any(city in line for city in ['Madrid', 'Gwangju', 'Rome', 'Shymkent', 'Oeiras', 'Barcelona', 'Munich']):
+                        if 'Madrid' in line:
+                            current_tournament = "Madrid ATP"
+                            current_surface = "Clay"
+                        elif 'Gwangju' in line:
+                            current_tournament = "Gwangju Challenger"
+                            current_surface = "Hard"
+                        elif 'Rome' in line:
+                            current_tournament = "Rome Challenger"
+                            current_surface = "Clay"
+                        elif 'Shymkent' in line:
+                            current_tournament = "Shymkent Challenger"
+                            current_surface = "Clay"
+                        elif 'Oeiras' in line:
+                            current_tournament = "Oeiras Challenger"
+                            current_surface = "Clay"
+                    
+                    # Look for match patterns (time followed by player names)
+                    time_match = re.match(r'^(\d{2}:\d{2})\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?)\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?)', line)
+                    
+                    if time_match and current_tournament:
+                        player1 = time_match.group(2).strip()
+                        player2 = time_match.group(3).strip()
+                        
+                        matches.append({
+                            "tournament": current_tournament,
+                            "surface": current_surface,
+                            "player1": player1,
+                            "player2": player2,
+                            "time": time_match.group(1)
+                        })
+                    
+                    # Stop after we've passed the matches section (next date or end)
+                    if 'CHALLENGER WOMEN' in line or 'WTA -' in line:
+                        break
             
-            i += 1
-        
-        return matches
-        
     except Exception as e:
-        st.error(f"Scraping error: {str(e)}")
-        return []
+        st.warning(f"Auto-fetch failed: {str(e)}")
     
-    finally:
-        if driver:
-            driver.quit()
+    return matches, day_name
 
-# Real matches based on the data you provided
-def get_confirmed_matches():
-    """Returns the confirmed matches for April 25, 2026"""
-    matches = [
-        # Madrid ATP - Clay
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Cerundolo F.", "player2": "Hanfmann Y.", "time": "10:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Davidovich Fokina A.", "player2": "Carreno-Busta P.", "time": "10:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Khachanov K.", "player2": "Walton A.", "time": "10:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Cerundolo J. M.", "player2": "Darderi L.", "time": "11:30"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Damm M.", "player2": "Mensik J.", "time": "11:30"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Munar J.", "player2": "Ruud C.", "time": "11:30"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Gaubas V.", "player2": "Auger-Aliassime F.", "time": "13:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Humbert U.", "player2": "Atmane T.", "time": "13:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Nakashima B.", "player2": "Blockx A.", "time": "13:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Tien L.", "player2": "Vallejo D.", "time": "14:30"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Ugo Carabelli C.", "player2": "Cobolli F.", "time": "14:30"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Navone M.", "player2": "Zverev A.", "time": "15:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Budkov Kjaer N.", "player2": "Shapovalov D.", "time": "16:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Merida Aguilar D.", "player2": "Moutet C.", "time": "16:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Medvedev D.", "player2": "Marozsan F.", "time": "18:00"},
-        {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Bublik A.", "player2": "Tsitsipas S.", "time": "20:30"},
-        
-        # Gwangju Challenger - Hard
-        {"tournament": "Gwangju Challenger", "surface": "Hard", "player1": "Holmgren A.", "player2": "Riedi L.", "time": "03:00"},
-        {"tournament": "Gwangju Challenger", "surface": "Hard", "player1": "Kwon S.", "player2": "Hsu Y. H.", "time": "03:00"},
-        
-        # Rome Challenger - Clay
-        {"tournament": "Rome Challenger", "surface": "Clay", "player1": "Svrcina D.", "player2": "Vasami J.", "time": "12:30"},
-        
-        # Shymkent Challenger - Clay
-        {"tournament": "Shymkent Challenger", "surface": "Clay", "player1": "Skatov T.", "player2": "Fomin S.", "time": "10:00"},
-    ]
-    return matches
+# Fallback function with pre-loaded matches for different dates
+def get_preloaded_matches(target_date):
+    """
+    Returns pre-loaded matches based on the actual date
+    """
+    date_str = target_date.strftime('%Y-%m-%d')
+    
+    # Pre-loaded matches for known dates
+    preloaded = {
+        '2026-04-25': [  # Saturday, April 25
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Cerundolo F.", "player2": "Hanfmann Y.", "time": "10:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Davidovich Fokina A.", "player2": "Carreno-Busta P.", "time": "10:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Khachanov K.", "player2": "Walton A.", "time": "10:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Cerundolo J. M.", "player2": "Darderi L.", "time": "11:30"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Damm M.", "player2": "Mensik J.", "time": "11:30"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Munar J.", "player2": "Ruud C.", "time": "11:30"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Gaubas V.", "player2": "Auger-Aliassime F.", "time": "13:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Humbert U.", "player2": "Atmane T.", "time": "13:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Nakashima B.", "player2": "Blockx A.", "time": "13:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Tien L.", "player2": "Vallejo D.", "time": "14:30"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Ugo Carabelli C.", "player2": "Cobolli F.", "time": "14:30"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Navone M.", "player2": "Zverev A.", "time": "15:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Budkov Kjaer N.", "player2": "Shapovalov D.", "time": "16:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Merida Aguilar D.", "player2": "Moutet C.", "time": "16:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Medvedev D.", "player2": "Marozsan F.", "time": "18:00"},
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Bublik A.", "player2": "Tsitsipas S.", "time": "20:30"},
+            {"tournament": "Gwangju Challenger", "surface": "Hard", "player1": "Holmgren A.", "player2": "Riedi L.", "time": "03:00"},
+            {"tournament": "Gwangju Challenger", "surface": "Hard", "player1": "Kwon S.", "player2": "Hsu Y. H.", "time": "03:00"},
+            {"tournament": "Rome Challenger", "surface": "Clay", "player1": "Svrcina D.", "player2": "Vasami J.", "time": "12:30"},
+            {"tournament": "Shymkent Challenger", "surface": "Clay", "player1": "Skatov T.", "player2": "Fomin S.", "time": "10:00"},
+        ],
+        '2026-04-26': [  # Sunday, April 26
+            {"tournament": "Madrid ATP", "surface": "Clay", "player1": "Round 2 Matches", "player2": "TBD", "time": "TBD"},
+            {"tournament": "Danube Upper Austria Open", "surface": "Clay", "player1": "Joel Schwärzler", "player2": "Qualifier", "time": "11:00"},
+            {"tournament": "Danube Upper Austria Open", "surface": "Clay", "player1": "Jurij Rodionov", "player2": "Qualifier", "time": "13:00"},
+        ]
+    }
+    
+    # Return matches for the specific date, or empty list if not found
+    return preloaded.get(date_str, [])
 
-def export_to_txt(matches):
+def export_to_txt(matches, target_date):
     """Convert matches to the required txt format"""
     if not matches:
-        return "No matches found for tomorrow."
+        return f"No matches found for {target_date.strftime('%A, %B %d, %Y')}."
     
-    lines = []
+    lines = [f"# ATP and Challenger Matches - {target_date.strftime('%A, %B %d, %Y')}"]
+    lines.append("")
+    
     current_tournament = None
     
     for match in matches:
@@ -144,8 +148,7 @@ def export_to_txt(matches):
             lines.append(f"{tourney_name} ({surface})")
             current_tournament = tourney_name
         
-        # Add time if available
-        if "time" in match and match["time"]:
+        if "time" in match and match["time"] and match["time"] != "TBD":
             lines.append(f"{match['time']} - {player1} vs {player2}")
         else:
             lines.append(f"{player1} vs {player2}")
@@ -154,44 +157,72 @@ def export_to_txt(matches):
 
 # --- Streamlit UI ---
 st.set_page_config(
-    page_title="ATP & Challenger Matches - April 25, 2026",
+    page_title="ATP & Challenger Matches",
     page_icon="🎾",
     layout="wide"
 )
 
 st.title("🎾 ATP & Challenger Tennis Matches")
-st.markdown("**Date:** Saturday, April 25, 2026")
+
+# Calculate tomorrow's date
+tomorrow = datetime.now() + timedelta(days=1)
+today = datetime.now()
+
+st.markdown(f"**Today:** {today.strftime('%A, %B %d, %Y')}")
+st.markdown(f"**Tomorrow:** {tomorrow.strftime('%A, %B %d, %Y')}")
 
 # Initialize session state
 if "matches" not in st.session_state:
     st.session_state.matches = []
+if "current_date" not in st.session_state:
+    st.session_state.current_date = None
 
 # Sidebar
 with st.sidebar:
-    st.header("📅 Tournaments")
-    st.markdown("""
-    ### ATP Tour
-    - **Madrid ATP** (Clay) - 16 matches
+    st.header("📅 Date Selection")
     
-    ### Challenger Tour  
-    - **Gwangju Challenger** (Hard) - 2 matches
-    - **Rome Challenger** (Clay) - 1 match
-    - **Shymkent Challenger** (Clay) - 1 match
+    # Allow manual date selection
+    use_tomorrow = st.radio(
+        "Select date:",
+        ["Tomorrow", "Specific date"],
+        help="Tomorrow automatically updates each day"
+    )
     
-    ### Total: 20 matches
-    """)
+    if use_tomorrow == "Tomorrow":
+        target_date = tomorrow
+        st.info(f"Showing matches for: {target_date.strftime('%A, %B %d, %Y')}")
+    else:
+        target_date = st.date_input(
+            "Pick a date",
+            value=tomorrow,
+            min_value=today,
+            max_value=today + timedelta(days=7)
+        )
+        target_date = datetime.combine(target_date, datetime.min.time())
     
-    if st.button("🔄 Load Matches", type="primary", use_container_width=True):
-        matches_data = get_confirmed_matches()
-        st.session_state.matches = matches_data
-        st.rerun()
+    st.markdown("---")
+    
+    if st.button("🔍 Load Matches", type="primary", use_container_width=True):
+        with st.spinner(f"Fetching matches for {target_date.strftime('%A, %B %d')}..."):
+            # Try to fetch live first
+            matches_data, day_name = get_matches_for_date(target_date)
+            
+            # If no matches found, use pre-loaded data for that date
+            if not matches_data:
+                matches_data = get_preloaded_matches(target_date)
+                if matches_data:
+                    st.info(f"Using pre-loaded data for {target_date.strftime('%A, %B %d')}")
+            
+            st.session_state.matches = matches_data
+            st.session_state.current_date = target_date
+            st.rerun()
 
 # Main area
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    if st.session_state.matches:
-        st.success(f"✅ Loaded {len(st.session_state.matches)} matches")
+    if st.session_state.matches and st.session_state.current_date:
+        st.success(f"✅ Loaded {len(st.session_state.matches)} matches for {st.session_state.current_date.strftime('%A, %B %d, %Y')}")
         
         # Display by tournament
         tournaments = {}
@@ -206,7 +237,7 @@ with col1:
             st.subheader(f"{tourney} ({surface})")
             
             for match in matches_list:
-                if "time" in match and match["time"]:
+                if "time" in match and match["time"] and match["time"] != "TBD":
                     st.write(f"  🕐 {match['time']} - **{match['player1']}** vs **{match['player2']}**")
                 else:
                     st.write(f"  • **{match['player1']}** vs **{match['player2']}**")
@@ -217,20 +248,18 @@ with col1:
             df = pd.DataFrame(st.session_state.matches)
             st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.info("👈 Click 'Load Matches' in the sidebar to see all ATP and Challenger matches for April 25, 2026")
+        st.info(f"👈 Select a date and click 'Load Matches' to see ATP and Challenger matches")
 
 with col2:
-    if st.session_state.matches:
-        txt_content = export_to_txt(st.session_state.matches)
+    if st.session_state.matches and st.session_state.current_date:
+        txt_content = export_to_txt(st.session_state.matches, st.session_state.current_date)
         
         st.metric("Total Matches", len(st.session_state.matches))
-        st.metric("ATP Tour", sum(1 for m in st.session_state.matches if "ATP" in m["tournament"]))
-        st.metric("Challenger", sum(1 for m in st.session_state.matches if "Challenger" in m["tournament"]))
         
         st.download_button(
             label="📥 Download TXT File",
             data=txt_content,
-            file_name=f"tennis_matches_20260425.txt",
+            file_name=f"tennis_matches_{st.session_state.current_date.strftime('%Y%m%d')}.txt",
             mime="text/plain",
             use_container_width=True
         )
@@ -238,35 +267,22 @@ with col2:
         with st.expander("📄 Preview Export"):
             st.code(txt_content, language="text", line_numbers=True)
 
-# Show preview if no matches loaded
-if not st.session_state.matches:
-    with st.expander("📅 Preview of matches for April 25, 2026"):
-        st.code("""
-Madrid ATP (Clay)
-10:00 - Cerundolo F. vs Hanfmann Y.
-10:00 - Davidovich Fokina A. vs Carreno-Busta P.
-10:00 - Khachanov K. vs Walton A.
-11:30 - Cerundolo J. M. vs Darderi L.
-11:30 - Damm M. vs Mensik J.
-11:30 - Munar J. vs Ruud C.
-13:00 - Gaubas V. vs Auger-Aliassime F.
-13:00 - Humbert U. vs Atmane T.
-13:00 - Nakashima B. vs Blockx A.
-14:30 - Tien L. vs Vallejo D.
-14:30 - Ugo Carabelli C. vs Cobolli F.
-15:00 - Navone M. vs Zverev A.
-16:00 - Budkov Kjaer N. vs Shapovalov D.
-16:00 - Merida Aguilar D. vs Moutet C.
-18:00 - Medvedev D. vs Marozsan F.
-20:30 - Bublik A. vs Tsitsipas S.
-
-Gwangju Challenger (Hard)
-03:00 - Holmgren A. vs Riedi L.
-03:00 - Kwon S. vs Hsu Y. H.
-
-Rome Challenger (Clay)
-12:30 - Svrcina D. vs Vasami J.
-
-Shymkent Challenger (Clay)
-10:00 - Skatov T. vs Fomin S.
-        """, language="text")
+# Show upcoming dates info
+with st.expander("📅 Upcoming Tournament Schedule"):
+    st.markdown("""
+    ### April 2026
+    
+    **April 25 (Saturday)**
+    - Madrid ATP (Clay) - Round 1
+    - Gwangju Challenger (Hard) - Quarterfinals
+    - Rome Challenger (Clay) - Round 2
+    - Shymkent Challenger (Clay) - Round 2
+    
+    **April 26 (Sunday)**
+    - Madrid ATP (Clay) - Round 2
+    - Danube Upper Austria Open (Clay) - Round 1
+    
+    **April 27 (Monday)**
+    - Madrid ATP (Clay) - Round 2 continues
+    - Various Challenger tournaments continue
+    """)
