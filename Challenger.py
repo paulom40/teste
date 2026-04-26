@@ -20,10 +20,9 @@ MIN_CONFIDENCE_STRONG = 0.68
 MIN_CONFIDENCE_GOOD = 0.60
 
 # ==============================================================================
-# MAPEAMENTO MANUAL DE SOBRENOMES -> NOMES COMPLETOS
+# MAPEAMENTO MANUAL DE SOBRENOMES -> NOMES COMPLETOS (SEM DUPLICATAS)
 # ==============================================================================
 NAME_MAPPING = {
-    # ATP Top Players (Madrid Open)
     'lehecka': 'Jiri Lehecka',
     'michelsen': 'Alex Michelsen',
     'griekspoor': 'Tallon Griekspoor',
@@ -70,16 +69,14 @@ NAME_MAPPING = {
     'gima': 'Sebastian Gima',
     'hands': 'Tom Hands',
     'hurrion': 'Matthew Hurrion',
-    'lock': 'Lock',
     'mansouri': 'Skander Mansouri',
     'weightman': 'James Weightman',
     'kuhar': 'Matt Kuhar',
-    'sanogo': 'SANOGO',
+    'sanogo': 'Sanogo',
     'hu': 'Hu',
     'moriya': 'Hiroki Moriya',
     'pearson': 'Kody Pearson',
     'peliwo': 'Filip Peliwo',
-    'tung-lin': 'Tung-Lin Wu',
     'wei': 'Wei',
     'ilagan': 'Andre Ilagan',
     'chen': 'Chen',
@@ -100,7 +97,6 @@ NAME_MAPPING = {
     'masur': 'Daniel Masur',
     'sun': 'Sun',
     'damas': 'Miguel Damas',
-    'pinter': 'Pinter',
     'hausberger': 'Hausberger',
     'donald': 'Donald',
     'iannaccone': 'Federico Iannaccone',
@@ -147,11 +143,11 @@ NAME_MAPPING = {
     'shin': 'Sanhui Shin',
     'klok': 'Klok',
     'zhalgasbay': 'Zhalgasbay',
-    'campana': 'Campana',
+    'campana': 'Campana Lee',
     'orlov': 'Orlov',
     'lomakin': 'Lomakin',
     'gulin': 'Gulin',
-    'wehnelt': 'Wehnelt',
+    'wehnelt': 'Kai Wehnelt',
     'trebukhin': 'Trebukhin',
     'vithoontien': 'Leo Vithoontien',
     'krutykh': 'Oleksii Krutykh',
@@ -183,23 +179,20 @@ NAME_MAPPING = {
     'hoeyeraal': 'Hoeyeraal',
     'cavallo': 'Cavallo',
     'searle': 'Henry Searle',
-    'torres': 'Torres',
+    'torres': 'Tiago Torres',
     'shepp': 'Shepp',
     'stringer': 'Stringer',
     'roca': 'Oriol Roca Batalla',
-    'montes-de': 'Inaki Montes-De La Torre',
     'gray': 'Alastair Gray',
     'cui': 'Cui',
     'arzhankin': 'Arzhankin',
     'kachmazov': 'Alibek Kachmazov',
-    'hernandez': 'Alex Hernandez',
     'pacheco': 'Rodrigo Pacheco Mendez',
     'rottgering': 'Mees Rottgering',
     'tararudee': 'Tararudee',
     'preston': 'Preston',
     'newman': 'Newman',
     'back': 'Back',
-    'matsuda': 'Ryuki Matsuda',
     'zolotareva': 'Zolotareva',
     'kumar': 'Kumar',
     'hayen': 'Hayen',
@@ -402,11 +395,11 @@ def train_model(df, player_stats, h2h, elo):
     return model
 
 # ==============================================================================
-# NAME MATCHER COM MAPEAMENTO MANUAL
+# NAME MATCHER
 # ==============================================================================
 class SmartNameMatcher:
     def __init__(self, historical_names):
-        self.historical_names = set(historical_names)
+        self.historical_names = list(historical_names)
         self.mapping = NAME_MAPPING
     
     def find_match(self, search_name):
@@ -504,9 +497,8 @@ def parse_colab_text(text):
             p1 = re.sub(r'\s+', ' ', p1).strip()
             p2 = re.sub(r'\s+', ' ', p2).strip()
             
-            surface = 'Clay'
             if p1 and p2 and p1 != p2:
-                matches.append({'player1': p1, 'player2': p2, 'surface': surface})
+                matches.append({'player1': p1, 'player2': p2})
     
     return matches
 
@@ -549,13 +541,19 @@ def main():
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
+                import traceback
+                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
         st.subheader("Cole sua lista de jogos")
-        st.markdown("**Exemplo:** `Lehecka vs Michelsen` ou `Jiri Lehecka vs Alex Michelsen`")
+        st.markdown("**Exemplo:** `Lehecka vs Michelsen`")
         
         matches_text = st.text_area("Jogos:", height=300, 
-                                     placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti\nPrizmic vs Etcheverry")
+                                     placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            surface_override = st.selectbox("Superficie", ["Clay", "Hard", "Grass"], index=0)
         
         if matches_text and st.button("FAZER PREVISOES", type="primary"):
             parsed_matches = parse_colab_text(matches_text)
@@ -567,7 +565,7 @@ def main():
                 for match in parsed_matches:
                     result, missing = predict_match(
                         st.session_state.model, 
-                        match['player1'], match['player2'], 'Clay',
+                        match['player1'], match['player2'], surface_override,
                         st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
                         st.session_state.name_matcher
                     )
@@ -579,10 +577,11 @@ def main():
                 if not_found:
                     st.warning(f"{len(not_found)} jogos nao encontrados")
                     with st.expander("Ver jogadores nao encontrados"):
-                        for p1, p2 in not_found:
+                        for p1, p2 in not_found[:20]:
                             st.write(f"  - {p1} vs {p2}")
                 
                 if results:
+                    st.subheader(f"Resultados ({len(results)} jogos)")
                     df_results = pd.DataFrame(results)
                     st.dataframe(df_results, use_container_width=True, hide_index=True)
                     
