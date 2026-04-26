@@ -8,7 +8,6 @@ import streamlit as st
 import requests
 from lightgbm import LGBMClassifier
 import matplotlib.pyplot as plt
-import re
 
 warnings.filterwarnings('ignore')
 
@@ -42,43 +41,43 @@ def detect_surface(tournament_name):
 # ==============================================================================
 def process_historical_data(df):
     df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
-    
+
     winner_col = None
     loser_col = None
-    
+
     for col in df.columns:
         if 'winner' in col or 'vencedor' in col:
             winner_col = col
         elif 'loser' in col or 'perdedor' in col:
             loser_col = col
-    
+
     if not winner_col or not loser_col:
         return None, None
-    
+
     df = df.rename(columns={winner_col: 'winner', loser_col: 'loser'})
-    
+
     if 'date' not in df.columns:
         df['date'] = pd.Timestamp.now()
     else:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
+
     if 'total_games' not in df.columns:
         df['total_games'] = 22
-    
+
     if 'surface' not in df.columns:
         df['surface'] = 'Hard'
-    
+
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
-    
+
     df = df[df['winner'].notna() & df['loser'].notna()]
     df = df[df['winner'] != 'nan']
     df = df[df['loser'] != 'nan']
     df = df[df['winner'] != '']
     df = df[df['loser'] != '']
-    
+
     all_players = list(set(df['winner'].unique()) | set(df['loser'].unique()))
-    
+
     return df, all_players
 
 # ==============================================================================
@@ -86,31 +85,31 @@ def process_historical_data(df):
 # ==============================================================================
 def calculate_player_stats(df, all_players):
     stats = {}
-    
+
     for player in all_players:
         player_matches = df[(df['winner'] == player) | (df['loser'] == player)]
-        
+
         if len(player_matches) == 0:
             stats[player] = {
                 'matches': 0, 'wins': 0, 'win_rate': 0.5,
                 'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22
             }
             continue
-        
+
         wins = len(player_matches[player_matches['winner'] == player])
         total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
-        
+
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
-        
+
         very_recent = player_matches.sort_values('date', ascending=False).head(5)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
-        
+
         avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
-        
+
         stats[player] = {
             'matches': total,
             'wins': wins,
@@ -119,7 +118,7 @@ def calculate_player_stats(df, all_players):
             'very_recent_form': very_recent_form,
             'avg_games': avg_games
         }
-    
+
     return stats
 
 # ==============================================================================
@@ -138,18 +137,18 @@ def calculate_h2h(df):
 # ==============================================================================
 def calculate_elo(df, all_players, k=32):
     elo = {p: 1500 for p in all_players}
-    
+
     for _, row in df.sort_values('date').iterrows():
         w, l = row['winner'], row['loser']
         if w in elo and l in elo:
             exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
             elo[w] += k * (1 - exp_w)
             elo[l] += k * (0 - (1 - exp_w))
-    
+
     return elo
 
 # ==============================================================================
-# ELO20 GLOBAL (últimos 20 jogos)
+# ELO20 GLOBAL
 # ==============================================================================
 def calculate_elo_last20(df, all_players, k=32):
     elo = {p: 1500 for p in all_players}
@@ -176,7 +175,7 @@ def calculate_elo_last20(df, all_players, k=32):
     return elo
 
 # ==============================================================================
-# ELO por superfície últimos 20 jogos
+# ELO20 POR SUPERFÍCIE
 # ==============================================================================
 def calculate_surface_elo_last20(df, all_players, surface, k=32):
     elo = {p: 1500 for p in all_players}
@@ -204,7 +203,7 @@ def calculate_surface_elo_last20(df, all_players, surface, k=32):
     return elo
 
 # ==============================================================================
-# W‑ELO (ponderado pela forma)
+# W‑ELO
 # ==============================================================================
 def calculate_welo(elo_value, recent_form):
     return round(elo_value * 0.7 + (recent_form * 1000) * 0.3, 1)
@@ -215,32 +214,32 @@ def calculate_welo(elo_value, recent_form):
 def find_player(name, historical_names):
     if not name:
         return None
-    
+
     name_str = str(name).strip()
     name_lower = name_str.lower()
-    
+
     if name_str in historical_names:
         return name_str
-    
+
     for player in historical_names:
         if player.lower() == name_lower:
             return player
-    
+
     parts = name_lower.split()
     if parts:
         last_name = parts[-1]
         for player in historical_names:
             if player.lower().endswith(last_name):
                 return player
-    
+
     for player in historical_names:
         if name_lower in player.lower():
             return player
-    
+
     return None
 
 # ==============================================================================
-# SCRAPER RAPIDAPI — ATP + CHALLENGER + ODDS
+# SCRAPER RAPIDAPI
 # ==============================================================================
 def scrape_matches():
     API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
@@ -509,11 +508,21 @@ def build_match_summary(p1, p2, surface, stats, h2h, elo_global, elo_surface, mo
     return summary
 
 # ==============================================================================
-# RANKING DIÁRIO COMPLETO
+# RANKING DIÁRIO COMPLETO (com proteção contra 404)
 # ==============================================================================
 def build_value_ranking(summaries):
+    if not summaries:
+        return pd.DataFrame(columns=[
+            "Jogador 1","Jogador 2","EV P1","EV P2","EV Over","EV Under","EV_MAX","VALUE_TAG"
+        ])
+
     df = pd.DataFrame(summaries)
-    df["EV_MAX"] = df[["EV P1", "EV P2", "EV Over", "EV Under"]].max(axis=1)
+
+    for col in ["EV P1","EV P2","EV Over","EV Under"]:
+        if col not in df.columns:
+            df[col] = None
+
+    df["EV_MAX"] = df[["EV P1","EV P2","EV Over","EV Under"]].max(axis=1)
 
     def best_value(row):
         tags = [
@@ -594,8 +603,9 @@ def export_excel(df):
     buffer = io.BytesIO()
     df.to_excel(buffer, index=False)
     return buffer.getvalue()
+
 # ==============================================================================
-# COMPARAÇÃO 1v1 — ELO, ELO20, W‑ELO, W‑ELO20
+# COMPARAÇÃO 1v1 — FUNÇÃO BASE
 # ==============================================================================
 def build_elo_comparison_1v1(p1, p2, stats, elo_global, elo20_global, elo_surface, elo20_surface):
     def welo(elo, form):
@@ -638,7 +648,6 @@ def build_elo_comparison_1v1(p1, p2, stats, elo_global, elo20_global, elo_surfac
     }
 
     return pd.DataFrame(comp)
-
 # ==============================================================================
 # GRÁFICO 1v1
 # ==============================================================================
@@ -664,6 +673,9 @@ def plot_elo_comparison_1v1(df, p1, p2):
 def main():
     st.title("🎾 ATP Predictor PRO — v7.4")
 
+    # ============================
+    # CARREGAR EXCEL
+    # ============================
     st.sidebar.header("📁 Carregar Base de Dados")
     file = st.sidebar.file_uploader("Carregar Excel", type=["xlsx", "xls"])
 
@@ -679,7 +691,9 @@ def main():
         st.error("Erro ao processar o ficheiro.")
         return
 
-
+    # ============================
+    # CALCULAR ESTATÍSTICAS
+    # ============================
     stats = calculate_player_stats(df, all_players)
     h2h = calculate_h2h(df)
 
@@ -690,6 +704,7 @@ def main():
     elo_hard = calculate_surface_elo_last20(df, all_players, "Hard")
     elo_grass = calculate_surface_elo_last20(df, all_players, "Grass")
 
+    # Guardar em sessão
     st.session_state.stats = stats
     st.session_state.h2h = h2h
     st.session_state.elo = elo_global
@@ -698,9 +713,20 @@ def main():
     st.session_state.elo_hard = elo_hard
     st.session_state.elo_grass = elo_grass
 
+    # ============================
+    # TREINAR MODELO
+    # ============================
     model = train_model(df, stats, h2h, elo_global)
 
-    tabs = st.tabs(["🎾 Previsão Individual", "📋 Previsão Jogos do Dia", "🏆 Ranking VALUE BETS", "⚔️ Comparação 1v1"])
+    # ============================
+    # TABS
+    # ============================
+    tabs = st.tabs([
+        "🎾 Previsão Individual",
+        "📋 Previsão Jogos do Dia",
+        "🏆 Ranking VALUE BETS",
+        "⚔️ Comparação 1v1"
+    ])
 
     # ==============================================================================
     # TAB 1 — PREVISÃO INDIVIDUAL
@@ -721,7 +747,9 @@ def main():
             if not p1 or not p2 or p1 == p2:
                 st.error("Jogadores inválidos.")
             else:
-                result, err = predict_match(model, p1, p2, surface, stats, h2h, elo_global, all_players, tournament)
+                result, err = predict_match(
+                    model, p1, p2, surface, stats, h2h, elo_global, all_players, tournament
+                )
                 if err:
                     st.error(err)
                 else:
@@ -771,7 +799,10 @@ def main():
 
             st.session_state.summaries = summaries
 
-            st.dataframe(pd.DataFrame(summaries), use_container_width=True)
+            if summaries:
+                st.dataframe(pd.DataFrame(summaries), use_container_width=True)
+            else:
+                st.warning("Nenhum jogo encontrado hoje.")
 
     # ==============================================================================
     # TAB 3 — RANKING VALUE BETS
@@ -779,13 +810,13 @@ def main():
     with tabs[2]:
         st.subheader("🏆 Ranking Diário — VALUE BETS")
 
-        if "summaries" not in st.session_state:
-            st.info("Primeiro gera previsões no separador anterior.")
+        if "summaries" not in st.session_state or not st.session_state.summaries:
+            st.warning("Nenhum jogo disponível. Primeiro gera previsões no separador anterior.")
         else:
             ranking_df = build_value_ranking(st.session_state.summaries)
 
             st.dataframe(
-                ranking_df.style.applymap(color_ev, subset=["EV P1", "EV P2", "EV Over", "EV Under", "EV_MAX"]),
+                ranking_df.style.applymap(color_ev, subset=["EV P1","EV P2","EV Over","EV Under","EV_MAX"]),
                 use_container_width=True
             )
 
