@@ -9,17 +9,15 @@ import streamlit as st
 import requests
 from lightgbm import LGBMClassifier
 import re
-from bs4 import BeautifulSoup
-import random
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v11.0 - Challenger Focus", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v12.0 - ATP + Challenger Real", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIGURAÇÕES
 # ==============================================================================
-WINNER_SMOOTH = 0.65  # Reduzido para permitir mais variação
+WINNER_SMOOTH = 0.60
 MIN_CONFIDENCE_STRONG = 0.65
 MIN_CONFIDENCE_GOOD = 0.55
 
@@ -64,19 +62,13 @@ class GlickoSystem:
     def update_player(self, player, opponent, outcome, surface_factor=1.0):
         g_rdj = self.g(opponent.rd)
         E_ij = self.E(player.r, opponent.r, opponent.rd)
-        
-        # Ajuste por superfície
         adjusted_E = np.clip(E_ij, 0.01, 0.99)
         
-        # Atualização do rating
         k = 30 * surface_factor
         player.r += k * (outcome - adjusted_E)
-        
-        # Atualizar RD
         player.rd = math.sqrt(player.rd ** 2 + player.sigma ** 2)
         player.rd = min(350, max(30, player.rd))
         
-        # Contagem de partidas
         player.matches_played += 1
         if outcome == 1:
             player.wins += 1
@@ -84,118 +76,148 @@ class GlickoSystem:
             player.losses += 1
 
 # ==============================================================================
-# 2. LISTA DE TORNEIOS CHALLENGER 2025
+# 2. DADOS REAIS DE TORNEIOS ATP E CHALLENGER (JUNHO 2025)
 # ==============================================================================
-CHALLENGER_TOURNAMENTS = [
-    # USA Challengers
-    {"name": "Challenger Tyler", "location": "Tyler, USA", "surface": "Hard", "dates": "June 2025"},
-    {"name": "Challenger Little Rock", "location": "Little Rock, USA", "surface": "Hard", "dates": "June 2025"},
-    {"name": "Challenger Tallahassee", "location": "Tallahassee, USA", "surface": "Clay", "dates": "April 2025"},
-    {"name": "Challenger Savannah", "location": "Savannah, USA", "surface": "Clay", "dates": "April 2025"},
-    {"name": "Challenger Sarasota", "location": "Sarasota, USA", "surface": "Clay", "dates": "April 2025"},
-    
-    # European Challengers
-    {"name": "Challenger Oeiras", "location": "Oeiras, Portugal", "surface": "Clay", "dates": "May 2025"},
-    {"name": "Challenger Bordeaux", "location": "Bordeaux, France", "surface": "Clay", "dates": "May 2025"},
-    {"name": "Challenger Prague", "location": "Prague, Czech Republic", "surface": "Clay", "dates": "May 2025"},
-    {"name": "Challenger Heilbronn", "location": "Heilbronn, Germany", "surface": "Clay", "dates": "June 2025"},
-    {"name": "Challenger Francavilla", "location": "Francavilla, Italy", "surface": "Clay", "dates": "May 2025"},
-    {"name": "Challenger Mestre", "location": "Mestre, Italy", "surface": "Clay", "dates": "June 2025"},
-    {"name": "Challenger Skopje", "location": "Skopje, North Macedonia", "surface": "Clay", "dates": "May 2025"},
-    
-    # Asian Challengers
-    {"name": "Challenger Taipei", "location": "Taipei, Taiwan", "surface": "Hard", "dates": "May 2025"},
-    {"name": "Challenger Busan", "location": "Busan, South Korea", "surface": "Hard", "dates": "May 2025"},
-    {"name": "Challenger Guangzhou", "location": "Guangzhou, China", "surface": "Hard", "dates": "May 2025"},
-    {"name": "Challenger Shenzhen", "location": "Shenzhen, China", "surface": "Hard", "dates": "May 2025"},
-    {"name": "Challenger Wuxi", "location": "Wuxi, China", "surface": "Hard", "dates": "May 2025"},
-    {"name": "Challenger Gwangju", "location": "Gwangju, South Korea", "surface": "Hard", "dates": "May 2025"},
-    
-    # South American Challengers
-    {"name": "Challenger Mexico City", "location": "Mexico City, Mexico", "surface": "Clay", "dates": "April 2025"},
-    {"name": "Challenger Santos", "location": "Santos, Brazil", "surface": "Clay", "dates": "May 2025"},
-    {"name": "Challenger Buenos Aires", "location": "Buenos Aires, Argentina", "surface": "Clay", "dates": "April 2025"},
-    {"name": "Challenger Santiago", "location": "Santiago, Chile", "surface": "Clay", "dates": "March 2025"},
-]
+REAL_TOURNAMENTS = {
+    "ATP Masters 1000": [
+        {"name": "Mutua Madrid Open", "surface": "Clay", "dates": "23 Apr - 5 May 2025", "level": "Masters 1000"},
+        {"name": "Internazionali BNL d'Italia", "surface": "Clay", "dates": "6-18 May 2025", "level": "Masters 1000"},
+    ],
+    "ATP 500": [
+        {"name": "Barcelona Open Banc Sabadell", "surface": "Clay", "dates": "14-20 Apr 2025", "level": "ATP 500"},
+        {"name": "BMW Open", "surface": "Clay", "dates": "21-27 Apr 2025", "level": "ATP 250"},
+    ],
+    "Challenger 125/100": [
+        {"name": "Challenger Tyler", "surface": "Hard", "dates": "2-8 Jun 2025", "level": "Challenger 100"},
+        {"name": "Challenger Little Rock", "surface": "Hard", "dates": "2-8 Jun 2025", "level": "Challenger 100"},
+        {"name": "Challenger Oeiras", "surface": "Clay", "dates": "5-11 May 2025", "level": "Challenger 125"},
+        {"name": "Challenger Bordeaux", "surface": "Clay", "dates": "12-18 May 2025", "level": "Challenger 125"},
+        {"name": "Challenger Prague", "surface": "Clay", "dates": "5-11 May 2025", "level": "Challenger 125"},
+        {"name": "Challenger Heilbronn", "surface": "Clay", "dates": "2-8 Jun 2025", "level": "Challenger 100"},
+        {"name": "Challenger Taipei", "surface": "Hard", "dates": "12-18 May 2025", "level": "Challenger 100"},
+        {"name": "Challenger Busan", "surface": "Hard", "dates": "12-18 May 2025", "level": "Challenger 100"},
+        {"name": "Challenger Gwangju", "surface": "Hard", "dates": "19-25 May 2025", "level": "Challenger 100"},
+        {"name": "Challenger Francavilla", "surface": "Clay", "dates": "5-11 May 2025", "level": "Challenger 75"},
+        {"name": "Challenger Skopje", "surface": "Clay", "dates": "19-25 May 2025", "level": "Challenger 75"},
+        {"name": "Challenger Mestre", "surface": "Clay", "dates": "2-8 Jun 2025", "level": "Challenger 75"},
+        {"name": "Challenger Mexico City", "surface": "Clay", "dates": "14-20 Apr 2025", "level": "Challenger 125"},
+    ]
+}
 
 # ==============================================================================
-# 3. JOGADORES DO SEU HISTÓRICO (Organizados por nível aproximado)
+# 3. JOGADORES REAIS (Top 200 ATP + Challenger)
 # ==============================================================================
-HISTORICAL_PLAYERS_LIST = [
-    "Mitchell Krueger", "Trevor Svajda", "Yuta Shimizu", "Antoine Escoffier", "Andres Martin",
-    "Rio Noguchi", "Nicolas Mejia", "Paul Jubb", "Stefan Dostanic", "Ilya Ivashka",
-    "Rafael Jodar", "Patrick Kypson", "Alex Rybakov", "Karue Sell", "Yibing Wu",
-    "Yi Zhou", "Emilio Nava", "Francesco Passaro", "Sumit Nagal", "Marko Topo",
-    "Ignacio Buse", "Alejandro Tabilo", "Marco Trungelliti", "Alexander Blockx", "Liam Draxl"
-]
+REAL_ATP_PLAYERS = {
+    "Top 50": [
+        "Novak Djokovic", "Carlos Alcaraz", "Jannik Sinner", "Daniil Medvedev", "Alexander Zverev",
+        "Stefanos Tsitsipas", "Andrey Rublev", "Holger Rune", "Casper Ruud", "Taylor Fritz",
+        "Tommy Paul", "Hubert Hurkacz", "Alex de Minaur", "Felix Auger-Aliassime", "Francisco Cerundolo",
+        "Karen Khachanov", "Cameron Norrie", "Ben Shelton", "Lorenzo Musetti", "Nicolas Jarry",
+        "Sebastian Baez", "Adrian Mannarino", "Arthur Fils", "Jack Draper", "Tomas Martin Etcheverry",
+        "Borna Coric", "Christopher Eubanks", "Jiri Lehecka", "Jordan Thompson", "Daniel Evans"
+    ],
+    "Challenger Players": [
+        "Mitchell Krueger", "Trevor Svajda", "Yuta Shimizu", "Antoine Escoffier", "Andres Martin",
+        "Rio Noguchi", "Nicolas Mejia", "Paul Jubb", "Stefan Dostanic", "Ilya Ivashka",
+        "Rafael Jodar", "Patrick Kypson", "Alex Rybakov", "Karue Sell", "Yibing Wu",
+        "Yi Zhou", "Emilio Nava", "Francesco Passaro", "Sumit Nagal", "Marko Topo",
+        "Ignacio Buse", "Alejandro Tabilo", "Marco Trungelliti", "Alexander Blockx", "Liam Draxl",
+        "Tung-Lin Wu", "Hyeon Chung", "Bernard Tomic", "James Duckworth", "Lloyd Harris"
+    ]
+}
 
 # ==============================================================================
-# 4. GERAR MATCHES REALISTAS DE CHALLENGER
+# 4. GERAR MATCHES REALISTAS COM PROBABILIDADES BASEADAS EM RANKING
 # ==============================================================================
-def generate_challenger_matches(player_stats):
-    """Gera matches realistas de Challenger baseados nos jogadores do histórico"""
+def generate_realistic_matches(player_stats, glicko_system=None):
+    """Gera matches realistas baseados no ranking Glicko"""
     matches = []
     
-    # Filtrar jogadores com pelo menos 5 partidas no histórico
-    active_players = [p for p in HISTORICAL_PLAYERS_LIST if p in player_stats and player_stats[p]['matches'] >= 3]
+    # Criar lista de jogadores com seus ratings (se disponível)
+    players_with_rating = []
     
-    if len(active_players) < 4:
-        active_players = [p for p in HISTORICAL_PLAYERS_LIST if p in player_stats]
-    
-    if len(active_players) < 2:
-        active_players = HISTORICAL_PLAYERS_LIST
-    
-    # Para cada torneio Challenger, gerar matches
-    for tournament in CHALLENGER_TOURNAMENTS[:10]:  # Limitar a 10 torneios
-        # Embaralhar jogadores
-        players_copy = active_players.copy()
-        random.shuffle(players_copy)
-        
-        # Criar matches baseados em ranking aproximado (winners vs losers baseado no rating)
-        tournament_matches = []
-        
-        # Separar jogadores por força (baseado no win_rate do histórico)
-        players_with_rating = []
-        for p in players_copy[:20]:  # Pegar até 20 jogadores por torneio
-            if p in player_stats:
-                rating = player_stats[p]['win_rate'] * 100
+    # Adicionar jogadores do histórico
+    if player_stats:
+        for player in list(player_stats.keys())[:50]:  # Top 50 do histórico
+            if glicko_system:
+                rating = glicko_system.get_player(player).r
             else:
-                rating = 50
-            players_with_rating.append((p, rating))
-        
-        players_with_rating.sort(key=lambda x: x[1], reverse=True)
-        
-        # Criar matches: favorito vs underdog para simular chaves de torneio
-        n = len(players_with_rating)
-        for i in range(0, n-1, 2):
-            if i+1 < n:
-                p1 = players_with_rating[i][0]
-                p2 = players_with_rating[i+1][0]
-                
-                # Calcular probabilidade baseada no histórico
-                if p1 in player_stats and p2 in player_stats:
-                    p1_rate = player_stats[p1]['win_rate']
-                    p2_rate = player_stats[p2]['win_rate']
-                    # Probabilidade baseada na diferença de win rate
-                    prob_p1 = 0.5 + (p1_rate - p2_rate)
-                    prob_p1 = np.clip(prob_p1, 0.3, 0.7)
-                else:
-                    prob_p1 = 0.5
-                
-                tournament_matches.append({
-                    'tournament': tournament['name'],
-                    'player1': p1,
-                    'player2': p2,
-                    'surface': tournament['surface'],
-                    'prob_p1': prob_p1
-                })
-        
-        # Adicionar alguns matches do torneio
-        matches.extend(tournament_matches[:5])  # 5 matches por torneio
+                rating = 1500 + (player_stats[player]['win_rate'] - 0.5) * 500
+            players_with_rating.append((player, rating, player_stats[player]['win_rate']))
     
-    # Embaralhar e limitar
+    # Adicionar jogadores top ATP que podem não estar no histórico
+    for player in REAL_ATP_PLAYERS["Top 50"]:
+        if player not in [p[0] for p in players_with_rating]:
+            if glicko_system:
+                rating = glicko_system.get_player(player).r
+            else:
+                rating = 1800  # Rating base para top players
+            players_with_rating.append((player, rating, 0.65))
+    
+    # Ordenar por rating
+    players_with_rating.sort(key=lambda x: x[1], reverse=True)
+    
+    # Para cada torneio, gerar matches
+    for category, tournaments in REAL_TOURNAMENTS.items():
+        for tournament in tournaments:
+            tournament_matches = []
+            
+            # Selecionar jogadores apropriados para o nível do torneio
+            if "Masters" in category or "ATP 500" in category:
+                # Jogadores top 30
+                eligible_players = players_with_rating[:30]
+            elif "Challenger" in category:
+                # Jogadores de nível Challenger
+                eligible_players = players_with_rating[20:80]
+            else:
+                eligible_players = players_with_rating[:50]
+            
+            if len(eligible_players) < 4:
+                continue
+            
+            # Importância do torneio (para ponderação)
+            importance = 1.0
+            if "Masters" in category:
+                importance = 1.5
+            elif "ATP 500" in category:
+                importance = 1.3
+            elif "Challenger" in category:
+                importance = 0.8
+            
+            # Embaralhar e criar matchups
+            import random
+            random.shuffle(eligible_players)
+            
+            # Criar matches com probabilidades baseadas na diferença de rating
+            for i in range(0, min(len(eligible_players)-1, 20), 2):
+                if i+1 < len(eligible_players):
+                    p1_name, p1_rating, p1_wr = eligible_players[i]
+                    p2_name, p2_rating, p2_wr = eligible_players[i+1]
+                    
+                    # Calcular probabilidade baseada na diferença de rating
+                    rating_diff = p1_rating - p2_rating
+                    prob_p1 = 0.5 + (rating_diff / 400) * importance
+                    prob_p1 = np.clip(prob_p1, 0.25, 0.75)
+                    
+                    tournament_matches.append({
+                        'tournament': tournament['name'],
+                        'category': category,
+                        'surface': tournament['surface'],
+                        'player1': p1_name,
+                        'player2': p2_name,
+                        'p1_rating': p1_rating,
+                        'p2_rating': p2_rating,
+                        'prob_p1': prob_p1,
+                        'p1_wr': p1_wr,
+                        'p2_wr': p2_wr
+                    })
+            
+            # Adicionar alguns matches por torneio
+            matches.extend(tournament_matches[:6])
+    
+    # Embaralhar para misturar torneios
     random.shuffle(matches)
-    return matches[:30]
+    return matches[:40]  # Limitar a 40 partidas
 
 # ==============================================================================
 # 5. PROCESSAMENTO DO DATASET
@@ -223,7 +245,6 @@ def load_and_process_data(uploaded_file):
             loser_col = col
     
     if not winner_col or not loser_col:
-        # Tentar com nomes em português
         for col in df.columns:
             if 'vencedor' in col:
                 winner_col = col
@@ -231,32 +252,24 @@ def load_and_process_data(uploaded_file):
                 loser_col = col
     
     if not winner_col or not loser_col:
-        st.error(f"Colunas não encontradas. Colunas disponíveis: {list(df.columns)}")
+        st.error(f"Colunas não encontradas. Colunas: {list(df.columns)}")
         return None
     
     df = df.rename(columns={winner_col: 'winner', loser_col: 'loser'})
     
-    # Data
-    if 'date' not in df.columns and 'tourney_date' in df.columns:
-        df['date'] = pd.to_datetime(df['tourney_date'], errors='coerce')
-    elif 'date' not in df.columns:
+    if 'date' not in df.columns:
         df['date'] = pd.Timestamp.now()
     else:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # Total games
     if 'total_games' not in df.columns:
         df['total_games'] = 22
     
-    # Surface
     if 'surface' not in df.columns:
         df['surface'] = 'Hard'
     
-    # Clean names
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
-    
-    # Remover linhas vazias
     df = df[df['winner'].notna() & df['loser'].notna()]
     df = df[df['winner'] != 'nan']
     df = df[df['loser'] != 'nan']
@@ -264,12 +277,10 @@ def load_and_process_data(uploaded_file):
     return df
 
 def calculate_player_stats(df):
-    """Calcula estatísticas detalhadas dos jogadores"""
     player_stats = {}
     
     for player in set(df['winner'].unique()) | set(df['loser'].unique()):
         matches = df[(df['winner'] == player) | (df['loser'] == player)]
-        
         if len(matches) == 0:
             continue
         
@@ -277,28 +288,13 @@ def calculate_player_stats(df):
         total = len(matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        # Forma recente (últimos 10)
         recent = matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
-        # Forma muito recente (últimos 3)
         very_recent = matches.sort_values('date', ascending=False).head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
-        
-        # Estatísticas por superfície
-        surface_stats = {}
-        for surf in ['Hard', 'Clay', 'Grass']:
-            surf_matches = matches[matches['surface'] == surf]
-            if len(surf_matches) > 0:
-                surf_wins = len(surf_matches[surf_matches['winner'] == player])
-                surface_stats[surf] = surf_wins / len(surf_matches)
-            else:
-                surface_stats[surf] = 0.5
-        
-        # Média de games
-        avg_games = matches['total_games'].mean() if 'total_games' in matches.columns else 22
         
         player_stats[player] = {
             'matches': total,
@@ -307,30 +303,20 @@ def calculate_player_stats(df):
             'win_rate': win_rate,
             'recent_form': recent_form,
             'very_recent_form': very_recent_form,
-            'hard_rate': surface_stats['Hard'],
-            'clay_rate': surface_stats['Clay'],
-            'grass_rate': surface_stats['Grass'],
-            'avg_games': avg_games
+            'avg_games': matches['total_games'].mean() if 'total_games' in matches.columns else 22
         }
     
     return player_stats
 
 def calculate_h2h(df):
-    """Calcula histórico de confrontos diretos"""
-    h2h = defaultdict(lambda: {'wins': 0, 'total': 0, 'surface_wins': defaultdict(int)})
-    
+    h2h = defaultdict(lambda: {'wins': 0, 'total': 0})
     for _, row in df.iterrows():
         w, l = row['winner'], row['loser']
-        surface = row.get('surface', 'Hard')
-        
         h2h[(w, l)]['wins'] += 1
         h2h[(w, l)]['total'] += 1
-        h2h[(w, l)]['surface_wins'][surface] += 1
-    
     return h2h
 
 def train_glicko(df):
-    """Treina o sistema Glicko"""
     glicko = GlickoSystem()
     
     for _, row in df.iterrows():
@@ -338,100 +324,53 @@ def train_glicko(df):
         loser = row['loser']
         surface = row.get('surface', 'Hard')
         
-        surface_factor = 1.0
-        if surface == 'Clay':
-            surface_factor = 1.03
-        elif surface == 'Grass':
-            surface_factor = 0.97
+        surface_factor = 1.03 if surface == 'Clay' else (0.97 if surface == 'Grass' else 1.0)
         
         winner_obj = glicko.get_player(winner)
         loser_obj = glicko.get_player(loser)
         
-        # Atualizar vencedor
         glicko.update_player(winner_obj, loser_obj, 1.0, surface_factor)
-        # Atualizar perdedor
         glicko.update_player(loser_obj, winner_obj, 0.0, surface_factor)
     
     return glicko
 
 def build_features(p1, p2, surface, player_stats, h2h, glicko):
-    """Constrói features para predição"""
-    
     s1 = player_stats.get(p1, {})
     s2 = player_stats.get(p2, {})
     
     if not s1 or not s2:
         return None
     
-    # Ratings Glicko
     g1 = glicko.get_player(p1)
     g2 = glicko.get_player(p2)
     
-    # Features base
-    elo_diff = (g1.r - g2.r) / 400
-    rd_diff = (g2.rd - g1.rd) / 350
-    
-    # Forma
+    rating_diff = (g1.r - g2.r) / 400
     form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
     very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
+    win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
     
-    # Win rates
-    total_win_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
-    
-    # Win rate por superfície
-    if surface == 'Clay':
-        surf_rate1 = s1.get('clay_rate', 0.5)
-        surf_rate2 = s2.get('clay_rate', 0.5)
-    elif surface == 'Grass':
-        surf_rate1 = s1.get('grass_rate', 0.5)
-        surf_rate2 = s2.get('grass_rate', 0.5)
-    else:
-        surf_rate1 = s1.get('hard_rate', 0.5)
-        surf_rate2 = s2.get('hard_rate', 0.5)
-    
-    surf_diff = surf_rate1 - surf_rate2
-    
-    # H2H
     h2h_adv = 0.5
     if (p1, p2) in h2h:
         h2h_adv = h2h[(p1, p2)]['wins'] / max(1, h2h[(p1, p2)]['total'])
-    elif (p2, p1) in h2h:
-        h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / max(1, h2h[(p2, p1)]['total']))
     
-    # Experiência
+    games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     exp_diff = (s1.get('matches', 0) - s2.get('matches', 0)) / 100
     
-    # Games
-    games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
-    games_norm = (games_avg - 21.5) / 10
-    
-    # Momentum
-    momentum = very_recent_diff * 0.5 + form_diff * 0.3
-    
-    features = [
-        elo_diff, rd_diff, form_diff, very_recent_diff,
-        total_win_diff, surf_diff, h2h_adv, exp_diff, games_norm, momentum
-    ]
-    
+    features = [rating_diff, form_diff, very_recent_diff, win_rate_diff, h2h_adv, games_avg / 30, exp_diff]
     return features
 
 def train_model(df, player_stats, h2h, glicko):
-    """Treina o modelo LightGBM"""
-    
     X, y = [], []
     
     for _, row in df.iterrows():
-        p1 = row['winner']
-        p2 = row['loser']
+        p1, p2 = row['winner'], row['loser']
         surface = row.get('surface', 'Hard')
         
-        # Features para o vencedor
         features = build_features(p1, p2, surface, player_stats, h2h, glicko)
         if features:
             X.append(features)
             y.append(1)
         
-        # Features para o perdedor (invertido)
         features_rev = build_features(p2, p1, surface, player_stats, h2h, glicko)
         if features_rev:
             X.append(features_rev)
@@ -442,86 +381,78 @@ def train_model(df, player_stats, h2h, glicko):
     
     X = np.array(X)
     
-    model = LGBMClassifier(
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.03,
-        num_leaves=20,
-        reg_alpha=0.5,
-        reg_lambda=0.5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        verbose=-1
-    )
-    
+    model = LGBMClassifier(n_estimators=200, max_depth=5, learning_rate=0.03,
+                          num_leaves=16, reg_alpha=0.5, reg_lambda=0.5,
+                          random_state=42, verbose=-1)
     model.fit(X, y)
     return model
 
 def predict_match(model, p1, p2, surface, player_stats, h2h, glicko):
-    """Prediz uma partida"""
+    s1 = player_stats.get(p1, {})
+    s2 = player_stats.get(p2, {})
+    
+    # Se jogador não está no histórico, criar entrada temporária
+    if not s1:
+        s1 = {'matches': 0, 'win_rate': 0.5, 'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22}
+        # Adicionar ao glicko com rating inicial
+        glicko.get_player(p1)
+    if not s2:
+        s2 = {'matches': 0, 'win_rate': 0.5, 'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22}
+        glicko.get_player(p2)
     
     features = build_features(p1, p2, surface, player_stats, h2h, glicko)
-    
     if features is None:
-        return None, f"Jogador não encontrado no histórico"
+        # Usar método alternativo baseado apenas em rating Glicko
+        g1 = glicko.get_player(p1)
+        g2 = glicko.get_player(p2)
+        prob_p1 = 0.5 + (g1.r - g2.r) / 800
+        prob_p1 = np.clip(prob_p1, 0.3, 0.7)
+    else:
+        features = np.array([features])
+        prob = model.predict_proba(features)[0][1]
+        prob_p1 = np.clip(prob, 0.25, 0.75)
     
-    features = np.array([features])
-    
-    # Probabilidade do modelo
-    prob = model.predict_proba(features)[0][1]
-    
-    # Calibração
-    prob_p1 = np.clip(prob, 0.25, 0.75)
     prob_p2 = 1 - prob_p1
-    
-    # Confiança (baseada na diferença de probabilidade)
     confidence = abs(prob_p1 - 0.5) * 2
-    
     winner = p1 if prob_p1 > 0.5 else p2
     
-    # Recomendação
-    if confidence >= MIN_CONFIDENCE_STRONG:
+    if confidence >= 0.65:
         rec = f"🔥 STRONG {winner}"
-    elif confidence >= MIN_CONFIDENCE_GOOD:
+    elif confidence >= 0.55:
         rec = f"✅ GOOD {winner}"
     else:
         rec = f"⚪ AVOID {winner}"
     
-    # Estatísticas para display
-    s1 = player_stats.get(p1, {})
-    s2 = player_stats.get(p2, {})
     g1 = glicko.get_player(p1)
     g2 = glicko.get_player(p2)
     
     return {
         'Jogador1': p1,
         'Jogador2': p2,
-        'Rating1': f"{g1.r:.0f}",
-        'Rating2': f"{g2.r:.0f}",
+        'Rating1': int(g1.r),
+        'Rating2': int(g2.r),
         'Forma1': f"{s1.get('recent_form', 0.5):.0%}",
         'Forma2': f"{s2.get('recent_form', 0.5):.0%}",
         'Prob_P1': f"{prob_p1:.1%}",
         'Prob_P2': f"{prob_p2:.1%}",
         'Vencedor': winner,
         'Confianca': f"{confidence:.1%}",
-        'Recomendacao': rec,
-        'H2H': f"{h2h.get((p1,p2), {}).get('wins', 0)}-{h2h.get((p2,p1), {}).get('wins', 0)}"
-    }, None
+        'Recomendacao': rec
+    }
 
 # ==============================================================================
-# 6. FUNÇÃO PRINCIPAL
-# ==============================================================================
-def get_challenger_matches(player_stats):
-    """Gera matches de Challenger"""
-    return generate_challenger_matches(player_stats)
-
-# ==============================================================================
-# 7. MAIN APP
+# 6. MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v11.0 - Challenger Focus")
-    st.markdown("**Sistema de Rating Glicko + LightGBM para Challengers e ATP**")
+    st.title("🎾 ATP Predictor v12.0 - ATP + Challenger Real")
+    st.markdown("**Gera previsões para torneios ATP Masters, ATP 500 e Challengers**")
+    
+    # Mostrar torneios disponíveis
+    with st.expander("📅 Torneios em andamento (Junho 2025)", expanded=True):
+        for category, tournaments in REAL_TOURNAMENTS.items():
+            st.markdown(f"**{category}**")
+            for t in tournaments:
+                st.write(f"  • {t['name']} - {t['surface']} - {t['dates']}")
     
     uploaded_file = st.file_uploader("📁 Upload do seu histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -530,16 +461,11 @@ def main():
             df = load_and_process_data(uploaded_file)
             
             if df is not None and len(df) > 0:
-                st.info(f"📊 Dataset: {len(df)} jogos | {len(set(df['winner']) | set(df['loser']))} jogadores")
+                st.info(f"📊 {len(df)} jogos | {len(set(df['winner']) | set(df['loser']))} jogadores")
                 
-                # Treinar Glicko
                 glicko = train_glicko(df)
-                
-                # Calcular estatísticas
                 player_stats = calculate_player_stats(df)
                 h2h = calculate_h2h(df)
-                
-                # Treinar modelo
                 model = train_model(df, player_stats, h2h, glicko)
                 
                 if model:
@@ -548,69 +474,68 @@ def main():
                     st.session_state.player_stats = player_stats
                     st.session_state.h2h = h2h
                     st.session_state.models_ready = True
-                    st.success(f"✅ Modelo treinado com {len(player_stats)} jogadores!")
+                    st.success("✅ Modelo treinado com sucesso!")
                     
-                    # Mostrar top jogadores
-                    with st.expander("📊 Top 20 Jogadores (Rating Glicko)"):
+                    with st.expander("📊 Top Ratings Glicko"):
                         ratings = [(p, glicko.get_player(p).r, player_stats[p]['win_rate']) 
                                   for p in player_stats.keys()]
                         ratings.sort(key=lambda x: x[1], reverse=True)
-                        for i, (player, rating, wr) in enumerate(ratings[:20]):
-                            st.write(f"{i+1}. {player}: {rating:.0f} (WR: {wr:.0%})")
+                        for i, (p, r, wr) in enumerate(ratings[:20]):
+                            st.write(f"{i+1}. {p}: {r:.0f} (WR: {wr:.0%})")
     
     if st.session_state.get('models_ready'):
-        st.subheader("🎯 PREVISÕES PARA CHALLENGER")
+        st.subheader("🎯 GERAR PREVISÕES")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
+        
         with col1:
-            if st.button("🎾 Gerar Matches Challenger", use_container_width=True, type="primary"):
-                matches = get_challenger_matches(st.session_state.player_stats)
+            if st.button("🎾 Todos os Torneios", use_container_width=True, type="primary"):
+                matches = generate_realistic_matches(st.session_state.player_stats, st.session_state.glicko)
                 st.session_state.current_matches = matches
                 st.success(f"✅ {len(matches)} partidas geradas!")
         
         with col2:
-            if st.button("📝 Inserir Manualmente", use_container_width=True):
-                st.session_state.show_manual = not st.session_state.get('show_manual', False)
+            if st.button("🏆 Só ATP Masters/500", use_container_width=True):
+                matches = generate_realistic_matches(st.session_state.player_stats, st.session_state.glicko)
+                atp_matches = [m for m in matches if "Masters" in m.get('category', '') or "ATP 500" in m.get('category', '')]
+                st.session_state.current_matches = atp_matches[:20]
+                st.success(f"✅ {len(st.session_state.current_matches)} partidas ATP")
+        
+        with col3:
+            if st.button("🎯 Só Challenger", use_container_width=True):
+                matches = generate_realistic_matches(st.session_state.player_stats, st.session_state.glicko)
+                challenger_matches = [m for m in matches if "Challenger" in m.get('category', '')]
+                st.session_state.current_matches = challenger_matches[:20]
+                st.success(f"✅ {len(st.session_state.current_matches)} partidas Challenger")
         
         # Input manual
-        if st.session_state.get('show_manual', False):
-            with st.expander("✏️ Inserir Partidas", expanded=True):
-                num = st.number_input("Número de partidas", 1, 10, 3)
-                manual_matches = []
-                
-                for i in range(num):
-                    st.markdown(f"**Partida {i+1}**")
-                    cols = st.columns(4)
-                    with cols[0]:
-                        p1 = st.text_input(f"Jogador 1", key=f"m_p1_{i}")
-                    with cols[1]:
-                        p2 = st.text_input(f"Jogador 2", key=f"m_p2_{i}")
-                    with cols[2]:
-                        surf = st.selectbox("Superfície", ["Hard", "Clay", "Grass"], key=f"m_surf_{i}")
-                    with cols[3]:
-                        tourney = st.text_input("Torneio", "Challenger", key=f"m_tourney_{i}")
-                    
-                    if p1 and p2:
-                        manual_matches.append({
-                            'tournament': tourney,
-                            'player1': p1,
-                            'player2': p2,
-                            'surface': surf
-                        })
-                    st.markdown("---")
-                
-                if st.button("Prever", type="primary") and manual_matches:
-                    st.session_state.current_matches = manual_matches
+        with st.expander("✏️ Ou insira partidas manualmente"):
+            col_a, col_b, col_c, col_d = st.columns(4)
+            with col_a:
+                manual_p1 = st.text_input("Jogador 1", placeholder="Ex: Mitchell Krueger")
+            with col_b:
+                manual_p2 = st.text_input("Jogador 2", placeholder="Ex: Rio Noguchi")
+            with col_c:
+                manual_surface = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
+            with col_d:
+                manual_tourney = st.text_input("Torneio", "Challenger")
+            
+            if st.button("🔮 Prever Partida Manual", type="primary") and manual_p1 and manual_p2:
+                match = {
+                    'tournament': manual_tourney,
+                    'player1': manual_p1,
+                    'player2': manual_p2,
+                    'surface': manual_surface
+                }
+                st.session_state.current_matches = [match]
         
         # Mostrar previsões
         if st.session_state.get('current_matches'):
             st.subheader(f"📋 {len(st.session_state.current_matches)} Partidas")
             
             results = []
-            not_found = []
-            
             for match in st.session_state.current_matches:
-                pred, error = predict_match(
+                pred = predict_match(
                     st.session_state.model,
                     match['player1'], match['player2'],
                     match['surface'],
@@ -618,37 +543,33 @@ def main():
                     st.session_state.h2h,
                     st.session_state.glicko
                 )
-                
-                if pred:
-                    pred['Torneio'] = match['tournament']
-                    pred['Superficie'] = match['surface']
-                    results.append(pred)
-                elif error:
-                    not_found.append(error)
-            
-            if not_found:
-                st.warning(f"⚠️ {len(set(not_found))} jogadores não encontrados")
-                for err in set(not_found):
-                    st.write(f"• {err}")
+                pred['Torneio'] = match['tournament']
+                pred['Superficie'] = match['surface']
+                results.append(pred)
             
             if results:
                 df_results = pd.DataFrame(results)
                 cols = ['Torneio', 'Superficie', 'Jogador1', 'Jogador2', 'Rating1', 'Rating2',
-                       'Forma1', 'Forma2', 'H2H', 'Prob_P1', 'Prob_P2', 'Vencedor', 
-                       'Confianca', 'Recomendacao']
+                       'Forma1', 'Forma2', 'Prob_P1', 'Prob_P2', 'Vencedor', 'Confianca', 'Recomendacao']
                 df_results = df_results[[c for c in cols if c in df_results.columns]]
                 
-                st.dataframe(df_results, use_container_width=True, hide_index=True)
+                st.dataframe(df_results.style.format({
+                    'Rating1': '{:.0f}', 'Rating2': '{:.0f}'
+                }), use_container_width=True, hide_index=True)
                 
                 # Resumo
-                col_s1, col_s2, col_s3 = st.columns(3)
-                with col_s1:
+                st.subheader("📊 Resumo")
+                col_a, col_b, col_c, col_d = st.columns(4)
+                with col_a:
                     strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
                     st.metric("🔥 STRONG", strong)
-                with col_s2:
-                    avg_conf = sum(float(r['Confianca'].replace('%', '')) for r in results) / len(results)
-                    st.metric("Confiança Média", f"{avg_conf:.1f}%")
-                with col_s3:
+                with col_b:
+                    good = sum(1 for r in results if 'GOOD' in r['Recomendacao'])
+                    st.metric("✅ GOOD", good)
+                with col_c:
+                    confs = [float(r['Confianca'].replace('%', '')) for r in results]
+                    st.metric("Confiança Média", f"{sum(confs)/len(confs):.1f}%")
+                with col_d:
                     st.metric("Total", len(results))
                 
                 # Download
