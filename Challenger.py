@@ -665,18 +665,20 @@ def main():
     st.title("🎾 ATP Predictor PRO — v7.4")
 
     st.sidebar.header("📁 Carregar Base de Dados")
-file = st.sidebar.file_uploader("Carregar Excel", type=["xlsx", "xls"])
+    file = st.sidebar.file_uploader("Carregar Excel", type=["xlsx", "xls"])
 
-if file is None:
-    st.info("Carrega um ficheiro Excel para começar.")
-    return
+    if file is None:
+        st.info("Carrega um ficheiro Excel para começar.")
+        return
 
-df = pd.read_excel(file)
+    df = pd.read_excel(file)
 
-    
+    df, all_players = process_historical_data(df)
+
     if df is None:
         st.error("Erro ao processar o ficheiro.")
         return
+
 
     stats = calculate_player_stats(df, all_players)
     h2h = calculate_h2h(df)
