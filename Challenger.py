@@ -287,26 +287,25 @@ def train_model(df, player_stats, h2h, elo):
     return model
 
 # ==============================================================================
-# SMART NAME MATCHER - CORRIGIDO PARA RECONHECER SOBRENOMES
+# SMART NAME MATCHER - CORRIGIDO
 # ==============================================================================
 class SmartNameMatcher:
     def __init__(self, historical_names):
         self.historical_names = historical_names
-        self.name_map = {}  # nome original -> nome original
-        self.last_name_map = defaultdict(list)  # sobrenome -> [nomes completos]
-        self.variation_map = {}  # variação -> nome original
+        self.name_map = {}
+        self.last_name_map = defaultdict(list)
+        self.variation_map = {}
         
         for name in historical_names:
             name_lower = name.lower()
             self.name_map[name_lower] = name
             
-            # Extrair sobrenome (última palavra)
             parts = name.split()
             if parts:
                 last_name = parts[-1].lower()
                 self.last_name_map[last_name].append(name)
                 
-                # Criar variações: apenas sobrenome, inicial + sobrenome
+                # Criar variações
                 self.variation_map[last_name] = name
                 if len(parts) >= 2:
                     first_initial = parts[0][0].lower()
@@ -330,11 +329,11 @@ class SmartNameMatcher:
         if search_lower in self.name_map:
             return self.name_map[search_lower]
         
-        # 3. Match por sobrenome
+        # 3. Match por variação
         if search_lower in self.variation_map:
             return self.variation_map[search_lower]
         
-        # 4. Match por sobrenome (última palavra)
+        # 4. Match por sobrenome
         parts = search_lower.split()
         if parts:
             last_name = parts[-1]
@@ -342,7 +341,7 @@ class SmartNameMatcher:
                 matches = self.last_name_map[last_name]
                 if len(matches) == 1:
                     return matches[0]
-                # Se múltiplos, procurar o que começa com a mesma inicial
+                # Se múltiplos, tentar pelo primeiro nome
                 if len(parts) >= 2:
                     first_initial = parts[0][0]
                     for match in matches:
@@ -350,12 +349,28 @@ class SmartNameMatcher:
                         if match_parts and match_parts[0].lower().startswith(first_initial):
                             return match
         
-        # 5. Match parcial (nome contém a busca)
+        # 5. Match parcial
         for name in self.historical_names:
             if search_lower in name.lower():
                 return name
         
         return None
+    
+    def get_suggestions(self, name):
+        """Retorna sugestões para um nome não encontrado"""
+        name_lower = name.lower()
+        suggestions = []
+        
+        # Procurar por sobrenome similar
+        parts = name_lower.split()
+        if parts:
+            last_name = parts[-1]
+            for key in self.last_name_map.keys():
+                if last_name in key or key in last_name:
+                    suggestions.extend(self.last_name_map[key])
+        
+        # Limitar a 5 sugestões
+        return list(set(suggestions))[:5]
 
 # ==============================================================================
 # PREDICT
@@ -365,13 +380,12 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher, 
     p2_match = name_matcher.find_match(p2)
     
     if not p1_match:
-        # Tentar sugestões
-        suggestions = name_matcher.last_name_map.get(p1.lower(), [])
+        suggestions = name_matcher.get_suggestions(p1)
         suggestion_text = f" (sugestoes: {', '.join(suggestions[:3])})" if suggestions else ""
         return None, f"'{p1}' nao encontrado{suggestion_text}"
     
     if not p2_match:
-        suggestions = name_matcher.last_name_map.get(p2.lower(), [])
+        suggestions = name_matcher.get_suggestions(p2)
         suggestion_text = f" (sugestoes: {', '.join(suggestions[:3])})" if suggestions else ""
         return None, f"'{p2}' nao encontrado{suggestion_text}"
     
@@ -532,14 +546,6 @@ def main():
                 
                 st.success("Modelo treinado com sucesso!")
                 
-                # Mostrar exemplos de matching
-                with st.expander("Exemplos de matching de nomes"):
-                    st.write("O sistema reconhece:")
-                    st.write("- Nome completo: 'Jiri Lehecka'")
-                    st.write("- Apenas sobrenome: 'Lehecka'")
-                    st.write("- Inicial + sobrenome: 'J. Lehecka'")
-                    st.write("- Primeiro nome + sobrenome: 'Jiri Lehecka'")
-                
             except Exception as e:
                 st.error(f"Erro: {e}")
                 import traceback
@@ -620,12 +626,7 @@ def main():
         with tab3:
             st.subheader("Inserir Lista de Jogos")
             
-            st.info("""
-            **Formatos aceitos:**
-            - Nome completo: `Jiri Lehecka vs Alex Michelsen`
-            - Apenas sobrenome: `Lehecka vs Michelsen`
-            - Inicial + sobrenome: `J. Lehecka vs A. Michelsen`
-            """)
+            st.info("Formatos aceitos: 'Lehecka vs Michelsen' ou 'Jiri Lehecka vs Alex Michelsen'")
             
             default_surface = st.selectbox("Superficie padrao", ["Clay", "Hard", "Grass"], key="batch_surface")
             
