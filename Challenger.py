@@ -14,10 +14,9 @@ warnings.filterwarnings('ignore')
 st.set_page_config(page_title="🎾 ATP Predictor v6.1 - Realistic Probabilities", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIG - AJUSTADA PARA PREVISÕES REALISTAS
+# CONFIG
 # ==============================================================================
-# Parâmetros de calibração - MAIS CONSERVADORES
-WINNER_SMOOTH = 0.35  # Reduzido para evitar probabilidades extremas
+WINNER_SMOOTH = 0.35
 MIN_CONFIDENCE_STRONG = 0.65
 MIN_CONFIDENCE_GOOD = 0.56
 MIN_CONFIDENCE_WEAK = 0.50
@@ -127,7 +126,6 @@ def calculate_player_stats(df, all_players):
         total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        # Surface-specific win rates
         hard_matches = player_matches[player_matches['surface'] == 'Hard']
         clay_matches = player_matches[player_matches['surface'] == 'Clay']
         grass_matches = player_matches[player_matches['surface'] == 'Grass']
@@ -140,7 +138,6 @@ def calculate_player_stats(df, all_players):
         clay_rate = clay_wins / len(clay_matches) if len(clay_matches) > 0 else 0.5
         grass_rate = grass_wins / len(grass_matches) if len(grass_matches) > 0 else 0.5
         
-        # Recent form
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
@@ -202,7 +199,6 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     if s1.get('matches', 0) == 0 or s2.get('matches', 0) == 0:
         return None
     
-    # Surface-specific win rates
     if surface == 'Clay':
         surf_rate1 = s1.get('clay_rate', 0.5)
         surf_rate2 = s2.get('clay_rate', 0.5)
@@ -213,54 +209,38 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
         surf_rate1 = s1.get('hard_rate', 0.5)
         surf_rate2 = s2.get('hard_rate', 0.5)
     
-    # ELO difference (normalizado)
     elo1 = elo.get(p1, 1500)
     elo2 = elo.get(p2, 1500)
     elo_diff = (elo1 - elo2) / 400
     elo_diff = np.clip(elo_diff, -0.5, 0.5)
     
-    # Form differences
     form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
     very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
-    
-    # Win rate differences
     win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
     surf_diff = surf_rate1 - surf_rate2
     
-    # H2H advantage
     h2h_adv = 0.5
     if (p1, p2) in h2h:
         h2h_adv = h2h[(p1, p2)]['wins'] / h2h[(p1, p2)]['total']
     elif (p2, p1) in h2h:
         h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / h2h[(p2, p1)]['total'])
     
-    # Transformar H2H para escala -0.5 a 0.5
     h2h_centered = h2h_adv - 0.5
     
-    # Games average
     games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     games_norm = (games_avg - 21.5) / 8
     games_norm = np.clip(games_norm, -0.3, 0.3)
     
-    # Experience difference
     exp1 = min(s1.get('matches', 0) / 200, 1)
     exp2 = min(s2.get('matches', 0) / 200, 1)
     exp_diff = exp1 - exp2
     
-    # Momentum
     momentum = very_recent_diff * 0.6 + form_diff * 0.4
     momentum = np.clip(momentum, -0.5, 0.5)
     
     features = [
-        elo_diff,
-        form_diff,
-        very_recent_diff,
-        win_rate_diff,
-        surf_diff,
-        h2h_centered,
-        games_norm,
-        exp_diff,
-        momentum
+        elo_diff, form_diff, very_recent_diff, win_rate_diff,
+        surf_diff, h2h_centered, games_norm, exp_diff, momentum
     ]
     
     return features
@@ -292,7 +272,7 @@ def train_model(df, player_stats, h2h, elo):
     
     model = LGBMClassifier(
         n_estimators=200,
-        max_depth=4,  # Reduzido para evitar overfitting
+        max_depth=4,
         learning_rate=0.025,
         num_leaves=12,
         reg_alpha=1.5,
@@ -348,7 +328,7 @@ class SimpleNameMatcher:
         return None
 
 # ==============================================================================
-# PREDICT - CORRIGIDO
+# PREDICT
 # ==============================================================================
 def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     p1_match = name_matcher.find_match(p1)
@@ -363,23 +343,14 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     if not features:
         return None, f"Estatísticas insuficientes"
     
-    # Probabilidade bruta do modelo
     raw_prob = model.predict_proba(np.array([features]))[0][1]
-    
-    # Aplicar calibração mais conservadora
-    # Mover a probabilidade em direção a 0.5
     calibrated_prob = 0.5 + (raw_prob - 0.5) * WINNER_SMOOTH
-    
-    # Garantir que fica entre 35% e 65% para evitar extremos irrealistas
     prob_p1 = np.clip(calibrated_prob, 0.35, 0.65)
     prob_p2 = 1 - prob_p1
     
-    # Calcular confiança baseada no quanto está longe de 0.5
     confidence = abs(prob_p1 - 0.5) * 2
-    
     winner = p1_match if prob_p1 > 0.5 else p2_match
     
-    # Recomendação baseada na confiança
     if confidence >= MIN_CONFIDENCE_STRONG:
         rec = f"🔥 STRONG {winner}"
     elif confidence >= MIN_CONFIDENCE_GOOD:
@@ -392,11 +363,8 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     s1 = player_stats.get(p1_match, {})
     s2 = player_stats.get(p2_match, {})
     
-    # Calcular momentum edge para informação adicional
     form_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
     momentum_edge = form_diff * 100
-    
-    # Calcular games esperados
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     exp_games = np.clip(exp_games, 18, 30)
     
@@ -410,12 +378,7 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
         'Vencedor': winner,
         'Confianca': f"{confidence:.1%}",
         'Recomendacao': rec,
-        'Momentum_Edge': f"{momentum_edge:+.0f}%",
-        'Games_Esperados': round(exp_games, 1),
-        'Jogos_P1': s1.get('matches', 0),
-        'Jogos_P2': s2.get('matches', 0),
-        'WinRate_P1': f"{s1.get('win_rate', 0.5):.1%}",
-        'WinRate_P2': f"{s2.get('win_rate', 0.5):.1%}"
+        'Games_Esperados': round(exp_games, 1)
     }
     
     return result, None
@@ -458,6 +421,12 @@ def main():
     st.title("🎾 ATP Predictor v6.1 - Realistic Probabilities")
     st.caption("Probabilidades realistas entre 35%-65% | Confiança baseada no desvio de 50%")
     
+    # Inicializar session_state
+    if 'models_ready' not in st.session_state:
+        st.session_state.models_ready = False
+    if 'matches' not in st.session_state:
+        st.session_state.matches = []
+    
     uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
@@ -476,8 +445,8 @@ def main():
                 
                 st.success(f"✅ {len(df)} jogos | {len(all_players)} jogadores")
                 
-                with st.expander("📋 Amostra dos jogadores"):
-                    for i, p in enumerate(sorted(all_players)[:30]):
+                with st.expander("📋 Amostra dos jogadores (primeiros 50)"):
+                    for i, p in enumerate(sorted(all_players)[:50]):
                         st.write(f"{i+1}. {p}")
                 
                 player_stats = calculate_player_stats(df, all_players)
@@ -494,42 +463,53 @@ def main():
                 st.session_state.all_players = all_players
                 st.session_state.models_ready = True
                 
-                st.success("✅ Modelo treinado!")
+                st.success("✅ Modelo treinado com sucesso!")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
                 import traceback
                 st.code(traceback.format_exc())
     
-    if st.session_state.get('models_ready'):
+    # Interface after training
+    if st.session_state.get('models_ready') and st.session_state.get('model'):
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📅 JOGOS DE HOJE", use_container_width=True):
                 with st.spinner("Buscando..."):
                     st.session_state.matches = scrape_matches()
         with col2:
-            if st.button("🔍 TESTAR", use_container_width=True):
-                test_name = st.text_input("Nome:", key="test")
+            if st.button("🔍 TESTAR MATCHING", use_container_width=True):
+                test_name = st.text_input("Nome:", key="test_match")
                 if test_name:
                     result = st.session_state.name_matcher.find_match(test_name)
-                    st.success(f"Encontrado: {result}") if result else st.error("Não encontrado")
+                    if result:
+                        st.success(f"✅ Encontrado: {result}")
+                    else:
+                        st.error(f"❌ Não encontrado: {test_name}")
+                        st.info("Dica: Tente usar apenas o sobrenome")
         
         # Manual prediction
         with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
-            players_with_stats = [p for p in st.session_state.all_players 
-                                  if st.session_state.player_stats[p]['matches'] > 0]
+            # Get players with stats safely
+            all_players = st.session_state.get('all_players', [])
+            if all_players:
+                players_with_stats = [p for p in all_players 
+                                      if st.session_state.player_stats.get(p, {}).get('matches', 0) > 0]
+                players_sorted = sorted(players_with_stats) if players_with_stats else sorted(all_players)
+            else:
+                players_sorted = []
             
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + sorted(players_with_stats))
+                manual_p1 = st.selectbox("Jogador 1", [""] + players_sorted[:200] if players_sorted else [""])
             with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + sorted(players_with_stats))
+                manual_p2 = st.selectbox("Jogador 2", [""] + players_sorted[:200] if players_sorted else [""])
             with col_c:
                 manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
-            if st.button("🔮 PREVER") and manual_p1 and manual_p2:
+            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2:
                 if manual_p1 == manual_p2:
-                    st.error("Jogadores diferentes")
+                    st.error("Selecione dois jogadores diferentes")
                 else:
                     result, error = predict_match(
                         st.session_state.model, manual_p1, manual_p2, manual_surface,
@@ -543,12 +523,13 @@ def main():
         
         # Today's predictions
         if st.session_state.get('matches'):
-            st.subheader("🎯 PREVISÕES")
+            st.subheader("🎯 PREVISÕES PARA HOJE")
             
             results = []
             errors = []
             
-            for match in st.session_state.matches:
+            progress_bar = st.progress(0)
+            for i, match in enumerate(st.session_state.matches):
                 result, error = predict_match(
                     st.session_state.model, match['player1'], match['player2'], match['surface'],
                     st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
@@ -559,40 +540,51 @@ def main():
                     results.append(result)
                 elif error:
                     errors.append(error)
+                progress_bar.progress((i + 1) / max(len(st.session_state.matches), 1))
+            progress_bar.empty()
             
             if errors:
-                with st.expander(f"⚠️ {len(errors)} não encontrados"):
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
                     for e in set(errors):
                         st.write(e)
             
             if results:
                 df_results = pd.DataFrame(results)
+                st.dataframe(df_results, use_container_width=True, hide_index=True)
                 
-                # Selecionar colunas principais
-                cols = ['Torneio', 'Jogador1', 'Jogador2', 'Encontrado', 'Superficie',
-                       'Prob_P1', 'Prob_P2', 'Vencedor', 'Confianca', 'Recomendacao',
-                       'WinRate_P1', 'WinRate_P2', 'Games_Esperados']
-                
-                df_display = df_results[[c for c in cols if c in df_results.columns]]
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
-                
-                # Estatísticas
+                # Summary
                 st.subheader("📊 Resumo")
                 strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
                 good = sum(1 for r in results if 'GOOD' in r['Recomendacao'])
                 weak = sum(1 for r in results if 'WEAK' in r['Recomendacao'])
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("STRONG", strong)
-                c2.metric("GOOD", good)
-                c3.metric("WEAK", weak)
+                c1.metric("🔥 STRONG", strong)
+                c2.metric("✅ GOOD", good)
+                c3.metric("🟡 WEAK", weak)
                 c4.metric("Total", len(results))
                 
                 # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download", buffer.getvalue(),
-                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                 use_container_width=True)
+    
+    elif not uploaded_file:
+        st.info("📂 Faça upload do seu ficheiro Excel/CSV com dados históricos")
+        st.markdown("""
+        ### Como preparar o arquivo:
+        
+        O arquivo deve conter:
+        - `winner` ou `vencedor` - nome do vencedor
+        - `loser` ou `perdedor` - nome do perdedor
+        
+        **Opcional:**
+        - `date` / `data` - para forma recente
+        - `score` / `placar` - para total de games
+        - `tournament` / `torneio` - para superfície
+        """)
 
 if __name__ == "__main__":
     main()
