@@ -60,11 +60,6 @@ NAME_MAPPING = {
     'molleker': 'Rudolf Molleker',
     'basavareddy': 'Nishesh Basavareddy',
     'pacheco': 'Rodrigo Pacheco Mendez',
-    'wang': 'Wang',
-    'zhu': 'Zhu',
-    'chen': 'Chen',
-    'hu': 'Hu',
-    'wei': 'Wei',
 }
 
 # ==============================================================================
@@ -116,9 +111,10 @@ def process_historical_data(df):
     
     # Converter data - CORRIGIDO
     if 'date' in df.columns:
-        # Converter para string primeiro para evitar problemas
-        df['date'] = df['date'].astype(str).str.strip()
-        # Tentar diferentes formatos
+        # Converter para string de forma segura
+        df['date'] = df['date'].astype(str)
+        df['date'] = df['date'].str.strip()
+        # Tentar converter para datetime
         try:
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
         except:
@@ -163,6 +159,8 @@ def process_historical_data(df):
     df = df[df['loser'] != 'nan']
     df = df[df['winner'] != '']
     df = df[df['loser'] != '']
+    df = df[df['winner'].str.len() > 1]
+    df = df[df['loser'].str.len() > 1]
     df = df[df['winner'] != df['loser']]
     
     # Extrair jogadores unicos
@@ -228,7 +226,8 @@ def calculate_h2h(df):
 # ==============================================================================
 def calculate_elo(df, all_players, k=32):
     elo = {p: 1500 for p in all_players}
-    for _, row in df.sort_values('date').iterrows():
+    df_sorted = df.sort_values('date')
+    for _, row in df_sorted.iterrows():
         w, l = row['winner'], row['loser']
         if w in elo and l in elo:
             exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
@@ -326,7 +325,8 @@ class SmartNameMatcher:
         
         # Busca por sobrenome (final do nome)
         for name in self.historical_names:
-            if name.lower().endswith(' ' + search_lower) or name.lower().endswith(search_lower):
+            name_lower = name.lower()
+            if name_lower.endswith(' ' + search_lower) or name_lower.endswith(search_lower):
                 return name
         
         return None
@@ -446,7 +446,7 @@ def main():
     
     if st.session_state.get('models_ready'):
         st.subheader("Cole sua lista de jogos")
-        st.markdown("**Exemplo:** `Lehecka vs Michelsen` ou `Jiri Lehecka vs Alex Michelsen`")
+        st.markdown("**Exemplo:** `Lehecka vs Michelsen`")
         
         matches_text = st.text_area("Jogos:", height=300, 
                                      placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti\nPrizmic vs Etcheverry")
