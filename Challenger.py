@@ -366,6 +366,37 @@ def parse_match_text(text, default_surface="Clay"):
 # SCRAPER v7.3 — HOJE + AMANHÃ + FALLBACK + LOGS
 # ==============================================================================
 def scrape_matches():
+    import random
+
+    # Lista de proxies gratuitos (HTTP/HTTPS)
+    # Podes adicionar mais — quanto maior a lista, menor o risco de 403
+    proxy_list = [
+        "http://51.159.66.158:3128",
+        "http://185.199.229.156:7492",
+        "http://103.152.112.145:80",
+        "http://103.242.104.246:8080",
+        "http://8.219.97.248:80",
+        "http://47.243.92.199:3128",
+        "http://103.180.123.27:8080",
+        "http://103.48.68.34:83",
+    ]
+
+    # Headers reais de browser
+    headers_list = [
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/124.0",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+    ]
+
     target_date = datetime.now().strftime("%Y-%m-%d")
     tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -377,10 +408,68 @@ def scrape_matches():
         "https://api.sofascore.com/api/v1/sport/tennis/{date}/events"
     ]
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-
     all_matches = []
     logs = []
+
+    for d in dates_to_check:
+        logs.append(f"📅 Procurando jogos para {d}")
+
+        for ep in endpoints:
+            url = ep.format(date=d)
+            logs.append(f"🔎 Testando endpoint: {url}")
+
+            success = False
+
+            # Tenta até 10 combinações diferentes de proxy + header
+            for attempt in range(10):
+                proxy = random.choice(proxy_list)
+                headers = random.choice(headers_list)
+
+                logs.append(f"🌐 Tentativa {attempt+1}/10 | Proxy: {proxy}")
+
+                try:
+                    r = requests.get(
+                        url,
+                        headers=headers,
+                        proxies={"http": proxy, "https": proxy},
+                        timeout=10
+                    )
+
+                    if r.status_code == 200:
+                        data = r.json()
+                        events = data.get("events", [])
+
+                        if not events:
+                            logs.append("⚠️ Endpoint OK mas sem eventos")
+                            continue
+
+                        logs.append(f"✅ Encontrados {len(events)} eventos")
+
+                        for ev in events:
+                            category = ev.get("tournament", {}).get("category", {}).get("name", "")
+                            if "WTA" in str(category).upper():
+                                continue
+
+                            all_matches.append({
+                                "tournament": ev["tournament"]["name"],
+                                "player1": ev["homeTeam"]["name"],
+                                "player2": ev["awayTeam"]["name"],
+                                "surface": detect_surface(ev["tournament"]["name"])
+                            })
+
+                        success = True
+                        break
+
+                    else:
+                        logs.append(f"❌ HTTP {r.status_code}")
+
+                except Exception as e:
+                    logs.append(f"💥 Erro com proxy {proxy}: {e}")
+
+            if success:
+                break
+
+    return all_matches, logs
 
     for d in dates_to_check:
         logs.append(f"📅 Procurando jogos para {d}")
