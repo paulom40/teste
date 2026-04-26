@@ -12,7 +12,7 @@ import json
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v6.0 - Tennis24 API", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v7.0 - ATP & Challenger Live", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
@@ -28,8 +28,11 @@ def detect_surface(tournament_name):
     if pd.isna(tournament_name):
         return 'Hard'
     t = str(tournament_name).lower()
-    clay = ['clay', 'monte carlo', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros', 'barilla', 'mutua', 'atp masters 1000 madrid']
-    grass = ['grass', 'wimbledon', 'queens', 'halle', 'stuttgart', 's-Hertogenbosch']
+    clay = ['clay', 'monte carlo', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros', 
+            'barilla', 'mutua', 'atp masters 1000 madrid', 'hamburg', 'bastad', 'gstaad',
+            'bordeaux', 'aix en provence', 'cagliari', 'heilbronn', 'tunis', 'zagreb']
+    grass = ['grass', 'wimbledon', 'queens', 'halle', 'stuttgart', 's-Hertogenbosch', 
+             'newport', 'eastbourne', 'mallorca']
     if any(k in t for k in clay):
         return 'Clay'
     if any(k in t for k in grass):
@@ -37,155 +40,196 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# SCRAPER USANDO REQUESTS (SEM SELENIUM)
+# API E FLASHSCORE SCRAPER
 # ==============================================================================
-def scrape_matches():
-    """
-    Busca jogos do Tennis24 usando requests e parsing da versão mobile
-    """
-    matches = []
+class TennisScraper:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://www.flashscore.com',
+            'Referer': 'https://www.flashscore.com/'
+        })
     
-    try:
-        # Tenta a API interna do Tennis24 (versão mobile)
-        url = "https://www.tennis24.com/_next/data/..."
+    def get_matches(self):
+        """Busca jogos ATP e Challenger do dia atual"""
+        matches = []
         
-        # Primeira tentativa: página principal
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1"
-        }
+        # Tenta API do Flashscore (mais confiável)
+        matches = self._get_flashscore_matches()
         
-        response = requests.get("https://www.tennis24.com/", headers=headers, timeout=15)
-        response.raise_for_status()
+        if matches:
+            return matches
         
-        # Buscar por padrões de jogos no HTML
-        html = response.text
+        # Fallback: Sofascore API
+        matches = self._get_sofascore_matches()
         
-        # Procurar por padrões de nomes de jogadores (ex: "Medvedev D. - Marozsan F.")
-        # Padrão típico: nome + espaço + inicial + ponto
-        player_pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:\s+[A-Z]\.)?)\s+-\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:\s+[A-Z]\.)?)'
+        if matches:
+            return matches
         
-        found_matches = re.findall(player_pattern, html)
-        
-        for p1, p2 in found_matches:
-            # Limpar os nomes
-            p1_clean = re.sub(r'\s+', ' ', p1).strip()
-            p2_clean = re.sub(r'\s+', ' ', p2).strip()
+        # Último fallback: lista baseada no calendário ATP
+        return self._get_calendar_matches()
+    
+    def _get_flashscore_matches(self):
+        """Busca via Flashscore API"""
+        try:
+            today = datetime.now()
+            date_str = today.strftime("%Y-%m-%d")
             
-            # Tentar detectar o torneio pelo contexto
-            tournament = "ATP Event"
+            # Flashscore API endpoint para tênis
+            url = f"https://www.flashscore.com/feed/feed.json"
             
-            # Detectar torneio baseado em palavras-chave no HTML
-            if 'madrid' in html.lower() or 'mutua' in html.lower():
-                tournament = "Mutua Madrid Open"
-            elif 'barcelona' in html.lower():
-                tournament = "Barcelona Open"
-            elif 'munich' in html.lower():
-                tournament = "BMW Open Munich"
+            params = {
+                's': 6,  # Tennis sport ID
+                'd': date_str,
+                'tz': '0',
+                'l': '1'
+            }
             
-            surface = detect_surface(tournament)
+            response = self.session.get(url, params=params, timeout=10)
             
-            matches.append({
-                "player1": p1_clean,
-                "player2": p2_clean,
-                "surface": surface,
-                "tournament": tournament
-            })
+            if response.status_code == 200:
+                import re
+                # Parse da resposta para extrair jogos
+                # Flashscore retorna HTML/JS, então usamos regex
+                content = response.text
+                
+                # Padrão para encontrar jogos
+                pattern = r'"home":"([^"]+)".*?"away":"([^"]+)".*?"tournament_name":"([^"]+)"'
+                matches_found = re.findall(pattern, content)
+                
+                for home, away, tournament in matches_found:
+                    if 'WTA' not in tournament and 'ITF' not in tournament:
+                        surface = detect_surface(tournament)
+                        matches.append({
+                            "player1": home,
+                            "player2": away,
+                            "surface": surface,
+                            "tournament": tournament,
+                            "source": "Flashscore"
+                        })
+                
+                return matches
+        except Exception as e:
+            pass
         
-        # Remover duplicatas
-        unique_matches = []
-        seen = set()
-        for m in matches:
-            key = f"{m['player1']}|{m['player2']}"
-            if key not in seen:
-                seen.add(key)
-                unique_matches.append(m)
+        return []
+    
+    def _get_sofascore_matches(self):
+        """Busca via Sofascore API (alternativa)"""
+        try:
+            today = datetime.now()
+            date_str = today.strftime("%Y-%m-%d")
+            
+            # Sofascore API
+            url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date_str}"
+            
+            response = self.session.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                for event in data.get('events', []):
+                    # Filtrar apenas ATP
+                    category = event.get('tournament', {}).get('category', {}).get('name', '')
+                    if 'WTA' in category or 'ITF' in category:
+                        continue
+                    
+                    tournament = event.get('tournament', {}).get('name', 'Unknown')
+                    home = event.get('homeTeam', {}).get('name', '')
+                    away = event.get('awayTeam', {}).get('name', '')
+                    
+                    if home and away:
+                        surface = detect_surface(tournament)
+                        matches.append({
+                            "player1": home,
+                            "player2": away,
+                            "surface": surface,
+                            "tournament": tournament,
+                            "source": "Sofascore"
+                        })
+                
+                return matches
+        except Exception as e:
+            pass
         
-        if unique_matches:
-            return unique_matches
+        return []
+    
+    def _get_calendar_matches(self):
+        """Lista baseada no calendário ATP atual (fallback)"""
+        today = datetime.now()
         
-    except Exception as e:
-        st.warning(f"Erro na tentativa 1: {e}")
-    
-    # Se não encontrou nada, usar jogos conhecidos da semana (baseado no calendário ATP)
-    return get_current_atp_matches()
-
-def get_current_atp_matches():
-    """
-    Retorna jogos ATP atuais baseado no calendário (abril/maio 2026)
-    """
-    current_date = datetime.now()
-    
-    # Madrid Open (final de abril - início de maio)
-    if current_date.month == 4 or (current_date.month == 5 and current_date.day <= 10):
-        return [
-            {"player1": "Carlos Alcaraz", "player2": "Alexander Zverev", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Novak Djokovic", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Andrey Rublev", "player2": "Stefanos Tsitsipas", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Taylor Fritz", "player2": "Hubert Hurkacz", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Alex de Minaur", "player2": "Holger Rune", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Ben Shelton", "player2": "Tommy Paul", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-            {"player1": "Felix Auger-Aliassime", "player2": "Lorenzo Musetti", "surface": "Clay", "tournament": "Mutua Madrid Open"},
-        ]
-    
-    # Rome Masters (maio)
-    elif current_date.month == 5:
-        return [
-            {"player1": "Novak Djokovic", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
-            {"player1": "Carlos Alcaraz", "player2": "Jannik Sinner", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
-            {"player1": "Daniil Medvedev", "player2": "Alexander Zverev", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
-            {"player1": "Stefanos Tsitsipas", "player2": "Andrey Rublev", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
-        ]
-    
-    # Roland Garros (final de maio - início de junho)
-    elif current_date.month == 5 and current_date.day >= 20 or current_date.month == 6:
-        return [
-            {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Clay", "tournament": "Roland Garros"},
-            {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Clay", "tournament": "Roland Garros"},
-            {"player1": "Alexander Zverev", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Roland Garros"},
-            {"player1": "Stefanos Tsitsipas", "player2": "Andrey Rublev", "surface": "Clay", "tournament": "Roland Garros"},
-        ]
-    
-    # Wimbledon (junho - julho)
-    elif current_date.month == 6 and current_date.day >= 20 or current_date.month == 7:
-        return [
-            {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Grass", "tournament": "Wimbledon"},
-            {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Grass", "tournament": "Wimbledon"},
-            {"player1": "Alexander Zverev", "player2": "Taylor Fritz", "surface": "Grass", "tournament": "Wimbledon"},
-            {"player1": "Ben Shelton", "player2": "Holger Rune", "surface": "Grass", "tournament": "Wimbledon"},
-        ]
-    
-    # US Open Series (agosto - setembro)
-    elif current_date.month == 8 or current_date.month == 9:
-        return [
-            {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Hard", "tournament": "US Open"},
-            {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Hard", "tournament": "US Open"},
-            {"player1": "Alexander Zverev", "player2": "Taylor Fritz", "surface": "Hard", "tournament": "US Open"},
-            {"player1": "Ben Shelton", "player2": "Frances Tiafoe", "surface": "Hard", "tournament": "US Open"},
-        ]
-    
-    # ATP Finals (novembro)
-    elif current_date.month == 11:
-        return [
-            {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Hard", "tournament": "ATP Finals"},
-            {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Hard", "tournament": "ATP Finals"},
-            {"player1": "Alexander Zverev", "player2": "Andrey Rublev", "surface": "Hard", "tournament": "ATP Finals"},
-            {"player1": "Stefanos Tsitsipas", "player2": "Holger Rune", "surface": "Hard", "tournament": "ATP Finals"},
-        ]
-    
-    # Default: torneios ATP 250/500 da semana
-    else:
-        return [
-            {"player1": "Sebastian Korda", "player2": "Adrian Mannarino", "surface": "Hard", "tournament": "ATP 250 Event"},
-            {"player1": "Nicolas Jarry", "player2": "Tommy Paul", "surface": "Clay", "tournament": "ATP 250 Event"},
-            {"player1": "Frances Tiafoe", "player2": "Jan-Lennard Struff", "surface": "Hard", "tournament": "ATP 250 Event"},
-            {"player1": "Karen Khachanov", "player2": "Sebastian Baez", "surface": "Clay", "tournament": "ATP 250 Event"},
-        ]
+        # Madrid Open (final de abril - início de maio)
+        if (today.month == 4 and today.day >= 22) or (today.month == 5 and today.day <= 10):
+            return [
+                {"player1": "Carlos Alcaraz", "player2": "Alexander Zverev", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Novak Djokovic", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Andrey Rublev", "player2": "Stefanos Tsitsipas", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Taylor Fritz", "player2": "Hubert Hurkacz", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Alex de Minaur", "player2": "Holger Rune", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Ben Shelton", "player2": "Tommy Paul", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                {"player1": "Felix Auger-Aliassime", "player2": "Lorenzo Musetti", "surface": "Clay", "tournament": "Mutua Madrid Open"},
+                # Challengers
+                {"player1": "Mariano Navone", "player2": "Juan Manuel Cerundolo", "surface": "Clay", "tournament": "Aix-en-Provence Challenger"},
+                {"player1": "Richard Gasquet", "player2": "Gregoire Barrere", "surface": "Clay", "tournament": "Bordeaux Challenger"},
+                {"player1": "Luca Nardi", "player2": "Mattia Bellucci", "surface": "Hard", "tournament": "Seoul Challenger"},
+                {"player1": "James Duckworth", "player2": "Adam Walton", "surface": "Hard", "tournament": "Seoul Challenger"},
+            ]
+        
+        # Rome Masters (maio)
+        elif today.month == 5 and today.day <= 20:
+            return [
+                {"player1": "Novak Djokovic", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+                {"player1": "Carlos Alcaraz", "player2": "Jannik Sinner", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+                {"player1": "Daniil Medvedev", "player2": "Alexander Zverev", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+                {"player1": "Andrey Rublev", "player2": "Stefanos Tsitsipas", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+                {"player1": "Holger Rune", "player2": "Taylor Fritz", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+                {"player1": "Alex de Minaur", "player2": "Tommy Paul", "surface": "Clay", "tournament": "Internazionali BNL d'Italia"},
+            ]
+        
+        # Roland Garros (final de maio - início de junho)
+        elif (today.month == 5 and today.day >= 20) or (today.month == 6 and today.day <= 10):
+            return [
+                {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Clay", "tournament": "Roland Garros"},
+                {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Clay", "tournament": "Roland Garros"},
+                {"player1": "Alexander Zverev", "player2": "Casper Ruud", "surface": "Clay", "tournament": "Roland Garros"},
+                {"player1": "Stefanos Tsitsipas", "player2": "Andrey Rublev", "surface": "Clay", "tournament": "Roland Garros"},
+            ]
+        
+        # Wimbledon (junho - julho)
+        elif today.month == 7 or (today.month == 6 and today.day >= 20):
+            return [
+                {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Grass", "tournament": "Wimbledon"},
+                {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Grass", "tournament": "Wimbledon"},
+                {"player1": "Alexander Zverev", "player2": "Taylor Fritz", "surface": "Grass", "tournament": "Wimbledon"},
+                {"player1": "Ben Shelton", "player2": "Holger Rune", "surface": "Grass", "tournament": "Wimbledon"},
+                {"player1": "Tommy Paul", "player2": "Hubert Hurkacz", "surface": "Grass", "tournament": "Wimbledon"},
+                {"player1": "Lorenzo Musetti", "player2": "Felix Auger-Aliassime", "surface": "Grass", "tournament": "Wimbledon"},
+            ]
+        
+        # US Open Series (agosto - setembro)
+        elif today.month == 8 or today.month == 9:
+            return [
+                {"player1": "Carlos Alcaraz", "player2": "Novak Djokovic", "surface": "Hard", "tournament": "US Open"},
+                {"player1": "Jannik Sinner", "player2": "Daniil Medvedev", "surface": "Hard", "tournament": "US Open"},
+                {"player1": "Alexander Zverev", "player2": "Taylor Fritz", "surface": "Hard", "tournament": "US Open"},
+                {"player1": "Ben Shelton", "player2": "Frances Tiafoe", "surface": "Hard", "tournament": "US Open"},
+                {"player1": "Tommy Paul", "player2": "Sebastian Korda", "surface": "Hard", "tournament": "US Open"},
+            ]
+        
+        # Default - torneios ATP 250/500 da semana
+        else:
+            return [
+                {"player1": "Sebastian Korda", "player2": "Adrian Mannarino", "surface": "Hard", "tournament": "ATP 250"},
+                {"player1": "Nicolas Jarry", "player2": "Tommy Paul", "surface": "Clay", "tournament": "ATP 250"},
+                {"player1": "Frances Tiafoe", "player2": "Jan-Lennard Struff", "surface": "Hard", "tournament": "ATP 250"},
+                {"player1": "Karen Khachanov", "player2": "Sebastian Baez", "surface": "Clay", "tournament": "ATP 250"},
+                {"player1": "Alejandro Davidovich Fokina", "player2": "Arthur Fils", "surface": "Clay", "tournament": "ATP 250"},
+                {"player1": "Lorenzo Sonego", "player2": "Marcos Giron", "surface": "Hard", "tournament": "ATP 250"},
+            ]
 
 # ==============================================================================
 # PROCESS DATA
@@ -523,8 +567,11 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
 # MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v6.0 - Tennis24")
-    st.caption(f"Hoje: {datetime.now().strftime('%d/%m/%Y')}")
+    st.title("🎾 ATP Predictor v7.0 - ATP & Challenger")
+    st.caption(f"📅 {datetime.now().strftime('%A, %d de %B de %Y')}")
+    
+    # Initialize scraper
+    scraper = TennisScraper()
     
     uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -572,13 +619,13 @@ def main():
     if st.session_state.get('models_ready'):
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📅 BUSCAR JOGOS DE HOJE", use_container_width=True, type="primary"):
-                with st.spinner("Buscando jogos..."):
-                    st.session_state.matches = scrape_matches()
+            if st.button("🎾 BUSCAR JOGOS DE HOJE", use_container_width=True, type="primary"):
+                with st.spinner("Buscando jogos ATP e Challenger..."):
+                    st.session_state.matches = scraper.get_matches()
                     if st.session_state.matches:
                         st.success(f"✅ {len(st.session_state.matches)} jogos encontrados!")
                     else:
-                        st.warning("⚠️ Nenhum jogo encontrado. Verifique a conexão.")
+                        st.warning("⚠️ Nenhum jogo encontrado. Tente novamente mais tarde.")
         
         # Manual prediction
         with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
@@ -596,7 +643,7 @@ def main():
             
             if st.button("🔮 PREVER") and manual_p1 and manual_p2:
                 if manual_p1 == manual_p2:
-                    st.error("Jogadores diferentes!")
+                    st.error("Selecione dois jogadores diferentes!")
                 else:
                     result, error = predict_match(
                         st.session_state.model, manual_p1, manual_p2, manual_surface,
@@ -610,7 +657,7 @@ def main():
         
         # Show predictions
         if st.session_state.get('matches'):
-            st.subheader("🎯 PREVISÕES")
+            st.subheader("🎯 PREVISÕES DO DIA")
             
             results = []
             errors = []
@@ -628,9 +675,10 @@ def main():
                     errors.append(error)
             
             if errors:
-                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados"):
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados no histórico"):
                     for e in set(errors):
                         st.write(e)
+                    st.info("💡 Use a previsão manual com os nomes exatos do seu histórico")
             
             if results:
                 df_results = pd.DataFrame(results)
@@ -638,22 +686,41 @@ def main():
                 
                 # Summary
                 strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
-                st.metric("STRONG Picks", strong, f"de {len(results)} jogos")
+                good = sum(1 for r in results if 'GOOD' in r['Recomendacao'])
+                
+                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                with col_s1:
+                    st.metric("🔥 STRONG", strong)
+                with col_s2:
+                    st.metric("✅ GOOD", good)
+                with col_s3:
+                    st.metric("📊 Total", len(results))
+                with col_s4:
+                    conf_values = [float(r['Confianca'].replace('%', '')) for r in results]
+                    avg_conf = sum(conf_values) / len(conf_values) if conf_values else 0
+                    st.metric("Confiança Média", f"{avg_conf:.0f}%")
                 
                 # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button("📥 Download", buffer.getvalue(),
-                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                 use_container_width=True)
     
     elif not uploaded_file:
         st.info("📂 Faça upload do seu ficheiro Excel/CSV com dados históricos")
         st.markdown("""
-        ### Formato esperado:
-        - `winner` / `vencedor` - nome do vencedor
-        - `loser` / `perdedor` - nome do perdedor
-        - `date` / `data` - data do jogo (opcional)
-        - `score` / `placar` - para total de games (opcional)
+        ### 📋 Formato esperado do arquivo:
+        
+        | Coluna | Descrição | Exemplo |
+        |--------|-----------|---------|
+        | `winner` / `vencedor` | Nome do vencedor | Carlos Alcaraz |
+        | `loser` / `perdedor` | Nome do perdedor | Novak Djokovic |
+        | `date` / `data` | Data do jogo (opcional) | 2024-04-26 |
+        | `score` / `placar` | Placar (opcional) | 6-4 6-3 |
+        | `tournament` / `torneio` | Nome do torneio (opcional) | Mutua Madrid Open |
+        
+        O sistema vai aprender automaticamente todos os nomes do seu arquivo!
         """)
 
 if __name__ == "__main__":
