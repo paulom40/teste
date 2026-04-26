@@ -19,4 +19,4 @@ scikit-learn
 playwright
 chromedriver-binary==119.0.6045.105.0
 selenium-stealth==1.0.6
-
+webdriver-manager
