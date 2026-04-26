@@ -20,7 +20,7 @@ MIN_CONFIDENCE_STRONG = 0.68
 MIN_CONFIDENCE_GOOD = 0.60
 
 # ==============================================================================
-# MAPEAMENTO MANUAL DE SOBRENOMES -> NOMES COMPLETOS (SEM DUPLICATAS)
+# MAPEAMENTO MANUAL DE SOBRENOMES -> NOMES COMPLETOS
 # ==============================================================================
 NAME_MAPPING = {
     'lehecka': 'Jiri Lehecka',
@@ -40,162 +40,31 @@ NAME_MAPPING = {
     'fonseca': 'Joao Fonseca',
     'jodar': 'Rafael Jodar',
     'zheng': 'Michael Zheng',
-    'rybakina': 'Elena Rybakina',
-    'arevalo': 'Marcelo Arevalo',
-    'paul': 'Tommy Paul',
-    'granollers': 'Marcel Granollers',
-    'arneodo': 'Romain Arneodo',
     'tabilo': 'Alejandro Tabilo',
-    'heliovaara': 'Harri Heliovaara',
     'bublik': 'Alexander Bublik',
-    'luz': 'Orlando Luz',
-    'melo': 'Marcelo Melo',
-    'darderi': 'Luciano Darderi',
     'cerundolo': 'Francisco Cerundolo',
-    'cabral': 'Francisco Cabral',
-    'krawietz': 'Kevin Krawietz',
     'onclin': 'Gauthier Onclin',
-    'stewart': 'Hamish Stewart',
     'holmgren': 'August Holmgren',
     'kwon': 'SoonWoo Kwon',
     'svrcina': 'Dalibor Svrcina',
-    'guerrieri': 'Andrea Guerrieri',
-    'kennedy': 'James Kennedy',
-    'basavareddy': 'Nishesh Basavareddy',
-    'kalyanpur': 'Adil Kalyanpur',
-    'perez': 'Alfredo Perez',
-    'neuchrist': 'Maximilian Neuchrist',
-    'fondriest': 'Fondriest',
-    'gima': 'Sebastian Gima',
-    'hands': 'Tom Hands',
-    'hurrion': 'Matthew Hurrion',
-    'mansouri': 'Skander Mansouri',
-    'weightman': 'James Weightman',
-    'kuhar': 'Matt Kuhar',
-    'sanogo': 'Sanogo',
-    'hu': 'Hu',
+    'shimizu': 'Yuta Shimizu',
     'moriya': 'Hiroki Moriya',
-    'pearson': 'Kody Pearson',
     'peliwo': 'Filip Peliwo',
-    'wei': 'Wei',
-    'ilagan': 'Andre Ilagan',
-    'chen': 'Chen',
-    'fellin': 'Pietro Fellin',
-    'delaney': 'Jake Delaney',
-    'sharipov': 'Marat Sharipov',
     'jones': 'Maximus Jones',
     'kusuhara': 'Yusuke Kusuhara',
-    'dellavedova': 'Matthew Dellavedova',
-    'tian': 'Tian',
-    'shimizu': 'Yuta Shimizu',
-    'matsuoka': 'Hayato Matsuoka',
-    'zhu': 'Zhu',
-    'zeng': 'Zeng',
-    'jasika': 'Omar Jasika',
-    'zhukayev': 'Beibit Zhukayev',
-    'takahashi': 'Yusuke Takahashi',
     'masur': 'Daniel Masur',
-    'sun': 'Sun',
-    'damas': 'Miguel Damas',
-    'hausberger': 'Hausberger',
-    'donald': 'Donald',
-    'iannaccone': 'Federico Iannaccone',
-    'obradovic': 'Obradovic',
-    'cukierman': 'Cukierman',
-    'vrbensky': 'Michael Vrbensky',
-    'jorda': 'David Jorda Sanchis',
-    'latinovic': 'Latinovic',
-    'martinez': 'Andres Martinez',
-    'waldner': 'Waldner',
-    'krumich': 'Martin Krumich',
-    'hilderbrand': 'Trey Hilderbrand',
-    'wagner': 'Wagner',
-    'nijboer': 'Nijboer',
-    'brunold': 'Mika Brunold',
-    'rosenkranz': 'Mats Rosenkranz',
-    'cretu': 'Cezar Cretu',
-    'berenz': 'Berenz',
-    'hipfl': 'Hipfl',
-    'sanchez': 'Sanchez',
-    'boitan': 'Gabi Adrian Boitan',
-    'cizek': 'Cizek',
-    'filar': 'Karol Filar',
-    'papoe': 'Radu Mihai Papoe',
-    'nicod': 'Jakub Nicod',
-    'moeller': 'Marvin Moeller',
-    'forejtek': 'Jonas Forejtek',
-    'doskocil': 'Doskocil',
-    'gombos': 'Norbert Gombos',
-    'kusy': 'Kusy',
-    'johns': 'Garrett Johns',
-    'juszczak': 'Juszczak',
-    'klimas': 'Klimas',
-    'basic': 'Mirza Basic',
-    'donski': 'Alexander Donski',
-    'banthia': 'Siddhant Banthia',
-    'molleker': 'Rudolf Molleker',
-    'recek': 'Recek',
-    'palosi': 'Stefan Palosi',
-    'stricker': 'Dominic Stricker',
-    'cerny': 'Cerny',
+    'zhukayev': 'Beibit Zhukayev',
     'mochizuki': 'Shintaro Mochizuki',
-    'chekhov': 'Chekhov',
-    'shin': 'Sanhui Shin',
-    'klok': 'Klok',
-    'zhalgasbay': 'Zhalgasbay',
-    'campana': 'Campana Lee',
-    'orlov': 'Orlov',
-    'lomakin': 'Lomakin',
-    'gulin': 'Gulin',
-    'wehnelt': 'Kai Wehnelt',
-    'trebukhin': 'Trebukhin',
-    'vithoontien': 'Leo Vithoontien',
-    'krutykh': 'Oleksii Krutykh',
-    'ostapenkov': 'Ostapenkov',
-    'kirkin': 'Kirkin',
-    'masabayashi': 'Masabayashi',
-    'yamazaki': 'Yamazaki',
-    'wang': 'Wang',
-    'plipuech': 'Plipuech',
-    'sidorova': 'Sidorova',
-    'eto': 'Eto',
-    'huang': 'Huang',
-    'yuan': 'Yuan',
-    'alves': 'Alves',
-    'falkowska': 'Falkowska',
-    'leonard': 'Leonard',
-    'nguyen': 'Nguyen',
-    'ovcharenko': 'Oleksandr Ovcharenko',
-    'buyukakcay': 'Buyukakcay',
-    'bartashevich': 'Bartashevich',
-    'sakellaridi': 'Stefanos Sakellaridis',
-    'efstathiou': 'Menelaos Efstathiou',
-    'pietri': 'Pietri',
-    'gschwendtner': 'Gschwendtner',
-    'kingsley': 'Cannon Kingsley',
-    'hance': 'Hance',
-    'flores': 'Flores',
-    'tanner': 'Gian Luca Tanner',
-    'hoeyeraal': 'Hoeyeraal',
-    'cavallo': 'Cavallo',
-    'searle': 'Henry Searle',
-    'torres': 'Tiago Torres',
-    'shepp': 'Shepp',
-    'stringer': 'Stringer',
-    'roca': 'Oriol Roca Batalla',
-    'gray': 'Alastair Gray',
-    'cui': 'Cui',
-    'arzhankin': 'Arzhankin',
-    'kachmazov': 'Alibek Kachmazov',
+    'stricker': 'Dominic Stricker',
+    'gombos': 'Norbert Gombos',
+    'molleker': 'Rudolf Molleker',
+    'basavareddy': 'Nishesh Basavareddy',
     'pacheco': 'Rodrigo Pacheco Mendez',
-    'rottgering': 'Mees Rottgering',
-    'tararudee': 'Tararudee',
-    'preston': 'Preston',
-    'newman': 'Newman',
-    'back': 'Back',
-    'zolotareva': 'Zolotareva',
-    'kumar': 'Kumar',
-    'hayen': 'Hayen',
+    'wang': 'Wang',
+    'zhu': 'Zhu',
+    'chen': 'Chen',
+    'hu': 'Hu',
+    'wei': 'Wei',
 }
 
 # ==============================================================================
@@ -205,27 +74,29 @@ def detect_surface(tournament_name):
     if pd.isna(tournament_name):
         return 'Hard'
     t = str(tournament_name).lower()
-    clay = ['clay', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros']
-    grass = ['grass', 'wimbledon', 'queens', 'halle']
-    if any(k in t for k in clay):
+    if 'clay' in t:
         return 'Clay'
-    if any(k in t for k in grass):
+    if 'grass' in t:
         return 'Grass'
     return 'Hard'
 
 # ==============================================================================
-# PROCESS DATA
+# PROCESS DATA - CORRIGIDO
 # ==============================================================================
 def process_historical_data(df):
     """Process historical data and extract player names from the file"""
     
-    # Mapeamento das colunas
+    st.write("### Colunas encontradas no arquivo:")
+    st.write(list(df.columns))
+    
+    # Mapeamento das colunas baseado no seu arquivo
     column_mapping = {}
+    
     for col in df.columns:
-        col_lower = col.lower()
-        if 'winner_name' in col_lower or 'winner' in col_lower:
+        col_lower = str(col).lower()
+        if 'winner_name' in col_lower or col_lower == 'winner':
             column_mapping[col] = 'winner'
-        elif 'loser_name' in col_lower or 'loser' in col_lower:
+        elif 'loser_name' in col_lower or col_lower == 'loser':
             column_mapping[col] = 'loser'
         elif 'tourney_name' in col_lower or 'tournament' in col_lower:
             column_mapping[col] = 'tournament'
@@ -235,18 +106,44 @@ def process_historical_data(df):
             column_mapping[col] = 'total_games'
         elif 'surface' in col_lower:
             column_mapping[col] = 'surface'
+        elif 'score' in col_lower:
+            column_mapping[col] = 'score'
     
     df = df.rename(columns=column_mapping)
     
-    # Converter data
+    st.write("### Colunas apos mapeamento:")
+    st.write(list(df.columns))
+    
+    # Converter data - CORRIGIDO
     if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
+        # Converter para string primeiro para evitar problemas
+        df['date'] = df['date'].astype(str).str.strip()
+        # Tentar diferentes formatos
+        try:
+            df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
+        except:
+            try:
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            except:
+                df['date'] = pd.Timestamp.now()
     else:
         df['date'] = pd.Timestamp.now()
     
+    # Preencher datas nulas com data atual
+    df['date'] = df['date'].fillna(pd.Timestamp.now())
+    
     # Total games
     if 'total_games' not in df.columns:
-        df['total_games'] = 22
+        if 'score' in df.columns:
+            def extract_games(score):
+                if pd.isna(score):
+                    return 22
+                numbers = re.findall(r'\d+', str(score))
+                games = [int(n) for n in numbers if int(n) < 20]
+                return sum(games) if games else 22
+            df['total_games'] = df['score'].apply(extract_games)
+        else:
+            df['total_games'] = 22
     
     # Superficie
     if 'surface' in df.columns:
@@ -268,6 +165,7 @@ def process_historical_data(df):
     df = df[df['loser'] != '']
     df = df[df['winner'] != df['loser']]
     
+    # Extrair jogadores unicos
     all_players = sorted(list(set(df['winner'].unique()) | set(df['loser'].unique())))
     
     st.success(f"Processado: {len(df)} jogos | {len(all_players)} jogadores")
@@ -390,7 +288,8 @@ def train_model(df, player_stats, h2h, elo):
         raise ValueError("No training data")
     
     X = np.array(X)
-    model = LGBMClassifier(n_estimators=150, max_depth=5, learning_rate=0.035, num_leaves=16, reg_alpha=0.8, reg_lambda=0.8, random_state=42, verbose=-1)
+    model = LGBMClassifier(n_estimators=150, max_depth=5, learning_rate=0.035, num_leaves=16, 
+                           reg_alpha=0.8, reg_lambda=0.8, random_state=42, verbose=-1)
     model.fit(X, y)
     return model
 
@@ -400,6 +299,7 @@ def train_model(df, player_stats, h2h, elo):
 class SmartNameMatcher:
     def __init__(self, historical_names):
         self.historical_names = list(historical_names)
+        self.historical_set = set(historical_names)
         self.mapping = NAME_MAPPING
     
     def find_match(self, search_name):
@@ -410,7 +310,7 @@ class SmartNameMatcher:
         search_lower = search_str.lower()
         
         # Match exato
-        if search_str in self.historical_names:
+        if search_str in self.historical_set:
             return search_str
         
         # Case insensitive
@@ -421,12 +321,12 @@ class SmartNameMatcher:
         # Mapeamento manual
         if search_lower in self.mapping:
             mapped = self.mapping[search_lower]
-            if mapped in self.historical_names:
+            if mapped in self.historical_set:
                 return mapped
         
-        # Busca por sobrenome
+        # Busca por sobrenome (final do nome)
         for name in self.historical_names:
-            if name.lower().endswith(search_lower):
+            if name.lower().endswith(' ' + search_lower) or name.lower().endswith(search_lower):
                 return name
         
         return None
@@ -507,7 +407,7 @@ def parse_colab_text(text):
 # ==============================================================================
 def main():
     st.title("ATP Predictor v8.0 - Previsao por Lista")
-    st.caption("Upload do historico | Cole os jogos | Normalizacao automatica de nomes")
+    st.caption("Upload do historico | Cole os jogos | Normalizacao automatica")
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -546,10 +446,10 @@ def main():
     
     if st.session_state.get('models_ready'):
         st.subheader("Cole sua lista de jogos")
-        st.markdown("**Exemplo:** `Lehecka vs Michelsen`")
+        st.markdown("**Exemplo:** `Lehecka vs Michelsen` ou `Jiri Lehecka vs Alex Michelsen`")
         
         matches_text = st.text_area("Jogos:", height=300, 
-                                     placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti")
+                                     placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti\nPrizmic vs Etcheverry")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -587,7 +487,8 @@ def main():
                     
                     buffer = io.BytesIO()
                     df_results.to_excel(buffer, index=False)
-                    st.download_button("Download Excel", buffer.getvalue(), f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                    st.download_button("Download Excel", buffer.getvalue(), 
+                                       f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
             else:
                 st.warning("Nenhum jogo detectado")
 
