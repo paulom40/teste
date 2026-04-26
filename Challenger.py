@@ -353,7 +353,8 @@ def parse_match_text(text, default_surface="Clay"):
 def scrape_matches():
     try:
         target_date = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{date}
+{target_date}"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
 
