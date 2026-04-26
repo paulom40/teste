@@ -26,7 +26,7 @@ def detect_surface(tournament_name):
     if pd.isna(tournament_name):
         return 'Hard'
     t = str(tournament_name).lower()
-    clay = ['clay', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros', 'atp masters 1000 madrid']
+    clay = ['clay', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros']
     grass = ['grass', 'wimbledon', 'queens', 'halle']
     if any(k in t for k in clay):
         return 'Clay'
@@ -46,21 +46,12 @@ def process_historical_data(df):
     # Find columns
     winner_col = None
     loser_col = None
-    tournament_col = None
-    date_col = None
-    score_col = None
     
     for col in df.columns:
         if 'winner' in col or 'vencedor' in col:
             winner_col = col
         elif 'loser' in col or 'perdedor' in col:
             loser_col = col
-        elif 'tourney' in col or 'torneio' in col or 'tournament' in col:
-            tournament_col = col
-        elif 'date' in col or 'data' in col:
-            date_col = col
-        elif 'score' in col or 'placar' in col:
-            score_col = col
     
     if not winner_col or not loser_col:
         st.error(f"Colunas nao encontradas. Colunas disponiveis: {list(df.columns)}")
@@ -69,28 +60,17 @@ def process_historical_data(df):
     # Rename columns
     df = df.rename(columns={
         winner_col: 'winner',
-        loser_col: 'loser',
-        tournament_col: 'tournament' if tournament_col else 'tournament',
-        date_col: 'date' if date_col else 'date',
-        score_col: 'score' if score_col else 'score'
+        loser_col: 'loser'
     })
     
     # Convert date
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    else:
+    if 'date' not in df.columns:
         df['date'] = pd.Timestamp.now()
+    else:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
     # Calculate total games
-    if 'total_games' not in df.columns and 'score' in df.columns:
-        def extract_games(score):
-            if pd.isna(score):
-                return 22
-            numbers = re.findall(r'\d+', str(score))
-            games = [int(n) for n in numbers if int(n) < 20]
-            return sum(games) if games else 22
-        df['total_games'] = df['score'].apply(extract_games)
-    elif 'total_games' not in df.columns:
+    if 'total_games' not in df.columns:
         df['total_games'] = 22
     
     # Detect surface
@@ -280,7 +260,7 @@ def train_model(df, player_stats, h2h, elo):
 # ==============================================================================
 class SimpleNameMatcher:
     def __init__(self, historical_names):
-        self.historical_names = historical_names
+        self.historical_names = set(historical_names)
         self.name_map = {}
         
         for name in historical_names:
@@ -303,46 +283,38 @@ class SimpleNameMatcher:
         if search_str in self.historical_names:
             return search_str
         
-        # Remove common prefixes
-        search_clean = re.sub(r'^(van|de|den|der|dos|das|le|la)\s+', '', search_lower)
-        
         # Case insensitive
         for name in self.historical_names:
             if name.lower() == search_lower:
-                return name
-            if name.lower() == search_clean:
                 return name
         
         # Last name match
         if search_lower in self.name_map:
             return self.name_map[search_lower]
-        if search_clean in self.name_map:
-            return self.name_map[search_clean]
         
-        # Partial match
+        # Partial match (only if very similar)
         for name in self.historical_names:
             if search_lower in name.lower() or name.lower() in search_lower:
-                return name
-            if search_clean in name.lower() or name.lower() in search_clean:
-                return name
+                # Check if it's a good match (not too short)
+                if len(search_lower) >= 3 and len(name) >= 3:
+                    return name
         
         return None
 
 # ==============================================================================
-# PREDICT MATCH
+# PREDICT MATCH - IGNORA QUANDO NAO ENCONTRA
 # ==============================================================================
 def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     p1_match = name_matcher.find_match(p1)
     p2_match = name_matcher.find_match(p2)
     
-    if not p1_match:
-        return None, f"X '{p1}' nao encontrado no historico"
-    if not p2_match:
-        return None, f"X '{p2}' nao encontrado no historico"
+    # Se qualquer jogador nao for encontrado, retorna None (ignora)
+    if not p1_match or not p2_match:
+        return None, None
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
     if not features:
-        return None, f"Estatisticas insuficientes para {p1_match} ou {p2_match}"
+        return None, None
     
     prob = model.predict_proba(np.array([features]))[0][1]
     prob_p1 = np.clip(0.5 + (prob - 0.5) * WINNER_SMOOTH, 0.15, 0.85)
@@ -362,10 +334,9 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
     has_data = s1.get('matches', 0) > 0 and s2.get('matches', 0) > 0
-    data_quality = "OK" if has_data else "SEM DADOS"
+    data_quality = "OK" if has_data else "POUCOS DADOS"
     
     return {
-        'Torneio': 'ATP',
         'Jogador1': p1,
         'Jogador2': p2,
         'Match_Historico': f"{p1_match} vs {p2_match}",
@@ -375,16 +346,15 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
         'Vencedor_Previsto': winner,
         'Confianca': f"{confidence:.1%}",
         'Recomendacao': rec,
-        'Momentum': f"{momentum_edge:+.0f}",
         'Games_Esperados': round(exp_games, 1),
         'Dados': f"{data_quality} ({s1.get('matches',0)}/{s2.get('matches',0)})"
     }, None
 
 # ==============================================================================
-# PARSE DE TEXTO MELHORADO
+# PARSE DE TEXTO
 # ==============================================================================
 def parse_colab_text(text):
-    """Parse o texto colado do usuario - suporta varios formatos"""
+    """Parse o texto colado do usuario"""
     matches = []
     lines = text.strip().split('\n')
     
@@ -393,34 +363,27 @@ def parse_colab_text(text):
         if not line:
             continue
         
-        # Remove o prefixo "ATP" ou "CHALLENGER" se existir
-        line = re.sub(r'^(ATP|CHALLENGER|ITF)\s+', '', line, flags=re.IGNORECASE)
+        # Remove prefixos
+        line = re.sub(r'^(ATP|CHALLENGER|WTA)\s+', '', line, flags=re.IGNORECASE)
         
-        # Procura por "vs" ou "VS" ou "x"
+        # Procura por vs ou x
         vs_match = re.search(r'(.+?)\s+(?:vs|VS|x)\s+(.+)', line)
         
         if vs_match:
             p1 = vs_match.group(1).strip()
             p2 = vs_match.group(2).strip()
             
-            # Limpar nomes - remover múltiplos espaços e tabs
+            # Limpar nomes
             p1 = re.sub(r'\s+', ' ', p1)
             p2 = re.sub(r'\s+', ' ', p2)
-            
-            # Remover caracteres especiais
             p1 = re.sub(r'[^\w\s\.\-]', '', p1)
             p2 = re.sub(r'[^\w\s\.\-]', '', p2)
             
-            # Extrair favorito se tiver -> ou %
+            # Extrair favorito se tiver
             arrow_match = re.search(r'->\s*([A-Za-z\s]+?)(?:\s*(\d+)%?)?', line)
-            if arrow_match:
-                favorite = arrow_match.group(1).strip()
-                percentage = int(arrow_match.group(2)) / 100 if arrow_match.group(2) else None
-            else:
-                favorite = None
-                percentage = None
+            favorite = arrow_match.group(1).strip() if arrow_match else None
             
-            # Detectar superficie
+            # Superficie
             surface = 'Clay'
             if 'hard' in line.lower():
                 surface = 'Hard'
@@ -432,9 +395,7 @@ def parse_colab_text(text):
                     'player1': p1,
                     'player2': p2,
                     'surface': surface,
-                    'favorite': favorite,
-                    'expected_prob': percentage,
-                    'tournament': 'ATP'
+                    'favorite': favorite
                 })
     
     return matches
@@ -444,7 +405,7 @@ def parse_colab_text(text):
 # ==============================================================================
 def main():
     st.title("ATP Predictor v8.0 - Previsao por Lista")
-    st.caption("Cole sua lista de jogos e o modelo fara as previsoes baseado no seu historico")
+    st.caption("Cole sua lista de jogos - Jogadores nao encontrados serao ignorados")
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -486,29 +447,26 @@ def main():
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
-                import traceback
-                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
         st.subheader("COLE SUA LISTA DE JOGOS")
         
         st.markdown("""
-        **Formatos aceitos:**
+        **Formato aceito:**
         - Lehecka vs Michelsen
         - Griekspoor vs Musetti
-        - ATP Lehecka vs Michelsen
-        - Lehecka x Michelsen -> Lehecka 61%
+        - Prizmic vs Etcheverry
         """)
         
         matches_text = st.text_area(
             "Cole aqui os jogos:",
-            height=400,
+            height=300,
             placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti\nPrizmic vs Etcheverry"
         )
         
         col1, col2 = st.columns(2)
         with col1:
-            surface_override = st.selectbox("Superficie (padrao)", ["Clay", "Hard", "Grass"], index=0)
+            surface_override = st.selectbox("Superficie", ["Clay", "Hard", "Grass"], index=0)
         with col2:
             if st.button("LIMPAR", use_container_width=True):
                 st.rerun()
@@ -517,51 +475,42 @@ def main():
             parsed_matches = parse_colab_text(matches_text)
             
             if parsed_matches:
-                st.success(f"{len(parsed_matches)} jogos detectados!")
+                st.info(f"{len(parsed_matches)} jogos detectados. Processando...")
                 
                 for match in parsed_matches:
-                    if match['surface'] == 'Clay' and surface_override != 'Clay':
+                    if surface_override != 'Clay':
                         match['surface'] = surface_override
                 
                 if st.button("FAZER PREVISOES", type="primary", use_container_width=True):
                     results = []
-                    errors = []
+                    not_found_count = 0
                     
                     progress_bar = st.progress(0)
                     for i, match in enumerate(parsed_matches):
-                        result, error = predict_match(
+                        result, _ = predict_match(
                             st.session_state.model, 
                             match['player1'], match['player2'], match['surface'],
                             st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
                             st.session_state.name_matcher
                         )
                         if result:
-                            if match.get('expected_prob'):
-                                result['Prob_Esperada'] = f"{match['expected_prob']:.0%}"
-                                result['Favorito_Lista'] = match.get('favorite', '')
                             results.append(result)
-                        elif error:
-                            errors.append(error)
+                        else:
+                            not_found_count += 1
                         progress_bar.progress((i + 1) / len(parsed_matches))
                     progress_bar.empty()
                     
-                    if errors:
-                        with st.expander(f"{len(errors)} jogadores nao encontrados"):
-                            for e in set(errors):
-                                st.write(e)
+                    if not_found_count > 0:
+                        st.warning(f"{not_found_count} jogadores nao encontrados no historico (ignorados)")
                     
                     if results:
-                        st.subheader("RESULTADOS DAS PREVISOES")
+                        st.subheader(f"RESULTADOS DAS PREVISOES ({len(results)} jogos)")
                         
                         df_results = pd.DataFrame(results)
                         
-                        cols = ['Torneio', 'Jogador1', 'Jogador2', 'Match_Historico', 'Superficie',
-                               'Prob_P1', 'Prob_P2', 'Vencedor_Previsto', 'Confianca', 'Recomendacao',
-                               'Momentum', 'Games_Esperados', 'Dados']
-                        
-                        if 'Prob_Esperada' in df_results.columns:
-                            cols.insert(6, 'Prob_Esperada')
-                            cols.insert(7, 'Favorito_Lista')
+                        cols = ['Jogador1', 'Jogador2', 'Match_Historico', 'Superficie',
+                               'Prob_P1', 'Prob_P2', 'Vencedor_Previsto', 'Confianca', 
+                               'Recomendacao', 'Games_Esperados', 'Dados']
                         
                         df_results = df_results[[c for c in cols if c in df_results.columns]]
                         
@@ -570,8 +519,6 @@ def main():
                                 return 'background-color: #2e7d32; color: white'
                             elif 'GOOD' in str(val):
                                 return 'background-color: #4caf50; color: white'
-                            elif 'AVOID' in str(val):
-                                return 'background-color: #9e9e9e; color: white'
                             return ''
                         
                         styled = df_results.style.format({
@@ -580,13 +527,12 @@ def main():
                             'Confianca': '{:.1%}'
                         }).map(color_recommendation, subset=['Recomendacao'])
                         
-                        st.dataframe(styled, use_container_width=True, hide_index=True, height=600)
+                        st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
                         
                         # Resumo
                         st.subheader("Resumo")
                         strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
                         good = sum(1 for r in results if 'GOOD' in r['Recomendacao'])
-                        avoid = sum(1 for r in results if 'AVOID' in r['Recomendacao'])
                         
                         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                         with col_s1:
@@ -594,7 +540,7 @@ def main():
                         with col_s2:
                             st.metric("GOOD", good)
                         with col_s3:
-                            st.metric("AVOID", avoid)
+                            st.metric("Total", len(results))
                         with col_s4:
                             conf_values = [float(r['Confianca'].replace('%', '')) for r in results]
                             avg_conf = sum(conf_values) / len(conf_values) if conf_values else 0
@@ -609,39 +555,21 @@ def main():
                             f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                             use_container_width=True
                         )
+                    else:
+                        st.error("Nenhum jogo valido encontrado. Verifique se os nomes dos jogadores estao no historico.")
             else:
                 st.warning("Nenhum jogo detectado. Use o formato: Jogador1 vs Jogador2")
-        
-        # Previsao manual
-        with st.expander("PREVISAO MANUAL INDIVIDUAL"):
-            players_with_stats = [p for p in st.session_state.all_players 
-                                  if st.session_state.player_stats.get(p, {}).get('matches', 0) > 0]
-            players_sorted = sorted(players_with_stats)
-            
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + players_sorted, key="man_p1")
-            with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + players_sorted, key="man_p2")
-            with col_c:
-                manual_surface = st.selectbox("Superficie", ["Clay", "Hard", "Grass"], key="man_surf")
-            
-            if st.button("PREVER JOGO", key="man_btn") and manual_p1 and manual_p2:
-                if manual_p1 == manual_p2:
-                    st.error("Selecione dois jogadores diferentes!")
-                else:
-                    result, error = predict_match(
-                        st.session_state.model, manual_p1, manual_p2, manual_surface,
-                        st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                        st.session_state.name_matcher
-                    )
-                    if result:
-                        st.dataframe(pd.DataFrame([result]), use_container_width=True)
-                    else:
-                        st.error(error)
     
     elif not uploaded_file:
         st.info("Faca upload do seu ficheiro Excel/CSV com dados historicos")
+        st.markdown("""
+        **Como usar:**
+        1. Faca upload do seu historico
+        2. Cole a lista de jogos no formato: Jogador1 vs Jogador2
+        3. Clique em FAZER PREVISOES
+        
+        **Observacao:** Jogadores nao encontrados serao ignorados automaticamente.
+        """)
 
 if __name__ == "__main__":
     main()
