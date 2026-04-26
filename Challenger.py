@@ -11,7 +11,7 @@ import re
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="ATP Predictor v6.3 - Smart Name Matching", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="ATP Predictor v7.0 - Simple & Robust", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
@@ -44,53 +44,27 @@ def process_historical_data(df):
     
     winner_col = None
     loser_col = None
-    tournament_col = None
-    date_col = None
-    score_col = None
     
     for col in df.columns:
         if 'winner' in col or 'vencedor' in col:
             winner_col = col
         elif 'loser' in col or 'perdedor' in col:
             loser_col = col
-        elif 'tourney' in col or 'torneio' in col or 'tournament' in col:
-            tournament_col = col
-        elif 'date' in col or 'data' in col:
-            date_col = col
-        elif 'score' in col or 'placar' in col:
-            score_col = col
     
     if not winner_col or not loser_col:
         return None, None
     
-    df = df.rename(columns={
-        winner_col: 'winner',
-        loser_col: 'loser',
-        tournament_col: 'tournament' if tournament_col else 'tournament',
-        date_col: 'date' if date_col else 'date',
-        score_col: 'score' if score_col else 'score'
-    })
+    df = df.rename(columns={winner_col: 'winner', loser_col: 'loser'})
     
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    else:
+    if 'date' not in df.columns:
         df['date'] = pd.Timestamp.now()
+    else:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    if 'total_games' not in df.columns and 'score' in df.columns:
-        def extract_games(score):
-            if pd.isna(score):
-                return 22
-            numbers = re.findall(r'\d+', str(score))
-            games = [int(n) for n in numbers if int(n) < 20]
-            return sum(games) if games else 22
-        df['total_games'] = df['score'].apply(extract_games)
-    elif 'total_games' not in df.columns:
+    if 'total_games' not in df.columns:
         df['total_games'] = 22
     
-    if 'tournament' in df.columns:
-        df['surface'] = df['tournament'].apply(detect_surface)
-    else:
-        df['surface'] = 'Hard'
+    df['surface'] = 'Hard'
     
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
@@ -117,26 +91,13 @@ def calculate_player_stats(df, all_players):
         if len(player_matches) == 0:
             stats[player] = {
                 'matches': 0, 'wins': 0, 'win_rate': 0.5,
-                'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22,
-                'hard_rate': 0.5, 'clay_rate': 0.5, 'grass_rate': 0.5
+                'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22
             }
             continue
         
         wins = len(player_matches[player_matches['winner'] == player])
         total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
-        
-        hard_matches = player_matches[player_matches['surface'] == 'Hard']
-        clay_matches = player_matches[player_matches['surface'] == 'Clay']
-        grass_matches = player_matches[player_matches['surface'] == 'Grass']
-        
-        hard_wins = len(hard_matches[hard_matches['winner'] == player])
-        clay_wins = len(clay_matches[clay_matches['winner'] == player])
-        grass_wins = len(grass_matches[grass_matches['winner'] == player])
-        
-        hard_rate = hard_wins / len(hard_matches) if len(hard_matches) > 0 else 0.5
-        clay_rate = clay_wins / len(clay_matches) if len(clay_matches) > 0 else 0.5
-        grass_rate = grass_wins / len(grass_matches) if len(grass_matches) > 0 else 0.5
         
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
@@ -151,11 +112,7 @@ def calculate_player_stats(df, all_players):
         stats[player] = {
             'matches': total,
             'wins': wins,
-            'losses': total - wins,
             'win_rate': win_rate,
-            'hard_rate': hard_rate,
-            'clay_rate': clay_rate,
-            'grass_rate': grass_rate,
             'recent_form': recent_form,
             'very_recent_form': very_recent_form,
             'avg_games': avg_games
@@ -199,16 +156,6 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     if s1.get('matches', 0) == 0 or s2.get('matches', 0) == 0:
         return None
     
-    if surface == 'Clay':
-        surf_rate1 = s1.get('clay_rate', 0.5)
-        surf_rate2 = s2.get('clay_rate', 0.5)
-    elif surface == 'Grass':
-        surf_rate1 = s1.get('grass_rate', 0.5)
-        surf_rate2 = s2.get('grass_rate', 0.5)
-    else:
-        surf_rate1 = s1.get('hard_rate', 0.5)
-        surf_rate2 = s2.get('hard_rate', 0.5)
-    
     elo1 = elo.get(p1, 1500)
     elo2 = elo.get(p2, 1500)
     elo_diff = (elo1 - elo2) / 400
@@ -217,7 +164,6 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
     very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
     win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
-    surf_diff = surf_rate1 - surf_rate2
     
     h2h_adv = 0.5
     if (p1, p2) in h2h:
@@ -240,7 +186,7 @@ def build_features(p1, p2, surface, player_stats, h2h, elo):
     
     features = [
         elo_diff, form_diff, very_recent_diff, win_rate_diff,
-        surf_diff, h2h_centered, games_norm, exp_diff, momentum
+        h2h_centered, games_norm, exp_diff, momentum
     ]
     
     return features
@@ -271,14 +217,12 @@ def train_model(df, player_stats, h2h, elo):
     X = np.array(X)
     
     model = LGBMClassifier(
-        n_estimators=200,
+        n_estimators=150,
         max_depth=4,
-        learning_rate=0.025,
+        learning_rate=0.03,
         num_leaves=12,
-        reg_alpha=1.5,
-        reg_lambda=1.5,
-        subsample=0.7,
-        colsample_bytree=0.7,
+        reg_alpha=1.0,
+        reg_lambda=1.0,
         random_state=42,
         verbose=-1
     )
@@ -287,111 +231,56 @@ def train_model(df, player_stats, h2h, elo):
     return model
 
 # ==============================================================================
-# SMART NAME MATCHER - CORRIGIDO
+# SIMPLE NAME MATCHER
 # ==============================================================================
-class SmartNameMatcher:
-    def __init__(self, historical_names):
-        self.historical_names = historical_names
-        self.name_map = {}
-        self.last_name_map = defaultdict(list)
-        self.variation_map = {}
-        
-        for name in historical_names:
-            name_lower = name.lower()
-            self.name_map[name_lower] = name
-            
-            parts = name.split()
-            if parts:
-                last_name = parts[-1].lower()
-                self.last_name_map[last_name].append(name)
-                
-                # Criar variações
-                self.variation_map[last_name] = name
-                if len(parts) >= 2:
-                    first_initial = parts[0][0].lower()
-                    variation = f"{first_initial}. {parts[-1]}"
-                    self.variation_map[variation.lower()] = name
-                    variation2 = f"{first_initial}{parts[-1]}"
-                    self.variation_map[variation2.lower()] = name
-    
-    def find_match(self, search_name):
-        if not search_name:
-            return None
-        
-        search_str = str(search_name).strip()
-        search_lower = search_str.lower()
-        
-        # 1. Match exato
-        if search_str in self.historical_names:
-            return search_str
-        
-        # 2. Case insensitive
-        if search_lower in self.name_map:
-            return self.name_map[search_lower]
-        
-        # 3. Match por variação
-        if search_lower in self.variation_map:
-            return self.variation_map[search_lower]
-        
-        # 4. Match por sobrenome
-        parts = search_lower.split()
-        if parts:
-            last_name = parts[-1]
-            if last_name in self.last_name_map:
-                matches = self.last_name_map[last_name]
-                if len(matches) == 1:
-                    return matches[0]
-                # Se múltiplos, tentar pelo primeiro nome
-                if len(parts) >= 2:
-                    first_initial = parts[0][0]
-                    for match in matches:
-                        match_parts = match.split()
-                        if match_parts and match_parts[0].lower().startswith(first_initial):
-                            return match
-        
-        # 5. Match parcial
-        for name in self.historical_names:
-            if search_lower in name.lower():
-                return name
-        
+def find_player(name, historical_names):
+    """Simple function to find a player by name or last name"""
+    if not name:
         return None
     
-    def get_suggestions(self, name):
-        """Retorna sugestões para um nome não encontrado"""
-        name_lower = name.lower()
-        suggestions = []
-        
-        # Procurar por sobrenome similar
-        parts = name_lower.split()
-        if parts:
-            last_name = parts[-1]
-            for key in self.last_name_map.keys():
-                if last_name in key or key in last_name:
-                    suggestions.extend(self.last_name_map[key])
-        
-        # Limitar a 5 sugestões
-        return list(set(suggestions))[:5]
+    name_str = str(name).strip()
+    name_lower = name_str.lower()
+    
+    # Exact match
+    if name_str in historical_names:
+        return name_str
+    
+    # Case insensitive
+    for player in historical_names:
+        if player.lower() == name_lower:
+            return player
+    
+    # Last name match
+    parts = name_lower.split()
+    if parts:
+        last_name = parts[-1]
+        for player in historical_names:
+            player_lower = player.lower()
+            if player_lower.endswith(last_name):
+                return player
+    
+    # Partial match
+    for player in historical_names:
+        if name_lower in player.lower():
+            return player
+    
+    return None
 
 # ==============================================================================
 # PREDICT
 # ==============================================================================
-def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher, tournament=""):
-    p1_match = name_matcher.find_match(p1)
-    p2_match = name_matcher.find_match(p2)
+def predict_match(model, p1, p2, surface, player_stats, h2h, elo, historical_names, tournament=""):
+    p1_match = find_player(p1, historical_names)
+    p2_match = find_player(p2, historical_names)
     
     if not p1_match:
-        suggestions = name_matcher.get_suggestions(p1)
-        suggestion_text = f" (sugestoes: {', '.join(suggestions[:3])})" if suggestions else ""
-        return None, f"'{p1}' nao encontrado{suggestion_text}"
-    
+        return None, f"'{p1}' nao encontrado"
     if not p2_match:
-        suggestions = name_matcher.get_suggestions(p2)
-        suggestion_text = f" (sugestoes: {', '.join(suggestions[:3])})" if suggestions else ""
-        return None, f"'{p2}' nao encontrado{suggestion_text}"
+        return None, f"'{p2}' nao encontrado"
     
     features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
     if not features:
-        return None, f"Estatisticas insuficientes para {p1_match} ou {p2_match}"
+        return None, f"Estatisticas insuficientes"
     
     raw_prob = model.predict_proba(np.array([features]))[0][1]
     calibrated_prob = 0.5 + (raw_prob - 0.5) * WINNER_SMOOTH
@@ -413,8 +302,6 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher, 
     s1 = player_stats.get(p1_match, {})
     s2 = player_stats.get(p2_match, {})
     
-    form_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
-    momentum_edge = form_diff * 100
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     exp_games = np.clip(exp_games, 18, 30)
     
@@ -443,9 +330,6 @@ def parse_match_text(text, default_surface="Clay"):
         if not line:
             continue
         
-        # Limpar caracteres especiais
-        line = re.sub(r'[^\w\s]', '', line)
-        
         # Procurar padrao "Jogador1 vs Jogador2"
         vs_match = re.search(r'(.+?)\s+vs\s+(.+)', line, re.IGNORECASE)
         if vs_match:
@@ -457,8 +341,8 @@ def parse_match_text(text, default_surface="Clay"):
                 'surface': default_surface
             })
         else:
-            # Tentar separar por espacos ou tabs
-            parts = re.split(r'\s{2,}|\t+', line)
+            # Tentar separar por espacos
+            parts = line.split()
             if len(parts) >= 2:
                 matches.append({
                     'player1': parts[0].strip(),
@@ -503,8 +387,8 @@ def scrape_matches():
 # MAIN
 # ==============================================================================
 def main():
-    st.title("ATP Predictor v6.3 - Smart Name Matching")
-    st.caption("Reconhece sobrenomes | Previsoes em lote")
+    st.title("ATP Predictor v7.0 - Simple & Robust")
+    st.caption("Sistema simples de matching | Previsoes em lote")
     
     # Inicializar session_state
     if 'models_ready' not in st.session_state:
@@ -530,17 +414,22 @@ def main():
                 
                 st.success(f"Carregados {len(df)} jogos e {len(all_players)} jogadores")
                 
+                # Mostrar primeiros jogadores
+                with st.expander(f"Jogadores no historico (amostra)"):
+                    for i, p in enumerate(sorted(all_players)[:30]):
+                        st.write(f"{i+1}. {p}")
+                    if len(all_players) > 30:
+                        st.write(f"... e mais {len(all_players) - 30} jogadores")
+                
                 player_stats = calculate_player_stats(df, all_players)
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df, all_players)
                 model = train_model(df, player_stats, h2h, elo)
-                name_matcher = SmartNameMatcher(all_players)
                 
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
                 st.session_state.h2h = h2h
                 st.session_state.elo = elo
-                st.session_state.name_matcher = name_matcher
                 st.session_state.all_players = all_players
                 st.session_state.models_ready = True
                 
@@ -572,7 +461,7 @@ def main():
                     result, error = predict_match(
                         st.session_state.model, match['player1'], match['player2'], match['surface'],
                         st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                        st.session_state.name_matcher, match['tournament']
+                        st.session_state.all_players, match['tournament']
                     )
                     if result:
                         results.append(result)
@@ -602,9 +491,9 @@ def main():
             
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.selectbox("Jogador 1", [""] + players_sorted[:200])
+                manual_p1 = st.selectbox("Jogador 1", [""] + players_sorted)
             with col_b:
-                manual_p2 = st.selectbox("Jogador 2", [""] + players_sorted[:200])
+                manual_p2 = st.selectbox("Jogador 2", [""] + players_sorted)
             with col_c:
                 manual_surface = st.selectbox("Superficie", ["Clay", "Hard", "Grass"])
             
@@ -615,7 +504,7 @@ def main():
                     result, error = predict_match(
                         st.session_state.model, manual_p1, manual_p2, manual_surface,
                         st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                        st.session_state.name_matcher, "Manual"
+                        st.session_state.all_players, "Manual"
                     )
                     if result:
                         st.dataframe(pd.DataFrame([result]), use_container_width=True)
@@ -626,7 +515,7 @@ def main():
         with tab3:
             st.subheader("Inserir Lista de Jogos")
             
-            st.info("Formatos aceitos: 'Lehecka vs Michelsen' ou 'Jiri Lehecka vs Alex Michelsen'")
+            st.info("Formatos aceitos: 'Lehecka vs Michelsen' (apenas sobrenome) ou 'Jiri Lehecka vs Alex Michelsen'")
             
             default_surface = st.selectbox("Superficie padrao", ["Clay", "Hard", "Grass"], key="batch_surface")
             
@@ -651,7 +540,7 @@ def main():
                             result, error = predict_match(
                                 st.session_state.model, match['player1'], match['player2'], match['surface'],
                                 st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                                st.session_state.name_matcher, "Batch"
+                                st.session_state.all_players, "Batch"
                             )
                             if result:
                                 results.append(result)
