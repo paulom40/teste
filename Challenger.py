@@ -439,20 +439,49 @@ def main():
     uploaded_file = st.file_uploader("Upload do ficheiro historico", type=['xlsx', 'csv'])
     
     if uploaded_file and 'model' not in st.session_state:
-        with st.spinner("Processando..."):
-            try:
-                if uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                else:
-                    df = pd.read_excel(uploaded_file)
-                
-                df, all_players = process_historical_data(df)
-                
-                if df is None or len(df) == 0:
-                    st.error("Nao foi possivel processar o arquivo")
-                    return
-                
-                st.success(f"Carregados {len(df)} jogos e {len(all_players)} jogadores")
+    with st.spinner("Processando..."):
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+
+            df, all_players = process_historical_data(df)
+
+            if df is None or len(df) == 0:
+                st.error("Nao foi possivel processar o arquivo")
+                return
+
+            player_stats = calculate_player_stats(df, all_players)
+            h2h = calculate_h2h(df)
+
+            # ELO GLOBAL + POR SUPERFÍCIE
+            elo_global = calculate_elo(df, all_players)
+            elo_clay = calculate_elo_by_surface(df, all_players, "Clay")
+            elo_hard = calculate_elo_by_surface(df, all_players, "Hard")
+            elo_grass = calculate_elo_by_surface(df, all_players, "Grass")
+
+            # TREINO DO MODELO
+            model = train_model(df, player_stats, h2h, elo_global)
+
+            # SALVAR NO SESSION_STATE
+            st.session_state.model = model
+            st.session_state.player_stats = player_stats
+            st.session_state.h2h = h2h
+            st.session_state.elo = elo_global
+            st.session_state.elo_clay = elo_clay
+            st.session_state.elo_hard = elo_hard
+            st.session_state.elo_grass = elo_grass
+            st.session_state.all_players = all_players
+            st.session_state.models_ready = True
+
+            st.success("Modelo treinado com sucesso!")
+
+        except Exception as e:
+            st.error(f"Erro: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
                 
                 with st.expander("Jogadores no historico (amostra)"):
                     for i, p in enumerate(sorted(all_players)[:30]):
