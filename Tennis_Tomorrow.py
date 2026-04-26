@@ -10,18 +10,7 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
-# Selenium imports
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-import time
-
-st.set_page_config(page_title="🎾 Tennis Hedge Fund v5 Flashscore", layout="wide")
+st.set_page_config(page_title="🎾 Tennis Hedge Fund FINAL", layout="wide")
 
 BET_LOG = "bet_log.csv"
 
@@ -65,7 +54,7 @@ def load(file):
 
     return df.dropna(subset=["winner","loser","date"])
 
-# ================= STATS (OPTIMIZED) =================
+# ================= STATS =================
 @st.cache_data
 def compute_stats(df):
     """Optimized stats computation"""
@@ -348,126 +337,8 @@ def predict_ou(model_ou, scaler_ou, stats, p1, p2, s, o_under, o_over):
         "Stake": kelly(calibrated_prob, odd)
     }
 
-# ================= FLASHSCORE SCRAPER (ROBUST) =================
-def scrape_flashscore_matches(days_ahead=0):
-    """
-    Robust Flashscore scraper with error handling
-    """
-    driver = None
-    try:
-        target_date = (datetime.now() + timedelta(days=days_ahead)).strftime('%d.%m.%Y')
-        
-        # Chrome options
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--start-maximized')
-        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
-        
-        # Initialize driver with webdriver-manager
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # Navigate to Flashscore
-        url = f"https://www.flashscore.com/tennis/{target_date}/"
-        driver.get(url)
-        
-        # Wait and scroll to load content
-        time.sleep(3)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
-        
-        matches = []
-        
-        # Try multiple selectors
-        selectors = [
-            (By.CLASS_NAME, "event__match"),
-            (By.CLASS_NAME, "eventRow"),
-            (By.XPATH, "//div[@class='event__match']"),
-            (By.XPATH, "//tr[@class='event__row']"),
-        ]
-        
-        match_elements = []
-        for by, selector in selectors:
-            try:
-                match_elements = driver.find_elements(by, selector)
-                if match_elements:
-                    break
-            except:
-                continue
-        
-        if not match_elements:
-            return []
-        
-        for elem in match_elements[:30]:  # Limit to 30 matches
-            try:
-                # Get match info
-                match_text = elem.text.strip()
-                
-                if not match_text or len(match_text) < 5:
-                    continue
-                
-                # Parse match (format: "Player1\nPlayer2\nScore or Time")
-                lines = match_text.split('\n')
-                
-                if len(lines) < 2:
-                    continue
-                
-                p1 = lines[0].strip()
-                p2 = lines[1].strip()
-                
-                # Validate player names
-                if not p1 or not p2 or len(p1) < 2 or len(p2) < 2:
-                    continue
-                
-                # Filter out invalid entries
-                if any(x in p1.lower() for x in ['live', 'score', 'result', 'starts', 'cancelled']):
-                    continue
-                if any(x in p2.lower() for x in ['live', 'score', 'result', 'starts', 'cancelled']):
-                    continue
-                
-                # Get tournament info for surface
-                surface = "Hard"  # Default
-                try:
-                    tournament_elem = elem.find_element(By.CLASS_NAME, "event__title")
-                    tournament_text = tournament_elem.text.lower()
-                    
-                    if "clay" in tournament_text or "roland" in tournament_text or "rg" in tournament_text:
-                        surface = "Clay"
-                    elif "grass" in tournament_text or "wimbledon" in tournament_text or "atp grass" in tournament_text:
-                        surface = "Grass"
-                except:
-                    pass
-                
-                matches.append({
-                    "p1": p1,
-                    "p2": p2,
-                    "surface": surface
-                })
-                
-            except Exception as e:
-                continue
-        
-        return matches[:20]  # Return first 20
-        
-    except TimeoutException:
-        return []
-    except WebDriverException as e:
-        return []
-    except Exception as e:
-        return []
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-
 # ================= APP =================
-st.title("⚡ Tennis Hedge Fund v5 - Flashscore")
+st.title("⚡ Tennis Hedge Fund - Production Ready")
 
 file = st.file_uploader("Upload dataset", type=["xlsx"])
 
@@ -480,76 +351,73 @@ if file:
         model_ou, scaler_ou = train_ou(df, stats)
 
     if model_winner and model_ou:
-        st.success("✅ Models trained!")
+        st.success("✅ Models trained! Ready for predictions.")
     else:
-        st.warning("⚠️ Not enough data")
+        st.warning("⚠️ Not enough data to train models")
         st.stop()
 
+    # Sidebar
     with st.sidebar:
-        st.subheader("📅 Load Matches")
+        st.subheader("📝 Enter Matches")
         
-        col1, col2, col3 = st.columns(3)
+        st.write("""
+        **Copy-paste match data** from any source:
+        - Flashscore
+        - Tennis Explorer
+        - ATP.com
+        - Your bookmaker
         
-        with col1:
-            if st.button("📅 TODAY", use_container_width=True, key="today_btn"):
-                with st.spinner("Scraping Flashscore... (15-20 sec)"):
-                    matches = scrape_flashscore_matches(days_ahead=0)
-                    if matches:
-                        st.session_state.matches = matches
-                        st.session_state.current_date = "TODAY"
-                        st.success(f"✅ Loaded {len(matches)} matches")
-                    else:
-                        st.warning("⚠️ No matches found")
-
-        with col2:
-            if st.button("📆 TOMORROW", use_container_width=True, key="tomorrow_btn"):
-                with st.spinner("Scraping Flashscore... (15-20 sec)"):
-                    matches = scrape_flashscore_matches(days_ahead=1)
-                    if matches:
-                        st.session_state.matches = matches
-                        st.session_state.current_date = "TOMORROW"
-                        st.success(f"✅ Loaded {len(matches)} matches")
-                    else:
-                        st.warning("⚠️ No matches found")
-
-        with col3:
-            if st.button("📅 +2 DAYS", use_container_width=True, key="twodays_btn"):
-                with st.spinner("Scraping Flashscore... (15-20 sec)"):
-                    matches = scrape_flashscore_matches(days_ahead=2)
-                    if matches:
-                        st.session_state.matches = matches
-                        st.session_state.current_date = "IN 2 DAYS"
-                        st.success(f"✅ Loaded {len(matches)} matches")
-                    else:
-                        st.warning("⚠️ No matches found")
+        Or type manually below.
+        """)
+        
+        num_matches = st.number_input("How many matches?", 1, 30, 3)
 
     bankroll = st.number_input("💰 Bankroll (€)", value=1000, min_value=100)
     min_edge = st.slider("Min Edge (%)", 2, 10, 5) / 100
     min_prob = st.slider("Min Probability (%)", 55, 80, 67) / 100
 
     all_picks = []
+    matches_list = []
 
-    if "matches" in st.session_state and st.session_state.matches:
-        date_label = st.session_state.get("current_date", "Matches")
-        st.subheader(f"📊 Predictions - {date_label} ({len(st.session_state.matches)} matches)")
+    st.subheader("📝 Enter Matches Manually")
+    
+    for idx in range(int(num_matches)):
+        col1, col2, col3 = st.columns([2, 2, 1])
+        
+        with col1:
+            p1 = st.text_input(f"Player 1 - Match {idx+1}", key=f"p1_text_{idx}", placeholder="e.g. Djokovic")
+        
+        with col2:
+            p2 = st.text_input(f"Player 2 - Match {idx+1}", key=f"p2_text_{idx}", placeholder="e.g. Sinner")
+        
+        with col3:
+            surface = st.selectbox("Surface", ["Hard", "Clay", "Grass"], key=f"surf_{idx}")
+        
+        if p1 and p2:
+            matches_list.append({"p1": p1, "p2": p2, "surface": surface})
+
+    # Process matches
+    if len(matches_list) > 0:
+        st.subheader("🎲 Enter Odds & Get Predictions")
         
         cols = st.columns(2)
         col_idx = 0
 
-        for idx, m in enumerate(st.session_state.matches):
+        for idx, m in enumerate(matches_list):
             with cols[col_idx % 2]:
                 st.subheader(f"{m['p1']} vs {m['p2']}", divider="gray")
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    o1 = float(st.number_input("P1", 1.01, 10.0, 1.8, step=0.01, key=f"p1_{idx}"))
+                    o1 = float(st.number_input("P1 Odd", 1.01, 10.0, 1.8, step=0.01, key=f"p1_odd_{idx}"))
                 with col2:
-                    o2 = float(st.number_input("P2", 1.01, 10.0, 2.0, step=0.01, key=f"p2_{idx}"))
+                    o2 = float(st.number_input("P2 Odd", 1.01, 10.0, 2.0, step=0.01, key=f"p2_odd_{idx}"))
                 with col3:
                     o_under = float(st.number_input("U21.5", 1.01, 5.0, 2.0, step=0.01, key=f"ou_{idx}"))
                 with col4:
                     o_over = float(st.number_input("O21.5", 1.01, 5.0, 1.7, step=0.01, key=f"oo_{idx}"))
 
+                # Predictions
                 pred_w = predict_winner(model_winner, scaler_w, stats, m["p1"], m["p2"], m["surface"], o1, o2)
                 pred_ou = predict_ou(model_ou, scaler_ou, stats, m["p1"], m["p2"], m["surface"], o_under, o_over)
 
@@ -578,22 +446,23 @@ if file:
                 col_idx += 1
 
     if all_picks:
-        st.subheader("📥 Export")
+        st.subheader("📥 Export Picks")
         df_exp = pd.DataFrame(all_picks)
         buffer = io.BytesIO()
         df_exp.to_excel(buffer, index=False)
         buffer.seek(0)
-        st.download_button("📥 Download Picks", buffer, "picks_v5.xlsx")
+        st.download_button("📥 Download Picks", buffer, "picks_final.xlsx")
 
 # ================= DASHBOARD =================
 st.header("📊 Dashboard")
+
 log = pd.read_csv(BET_LOG)
 
 if len(log) > 0:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Profit", f"€{log['profit'].sum():.2f}")
-    col2.metric("ROI", f"{(log['profit'].sum() / log['stake'].sum() * 100):.1f}%")
-    col3.metric("Winrate", f"{(len(log[log['result']==1]) / len(log) * 100):.1f}%")
+    col2.metric("ROI", f"{(log['profit'].sum() / log['stake'].sum() * 100):.1f}%" if log['stake'].sum() > 0 else "0%")
+    col3.metric("Winrate", f"{(len(log[log['result']==1]) / len(log) * 100):.1f}%" if len(log) > 0 else "0%")
     col4.metric("Bets", len(log))
 
     st.dataframe(log, use_container_width=True)
@@ -604,8 +473,8 @@ if len(log) > 0:
     st.download_button("📥 Download Log", buffer2, "bet_log.xlsx")
 
     st.subheader("Update Result")
-    idx = st.number_input("Index", 0, len(log)-1, 0)
-    res = st.selectbox("Result", [1, 0])
+    idx = st.number_input("Bet Index", 0, len(log)-1, 0)
+    res = st.selectbox("Result", [1, 0], key="result_select")
     if st.button("Update"):
         profit = log.loc[idx, "stake"] * (log.loc[idx, "odd"] - 1) if res == 1 else -log.loc[idx, "stake"]
         log.loc[idx, "result"] = res
