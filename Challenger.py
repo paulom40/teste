@@ -10,7 +10,7 @@ from lightgbm import LGBMClassifier
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="ATP Predictor v8.0 - Manual Input", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="ATP Predictor v8.0 - Previsao por Lista", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIG
@@ -76,7 +76,7 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# PROCESS DATA - CORRIGIDO
+# PROCESS DATA - SIMPLIFICADO
 # ==============================================================================
 def process_historical_data(df):
     """Process historical data and extract player names from the file"""
@@ -84,7 +84,7 @@ def process_historical_data(df):
     st.write("### Colunas encontradas no arquivo:")
     st.write(list(df.columns))
     
-    # Mapeamento das colunas baseado no seu arquivo
+    # Mapeamento das colunas
     column_mapping = {}
     
     for col in df.columns:
@@ -109,23 +109,26 @@ def process_historical_data(df):
     st.write("### Colunas apos mapeamento:")
     st.write(list(df.columns))
     
-    # Converter data - CORRIGIDO
+    # Converter data - VERSÃO SIMPLIFICADA
     if 'date' in df.columns:
-        # Converter para string de forma segura
-        df['date'] = df['date'].astype(str)
-        df['date'] = df['date'].str.strip()
+        # Converter para string sem usar .str
+        df['date'] = df['date'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
+        
         # Tentar converter para datetime
         try:
+            # Tentar formato YYYYMMDD
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
         except:
             try:
+                # Tentar formato automático
                 df['date'] = pd.to_datetime(df['date'], errors='coerce')
             except:
+                # Se falhar, usar data atual
                 df['date'] = pd.Timestamp.now()
     else:
         df['date'] = pd.Timestamp.now()
     
-    # Preencher datas nulas com data atual
+    # Preencher datas nulas
     df['date'] = df['date'].fillna(pd.Timestamp.now())
     
     # Total games
@@ -149,19 +152,18 @@ def process_historical_data(df):
     else:
         df['surface'] = 'Hard'
     
-    # Limpar nomes
-    df['winner'] = df['winner'].astype(str).str.strip()
-    df['loser'] = df['loser'].astype(str).str.strip()
+    # Limpar nomes - usar apply para evitar problemas
+    df['winner'] = df['winner'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
+    df['loser'] = df['loser'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
     
     # Remover linhas invalidas
-    df = df[df['winner'].notna() & df['loser'].notna()]
-    df = df[df['winner'] != 'nan']
-    df = df[df['loser'] != 'nan']
     df = df[df['winner'] != '']
     df = df[df['loser'] != '']
+    df = df[df['winner'] != 'nan']
+    df = df[df['loser'] != 'nan']
+    df = df[df['winner'] != df['loser']]
     df = df[df['winner'].str.len() > 1]
     df = df[df['loser'].str.len() > 1]
-    df = df[df['winner'] != df['loser']]
     
     # Extrair jogadores unicos
     all_players = sorted(list(set(df['winner'].unique()) | set(df['loser'].unique())))
@@ -323,7 +325,7 @@ class SmartNameMatcher:
             if mapped in self.historical_set:
                 return mapped
         
-        # Busca por sobrenome (final do nome)
+        # Busca por sobrenome
         for name in self.historical_names:
             name_lower = name.lower()
             if name_lower.endswith(' ' + search_lower) or name_lower.endswith(search_lower):
