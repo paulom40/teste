@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 import re
 from lightgbm import LGBMClassifier
+from difflib import get_close_matches
 
 warnings.filterwarnings('ignore')
 
@@ -256,21 +257,28 @@ def train_model(df, player_stats, h2h, elo):
     return model
 
 # ==============================================================================
-# NAME MATCHER
+# SMART NAME MATCHER - NORMALIZA NOMES
 # ==============================================================================
-class SimpleNameMatcher:
+class SmartNameMatcher:
     def __init__(self, historical_names):
-        self.historical_names = set(historical_names)
+        self.historical_names = list(historical_names)
         self.name_map = {}
+        self.last_name_map = defaultdict(list)
+        self.first_name_map = defaultdict(list)
         
-        for name in historical_names:
+        for name in self.historical_names:
             name_lower = name.lower()
             self.name_map[name_lower] = name
+            
             parts = name.split()
             if parts:
+                # Mapear por sobrenome (última parte)
                 last_name = parts[-1].lower()
-                if last_name not in self.name_map:
-                    self.name_map[last_name] = name
+                self.last_name_map[last_name].append(name)
+                
+                # Mapear por nome (primeira parte)
+                first_name = parts[0].lower()
+                self.first_name_map[first_name].append(name)
     
     def find_match(self, search_name):
         if not search_name:
@@ -279,36 +287,55 @@ class SimpleNameMatcher:
         search_str = str(search_name).strip()
         search_lower = search_str.lower()
         
-        # Direct match
+        # 1. Match exato
         if search_str in self.historical_names:
             return search_str
         
-        # Case insensitive
+        # 2. Match case insensitive
         for name in self.historical_names:
             if name.lower() == search_lower:
                 return name
         
-        # Last name match
-        if search_lower in self.name_map:
-            return self.name_map[search_lower]
+        # 3. Match por sobrenome (quando a busca é apenas o sobrenome)
+        if search_lower in self.last_name_map:
+            matches = self.last_name_map[search_lower]
+            if len(matches) == 1:
+                return matches[0]
+            # Se múltiplos, retorna o mais comum (mais jogos)
+            return matches[0]  # retorna o primeiro
         
-        # Partial match (only if very similar)
+        # 4. Match por nome (quando a busca é apenas o primeiro nome)
+        if search_lower in self.first_name_map:
+            matches = self.first_name_map[search_lower]
+            if len(matches) == 1:
+                return matches[0]
+        
+        # 5. Match parcial (contém)
         for name in self.historical_names:
-            if search_lower in name.lower() or name.lower() in search_lower:
-                # Check if it's a good match (not too short)
-                if len(search_lower) >= 3 and len(name) >= 3:
+            if search_lower in name.lower():
+                return name
+            if name.lower() in search_lower and len(search_lower) >= 3:
+                return name
+        
+        # 6. Fuzzy match usando difflib
+        close_matches = get_close_matches(search_lower, [n.lower() for n in self.historical_names], n=1, cutoff=0.6)
+        if close_matches:
+            for name in self.historical_names:
+                if name.lower() == close_matches[0]:
                     return name
         
         return None
+    
+    def get_all_names(self):
+        return self.historical_names
 
 # ==============================================================================
-# PREDICT MATCH - IGNORA QUANDO NAO ENCONTRA
+# PREDICT MATCH
 # ==============================================================================
 def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     p1_match = name_matcher.find_match(p1)
     p2_match = name_matcher.find_match(p2)
     
-    # Se qualquer jogador nao for encontrado, retorna None (ignora)
     if not p1_match or not p2_match:
         return None, None
     
@@ -333,21 +360,17 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     momentum_edge = (s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)) * 100
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
-    has_data = s1.get('matches', 0) > 0 and s2.get('matches', 0) > 0
-    data_quality = "OK" if has_data else "POUCOS DADOS"
-    
     return {
-        'Jogador1': p1,
-        'Jogador2': p2,
+        'Busca_P1': p1,
+        'Busca_P2': p2,
         'Match_Historico': f"{p1_match} vs {p2_match}",
         'Superficie': surface,
         'Prob_P1': f"{prob_p1:.1%}",
         'Prob_P2': f"{1-prob_p1:.1%}",
-        'Vencedor_Previsto': winner,
+        'Vencedor': winner,
         'Confianca': f"{confidence:.1%}",
         'Recomendacao': rec,
-        'Games_Esperados': round(exp_games, 1),
-        'Dados': f"{data_quality} ({s1.get('matches',0)}/{s2.get('matches',0)})"
+        'Games_Esperados': round(exp_games, 1)
     }, None
 
 # ==============================================================================
@@ -363,27 +386,23 @@ def parse_colab_text(text):
         if not line:
             continue
         
-        # Remove prefixos
-        line = re.sub(r'^(ATP|CHALLENGER|WTA)\s+', '', line, flags=re.IGNORECASE)
+        # Remove prefixos ATP/CHALLENGER/WTA
+        line = re.sub(r'^(ATP|CHALLENGER|WTA|ITF)\s+', '', line, flags=re.IGNORECASE)
         
-        # Procura por vs ou x
+        # Procura por vs, VS, x, ou espaços como separador
         vs_match = re.search(r'(.+?)\s+(?:vs|VS|x)\s+(.+)', line)
         
         if vs_match:
             p1 = vs_match.group(1).strip()
             p2 = vs_match.group(2).strip()
             
-            # Limpar nomes
-            p1 = re.sub(r'\s+', ' ', p1)
-            p2 = re.sub(r'\s+', ' ', p2)
+            # Limpar nomes - remover caracteres especiais
             p1 = re.sub(r'[^\w\s\.\-]', '', p1)
             p2 = re.sub(r'[^\w\s\.\-]', '', p2)
+            p1 = re.sub(r'\s+', ' ', p1)
+            p2 = re.sub(r'\s+', ' ', p2)
             
-            # Extrair favorito se tiver
-            arrow_match = re.search(r'->\s*([A-Za-z\s]+?)(?:\s*(\d+)%?)?', line)
-            favorite = arrow_match.group(1).strip() if arrow_match else None
-            
-            # Superficie
+            # Detectar superficie
             surface = 'Clay'
             if 'hard' in line.lower():
                 surface = 'Hard'
@@ -394,8 +413,7 @@ def parse_colab_text(text):
                 matches.append({
                     'player1': p1,
                     'player2': p2,
-                    'surface': surface,
-                    'favorite': favorite
+                    'surface': surface
                 })
     
     return matches
@@ -405,7 +423,7 @@ def parse_colab_text(text):
 # ==============================================================================
 def main():
     st.title("ATP Predictor v8.0 - Previsao por Lista")
-    st.caption("Cole sua lista de jogos - Jogadores nao encontrados serao ignorados")
+    st.caption("Normalizacao automatica de nomes | Aceita sobrenomes ou nomes completos")
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -425,15 +443,18 @@ def main():
                 
                 st.success(f"{len(df)} jogos | {len(all_players)} jogadores")
                 
-                with st.expander("Amostra dos jogadores (primeiros 50)"):
-                    for i, p in enumerate(sorted(all_players)[:50]):
+                # Mostrar amostra de jogadores
+                with st.expander("Jogadores no historico (para referencia)"):
+                    for i, p in enumerate(sorted(all_players)[:100]):
                         st.write(f"{i+1}. {p}")
+                    if len(all_players) > 100:
+                        st.write(f"... e mais {len(all_players) - 100} jogadores")
                 
                 player_stats = calculate_player_stats(df, all_players)
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df, all_players)
                 model = train_model(df, player_stats, h2h, elo)
-                name_matcher = SimpleNameMatcher(all_players)
+                name_matcher = SmartNameMatcher(all_players)
                 
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
@@ -443,7 +464,7 @@ def main():
                 st.session_state.all_players = all_players
                 st.session_state.models_ready = True
                 
-                st.success("Modelo treinado!")
+                st.success("Modelo treinado! Agora cole sua lista de jogos.")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
@@ -452,10 +473,12 @@ def main():
         st.subheader("COLE SUA LISTA DE JOGOS")
         
         st.markdown("""
-        **Formato aceito:**
-        - Lehecka vs Michelsen
-        - Griekspoor vs Musetti
-        - Prizmic vs Etcheverry
+        **Formatos aceitos:**
+        - `Lehecka vs Michelsen` (apenas sobrenomes funciona!)
+        - `Griekspoor vs Musetti`
+        - `Jiri Lehecka vs Alex Michelsen` (nome completo)
+        
+        O sistema normaliza automaticamente os nomes.
         """)
         
         matches_text = st.text_area(
@@ -475,7 +498,7 @@ def main():
             parsed_matches = parse_colab_text(matches_text)
             
             if parsed_matches:
-                st.info(f"{len(parsed_matches)} jogos detectados. Processando...")
+                st.info(f"{len(parsed_matches)} jogos detectados. Normalizando nomes...")
                 
                 for match in parsed_matches:
                     if surface_override != 'Clay':
@@ -483,7 +506,7 @@ def main():
                 
                 if st.button("FAZER PREVISOES", type="primary", use_container_width=True):
                     results = []
-                    not_found_count = 0
+                    not_found = []
                     
                     progress_bar = st.progress(0)
                     for i, match in enumerate(parsed_matches):
@@ -496,21 +519,26 @@ def main():
                         if result:
                             results.append(result)
                         else:
-                            not_found_count += 1
+                            not_found.append((match['player1'], match['player2']))
                         progress_bar.progress((i + 1) / len(parsed_matches))
                     progress_bar.empty()
                     
-                    if not_found_count > 0:
-                        st.warning(f"{not_found_count} jogadores nao encontrados no historico (ignorados)")
+                    if not_found:
+                        st.warning(f"{len(not_found)} jogos nao processados (jogadores nao encontrados)")
+                        with st.expander("Ver jogadores nao encontrados"):
+                            for p1, p2 in not_found[:20]:
+                                st.write(f"- {p1} vs {p2}")
+                            if len(not_found) > 20:
+                                st.write(f"... e mais {len(not_found) - 20}")
                     
                     if results:
                         st.subheader(f"RESULTADOS DAS PREVISOES ({len(results)} jogos)")
                         
                         df_results = pd.DataFrame(results)
                         
-                        cols = ['Jogador1', 'Jogador2', 'Match_Historico', 'Superficie',
-                               'Prob_P1', 'Prob_P2', 'Vencedor_Previsto', 'Confianca', 
-                               'Recomendacao', 'Games_Esperados', 'Dados']
+                        cols = ['Busca_P1', 'Busca_P2', 'Match_Historico', 'Superficie',
+                               'Prob_P1', 'Prob_P2', 'Vencedor', 'Confianca', 
+                               'Recomendacao', 'Games_Esperados']
                         
                         df_results = df_results[[c for c in cols if c in df_results.columns]]
                         
@@ -556,20 +584,12 @@ def main():
                             use_container_width=True
                         )
                     else:
-                        st.error("Nenhum jogo valido encontrado. Verifique se os nomes dos jogadores estao no historico.")
+                        st.error("Nenhum jogo valido encontrado. Verifique se os nomes estao corretos.")
             else:
                 st.warning("Nenhum jogo detectado. Use o formato: Jogador1 vs Jogador2")
     
     elif not uploaded_file:
         st.info("Faca upload do seu ficheiro Excel/CSV com dados historicos")
-        st.markdown("""
-        **Como usar:**
-        1. Faca upload do seu historico
-        2. Cole a lista de jogos no formato: Jogador1 vs Jogador2
-        3. Clique em FAZER PREVISOES
-        
-        **Observacao:** Jogadores nao encontrados serao ignorados automaticamente.
-        """)
 
 if __name__ == "__main__":
     main()
