@@ -10,11 +10,11 @@ import requests
 from lightgbm import LGBMClassifier
 import re
 import json
-import time
+from bs4 import BeautifulSoup
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v9.0 - Tennis24 API", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v10.0 - ATP + Challenger", page_icon="🎾", layout="wide")
 
 # ==============================================================================
 # CONFIGURAÇÕES
@@ -97,283 +97,223 @@ class GlickoSystem:
         player.sigma = sigma_new
 
 # ==============================================================================
-# 2. SCRAPING DO TENNIS24 VIA API INTERNA
+# 2. SCRAPING COMPLETO - ATP + CHALLENGER
 # ==============================================================================
-def scrape_tennis24_via_api():
-    """
-    Usa as APIs internas do Tennis24 para obter partidas
-    """
+def scrape_all_matches():
+    """Scraping de todos os torneios (ATP + Challenger)"""
+    all_matches = []
+    
+    # Lista de torneios Challenger em andamento
+    challengers = get_challenger_tournaments()
+    
+    for challenger in challengers:
+        matches = scrape_challenger_matches(challenger)
+        all_matches.extend(matches)
+    
+    # Adicionar torneios ATP
+    atp_matches = scrape_atp_matches()
+    all_matches.extend(atp_matches)
+    
+    return all_matches
+
+def get_challenger_tournaments():
+    """Retorna lista de torneios Challenger ativos"""
+    # Lista de Challengers ATP por região/superfície
+    challengers = [
+        {"name": "Challenger Tyler", "location": "Tyler, USA", "surface": "Hard"},
+        {"name": "Challenger Savannah", "location": "Savannah, USA", "surface": "Clay"},
+        {"name": "Challenger Oeiras", "location": "Oeiras, Portugal", "surface": "Clay"},
+        {"name": "Challenger Bordeaux", "location": "Bordeaux, France", "surface": "Clay"},
+        {"name": "Challenger Tunis", "location": "Tunis, Tunisia", "surface": "Clay"},
+        {"name": "Challenger Taipei", "location": "Taipei, Taiwan", "surface": "Hard"},
+        {"name": "Challenger Busan", "location": "Busan, South Korea", "surface": "Hard"},
+        {"name": "Challenger Prague", "location": "Prague, Czech Republic", "surface": "Clay"},
+        {"name": "Challenger Heilbronn", "location": "Heilbronn, Germany", "surface": "Clay"},
+        {"name": "Challenger Francavilla", "location": "Francavilla, Italy", "surface": "Clay"},
+        {"name": "Challenger Mestre", "location": "Mestre, Italy", "surface": "Clay"},
+        {"name": "Challenger Skopje", "location": "Skopje, North Macedonia", "surface": "Clay"},
+        {"name": "Challenger Little Rock", "location": "Little Rock, USA", "surface": "Hard"},
+        {"name": "Challenger Tallahassee", "location": "Tallahassee, USA", "surface": "Clay"},
+        {"name": "Challenger Sarasota", "location": "Sarasota, USA", "surface": "Clay"},
+        {"name": "Challenger Mexico City", "location": "Mexico City, Mexico", "surface": "Clay"},
+        {"name": "Challenger Guangzhou", "location": "Guangzhou, China", "surface": "Hard"},
+        {"name": "Challenger Shenzhen", "location": "Shenzhen, China", "surface": "Hard"},
+        {"name": "Challenger Wuxi", "location": "Wuxi, China", "surface": "Hard"},
+        {"name": "Challenger Gwangju", "location": "Gwangju, South Korea", "surface": "Hard"},
+    ]
+    return challengers
+
+def scrape_challenger_matches(challenger):
+    """Scraping de matches de um Challenger específico"""
     matches = []
     
+    # Usar API do Tennis24 para Challengers
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.tennis24.com/',
-        'Origin': 'https://www.tennis24.com',
-        'X-Requested-With': 'XMLHttpRequest'
+        'Accept': 'application/json'
     }
     
-    try:
-        # Tentar API principal do Tennis24
-        api_urls = [
-            'https://www.tennis24.com/results/',
-            'https://www.tennis24.com/matches/',
-            'https://d.tennis24.com/x/feed/d_today_1_1_en_1',
-            'https://d.tennis24.com/x/feed/d_sport_1_1_en_1'
-        ]
-        
-        for url in api_urls:
-            try:
-                response = requests.get(url, headers=headers, timeout=10)
-                if response.status_code == 200:
-                    # Tentar parsear como JSON
-                    try:
-                        data = response.json()
-                        matches = parse_tennis24_json(data)
-                        if matches:
-                            break
-                    except:
-                        # Parsear HTML se não for JSON
-                        matches = parse_tennis24_html(response.text)
-                        if matches:
-                            break
-            except:
-                continue
-                
-    except Exception as e:
-        st.warning(f"Erro na API: {e}")
-    
-    return matches
-
-def parse_tennis24_json(data):
-    """Parseia a resposta JSON do Tennis24"""
-    matches = []
-    
-    try:
-        # Estrutura comum do Tennis24
-        if 'events' in data:
-            for event in data['events']:
-                match = extract_match_from_event(event)
-                if match:
-                    matches.append(match)
-        elif 'matches' in data:
-            for match_data in data['matches']:
-                match = extract_match_from_event(match_data)
-                if match:
-                    matches.append(match)
-    except:
-        pass
-    
-    return matches
-
-def parse_tennis24_html(html):
-    """Parseia HTML do Tennis24"""
-    matches = []
-    
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Procurar por partidas em diferentes estruturas
-        selectors = [
-            'div.event__match',
-            'div.matches__row',
-            'tr.match-row',
-            'div.tennis-match'
-        ]
-        
-        for selector in selectors:
-            match_elements = soup.select(selector)
-            for elem in match_elements:
-                match = extract_match_from_html_elem(elem)
-                if match and match['player1'] and match['player2']:
-                    matches.append(match)
-            if matches:
-                break
-                
-    except:
-        pass
-    
-    return matches
-
-def extract_match_from_event(event):
-    """Extrai match de um evento JSON"""
-    try:
-        # Tentar diferentes estruturas de dados
-        home = None
-        away = None
-        
-        if 'homeTeam' in event:
-            home = event['homeTeam'].get('name', '')
-        elif 'team1' in event:
-            home = event['team1']
-        elif 'home' in event:
-            home = event['home']
-            
-        if 'awayTeam' in event:
-            away = event['awayTeam'].get('name', '')
-        elif 'team2' in event:
-            away = event['team2']
-        elif 'away' in event:
-            away = event['away']
-        
-        if home and away and home != away:
-            # Detectar torneio
-            tournament = event.get('tournament', {}).get('name', 'ATP Tour')
-            if not tournament:
-                tournament = event.get('league', {}).get('name', 'ATP Tour')
-            
-            # Detectar superfície
-            surface = detect_surface_from_tournament(tournament)
-            
-            return {
-                'tournament': tournament,
-                'player1': home.strip(),
-                'player2': away.strip(),
-                'surface': surface
-            }
-    except:
-        pass
-    
-    return None
-
-def extract_match_from_html_elem(elem):
-    """Extrai match de um elemento HTML"""
-    try:
-        text = elem.get_text()
-        # Procurar padrão "Jogador1 - Jogador2" ou "Jogador1 vs Jogador2"
-        patterns = [
-            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[-–—]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
-            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+vs\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
-            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+v\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                p1, p2 = matches[0]
-                if len(p1) > 2 and len(p2) > 2:
-                    return {
-                        'tournament': 'ATP Tour',
-                        'player1': p1.strip(),
-                        'player2': p2.strip(),
-                        'surface': 'Hard'
-                    }
-    except:
-        pass
-    
-    return None
-
-def detect_surface_from_tournament(tournament_name):
-    """Detecta superfície pelo nome do torneio"""
-    t = tournament_name.lower()
-    
-    clay_tournaments = ['monte carlo', 'madrid', 'rome', 'barcelona', 'roland garros', 
-                        'french open', 'rio', 'buenos aires', 'santiago', 'estorial',
-                        'geneva', 'hamburg', 'bastad', 'gstaad', 'umag', 'kitzbuhel']
-    grass_tournaments = ['wimbledon', 'queens', 'halle', 'newport', 's-Hertogenbosch',
-                         'eastbourne', 'mallorca', 'stuttgart']
-    
-    for clay in clay_tournaments:
-        if clay in t:
-            return 'Clay'
-    for grass in grass_tournaments:
-        if grass in t:
-            return 'Grass'
-    
-    return 'Hard'
-
-# ==============================================================================
-# 3. ALTERNATIVA: LISTA DE TORNEIOS ATP ATUAIS
-# ==============================================================================
-def get_atp_matches_today():
-    """
-    Retorna lista de partidas ATP atuais baseada nos torneios em andamento
-    """
-    # Torneios ATP em andamento (atualizado para 2025)
-    current_tournaments = [
-        {"name": "Mutua Madrid Open", "surface": "Clay", "level": "Masters 1000"},
-        {"name": "Internazionali BNL d'Italia", "surface": "Clay", "level": "Masters 1000"},
-        {"name": "Open Parc Auvergne-Rhone-Alpes Lyon", "surface": "Clay", "level": "ATP 250"},
-        {"name": "Gonet Geneva Open", "surface": "Clay", "level": "ATP 250"},
-        {"name": "Roland Garros", "surface": "Clay", "level": "Grand Slam"},
-        {"name": "Boss Open", "surface": "Grass", "level": "ATP 250"},
-        {"name": "Libema Open", "surface": "Grass", "level": "ATP 250"},
-        {"name": "cinch Championships", "surface": "Grass", "level": "ATP 500"},
-        {"name": "Terra Wortmann Open", "surface": "Grass", "level": "ATP 500"},
-        {"name": "Mallorca Championships", "surface": "Grass", "level": "ATP 250"},
-        {"name": "Wimbledon", "surface": "Grass", "level": "Grand Slam"},
-    ]
-    
-    # Jogadores comuns em challengers (baseado no seu histórico)
-    common_players = [
-        "Mitchell Krueger", "Trevor Svajda", "Yuta Shimizu", "Antoine Escoffier",
-        "Andres Martin", "Rio Noguchi", "Nicolas Mejia", "Paul Jubb", "Stefan Dostanic",
-        "Ilya Ivashka", "Rafael Jodar", "Patrick Kypson", "Alex Rybakov", "Karue Sell",
-        "Yibing Wu", "Yi Zhou", "Emilio Nava", "Francesco Passaro", "Sumit Nagal",
-        "Marko Topo", "Ignacio Buse", "Alejandro Tabilo", "Marco Trungelliti"
-    ]
-    
-    # Gerar partidas de exemplo baseadas nos jogadores do histórico
-    matches = []
-    import random
-    
-    for tournament in current_tournaments[:3]:  # Usar primeiros 3 torneios como exemplo
-        # Embaralhar jogadores
-        shuffled = random.sample(common_players, min(20, len(common_players)))
-        for i in range(0, len(shuffled)-1, 2):
-            if i+1 < len(shuffled):
-                matches.append({
-                    'tournament': tournament['name'],
-                    'player1': shuffled[i],
-                    'player2': shuffled[i+1],
-                    'surface': tournament['surface']
-                })
-    
-    return matches
-
-# ==============================================================================
-# 4. SCRAPING VIA REQUESTS DIRETO (FALLBACK)
-# ==============================================================================
-def scrape_via_simplified_api():
-    """Tenta usar APIs simplificadas"""
-    matches = []
-    
-    # Lista de possíveis endpoints
+    # Tentar diferentes formatos de URL para Challenger
+    search_name = challenger['name'].lower().replace(' ', '-')
     urls = [
-        "https://www.tennis24.com/matches/",
-        "https://www.tennis24.com/tennis/atp/",
-        "https://www.tennis24.com/tennis/challenger-men/",
+        f"https://www.tennis24.com/tennis/atp-challenger/{search_name}/",
+        f"https://www.tennis24.com/sport/tennis/atp-challenger/{search_name}/",
+        f"https://www.tennis24.com/matches/#/search/{search_name}",
     ]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
     
     for url in urls:
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                # Procurar por padrões de nomes no HTML
                 html = response.text
-                # Procurar por padrão de partida
-                pattern = r'<a[^>]*href="[^"]*/match/[^"]*"[^>]*>([^<]+)</a>\s*[-–—]\s*<a[^>]*>([^<]+)</a>'
-                found_matches = re.findall(pattern, html, re.IGNORECASE)
+                # Procurar por padrões de partida
+                match_patterns = [
+                    r'<div class="event__match"[^>]*>.*?<a[^>]*>([^<]+)</a>.*?<a[^>]*>([^<]+)</a>',
+                    r'<span class="team-name">([^<]+)</span>.*?<span class="team-name">([^<]+)</span>',
+                    r'"homeTeam":{"name":"([^"]+)"}.*?"awayTeam":{"name":"([^"]+)"}'
+                ]
                 
-                for p1, p2 in found_matches[:10]:
-                    p1_clean = re.sub(r'<[^>]+>', '', p1).strip()
-                    p2_clean = re.sub(r'<[^>]+>', '', p2).strip()
-                    if len(p1_clean) > 2 and len(p2_clean) > 2:
-                        matches.append({
-                            'tournament': 'ATP Tour',
-                            'player1': p1_clean,
-                            'player2': p2_clean,
-                            'surface': 'Hard'
-                        })
+                for pattern in match_patterns:
+                    found = re.findall(pattern, html, re.DOTALL)
+                    for p1, p2 in found:
+                        if p1 and p2 and p1 != p2:
+                            matches.append({
+                                'tournament': challenger['name'],
+                                'player1': p1.strip(),
+                                'player2': p2.strip(),
+                                'surface': challenger['surface']
+                            })
+                    if matches:
+                        break
+            if matches:
+                break
+        except:
+            continue
+    
+    return matches
+
+def scrape_atp_matches():
+    """Scraping de torneios ATP principais"""
+    matches = []
+    
+    # Torneios ATP em andamento
+    atp_tournaments = [
+        {"name": "Mutua Madrid Open", "surface": "Clay", "level": "Masters 1000"},
+        {"name": "Internazionali BNL d'Italia", "surface": "Clay", "level": "Masters 1000"},
+        {"name": "Roland Garros", "surface": "Clay", "level": "Grand Slam"},
+        {"name": "Wimbledon", "surface": "Grass", "level": "Grand Slam"},
+        {"name": "US Open", "surface": "Hard", "level": "Grand Slam"},
+        {"name": "Australian Open", "surface": "Hard", "level": "Grand Slam"},
+    ]
+    
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    for tournament in atp_tournaments:
+        search_name = tournament['name'].lower().replace(' ', '-')
+        url = f"https://www.tennis24.com/tennis/atp/{search_name}/"
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                html = response.text
+                # Procurar por partidas
+                pattern = r'<a[^>]*class="[^"]*team-name[^"]*"[^>]*>([^<]+)</a>'
+                players = re.findall(pattern, html)
                 
-                if matches:
-                    break
+                for i in range(0, len(players)-1, 2):
+                    if i+1 < len(players):
+                        p1 = players[i].strip()
+                        p2 = players[i+1].strip()
+                        if p1 and p2 and p1 != p2:
+                            matches.append({
+                                'tournament': tournament['name'],
+                                'player1': p1,
+                                'player2': p2,
+                                'surface': tournament['surface']
+                            })
+        except:
+            continue
+    
+    return matches
+
+# ==============================================================================
+# 3. GERAR MATCHES BASEADOS NO SEU HISTÓRICO
+# ==============================================================================
+def generate_matches_from_history(player_stats, surface='Hard'):
+    """Gera partidas baseadas nos jogadores do seu histórico"""
+    matches = []
+    
+    # Pegar jogadores que aparecem no histórico
+    players = list(player_stats.keys())
+    if len(players) < 2:
+        return matches
+    
+    # Embaralhar e criar matchups
+    import random
+    random.shuffle(players)
+    
+    # Criar partidas entre jogadores do mesmo nível aproximado (baseado no rating)
+    players_with_rating = [(p, player_stats[p]['win_rate']) for p in players]
+    players_with_rating.sort(key=lambda x: x[1], reverse=True)
+    
+    # Criar matchups: top vs top, middle vs middle, etc.
+    n = len(players_with_rating)
+    for i in range(0, n-1, 2):
+        if i+1 < n:
+            matches.append({
+                'tournament': 'Challenger Match',
+                'player1': players_with_rating[i][0],
+                'player2': players_with_rating[i+1][0],
+                'surface': surface
+            })
+    
+    return matches[:20]  # Limitar a 20 partidas
+
+# ==============================================================================
+# 4. SCRAPING VIA FLASHCORE (API alternativa)
+# ==============================================================================
+def scrape_via_flashcore():
+    """Usa API do Flashcore para obter partidas (alternativa)"""
+    matches = []
+    
+    # URLs de torneios Challenger no Flashscore
+    challenger_urls = [
+        "https://www.flashscore.com/tennis/atp-challenger-men/",
+        "https://www.flashscore.com/tennis/atp-challenger-men-2025/",
+        "https://www.flashscore.com/tennis/atp-challenger-tyler/",
+    ]
+    
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    for url in challenger_urls:
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                html = response.text
+                
+                # Padrões de partidas no Flashscore
+                patterns = [
+                    r'<div class="event__match"[^>]*>.*?<div[^>]*class="[^"]*homeTeam[^"]*"[^>]*>([^<]+)</div>.*?<div[^>]*class="[^"]*awayTeam[^"]*"[^>]*>([^<]+)</div>',
+                    r'"home":{"name":"([^"]+)"}.*?"away":{"name":"([^"]+)"}',
+                    r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[-–—]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+                ]
+                
+                for pattern in patterns:
+                    found_matches = re.findall(pattern, html, re.DOTALL)
+                    for p1, p2 in found_matches:
+                        p1_clean = re.sub(r'<[^>]+>', '', p1).strip()
+                        p2_clean = re.sub(r'<[^>]+>', '', p2).strip()
+                        if len(p1_clean) > 2 and len(p2_clean) > 2 and p1_clean != p2_clean:
+                            matches.append({
+                                'tournament': 'Challenger',
+                                'player1': p1_clean,
+                                'player2': p2_clean,
+                                'surface': 'Hard'
+                            })
+                    if matches:
+                        break
+            if matches:
+                break
         except:
             continue
     
@@ -547,6 +487,11 @@ def predict_match(model, p1_name, p2_name, player_stats, h2h, glicko_system):
     p1 = glicko_system.get_player(p1_name)
     p2 = glicko_system.get_player(p2_name)
     
+    # Verificar se os jogadores existem no sistema
+    if p1.r == 1500 and p1.rd == 350:
+        # Jogador novo, rating inicial
+        pass
+    
     rating_diff = (p1.r - p2.r) / 400
     rd_diff = (p2.rd - p1.rd) / 350
     form_diff = s1['recent_form'] - s2['recent_form']
@@ -589,41 +534,35 @@ def predict_match(model, p1_name, p2_name, player_stats, h2h, glicko_system):
     }
 
 # ==============================================================================
-# 6. FUNÇÃO PRINCIPAL DE SCRAPING (MULTI-MÉTODO)
+# 6. FUNÇÃO PRINCIPAL DE BUSCA
 # ==============================================================================
-def get_matches():
-    """Tenta múltiplos métodos para obter partidas"""
-    matches = []
+def get_all_matches(player_stats):
+    """Busca todos os tipos de partidas"""
+    all_matches = []
     
-    # Método 1: API do Tennis24
-    with st.spinner("Tentando API do Tennis24..."):
-        matches = scrape_tennis24_via_api()
-        if matches:
-            st.success(f"✅ {len(matches)} partidas encontradas via API")
-            return matches
+    # Método 1: Tentar scraping online
+    with st.spinner("Buscando Challengers e torneios ATP..."):
+        all_matches = scrape_all_matches()
     
-    # Método 2: Scraping simplificado
-    with st.spinner("Tentando scraping direto..."):
-        matches = scrape_via_simplified_api()
-        if matches:
-            st.success(f"✅ {len(matches)} partidas encontradas via scraping")
-            return matches
+    # Método 2: Scraping via Flashcore
+    if not all_matches:
+        with st.spinner("Tentando Flashcore..."):
+            all_matches = scrape_via_flashcore()
     
-    # Método 3: Lista de torneios ATP
-    st.info("Usando lista de torneios ATP em andamento...")
-    matches = get_atp_matches_today()
-    if matches:
-        st.success(f"✅ {len(matches)} partidas geradas dos torneios ATP")
-        return matches
+    # Método 3: Gerar partidas baseadas no histórico
+    if not all_matches and player_stats:
+        st.info("Gerando partidas baseadas no seu histórico...")
+        all_matches = generate_matches_from_history(player_stats)
     
-    return []
+    return all_matches
 
 # ==============================================================================
 # 7. MAIN
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v9.0 - Tennis24 API")
+    st.title("🎾 ATP Predictor v10.0 - ATP + Challenger")
     st.markdown("**Sistema de Rating Dinâmico (Glicko) + LightGBM**")
+    st.info("Inclui torneios ATP e Challenger baseados no seu histórico")
     
     uploaded_file = st.file_uploader("📁 Upload do seu histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -651,54 +590,91 @@ def main():
                     with st.expander("📊 Top Ratings Glicko"):
                         ratings = [(p, glicko_system.get_player(p).r) for p in player_stats.keys()]
                         ratings.sort(key=lambda x: x[1], reverse=True)
-                        for i, (player, rating) in enumerate(ratings[:20]):
+                        for i, (player, rating) in enumerate(ratings[:30]):
                             st.write(f"{i+1}. {player}: {rating:.0f}")
     
     if st.session_state.get('models_ready'):
         st.subheader("🎯 BUSCAR PARTIDAS")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("🎾 Buscar Partidas ATP", use_container_width=True, type="primary"):
-                matches = get_matches()
+            if st.button("🎾 ATP + Challenger", use_container_width=True, type="primary"):
+                matches = get_all_matches(st.session_state.player_stats)
                 st.session_state.today_matches = matches
+                if matches:
+                    st.success(f"✅ {len(matches)} partidas encontradas!")
+                else:
+                    st.warning("Nenhuma partida encontrada. Use inserção manual.")
         
         with col2:
+            if st.button("🎾 Só Challenger", use_container_width=True):
+                challengers = get_challenger_tournaments()
+                matches = []
+                for ch in challengers[:5]:
+                    m = scrape_challenger_matches(ch)
+                    matches.extend(m)
+                st.session_state.today_matches = matches
+                st.success(f"✅ {len(matches)} partidas de Challenger")
+        
+        with col3:
             if st.button("📝 Inserir Manualmente", use_container_width=True):
                 st.session_state.show_manual = not st.session_state.get('show_manual', False)
         
         # Manual input
         if st.session_state.get('show_manual', False):
             with st.expander("✏️ Inserir Partidas Manualmente", expanded=True):
-                num_matches = st.number_input("Número de partidas", min_value=1, max_value=10, value=1)
+                st.markdown("### Inserir partidas de Challenger/ATP")
+                
+                num_matches = st.number_input("Número de partidas", min_value=1, max_value=20, value=5)
                 manual_matches = []
+                
+                col1, col2, col3 = st.columns(3)
+                surface_options = ["Hard", "Clay", "Grass"]
+                
                 for i in range(num_matches):
-                    st.markdown(f"**Partida {i+1}**")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        p1 = st.text_input(f"Jogador 1", key=f"man_p1_{i}")
-                    with col_b:
-                        p2 = st.text_input(f"Jogador 2", key=f"man_p2_{i}")
-                    with col_c:
-                        surf = st.selectbox(f"Superfície", ["Hard", "Clay", "Grass"], key=f"man_surf_{i}")
-                    
-                    if p1 and p2:
-                        manual_matches.append({
-                            "tournament": "Manual Entry",
-                            "player1": p1,
-                            "player2": p2,
-                            "surface": surf
-                        })
+                    with st.container():
+                        st.markdown(f"**Partida {i+1}**")
+                        cols = st.columns(3)
+                        with cols[0]:
+                            p1 = st.text_input(f"Jogador 1", key=f"man_p1_{i}", 
+                                              placeholder="Ex: Mitchell Krueger")
+                        with cols[1]:
+                            p2 = st.text_input(f"Jogador 2", key=f"man_p2_{i}",
+                                              placeholder="Ex: Tung-Lin Wu")
+                        with cols[2]:
+                            surf = st.selectbox(f"Superfície", surface_options, key=f"man_surf_{i}")
+                            tourney = st.text_input(f"Torneio", key=f"man_tourney_{i}",
+                                                   placeholder="Challenger Tyler", value="Challenger")
+                        
+                        if p1 and p2:
+                            manual_matches.append({
+                                "tournament": tourney if tourney else "Challenger",
+                                "player1": p1,
+                                "player2": p2,
+                                "surface": surf
+                            })
+                        st.markdown("---")
                 
                 if st.button("🔮 Prever Partidas", type="primary") and manual_matches:
                     st.session_state.today_matches = manual_matches
         
         # Mostrar previsões
         if st.session_state.get('today_matches'):
-            st.subheader(f"📋 {len(st.session_state.today_matches)} Partidas Encontradas")
+            st.subheader(f"📋 {len(st.session_state.today_matches)} Partidas para Prever")
             
             results = []
+            not_found = []
+            
             for match in st.session_state.today_matches:
+                # Verificar se os jogadores existem no histórico
+                p1_exists = match['player1'] in st.session_state.player_stats
+                p2_exists = match['player2'] in st.session_state.player_stats
+                
+                if not p1_exists:
+                    not_found.append(match['player1'])
+                if not p2_exists:
+                    not_found.append(match['player2'])
+                
                 pred = predict_match(
                     st.session_state.model,
                     match['player1'], match['player2'],
@@ -708,19 +684,28 @@ def main():
                 )
                 pred['Torneio'] = match['tournament']
                 pred['Superficie'] = match['surface']
+                pred['NoHistorico'] = f"{'✅' if p1_exists else '❌'} | {'✅' if p2_exists else '❌'}"
                 results.append(pred)
+            
+            # Avisar sobre jogadores não encontrados
+            if not_found:
+                st.warning(f"⚠️ {len(set(not_found))} jogadores não estão no histórico")
+                with st.expander("Ver jogadores não encontrados"):
+                    for player in sorted(set(not_found)):
+                        st.write(f"• {player}")
             
             if results:
                 df_results = pd.DataFrame(results)
-                cols = ['Torneio', 'Superficie', 'Jogador1', 'Jogador2', 'Rating_Glicko',
-                       'Prob_P1', 'Prob_P2', 'Vencedor', 'Confianca', 'Recomendacao', 'Games_Esperados']
+                cols = ['Torneio', 'Superficie', 'Jogador1', 'Jogador2', 'NoHistorico',
+                       'Rating_Glicko', 'Prob_P1', 'Prob_P2', 'Vencedor', 
+                       'Confianca', 'Recomendacao', 'Games_Esperados']
                 df_results = df_results[[c for c in cols if c in df_results.columns]]
                 
                 st.dataframe(df_results, use_container_width=True, hide_index=True)
                 
                 # Resumo
-                st.subheader("📊 Resumo")
-                col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                st.subheader("📊 Resumo das Previsões")
+                col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
                 with col_s1:
                     strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
                     st.metric("🔥 STRONG", strong)
@@ -732,6 +717,9 @@ def main():
                     avg_conf = sum(conf_values) / len(conf_values) if conf_values else 0
                     st.metric("Confiança Média", f"{avg_conf:.1f}%")
                 with col_s4:
+                    valid = sum(1 for r in results if '❌' not in r.get('NoHistorico', ''))
+                    st.metric("Com Histórico", f"{valid}/{len(results)}")
+                with col_s5:
                     st.metric("Total", len(results))
                 
                 # Download
@@ -740,20 +728,20 @@ def main():
                 st.download_button(
                     "📥 Download Previsões (Excel)",
                     buffer.getvalue(),
-                    f"previsoes_atp_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    f"previsoes_challenger_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                     use_container_width=True
                 )
         
-        # Lista de jogadores disponíveis
-        with st.expander("📋 Jogadores no seu histórico"):
+        # Sugestões de jogadores
+        with st.expander("💡 Jogadores no seu histórico"):
             players_list = sorted(list(st.session_state.player_stats.keys()))
             st.write(f"Total: {len(players_list)} jogadores")
-            # Mostrar em colunas
+            
+            # Mostrar em grid
             cols = st.columns(4)
-            for i, player in enumerate(players_list[:100]):
-                cols[i % 4].write(f"• {player}")
-            if len(players_list) > 100:
-                st.write(f"... e mais {len(players_list) - 100} jogadores")
+            for i, player in enumerate(players_list[:80]):
+                stats = st.session_state.player_stats[player]
+                cols[i % 4].markdown(f"**{player}**  \n{stats['matches']}j | {stats['win_rate']:.0%}")
 
 if __name__ == "__main__":
     main()
