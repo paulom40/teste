@@ -76,7 +76,7 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# PROCESS DATA - SIMPLIFICADO
+# PROCESS DATA - VERSÃO SIMPLIFICADA E CORRIGIDA
 # ==============================================================================
 def process_historical_data(df):
     """Process historical data and extract player names from the file"""
@@ -109,22 +109,27 @@ def process_historical_data(df):
     st.write("### Colunas apos mapeamento:")
     st.write(list(df.columns))
     
-    # Converter data - VERSÃO SIMPLIFICADA
+    # Converter data - VERSÃO CORRIGIDA
     if 'date' in df.columns:
-        # Converter para string sem usar .str
-        df['date'] = df['date'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
+        # Converter para string de forma simples
+        df['date'] = df['date'].astype(str)
+        df['date'] = df['date'].str.replace(' ', '')
+        df['date'] = df['date'].str.replace('-', '')
+        df['date'] = df['date'].str.replace('/', '')
         
         # Tentar converter para datetime
-        try:
-            # Tentar formato YYYYMMDD
-            df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
-        except:
+        def parse_date(val):
+            if val == '' or val == 'nan':
+                return pd.Timestamp.now()
             try:
-                # Tentar formato automático
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                if len(val) == 8 and val.isdigit():
+                    return pd.to_datetime(val, format='%Y%m%d')
+                else:
+                    return pd.to_datetime(val, errors='coerce')
             except:
-                # Se falhar, usar data atual
-                df['date'] = pd.Timestamp.now()
+                return pd.Timestamp.now()
+        
+        df['date'] = df['date'].apply(parse_date)
     else:
         df['date'] = pd.Timestamp.now()
     
@@ -152,9 +157,9 @@ def process_historical_data(df):
     else:
         df['surface'] = 'Hard'
     
-    # Limpar nomes - usar apply para evitar problemas
-    df['winner'] = df['winner'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
-    df['loser'] = df['loser'].apply(lambda x: str(x).strip() if pd.notna(x) else '')
+    # Limpar nomes
+    df['winner'] = df['winner'].astype(str).str.strip()
+    df['loser'] = df['loser'].astype(str).str.strip()
     
     # Remover linhas invalidas
     df = df[df['winner'] != '']
@@ -162,8 +167,6 @@ def process_historical_data(df):
     df = df[df['winner'] != 'nan']
     df = df[df['loser'] != 'nan']
     df = df[df['winner'] != df['loser']]
-    df = df[df['winner'].str.len() > 1]
-    df = df[df['loser'].str.len() > 1]
     
     # Extrair jogadores unicos
     all_players = sorted(list(set(df['winner'].unique()) | set(df['loser'].unique())))
