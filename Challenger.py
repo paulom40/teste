@@ -386,13 +386,17 @@ def main():
     st.title("ATP Predictor v7.0 - Simple & Robust")
     st.caption("Sistema simples de matching | Previsoes em lote")
     
+    # Inicializar session_state
     if 'models_ready' not in st.session_state:
         st.session_state.models_ready = False
     if 'matches' not in st.session_state:
         st.session_state.matches = []
+    if 'run_predictions' not in st.session_state:
+        st.session_state.run_predictions = False
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico", type=['xlsx', 'csv'])
     
+    # Treino do modelo
     if uploaded_file and 'model' not in st.session_state:
         with st.spinner("Processando..."):
             try:
@@ -409,7 +413,7 @@ def main():
                 
                 st.success(f"Carregados {len(df)} jogos e {len(all_players)} jogadores")
                 
-                with st.expander(f"Jogadores no historico (amostra)"):
+                with st.expander("Jogadores no historico (amostra)"):
                     for i, p in enumerate(sorted(all_players)[:30]):
                         st.write(f"{i+1}. {p}")
                     if len(all_players) > 30:
@@ -428,58 +432,61 @@ def main():
                 st.session_state.models_ready = True
                 
                 st.success("Modelo treinado com sucesso!")
-                
+            
             except Exception as e:
                 st.error(f"Erro: {e}")
                 import traceback
                 st.code(traceback.format_exc())
     
+    # Interface depois do treino
     if st.session_state.get('models_ready') and st.session_state.get('model'):
         tab1, tab2, tab3 = st.tabs(["Jogos Sofascore", "Previsao Manual", "Inserir Lista"])
         
-        # ==============================================================================
-        # TAB 1 — COM BOTÃO "PREVER AGORA"
-        # ==============================================================================
+        # ========================= TAB 1 — Sofascore =========================
         with tab1:
-
             if st.button("Buscar jogos de hoje", use_container_width=True):
                 with st.spinner("Buscando..."):
                     st.session_state.matches = scrape_matches()
                     st.session_state.run_predictions = False
                     st.rerun()
-
+            
             if st.session_state.get('matches'):
                 st.write(f"{len(st.session_state.matches)} jogos encontrados")
-
+                
                 if st.button("🔮 Prever agora", type="primary", use_container_width=True):
                     st.session_state.run_predictions = True
-
-            if st.session_state.get('run_predictions', False):
+            
+            if st.session_state.get('run_predictions', False) and st.session_state.get('matches'):
                 st.subheader("Previsões")
                 results = []
                 errors = []
-
+                
                 for match in st.session_state.matches:
                     result, error = predict_match(
-                        st.session_state.model, match['player1'], match['player2'], match['surface'],
-                        st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                        st.session_state.all_players, match['tournament']
+                        st.session_state.model,
+                        match['player1'],
+                        match['player2'],
+                        match['surface'],
+                        st.session_state.player_stats,
+                        st.session_state.h2h,
+                        st.session_state.elo,
+                        st.session_state.all_players,
+                        match['tournament']
                     )
                     if result:
                         results.append(result)
                     elif error:
                         errors.append(error)
-
+                
                 if errors:
-                    with st.expander(f"{len(errors)} jogadores não encontrados"):
+                    with st.expander(f"{len(errors)} jogadores nao encontrados"):
                         for e in errors:
                             st.write(e)
-
+                
                 if results:
-                    df                if results:
                     df_results = pd.DataFrame(results)
                     st.dataframe(df_results, use_container_width=True, hide_index=True)
-
+                    
                     buffer = io.BytesIO()
                     df_results.to_excel(buffer, index=False)
                     st.download_button(
@@ -487,10 +494,8 @@ def main():
                         buffer.getvalue(),
                         f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
                     )
-
-        # ==============================================================================
-        # TAB 2 — PREVISÃO MANUAL
-        # ==============================================================================
+        
+        # ====================== TAB 2 — Previsão Manual ======================
         with tab2:
             st.subheader("Previsao Individual")
             
@@ -512,18 +517,22 @@ def main():
                     st.error("Selecione dois jogadores diferentes")
                 else:
                     result, error = predict_match(
-                        st.session_state.model, manual_p1, manual_p2, manual_surface,
-                        st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                        st.session_state.all_players, "Manual"
+                        st.session_state.model,
+                        manual_p1,
+                        manual_p2,
+                        manual_surface,
+                        st.session_state.player_stats,
+                        st.session_state.h2h,
+                        st.session_state.elo,
+                        st.session_state.all_players,
+                        "Manual"
                     )
                     if result:
                         st.dataframe(pd.DataFrame([result]), use_container_width=True, hide_index=True)
                     else:
                         st.error(error)
-
-        # ==============================================================================
-        # TAB 3 — LISTA DE JOGOS
-        # ==============================================================================
+        
+        # ====================== TAB 3 — Lista de Jogos =======================
         with tab3:
             st.subheader("Inserir Lista de Jogos")
             
@@ -550,9 +559,15 @@ def main():
                         progress_bar = st.progress(0)
                         for i, match in enumerate(matches_list):
                             result, error = predict_match(
-                                st.session_state.model, match['player1'], match['player2'], match['surface'],
-                                st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
-                                st.session_state.all_players, "Batch"
+                                st.session_state.model,
+                                match['player1'],
+                                match['player2'],
+                                match['surface'],
+                                st.session_state.player_stats,
+                                st.session_state.h2h,
+                                st.session_state.elo,
+                                st.session_state.all_players,
+                                "Batch"
                             )
                             if result:
                                 results.append(result)
