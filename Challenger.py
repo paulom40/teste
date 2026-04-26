@@ -76,7 +76,7 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# PROCESS DATA - VERSÃO SIMPLIFICADA E CORRIGIDA
+# PROCESS DATA - VERSÃO SIMPLIFICADA (SEM CONVERSÃO DE DATA COMPLEXA)
 # ==============================================================================
 def process_historical_data(df):
     """Process historical data and extract player names from the file"""
@@ -109,32 +109,8 @@ def process_historical_data(df):
     st.write("### Colunas apos mapeamento:")
     st.write(list(df.columns))
     
-    # Converter data - VERSÃO CORRIGIDA
-    if 'date' in df.columns:
-        # Converter para string de forma simples
-        df['date'] = df['date'].astype(str)
-        df['date'] = df['date'].str.replace(' ', '')
-        df['date'] = df['date'].str.replace('-', '')
-        df['date'] = df['date'].str.replace('/', '')
-        
-        # Tentar converter para datetime
-        def parse_date(val):
-            if val == '' or val == 'nan':
-                return pd.Timestamp.now()
-            try:
-                if len(val) == 8 and val.isdigit():
-                    return pd.to_datetime(val, format='%Y%m%d')
-                else:
-                    return pd.to_datetime(val, errors='coerce')
-            except:
-                return pd.Timestamp.now()
-        
-        df['date'] = df['date'].apply(parse_date)
-    else:
-        df['date'] = pd.Timestamp.now()
-    
-    # Preencher datas nulas
-    df['date'] = df['date'].fillna(pd.Timestamp.now())
+    # Usar uma data padrão para todos os registros (evita problemas de conversão)
+    df['date'] = pd.Timestamp.now()
     
     # Total games
     if 'total_games' not in df.columns:
@@ -197,11 +173,11 @@ def calculate_player_stats(df, all_players):
         total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        recent = player_matches.sort_values('date', ascending=False).head(10)
+        recent = player_matches.head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
-        very_recent = player_matches.sort_values('date', ascending=False).head(3)
+        very_recent = player_matches.head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
         
@@ -231,8 +207,7 @@ def calculate_h2h(df):
 # ==============================================================================
 def calculate_elo(df, all_players, k=32):
     elo = {p: 1500 for p in all_players}
-    df_sorted = df.sort_values('date')
-    for _, row in df_sorted.iterrows():
+    for _, row in df.iterrows():
         w, l = row['winner'], row['loser']
         if w in elo and l in elo:
             exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
