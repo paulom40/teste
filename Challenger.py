@@ -667,12 +667,12 @@ def main():
     st.sidebar.header("📁 Carregar Base de Dados")
 file = st.sidebar.file_uploader("Carregar Excel", type=["xlsx", "xls"])
 
+if file is None:
+    st.info("Carrega um ficheiro Excel para começar.")
+    return
 
-    if file is None:
-        st.info("Carrega um ficheiro CSV para começar.")
-        return
+df = pd.read_excel(file)
 
-    df = pd.read_excel(file)
     df, all_players = process_historical_data(df)
 
     if df is None:
