@@ -234,32 +234,26 @@ def train_model(df, player_stats, h2h, elo):
 # SIMPLE NAME MATCHER
 # ==============================================================================
 def find_player(name, historical_names):
-    """Simple function to find a player by name or last name"""
     if not name:
         return None
     
     name_str = str(name).strip()
     name_lower = name_str.lower()
     
-    # Exact match
     if name_str in historical_names:
         return name_str
     
-    # Case insensitive
     for player in historical_names:
         if player.lower() == name_lower:
             return player
     
-    # Last name match
     parts = name_lower.split()
     if parts:
         last_name = parts[-1]
         for player in historical_names:
-            player_lower = player.lower()
-            if player_lower.endswith(last_name):
+            if player.lower().endswith(last_name):
                 return player
     
-    # Partial match
     for player in historical_names:
         if name_lower in player.lower():
             return player
@@ -321,6 +315,9 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, historical_nam
     
     return result, None
 
+# ==============================================================================
+# PARSE MATCH TEXT
+# ==============================================================================
 def parse_match_text(text, default_surface="Clay"):
     matches = []
     lines = text.strip().split('\n')
@@ -330,7 +327,6 @@ def parse_match_text(text, default_surface="Clay"):
         if not line:
             continue
         
-        # Procurar padrao "Jogador1 vs Jogador2"
         vs_match = re.search(r'(.+?)\s+vs\s+(.+)', line, re.IGNORECASE)
         if vs_match:
             p1 = vs_match.group(1).strip()
@@ -341,7 +337,6 @@ def parse_match_text(text, default_surface="Clay"):
                 'surface': default_surface
             })
         else:
-            # Tentar separar por espacos
             parts = line.split()
             if len(parts) >= 2:
                 matches.append({
@@ -353,26 +348,26 @@ def parse_match_text(text, default_surface="Clay"):
     return matches
 
 # ==============================================================================
-# SCRAPER
+# SCRAPER (CORRIGIDO)
 # ==============================================================================
 def scrape_matches():
     try:
         target_date = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/scheduled-events/{target_date}"
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/events/{target_date}"
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
-        
+
         if r.status_code != 200:
             return []
-        
+
         data = r.json()
         matches = []
-        
+
         for ev in data.get("events", []):
             category = ev.get("tournament", {}).get("category", {}).get("name", "")
             if "WTA" in str(category).upper():
                 continue
-            
+
             matches.append({
                 "tournament": ev["tournament"]["name"],
                 "player1": ev["homeTeam"]["name"],
@@ -380,6 +375,7 @@ def scrape_matches():
                 "surface": detect_surface(ev["tournament"]["name"])
             })
         return matches
+
     except Exception:
         return []
 
@@ -390,7 +386,6 @@ def main():
     st.title("ATP Predictor v7.0 - Simple & Robust")
     st.caption("Sistema simples de matching | Previsoes em lote")
     
-    # Inicializar session_state
     if 'models_ready' not in st.session_state:
         st.session_state.models_ready = False
     if 'matches' not in st.session_state:
@@ -414,7 +409,6 @@ def main():
                 
                 st.success(f"Carregados {len(df)} jogos e {len(all_players)} jogadores")
                 
-                # Mostrar primeiros jogadores
                 with st.expander(f"Jogadores no historico (amostra)"):
                     for i, p in enumerate(sorted(all_players)[:30]):
                         st.write(f"{i+1}. {p}")
@@ -440,23 +434,31 @@ def main():
                 import traceback
                 st.code(traceback.format_exc())
     
-    # Interface after training
     if st.session_state.get('models_ready') and st.session_state.get('model'):
-        # Abas
         tab1, tab2, tab3 = st.tabs(["Jogos Sofascore", "Previsao Manual", "Inserir Lista"])
         
-        # Tab 1: Sofascore
+        # ==============================================================================
+        # TAB 1 — COM BOTÃO "PREVER AGORA"
+        # ==============================================================================
         with tab1:
+
             if st.button("Buscar jogos de hoje", use_container_width=True):
                 with st.spinner("Buscando..."):
                     st.session_state.matches = scrape_matches()
+                    st.session_state.run_predictions = False
                     st.rerun()
-            
+
             if st.session_state.get('matches'):
-                st.subheader("Previsoes")
+                st.write(f"{len(st.session_state.matches)} jogos encontrados")
+
+                if st.button("🔮 Prever agora", type="primary", use_container_width=True):
+                    st.session_state.run_predictions = True
+
+            if st.session_state.get('run_predictions', False):
+                st.subheader("Previsões")
                 results = []
                 errors = []
-                
+
                 for match in st.session_state.matches:
                     result, error = predict_match(
                         st.session_state.model, match['player1'], match['player2'], match['surface'],
@@ -467,22 +469,28 @@ def main():
                         results.append(result)
                     elif error:
                         errors.append(error)
-                
+
                 if errors:
-                    with st.expander(f"{len(errors)} jogadores nao encontrados"):
-                        for e in set(errors):
+                    with st.expander(f"{len(errors)} jogadores não encontrados"):
+                        for e in errors:
                             st.write(e)
-                
+
                 if results:
+                    df                if results:
                     df_results = pd.DataFrame(results)
                     st.dataframe(df_results, use_container_width=True, hide_index=True)
-                    
+
                     buffer = io.BytesIO()
                     df_results.to_excel(buffer, index=False)
-                    st.download_button("Download Excel", buffer.getvalue(),
-                                     f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
-        
-        # Tab 2: Previsao manual
+                    st.download_button(
+                        "Download Excel",
+                        buffer.getvalue(),
+                        f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                    )
+
+        # ==============================================================================
+        # TAB 2 — PREVISÃO MANUAL
+        # ==============================================================================
         with tab2:
             st.subheader("Previsao Individual")
             
@@ -497,8 +505,10 @@ def main():
             with col_c:
                 manual_surface = st.selectbox("Superficie", ["Clay", "Hard", "Grass"])
             
-            if st.button("Prever", type="primary") and manual_p1 and manual_p2:
-                if manual_p1 == manual_p2:
+            if st.button("Prever", type="primary"):
+                if not manual_p1 or not manual_p2:
+                    st.error("Selecione os dois jogadores")
+                elif manual_p1 == manual_p2:
                     st.error("Selecione dois jogadores diferentes")
                 else:
                     result, error = predict_match(
@@ -507,15 +517,17 @@ def main():
                         st.session_state.all_players, "Manual"
                     )
                     if result:
-                        st.dataframe(pd.DataFrame([result]), use_container_width=True)
+                        st.dataframe(pd.DataFrame([result]), use_container_width=True, hide_index=True)
                     else:
                         st.error(error)
-        
-        # Tab 3: Lista de jogos
+
+        # ==============================================================================
+        # TAB 3 — LISTA DE JOGOS
+        # ==============================================================================
         with tab3:
             st.subheader("Inserir Lista de Jogos")
             
-            st.info("Formatos aceitos: 'Lehecka vs Michelsen' (apenas sobrenome) ou 'Jiri Lehecka vs Alex Michelsen'")
+            st.info("Formatos aceitos: 'Lehecka vs Michelsen' ou 'Jiri Lehecka vs Alex Michelsen'")
             
             default_surface = st.selectbox("Superficie padrao", ["Clay", "Hard", "Grass"], key="batch_surface")
             
@@ -571,9 +583,12 @@ def main():
                             
                             buffer = io.BytesIO()
                             df_results.to_excel(buffer, index=False)
-                            st.download_button("Download Excel", buffer.getvalue(),
-                                             f"previsoes_batch_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                                             use_container_width=True)
+                            st.download_button(
+                                "Download Excel",
+                                buffer.getvalue(),
+                                f"previsoes_batch_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                use_container_width=True
+                            )
                     else:
                         st.warning("Nenhum jogo encontrado")
                 else:
