@@ -2,356 +2,298 @@ import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
 import io
-import math
 import numpy as np
 import pandas as pd
 import streamlit as st
+import requests
 from lightgbm import LGBMClassifier
 import re
+import time
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="🎾 ATP Predictor v15.0 - WELO + Over/Under", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="🎾 ATP Predictor v6.0 - Tennis24 Scraper", page_icon="🎾", layout="wide")
 
 # ==============================================================================
-# CONFIGURAÇÕES
+# CONFIG
 # ==============================================================================
-MIN_CONFIDENCE_STRONG = 0.65
-MIN_CONFIDENCE_GOOD = 0.55
+WINNER_SMOOTH = 0.55
+MIN_CONFIDENCE_STRONG = 0.68
+MIN_CONFIDENCE_GOOD = 0.60
 
 # ==============================================================================
-# 1. SISTEMA WELO (WEIGHTED ELO) - Dá mais peso a jogos recentes
+# SURFACE DETECTION
 # ==============================================================================
-class WELOSystem:
+def detect_surface(tournament_name):
+    if pd.isna(tournament_name):
+        return 'Hard'
+    t = str(tournament_name).lower()
+    clay = ['clay', 'monte carlo', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros', 'barilla', 'mutua']
+    grass = ['grass', 'wimbledon', 'queens', 'halle', 'stuttgart', 's-Hertogenbosch']
+    if any(k in t for k in clay):
+        return 'Clay'
+    if any(k in t for k in grass):
+        return 'Grass'
+    return 'Hard'
+
+# ==============================================================================
+# SCRAPER COM SELENIUM + CHROMIUM (TENNIS24.COM)
+# ==============================================================================
+def scrape_matches():
     """
-    Weighted ELO System - dá peso decrescente a jogos mais antigos
+    Usa Selenium + Chromium para extrair os jogos de hoje do Tennis24.com
     """
-    def __init__(self, initial_rating=1500, base_k=32, decay_factor=0.95):
-        self.ratings = defaultdict(lambda: initial_rating)
-        self.match_history = defaultdict(list)  # Armazena (rating_antes, resultado, peso)
-        self.base_k = base_k
-        self.decay_factor = decay_factor
-        
-    def get_weight_for_match(self, match_age, total_matches):
-        """Calcula o peso de um jogo baseado na idade (mais recente = maior peso)"""
-        if total_matches <= 1:
-            return 1.0
-        # Jogos mais recentes têm peso próximo de 1, jogos antigos peso próximo de 0
-        position = match_age  # 0 = mais recente
-        weight = self.decay_factor ** position
-        return weight
-    
-    def update(self, winner, loser, surface='Hard', match_date=None):
-        """Atualiza ratings WELO após uma partida"""
-        r_winner = self.ratings[winner]
-        r_loser = self.ratings[loser]
-        
-        # Ajuste por superfície
-        surface_factor = 1.05 if surface == 'Clay' else (0.95 if surface == 'Grass' else 1.0)
-        
-        expected_winner = 1 / (1 + 10 ** ((r_loser - r_winner) / 400))
-        
-        # K-factor adaptativo (maior para underdogs, menor para favoritos)
-        upset_factor = abs(expected_winner - 0.5) * 2  # 0 = empate, 1 = grande zebra
-        k = self.base_k * (0.8 + upset_factor * 0.4)
-        k = k * surface_factor
-        
-        self.ratings[winner] = r_winner + k * (1 - expected_winner)
-        self.ratings[loser] = r_loser + k * (0 - (1 - expected_winner))
-        
-        # Registrar histórico com timestamp
-        self.match_history[winner].append((self.ratings[winner], 1, match_date))
-        self.match_history[loser].append((self.ratings[loser], 0, match_date))
-        
-        # Limitar histórico
-        if len(self.match_history[winner]) > 50:
-            self.match_history[winner] = self.match_history[winner][-50:]
-        if len(self.match_history[loser]) > 50:
-            self.match_history[loser] = self.match_history[loser][-50:]
-    
-    def get_rating(self, player, use_weighted=True):
-        """Retorna rating (pode ser ponderado por jogos recentes)"""
-        if not use_weighted or player not in self.match_history:
-            return self.ratings[player]
-        
-        # Calcular rating ponderado baseado na data dos jogos
-        history = self.match_history[player]
-        if len(history) == 0:
-            return self.ratings[player]
-        
-        total_weight = 0
-        weighted_rating = 0
-        
-        for i, (rating, _, date) in enumerate(history):
-            # Peso baseado na posição (mais recente = maior peso)
-            position = len(history) - 1 - i
-            weight = self.decay_factor ** position
-            weighted_rating += rating * weight
-            total_weight += weight
-        
-        if total_weight > 0:
-            return weighted_rating / total_weight
-        return self.ratings[player]
-    
-    def get_win_probability(self, p1, p2, surface='Hard'):
-        """Calcula probabilidade baseada no rating WELO"""
-        r1 = self.get_rating(p1)
-        r2 = self.get_rating(p2)
-        
-        # Ajuste por superfície
-        surface_adj = 1.0
-        if surface == 'Clay':
-            surface_adj = 1.03
-        elif surface == 'Grass':
-            surface_adj = 0.97
-        
-        # Força do adversário impacta o K-factor
-        rating_diff = r2 - r1
-        prob = 1 / (1 + 10 ** (rating_diff / 400))
-        
-        # Ajuste por superfície
-        prob = 0.5 + (prob - 0.5) * surface_adj
-        
-        # Ajuste por momentum (últimos 5 jogos)
-        momentum_p1 = self.get_momentum(p1)
-        momentum_p2 = self.get_momentum(p2)
-        momentum_adj = (momentum_p1 - momentum_p2) * 0.05
-        prob += momentum_adj
-        
-        return np.clip(prob, 0.25, 0.75)
-    
-    def get_momentum(self, player):
-        """Calcula momentum baseado nos últimos 5 jogos"""
-        history = self.match_history.get(player, [])
-        if len(history) == 0:
-            return 0.5
-        
-        recent = history[-5:]  # Últimos 5 jogos
-        wins = sum(1 for _, result, _ in recent if result == 1)
-        return wins / len(recent) if recent else 0.5
-
-# ==============================================================================
-# 2. SISTEMA PARA OVER/UNDER 21.5 GAMES
-# ==============================================================================
-class OverUnderSystem:
-    """
-    Sistema especializado em prever Over/Under 21.5 games
-    """
-    def __init__(self):
-        self.player_avg_games = defaultdict(lambda: 22.0)
-        self.player_std_games = defaultdict(lambda: 4.0)
-        self.surface_avg = {'Hard': 22.0, 'Clay': 23.5, 'Grass': 20.5}
-        
-    def update(self, winner, loser, total_games, surface='Hard'):
-        """Atualiza estatísticas de games"""
-        if total_games < 18 or total_games > 40:  # Filtrar outliers
-            return
-        
-        # Média móvel para cada jogador
-        for player in [winner, loser]:
-            current_avg = self.player_avg_games[player]
-            self.player_avg_games[player] = current_avg * 0.95 + total_games * 0.05
-            
-            # Desvio padrão
-            diff = abs(total_games - current_avg)
-            self.player_std_games[player] = self.player_std_games[player] * 0.95 + diff * 0.05
-    
-    def predict_over_probability(self, p1, p2, surface='Hard'):
-        """Prediz probabilidade de Over 21.5 games"""
-        # Média esperada de games
-        expected_games = (self.player_avg_games[p1] + self.player_avg_games[p2]) / 2
-        
-        # Ajuste por superfície
-        surface_adj = self.surface_avg.get(surface, 22.0)
-        expected_games = expected_games * 0.6 + surface_adj * 0.4
-        
-        # Desvio padrão combinado
-        combined_std = (self.player_std_games[p1] + self.player_std_games[p2]) / 2
-        
-        # Probabilidade de Over 21.5 usando distribuição normal
-        z_score = (21.5 - expected_games) / max(combined_std, 3.0)
-        
-        # Converter z-score para probabilidade
-        from scipy.stats import norm
-        prob_over = 1 - norm.cdf(z_score)
-        
-        # Ajuste por forma recente (jogadores que fazem muitos games)
-        prob_over = np.clip(prob_over, 0.30, 0.70)
-        
-        return prob_over, expected_games
-
-# ==============================================================================
-# 3. TORNEIOS ATP E CHALLENGER
-# ==============================================================================
-TOURNAMENTS = {
-    "ATP Masters 1000": [
-        {"name": "Mutua Madrid Open", "surface": "Clay", "prize": "7.5M €"},
-        {"name": "Internazionali BNL d'Italia", "surface": "Clay", "prize": "7.7M €"},
-        {"name": "Rolex Shanghai Masters", "surface": "Hard", "prize": "8.8M €"},
-    ],
-    "ATP 500": [
-        {"name": "Barcelona Open", "surface": "Clay", "prize": "2.8M €"},
-        {"name": "Halle Open", "surface": "Grass", "prize": "2.2M €"},
-        {"name": "Queen's Club", "surface": "Grass", "prize": "2.2M €"},
-        {"name": "Vienna Open", "surface": "Hard", "prize": "2.4M €"},
-    ],
-    "ATP 250": [
-        {"name": "BMW Open Munich", "surface": "Clay", "prize": "650k €"},
-        {"name": "Geneva Open", "surface": "Clay", "prize": "650k €"},
-        {"name": "Lyon Open", "surface": "Clay", "prize": "650k €"},
-        {"name": "Eastbourne International", "surface": "Grass", "prize": "650k €"},
-    ],
-    "Challenger 125": [
-        {"name": "Challenger Bordeaux", "surface": "Clay", "prize": "160k €"},
-        {"name": "Challenger Oeiras", "surface": "Clay", "prize": "160k €"},
-        {"name": "Challenger Mexico City", "surface": "Clay", "prize": "160k €"},
-        {"name": "Challenger Phoenix", "surface": "Hard", "prize": "160k €"},
-    ],
-    "Challenger 100": [
-        {"name": "Challenger Tyler", "surface": "Hard", "prize": "120k €"},
-        {"name": "Challenger Little Rock", "surface": "Hard", "prize": "120k €"},
-        {"name": "Challenger Taipei", "surface": "Hard", "prize": "120k €"},
-        {"name": "Challenger Busan", "surface": "Hard", "prize": "120k €"},
-    ],
-    "Challenger 75": [
-        {"name": "Challenger Prague", "surface": "Clay", "prize": "75k €"},
-        {"name": "Challenger Heilbronn", "surface": "Clay", "prize": "75k €"},
-        {"name": "Challenger Skopje", "surface": "Clay", "prize": "75k €"},
-        {"name": "Challenger Savannah", "surface": "Clay", "prize": "75k €"},
-    ]
-}
-
-# ==============================================================================
-# 4. PROCESSAMENTO DO HISTÓRICO
-# ==============================================================================
-def load_and_process_data(uploaded_file):
-    """Carrega e processa o arquivo de histórico"""
+    driver = None
     try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+        # Configuração do Chrome para ambiente headless
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        
+        # Inicializa o driver
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Acessa o Tennis24
+        driver.get("https://www.tennis24.com/")
+        
+        # Aguarda a página carregar
+        wait = WebDriverWait(driver, 15)
+        
+        matches_data = []
+        
+        # Estratégia 1: Procurar por links de partidas
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/#/match/']")))
+            match_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/#/match/']")
+            
+            for link in match_links:
+                try:
+                    match_text = link.text.strip()
+                    if ' - ' in match_text:
+                        players = match_text.split(' - ')
+                        if len(players) == 2:
+                            p1 = players[0].strip()
+                            p2 = players[1].strip()
+                            
+                            # Tenta encontrar o torneio
+                            tournament = "ATP Event"
+                            try:
+                                parent = link.find_element(By.XPATH, "./ancestor::div[contains(@class, 'event')]")
+                                tourney_elem = parent.find_element(By.CSS_SELECTOR, "[class*='tournament'], [class*='event-name']")
+                                tournament = tourney_elem.text.strip()
+                            except:
+                                pass
+                            
+                            surface = detect_surface(tournament)
+                            
+                            matches_data.append({
+                                "player1": p1,
+                                "player2": p2,
+                                "surface": surface,
+                                "tournament": tournament
+                            })
+                except:
+                    continue
+        except:
+            pass
+        
+        # Estratégia 2: Procurar por tabelas de jogos
+        if not matches_data:
+            try:
+                rows = driver.find_elements(By.CSS_SELECTOR, "tr[class*='match'], div[class*='row'][class*='match']")
+                
+                for row in rows:
+                    try:
+                        players = row.find_elements(By.CSS_SELECTOR, "[class*='team'], [class*='participant']")
+                        if len(players) >= 2:
+                            p1 = players[0].text.strip()
+                            p2 = players[1].text.strip()
+                            
+                            if p1 and p2 and p1 != p2:
+                                tournament = "ATP Event"
+                                try:
+                                    tourney = row.find_element(By.XPATH, "./ancestor::div[contains(@class, 'tournament')]")
+                                    tournament = tourney.text.strip()
+                                except:
+                                    pass
+                                
+                                surface = detect_surface(tournament)
+                                matches_data.append({
+                                    "player1": p1,
+                                    "player2": p2,
+                                    "surface": surface,
+                                    "tournament": tournament
+                                })
+                    except:
+                        continue
+            except:
+                pass
+        
+        # Remove duplicatas
+        unique_matches = []
+        seen_pairs = set()
+        for match in matches_data:
+            pair = f"{match['player1']}|{match['player2']}"
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                unique_matches.append(match)
+        
+        return unique_matches
+            
     except Exception as e:
-        st.error(f"Erro ao ler arquivo: {e}")
-        return None
+        st.error(f"Erro no scraper: {e}")
+        return []
     
-    df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
+    finally:
+        if driver:
+            driver.quit()
+
+# ==============================================================================
+# PROCESS DATA
+# ==============================================================================
+def process_historical_data(df):
+    """Process historical data and extract player names from the file"""
     
-    # Encontrar colunas
+    # Clean column names
+    df.columns = [str(c).strip().lower().replace(' ', '_').replace('-', '_') for c in df.columns]
+    
+    # Find columns
     winner_col = None
     loser_col = None
+    tournament_col = None
+    date_col = None
+    score_col = None
     
     for col in df.columns:
-        if 'winner_name' in col or col == 'winner':
+        if 'winner' in col or 'vencedor' in col:
             winner_col = col
-        elif 'loser_name' in col or col == 'loser':
+        elif 'loser' in col or 'perdedor' in col:
             loser_col = col
+        elif 'tourney' in col or 'torneio' in col or 'tournament' in col:
+            tournament_col = col
+        elif 'date' in col or 'data' in col:
+            date_col = col
+        elif 'score' in col or 'placar' in col:
+            score_col = col
     
     if not winner_col or not loser_col:
-        for col in df.columns:
-            if 'vencedor' in col:
-                winner_col = col
-            elif 'perdedor' in col:
-                loser_col = col
+        st.error(f"Colunas não encontradas. Colunas disponíveis: {list(df.columns)}")
+        st.info("Por favor, certifique-se que o arquivo tem colunas como 'winner', 'loser', ou 'vencedor', 'perdedor'")
+        return None, None, None
     
-    if not winner_col or not loser_col:
-        st.error(f"Colunas não encontradas. Colunas: {list(df.columns)}")
-        return None
+    # Rename columns
+    df = df.rename(columns={
+        winner_col: 'winner',
+        loser_col: 'loser',
+        tournament_col: 'tournament' if tournament_col else 'tournament',
+        date_col: 'date' if date_col else 'date',
+        score_col: 'score' if score_col else 'score'
+    })
     
-    df = df.rename(columns={winner_col: 'winner', loser_col: 'loser'})
-    
-    # Data
-    if 'date' not in df.columns:
-        if 'tourney_date' in df.columns:
-            df['date'] = pd.to_datetime(df['tourney_date'], errors='coerce')
-        else:
-            df['date'] = pd.Timestamp.now()
-    else:
+    # Convert date
+    if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    else:
+        df['date'] = pd.Timestamp.now()
     
-    # Total games
-    if 'total_games' not in df.columns:
-        if 'score' in df.columns:
-            def extract_games(score):
-                if pd.isna(score):
-                    return 22
-                games = re.findall(r'(\d+)-(\d+)', str(score))
-                total = sum(int(a) + int(b) for a, b in games if a.isdigit() and b.isdigit())
-                return max(total, 22) if total > 0 else 22
-            df['total_games'] = df['score'].apply(extract_games)
-        else:
-            df['total_games'] = 22
+    # Calculate total games
+    if 'total_games' not in df.columns and 'score' in df.columns:
+        def extract_games(score):
+            if pd.isna(score):
+                return 22
+            numbers = re.findall(r'\d+', str(score))
+            games = [int(n) for n in numbers if int(n) < 20]
+            return sum(games) if games else 22
+        df['total_games'] = df['score'].apply(extract_games)
+    elif 'total_games' not in df.columns:
+        df['total_games'] = 22
     
-    # Superfície
-    if 'surface' not in df.columns:
+    # Detect surface
+    if 'tournament' in df.columns:
+        df['surface'] = df['tournament'].apply(detect_surface)
+    else:
         df['surface'] = 'Hard'
     
-    # Limpar nomes
+    # Clean names
     df['winner'] = df['winner'].astype(str).str.strip()
     df['loser'] = df['loser'].astype(str).str.strip()
     
-    # Remover inválidos
+    # Remove any rows with empty names
     df = df[df['winner'].notna() & df['loser'].notna()]
     df = df[df['winner'] != 'nan']
     df = df[df['loser'] != 'nan']
     df = df[df['winner'] != '']
     df = df[df['loser'] != '']
     
-    return df
+    # Extract unique players from the data
+    all_players = list(set(df['winner'].unique()) | set(df['loser'].unique()))
+    
+    return df, all_players
 
-def train_welo_system(df):
-    """Treina o sistema WELO com os dados históricos"""
-    welo = WELOSystem(decay_factor=0.95)
-    ou_system = OverUnderSystem()
+# ==============================================================================
+# PLAYER STATISTICS
+# ==============================================================================
+def calculate_player_stats(df, all_players):
+    """Calculate player statistics"""
     
-    # Ordenar por data
-    df_sorted = df.sort_values('date')
-    
-    for idx, row in df_sorted.iterrows():
-        winner = row['winner']
-        loser = row['loser']
-        surface = row.get('surface', 'Hard')
-        total_games = row.get('total_games', 22)
-        
-        # Atualizar WELO
-        welo.update(winner, loser, surface, row['date'])
-        
-        # Atualizar Over/Under
-        ou_system.update(winner, loser, total_games, surface)
-    
-    return welo, ou_system
-
-def calculate_player_stats(df):
-    """Calcula estatísticas dos jogadores"""
     stats = {}
     
-    for player in set(df['winner'].unique()) | set(df['loser'].unique()):
-        matches = df[(df['winner'] == player) | (df['loser'] == player)]
+    for player in all_players:
+        player_matches = df[(df['winner'] == player) | (df['loser'] == player)]
         
-        if len(matches) == 0:
+        if len(player_matches) == 0:
+            stats[player] = {
+                'matches': 0, 'wins': 0, 'win_rate': 0.5,
+                'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22
+            }
             continue
         
-        wins = len(matches[matches['winner'] == player])
-        total = len(matches)
+        wins = len(player_matches[player_matches['winner'] == player])
+        total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        # Forma recente (últimos 5 jogos)
-        recent = matches.sort_values('date', ascending=False).head(5)
+        # Recent form (last 10 matches)
+        recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
+        
+        # Very recent form (last 3 matches)
+        very_recent = player_matches.sort_values('date', ascending=False).head(3)
+        very_recent_wins = len(very_recent[very_recent['winner'] == player])
+        very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
+        
+        # Average games
+        avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
         
         stats[player] = {
             'matches': total,
             'wins': wins,
+            'losses': total - wins,
             'win_rate': win_rate,
             'recent_form': recent_form,
-            'avg_games': matches['total_games'].mean() if 'total_games' in matches.columns else 22
+            'very_recent_form': very_recent_form,
+            'avg_games': avg_games
         }
     
     return stats
 
+# ==============================================================================
+# H2H DATA
+# ==============================================================================
 def calculate_h2h(df):
-    """Calcula confrontos diretos"""
+    """Calculate head-to-head statistics"""
     h2h = defaultdict(lambda: {'wins': 0, 'total': 0})
     
     for _, row in df.iterrows():
@@ -362,285 +304,403 @@ def calculate_h2h(df):
     return h2h
 
 # ==============================================================================
-# 5. PREDIÇÃO DE PARTIDAS
+# ELO RATING
 # ==============================================================================
-def predict_match(welo_system, ou_system, p1, p2, surface, player_stats, h2h):
-    """Prediz o resultado de uma partida e Over/Under"""
+def calculate_elo(df, all_players, k=32):
+    """Calculate ELO ratings"""
+    elo = {p: 1500 for p in all_players}
     
-    # Probabilidade de vitória (WELO)
-    win_prob_p1 = welo_system.get_win_probability(p1, p2, surface)
+    for _, row in df.sort_values('date').iterrows():
+        w, l = row['winner'], row['loser']
+        if w in elo and l in elo:
+            exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
+            elo[w] += k * (1 - exp_w)
+            elo[l] += k * (0 - (1 - exp_w))
     
-    # Ajuste por confronto direto
-    s1 = player_stats.get(p1, {'recent_form': 0.5, 'win_rate': 0.5})
-    s2 = player_stats.get(p2, {'recent_form': 0.5, 'win_rate': 0.5})
+    return elo
+
+# ==============================================================================
+# FEATURE ENGINEERING
+# ==============================================================================
+def build_features(p1, p2, surface, player_stats, h2h, elo):
+    """Build features for prediction"""
     
+    s1 = player_stats.get(p1, {})
+    s2 = player_stats.get(p2, {})
+    
+    if s1.get('matches', 0) == 0 or s2.get('matches', 0) == 0:
+        return None
+    
+    # ELO difference
+    elo_diff = (elo.get(p1, 1500) - elo.get(p2, 1500)) / 400
+    
+    # Form differences
+    form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
+    very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
+    
+    # Win rate differences
+    win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
+    
+    # H2H advantage
     h2h_adv = 0.5
     if (p1, p2) in h2h:
-        h2h_adv = h2h[(p1, p2)]['wins'] / max(1, h2h[(p1, p2)]['total'])
+        h2h_adv = h2h[(p1, p2)]['wins'] / h2h[(p1, p2)]['total']
     elif (p2, p1) in h2h:
-        h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / max(1, h2h[(p2, p1)]['total']))
+        h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / h2h[(p2, p1)]['total'])
     
-    # Combinar probabilidades
-    final_win_prob = win_prob_p1 * 0.7 + h2h_adv * 0.15 + s1.get('recent_form', 0.5) * 0.15
-    final_win_prob = np.clip(final_win_prob, 0.25, 0.75)
+    # Games average
+    games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
+    games_norm = (games_avg - 21.5) / 8
     
-    # Probabilidade Over 21.5
-    over_prob, expected_games = ou_system.predict_over_probability(p1, p2, surface)
+    # Experience difference
+    exp_diff = (s1.get('matches', 0) - s2.get('matches', 0)) / 200
     
-    # Confiança baseada na diferença de rating
-    r1 = welo_system.get_rating(p1)
-    r2 = welo_system.get_rating(p2)
-    rating_diff = abs(r1 - r2)
+    # Momentum
+    momentum = very_recent_diff * 0.6 + form_diff * 0.4
     
-    if rating_diff > 200:
-        confidence = 0.75
-    elif rating_diff > 100:
-        confidence = 0.65
-    elif rating_diff > 50:
-        confidence = 0.55
-    else:
-        confidence = 0.50
+    features = [
+        elo_diff,
+        form_diff,
+        very_recent_diff,
+        win_rate_diff,
+        h2h_adv,
+        games_norm,
+        exp_diff,
+        momentum
+    ]
     
-    winner = p1 if final_win_prob > 0.5 else p2
+    return features
+
+# ==============================================================================
+# TRAIN MODEL
+# ==============================================================================
+def train_model(df, player_stats, h2h, elo):
+    """Train prediction model"""
     
-    if confidence >= 0.65:
+    X, y = [], []
+    
+    for _, row in df.iterrows():
+        w, l = row['winner'], row['loser']
+        surface = row.get('surface', 'Hard')
+        
+        # Features for winner
+        features = build_features(w, l, surface, player_stats, h2h, elo)
+        if features:
+            X.append(features)
+            y.append(1)
+        
+        # Features for loser (reverse)
+        features_rev = build_features(l, w, surface, player_stats, h2h, elo)
+        if features_rev:
+            X.append(features_rev)
+            y.append(0)
+    
+    if len(X) == 0:
+        raise ValueError("No training data - verifique se os nomes dos jogadores estão corretos")
+    
+    X = np.array(X)
+    
+    model = LGBMClassifier(
+        n_estimators=150,
+        max_depth=5,
+        learning_rate=0.035,
+        num_leaves=16,
+        reg_alpha=0.8,
+        reg_lambda=0.8,
+        random_state=42,
+        verbose=-1
+    )
+    
+    model.fit(X, y)
+    
+    return model
+
+# ==============================================================================
+# NAME MATCHER
+# ==============================================================================
+class SimpleNameMatcher:
+    """Simple name matcher for Sofascore names"""
+    
+    def __init__(self, historical_names):
+        self.historical_names = historical_names
+        self.name_map = {}
+        
+        # Create mappings
+        for name in historical_names:
+            name_lower = name.lower()
+            self.name_map[name_lower] = name
+            
+            # Last name mapping
+            parts = name.split()
+            if parts:
+                last_name = parts[-1].lower()
+                if last_name not in self.name_map:
+                    self.name_map[last_name] = name
+    
+    def find_match(self, search_name):
+        if not search_name:
+            return None
+        
+        search_str = str(search_name).strip()
+        search_lower = search_str.lower()
+        
+        # Direct match
+        if search_str in self.historical_names:
+            return search_str
+        
+        # Case insensitive
+        for name in self.historical_names:
+            if name.lower() == search_lower:
+                return name
+        
+        # Last name match
+        if search_lower in self.name_map:
+            return self.name_map[search_lower]
+        
+        # Partial match
+        for name in self.historical_names:
+            if search_lower in name.lower() or name.lower() in search_lower:
+                return name
+        
+        return None
+
+# ==============================================================================
+# PREDICT MATCH
+# ==============================================================================
+def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
+    """Predict a single match"""
+    
+    p1_match = name_matcher.find_match(p1)
+    p2_match = name_matcher.find_match(p2)
+    
+    if not p1_match:
+        return None, f"❌ '{p1}' não encontrado no histórico"
+    if not p2_match:
+        return None, f"❌ '{p2}' não encontrado no histórico"
+    
+    features = build_features(p1_match, p2_match, surface, player_stats, h2h, elo)
+    if not features:
+        return None, f"Estatísticas insuficientes"
+    
+    prob = model.predict_proba(np.array([features]))[0][1]
+    prob_p1 = np.clip(0.5 + (prob - 0.5) * WINNER_SMOOTH, 0.15, 0.85)
+    confidence = abs(prob_p1 - 0.5) * 2
+    winner = p1_match if prob_p1 > 0.5 else p2_match
+    
+    if confidence >= MIN_CONFIDENCE_STRONG:
         rec = f"🔥 STRONG {winner}"
-    elif confidence >= 0.55:
+    elif confidence >= MIN_CONFIDENCE_GOOD:
         rec = f"✅ GOOD {winner}"
     else:
         rec = f"⚪ AVOID {winner}"
     
-    # Determinar Over/Under
-    ou_prediction = "Over 21.5" if over_prob > 0.5 else "Under 21.5"
-    ou_confidence = abs(over_prob - 0.5) * 2
+    s1 = player_stats.get(p1_match, {})
+    s2 = player_stats.get(p2_match, {})
+    momentum_edge = (s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)) * 100
+    exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
     return {
         'Jogador1': p1,
         'Jogador2': p2,
-        'WELO1': int(r1),
-        'WELO2': int(r2),
-        'WinRate1': f"{s1.get('win_rate', 0.5):.0%}",
-        'WinRate2': f"{s2.get('win_rate', 0.5):.0%}",
-        'Forma1': f"{s1.get('recent_form', 0.5):.0%}",
-        'Forma2': f"{s2.get('recent_form', 0.5):.0%}",
-        'H2H': f"{h2h_adv:.0%}",
-        'Prob_Vitoria_P1': f"{final_win_prob:.1%}",
-        'Prob_Vitoria_P2': f"{1-final_win_prob:.1%}",
+        'Match_Historico': f"{p1_match} vs {p2_match}",
+        'Superficie': surface,
+        'Prob_P1': f"{prob_p1:.1%}",
+        'Prob_P2': f"{1-prob_p1:.1%}",
         'Vencedor': winner,
-        'Confianca_Win': f"{confidence:.1%}",
+        'Confianca': f"{confidence:.1%}",
         'Recomendacao': rec,
-        'Games_Esperados': f"{expected_games:.1f}",
-        'Prob_Over': f"{over_prob:.1%}",
-        'Prob_Under': f"{1-over_prob:.1%}",
-        'Over_Under': ou_prediction,
-        'Confianca_OU': f"{ou_confidence:.1%}"
-    }
+        'Momentum': f"{momentum_edge:+.0f}",
+        'Games_Esperados': round(exp_games, 1)
+    }, None
 
 # ==============================================================================
-# 6. GERAR MATCHES
-# ==============================================================================
-def generate_matches(player_stats):
-    """Gera matches baseados nos jogadores do histórico"""
-    matches = []
-    
-    players = list(player_stats.keys())
-    
-    if len(players) < 4:
-        players = [
-            "Novak Djokovic", "Carlos Alcaraz", "Jannik Sinner", "Daniil Medvedev",
-            "Alexander Zverev", "Stefanos Tsitsipas", "Andrey Rublev", "Holger Rune"
-        ]
-    
-    import random
-    random.shuffle(players)
-    
-    for level, tournaments in TOURNAMENTS.items():
-        for tournament in tournaments[:2]:
-            if "Masters" in level or "ATP 500" in level:
-                tourney_players = players[:min(12, len(players))]
-            else:
-                tourney_players = players[:min(16, len(players))]
-            
-            random.shuffle(tourney_players)
-            
-            for i in range(0, len(tourney_players)-1, 2):
-                if i+1 < len(tourney_players):
-                    matches.append({
-                        'tournament': tournament['name'],
-                        'level': level,
-                        'surface': tournament['surface'],
-                        'player1': tourney_players[i],
-                        'player2': tourney_players[i+1]
-                    })
-                    
-                    if len([m for m in matches if m['tournament'] == tournament['name']]) >= 4:
-                        break
-    
-    return matches[:40]
-
-# ==============================================================================
-# 7. MAIN APP
+# MAIN APP
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor v15.0 - WELO + Over/Under")
-    st.markdown("**Sistema WELO (Weighted ELO) + Previsão de Over/Under 21.5 Games**")
+    st.title("🎾 ATP Predictor v6.0 - Tennis24 Scraper")
+    st.caption("Busca automática de jogos no Tennis24.com | Modelo treinado com seu histórico")
     
-    # Explicação dos sistemas
-    with st.expander("ℹ️ Como funciona o WELO e Over/Under", expanded=False):
-        st.markdown("""
-        **WELO (Weighted ELO)**
-        - Dá mais peso a jogos recentes (decay exponencial)
-        - K-factor adaptativo (maior para zebras)
-        - Momentum baseado nos últimos 5 jogos
-        
-        **Over/Under 21.5 Games**
-        - Calcula média de games por jogador
-        - Ajuste por superfície (Clay: +1.5, Grass: -1.5)
-        - Probabilidade baseada em distribuição normal
-        """)
+    uploaded_file = st.file_uploader("📁 Upload do ficheiro histórico (Excel/CSV)", type=['xlsx', 'csv'])
     
-    uploaded_file = st.file_uploader("📁 Upload do seu histórico (Excel/CSV)", type=['xlsx', 'csv'])
-    
-    if uploaded_file and 'welo_system' not in st.session_state:
-        with st.spinner("Processando dados e treinando sistemas WELO e Over/Under..."):
-            df = load_and_process_data(uploaded_file)
-            
-            if df is not None and len(df) > 0:
+    if uploaded_file and 'model' not in st.session_state:
+        with st.spinner("🔄 Processando seu arquivo..."):
+            try:
+                # Load data
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                
+                # Show original columns
+                st.info(f"Colunas encontradas: {list(df.columns)}")
+                
+                # Process data and extract players
+                df, all_players = process_historical_data(df)
+                
+                if df is None or len(df) == 0:
+                    st.error("Não foi possível processar o arquivo. Verifique as colunas.")
+                    return
+                
                 st.success(f"✅ {len(df)} jogos carregados")
+                st.success(f"✅ {len(all_players)} jogadores únicos encontrados")
                 
-                # Treinar sistemas
-                welo_system, ou_system = train_welo_system(df)
-                player_stats = calculate_player_stats(df)
+                # Show sample of players
+                with st.expander(f"📋 Amostra dos jogadores no seu arquivo (primeiros 50)"):
+                    for i, p in enumerate(sorted(all_players)[:50]):
+                        st.write(f"{i+1}. {p}")
+                    if len(all_players) > 50:
+                        st.write(f"... e mais {len(all_players) - 50} jogadores")
+                
+                # Calculate statistics
+                player_stats = calculate_player_stats(df, all_players)
                 h2h = calculate_h2h(df)
+                elo = calculate_elo(df, all_players)
                 
-                st.session_state.welo_system = welo_system
-                st.session_state.ou_system = ou_system
+                # Train model
+                model = train_model(df, player_stats, h2h, elo)
+                
+                # Create name matcher
+                name_matcher = SimpleNameMatcher(all_players)
+                
+                # Store in session
+                st.session_state.model = model
                 st.session_state.player_stats = player_stats
                 st.session_state.h2h = h2h
+                st.session_state.elo = elo
+                st.session_state.name_matcher = name_matcher
+                st.session_state.all_players = all_players
                 st.session_state.models_ready = True
                 
-                st.success("✅ Sistemas treinados com sucesso!")
+                st.success("✅ Modelo treinado com sucesso!")
                 
-                # Mostrar top jogadores WELO
-                with st.expander("📊 Ranking WELO - Top 20"):
-                    rankings = [(p, welo_system.get_rating(p)) for p in player_stats.keys()]
-                    rankings.sort(key=lambda x: x[1], reverse=True)
-                    for i, (p, r) in enumerate(rankings[:20]):
-                        wr = player_stats[p]['win_rate']
-                        momentum = welo_system.get_momentum(p)
-                        st.write(f"{i+1}. {p}: {r:.0f} (WR: {wr:.0%} | Momentum: {momentum:.0%})")
+                # Show statistics
+                players_with_matches = [p for p in all_players if player_stats[p]['matches'] > 0]
+                st.info(f"📊 Jogadores com estatísticas: {len(players_with_matches)}")
+                
+            except Exception as e:
+                st.error(f"Erro: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
-        st.subheader("🎯 GERAR PREVISÕES")
-        
-        col1, col2, col3 = st.columns(3)
-        
+        col1, col2 = st.columns(2)
         with col1:
-            if st.button("🎾 Todos os Torneios", use_container_width=True, type="primary"):
-                matches = generate_matches(st.session_state.player_stats)
-                st.session_state.current_matches = matches
-                st.success(f"✅ {len(matches)} partidas geradas!")
-        
+            if st.button("📅 BUSCAR JOGOS DE HOJE", use_container_width=True, type="primary"):
+                with st.spinner("Acessando Tennis24.com e extraindo jogos..."):
+                    st.session_state.matches = scrape_matches()
+                    if st.session_state.matches:
+                        st.success(f"✅ {len(st.session_state.matches)} jogos encontrados!")
+                    else:
+                        st.error("❌ Nenhum jogo encontrado. O site pode ter mudado a estrutura.")
         with col2:
-            if st.button("🏆 ATP Masters/500", use_container_width=True):
-                matches = generate_matches(st.session_state.player_stats)
-                atp_matches = [m for m in matches if "Masters" in m['level'] or "ATP 500" in m['level']]
-                st.session_state.current_matches = atp_matches[:15]
-                st.success(f"✅ {len(st.session_state.current_matches)} partidas")
+            if st.button("🔍 TESTAR MATCHING", use_container_width=True):
+                test_name = st.text_input("Digite um nome para testar:", key="test_input")
+                if test_name:
+                    result = st.session_state.name_matcher.find_match(test_name)
+                    if result:
+                        st.success(f"✅ Encontrado: {result}")
+                    else:
+                        st.error(f"❌ Não encontrado: {test_name}")
+                        st.info("Dica: Tente usar apenas o sobrenome (ex: 'Struff' em vez de 'Jan-Lennard Struff')")
         
-        with col3:
-            if st.button("🎯 Só Challenger", use_container_width=True):
-                matches = generate_matches(st.session_state.player_stats)
-                chall_matches = [m for m in matches if "Challenger" in m['level']]
-                st.session_state.current_matches = chall_matches[:15]
-                st.success(f"✅ {len(st.session_state.current_matches)} partidas")
-        
-        # Input manual
-        with st.expander("✏️ Inserir Partida Manual"):
+        # Manual prediction
+        with st.expander("✏️ PREVISÃO MANUAL", expanded=True):
+            # Get players with stats
+            players_with_stats = [p for p in st.session_state.all_players 
+                                  if st.session_state.player_stats[p]['matches'] > 0]
+            players_sorted = sorted(players_with_stats)
+            
             col_a, col_b, col_c = st.columns(3)
             with col_a:
-                manual_p1 = st.text_input("Jogador 1", placeholder="Ex: Novak Djokovic")
+                manual_p1 = st.selectbox("Jogador 1", [""] + players_sorted)
             with col_b:
-                manual_p2 = st.text_input("Jogador 2", placeholder="Ex: Carlos Alcaraz")
+                manual_p2 = st.selectbox("Jogador 2", [""] + players_sorted)
             with col_c:
-                manual_surf = st.selectbox("Superfície", ["Hard", "Clay", "Grass"])
-                manual_tourney = st.text_input("Torneio", "ATP Masters")
+                manual_surface = st.selectbox("Superfície", ["Clay", "Hard", "Grass"])
             
-            if st.button("🔮 Prever Partida", type="primary") and manual_p1 and manual_p2:
-                match = {
-                    'tournament': manual_tourney,
-                    'player1': manual_p1,
-                    'player2': manual_p2,
-                    'surface': manual_surf,
-                    'level': 'Manual'
-                }
-                st.session_state.current_matches = [match]
+            if st.button("🔮 PREVER", type="primary") and manual_p1 and manual_p2:
+                if manual_p1 == manual_p2:
+                    st.error("Selecione dois jogadores diferentes")
+                else:
+                    result, error = predict_match(
+                        st.session_state.model, manual_p1, manual_p2, manual_surface,
+                        st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
+                        st.session_state.name_matcher
+                    )
+                    if result:
+                        st.dataframe(pd.DataFrame([result]), use_container_width=True)
+                    else:
+                        st.error(error)
         
-        # Mostrar previsões
-        if st.session_state.get('current_matches'):
-            st.subheader(f"📋 Previsões ({len(st.session_state.current_matches)} partidas)")
+        # Show predictions for today
+        if st.session_state.get('matches'):
+            st.subheader("🎯 PREVISÕES PARA HOJE")
             
             results = []
-            for match in st.session_state.current_matches:
-                pred = predict_match(
-                    st.session_state.welo_system,
-                    st.session_state.ou_system,
-                    match['player1'], match['player2'],
-                    match['surface'],
-                    st.session_state.player_stats,
-                    st.session_state.h2h
+            errors = []
+            
+            progress_bar = st.progress(0)
+            for i, match in enumerate(st.session_state.matches):
+                result, error = predict_match(
+                    st.session_state.model, match['player1'], match['player2'], match['surface'],
+                    st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
+                    st.session_state.name_matcher
                 )
-                pred['Torneio'] = match['tournament']
-                pred['Nivel'] = match.get('level', '')
-                pred['Superficie'] = match['surface']
-                results.append(pred)
+                if result:
+                    result['Torneio'] = match.get('tournament', 'ATP Event')
+                    results.append(result)
+                elif error:
+                    errors.append(error)
+                progress_bar.progress((i + 1) / len(st.session_state.matches))
+            progress_bar.empty()
+            
+            # Show errors
+            if errors:
+                with st.expander(f"⚠️ {len(errors)} jogadores não encontrados no histórico"):
+                    for e in set(errors):
+                        st.write(e)
+                    st.info("💡 Use a previsão manual com os nomes exatos do seu histórico")
             
             if results:
                 df_results = pd.DataFrame(results)
+                st.dataframe(df_results, use_container_width=True, hide_index=True)
                 
-                # Selecionar colunas para exibir
-                display_cols = ['Torneio', 'Nivel', 'Superficie', 'Jogador1', 'Jogador2', 
-                               'WELO1', 'WELO2', 'Forma1', 'Forma2', 'H2H',
-                               'Prob_Vitoria_P1', 'Prob_Vitoria_P2', 'Vencedor', 'Confianca_Win',
-                               'Games_Esperados', 'Prob_Over', 'Prob_Under', 'Over_Under', 'Confianca_OU']
-                
-                df_display = df_results[[c for c in display_cols if c in df_results.columns]]
-                
-                # Estilizar
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
-                
-                # Resumo
-                st.subheader("📊 Resumo das Previsões")
-                col_a, col_b, col_c, col_d, col_e = st.columns(5)
-                
-                with col_a:
+                # Summary
+                st.subheader("📊 Resumo")
+                col_s1, col_s2, col_s3 = st.columns(3)
+                with col_s1:
                     strong = sum(1 for r in results if 'STRONG' in r['Recomendacao'])
-                    st.metric("🔥 STRONG", strong)
-                
-                with col_b:
-                    good = sum(1 for r in results if 'GOOD' in r['Recomendacao'])
-                    st.metric("✅ GOOD", good)
-                
-                with col_c:
-                    over_count = sum(1 for r in results if r['Over_Under'] == 'Over 21.5')
-                    st.metric("📈 Over 21.5", f"{over_count}/{len(results)}")
-                
-                with col_d:
-                    under_count = sum(1 for r in results if r['Over_Under'] == 'Under 21.5')
-                    st.metric("📉 Under 21.5", f"{under_count}/{len(results)}")
-                
-                with col_e:
-                    st.metric("Total", len(results))
+                    st.metric("STRONG Picks", strong)
+                with col_s2:
+                    conf_values = [float(r['Confianca'].replace('%', '')) for r in results]
+                    avg_conf = sum(conf_values) / len(conf_values) if conf_values else 0
+                    st.metric("Confiança Média", f"{avg_conf:.1f}%")
+                with col_s3:
+                    st.metric("Total Jogos", len(results))
                 
                 # Download
                 buffer = io.BytesIO()
                 df_results.to_excel(buffer, index=False)
-                st.download_button(
-                    "📥 Download Previsões (Excel)",
-                    buffer.getvalue(),
-                    f"previsoes_welo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    use_container_width=True
-                )
+                st.download_button("📥 Download Excel", buffer.getvalue(),
+                                 f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                 use_container_width=True)
+    
+    elif not uploaded_file:
+        st.info("📂 Faça upload do seu ficheiro Excel/CSV com dados históricos")
+        st.markdown("""
+        ### Como preparar o arquivo:
+        
+        O arquivo deve conter colunas com os nomes dos jogadores:
+        - `winner` ou `vencedor` - nome do jogador que venceu
+        - `loser` ou `perdedor` - nome do jogador que perdeu
+        
+        **Colunas opcionais:**
+        - `date` ou `data` - data do jogo (para forma recente)
+        - `score` ou `placar` - para calcular total de games
+        - `tournament` ou `torneio` - para detectar superfície
+        
+        O sistema vai aprender automaticamente todos os nomes do seu arquivo!
+        """)
 
 if __name__ == "__main__":
     main()
