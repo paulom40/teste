@@ -673,8 +673,7 @@ if file is None:
 
 df = pd.read_excel(file)
 
-    df, all_players = process_historical_data(df)
-
+    
     if df is None:
         st.error("Erro ao processar o ficheiro.")
         return
