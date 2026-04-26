@@ -20,14 +20,200 @@ MIN_CONFIDENCE_STRONG = 0.68
 MIN_CONFIDENCE_GOOD = 0.60
 
 # ==============================================================================
+# MAPEAMENTO MANUAL DE SOBRENOMES -> NOMES COMPLETOS
+# ==============================================================================
+NAME_MAPPING = {
+    # ATP Top Players (Madrid Open)
+    'lehecka': 'Jiri Lehecka',
+    'michelsen': 'Alex Michelsen',
+    'griekspoor': 'Tallon Griekspoor',
+    'musetti': 'Lorenzo Musetti',
+    'prizmic': 'Dino Prizmic',
+    'etcheverry': 'Tomas Martin Etcheverry',
+    'fils': 'Arthur Fils',
+    'nava': 'Emilio Nava',
+    'sinner': 'Jannik Sinner',
+    'moller': 'Elmer Moller',
+    'norrie': 'Cameron Norrie',
+    'tirante': 'Thiago Agustin Tirante',
+    'kopriva': 'Vit Kopriva',
+    'rinderknech': 'Arthur Rinderknech',
+    'fonseca': 'Joao Fonseca',
+    'jodar': 'Rafael Jodar',
+    'zheng': 'Michael Zheng',
+    'rybakina': 'Elena Rybakina',
+    'arevalo': 'Marcelo Arevalo',
+    'paul': 'Tommy Paul',
+    'granollers': 'Marcel Granollers',
+    'arneodo': 'Romain Arneodo',
+    'tabilo': 'Alejandro Tabilo',
+    'heliovaara': 'Harri Heliovaara',
+    'bublik': 'Alexander Bublik',
+    'luz': 'Orlando Luz',
+    'melo': 'Marcelo Melo',
+    'darderi': 'Luciano Darderi',
+    'cerundolo': 'Francisco Cerundolo',
+    'cabral': 'Francisco Cabral',
+    'krawietz': 'Kevin Krawietz',
+    'onclin': 'Gauthier Onclin',
+    'stewart': 'Hamish Stewart',
+    'holmgren': 'August Holmgren',
+    'kwon': 'SoonWoo Kwon',
+    'svrcina': 'Dalibor Svrcina',
+    'guerrieri': 'Andrea Guerrieri',
+    'kennedy': 'James Kennedy',
+    'basavareddy': 'Nishesh Basavareddy',
+    'kalyanpur': 'Adil Kalyanpur',
+    'perez': 'Alfredo Perez',
+    'neuchrist': 'Maximilian Neuchrist',
+    'fondriest': 'Fondriest',
+    'gima': 'Sebastian Gima',
+    'hands': 'Tom Hands',
+    'hurrion': 'Matthew Hurrion',
+    'lock': 'Lock',
+    'mansouri': 'Skander Mansouri',
+    'weightman': 'James Weightman',
+    'kuhar': 'Matt Kuhar',
+    'sanogo': 'SANOGO',
+    'hu': 'Hu',
+    'moriya': 'Hiroki Moriya',
+    'pearson': 'Kody Pearson',
+    'peliwo': 'Filip Peliwo',
+    'tung-lin': 'Tung-Lin Wu',
+    'wei': 'Wei',
+    'ilagan': 'Andre Ilagan',
+    'chen': 'Chen',
+    'fellin': 'Pietro Fellin',
+    'delaney': 'Jake Delaney',
+    'sharipov': 'Marat Sharipov',
+    'jones': 'Maximus Jones',
+    'kusuhara': 'Yusuke Kusuhara',
+    'dellavedova': 'Matthew Dellavedova',
+    'tian': 'Tian',
+    'shimizu': 'Yuta Shimizu',
+    'matsuoka': 'Hayato Matsuoka',
+    'zhu': 'Zhu',
+    'zeng': 'Zeng',
+    'jasika': 'Omar Jasika',
+    'zhukayev': 'Beibit Zhukayev',
+    'takahashi': 'Yusuke Takahashi',
+    'masur': 'Daniel Masur',
+    'sun': 'Sun',
+    'damas': 'Miguel Damas',
+    'pinter': 'Pinter',
+    'hausberger': 'Hausberger',
+    'donald': 'Donald',
+    'iannaccone': 'Federico Iannaccone',
+    'obradovic': 'Obradovic',
+    'cukierman': 'Cukierman',
+    'vrbensky': 'Michael Vrbensky',
+    'jorda': 'David Jorda Sanchis',
+    'latinovic': 'Latinovic',
+    'martinez': 'Andres Martinez',
+    'waldner': 'Waldner',
+    'krumich': 'Martin Krumich',
+    'hilderbrand': 'Trey Hilderbrand',
+    'wagner': 'Wagner',
+    'nijboer': 'Nijboer',
+    'brunold': 'Mika Brunold',
+    'rosenkranz': 'Mats Rosenkranz',
+    'cretu': 'Cezar Cretu',
+    'berenz': 'Berenz',
+    'hipfl': 'Hipfl',
+    'sanchez': 'Sanchez',
+    'boitan': 'Gabi Adrian Boitan',
+    'cizek': 'Cizek',
+    'filar': 'Karol Filar',
+    'papoe': 'Radu Mihai Papoe',
+    'nicod': 'Jakub Nicod',
+    'moeller': 'Marvin Moeller',
+    'forejtek': 'Jonas Forejtek',
+    'doskocil': 'Doskocil',
+    'gombos': 'Norbert Gombos',
+    'kusy': 'Kusy',
+    'johns': 'Garrett Johns',
+    'juszczak': 'Juszczak',
+    'klimas': 'Klimas',
+    'basic': 'Mirza Basic',
+    'donski': 'Alexander Donski',
+    'banthia': 'Siddhant Banthia',
+    'molleker': 'Rudolf Molleker',
+    'recek': 'Recek',
+    'palosi': 'Stefan Palosi',
+    'stricker': 'Dominic Stricker',
+    'cerny': 'Cerny',
+    'mochizuki': 'Shintaro Mochizuki',
+    'chekhov': 'Chekhov',
+    'shin': 'Sanhui Shin',
+    'klok': 'Klok',
+    'zhalgasbay': 'Zhalgasbay',
+    'campana': 'Campana',
+    'orlov': 'Orlov',
+    'lomakin': 'Lomakin',
+    'gulin': 'Gulin',
+    'wehnelt': 'Wehnelt',
+    'trebukhin': 'Trebukhin',
+    'vithoontien': 'Leo Vithoontien',
+    'krutykh': 'Oleksii Krutykh',
+    'ostapenkov': 'Ostapenkov',
+    'kirkin': 'Kirkin',
+    'masabayashi': 'Masabayashi',
+    'yamazaki': 'Yamazaki',
+    'wang': 'Wang',
+    'plipuech': 'Plipuech',
+    'sidorova': 'Sidorova',
+    'eto': 'Eto',
+    'huang': 'Huang',
+    'yuan': 'Yuan',
+    'alves': 'Alves',
+    'falkowska': 'Falkowska',
+    'leonard': 'Leonard',
+    'nguyen': 'Nguyen',
+    'ovcharenko': 'Oleksandr Ovcharenko',
+    'buyukakcay': 'Buyukakcay',
+    'bartashevich': 'Bartashevich',
+    'sakellaridi': 'Stefanos Sakellaridis',
+    'efstathiou': 'Menelaos Efstathiou',
+    'pietri': 'Pietri',
+    'gschwendtner': 'Gschwendtner',
+    'kingsley': 'Cannon Kingsley',
+    'hance': 'Hance',
+    'flores': 'Flores',
+    'tanner': 'Gian Luca Tanner',
+    'hoeyeraal': 'Hoeyeraal',
+    'cavallo': 'Cavallo',
+    'searle': 'Henry Searle',
+    'torres': 'Torres',
+    'shepp': 'Shepp',
+    'stringer': 'Stringer',
+    'roca': 'Oriol Roca Batalla',
+    'montes-de': 'Inaki Montes-De La Torre',
+    'gray': 'Alastair Gray',
+    'cui': 'Cui',
+    'arzhankin': 'Arzhankin',
+    'kachmazov': 'Alibek Kachmazov',
+    'hernandez': 'Alex Hernandez',
+    'pacheco': 'Rodrigo Pacheco Mendez',
+    'rottgering': 'Mees Rottgering',
+    'tararudee': 'Tararudee',
+    'preston': 'Preston',
+    'newman': 'Newman',
+    'back': 'Back',
+    'matsuda': 'Ryuki Matsuda',
+    'zolotareva': 'Zolotareva',
+    'kumar': 'Kumar',
+    'hayen': 'Hayen',
+}
+
+# ==============================================================================
 # SURFACE DETECTION
 # ==============================================================================
 def detect_surface(tournament_name):
     if pd.isna(tournament_name):
         return 'Hard'
     t = str(tournament_name).lower()
-    clay = ['clay', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros', 'bordeaux', 'aix', 'cagliari']
-    grass = ['grass', 'wimbledon', 'queens', 'halle', 'stuttgart', 's-Hertogenbosch']
+    clay = ['clay', 'madrid', 'rome', 'barcelona', 'munich', 'roland garros']
+    grass = ['grass', 'wimbledon', 'queens', 'halle']
     if any(k in t for k in clay):
         return 'Clay'
     if any(k in t for k in grass):
@@ -35,75 +221,43 @@ def detect_surface(tournament_name):
     return 'Hard'
 
 # ==============================================================================
-# PROCESS DATA - CORRIGIDO PARA SEU FORMATO
+# PROCESS DATA
 # ==============================================================================
 def process_historical_data(df):
     """Process historical data and extract player names from the file"""
     
-    # Mostrar colunas para debug
-    st.write("### Colunas encontradas no arquivo:")
-    st.write(list(df.columns))
-    
-    # Mapeamento das colunas do seu arquivo
+    # Mapeamento das colunas
     column_mapping = {}
-    
-    # Mapear coluna de vencedor
     for col in df.columns:
         col_lower = col.lower()
         if 'winner_name' in col_lower or 'winner' in col_lower:
             column_mapping[col] = 'winner'
         elif 'loser_name' in col_lower or 'loser' in col_lower:
             column_mapping[col] = 'loser'
-        elif 'tourney_name' in col_lower or 'tournament' in col_lower or 'tourney' in col_lower:
+        elif 'tourney_name' in col_lower or 'tournament' in col_lower:
             column_mapping[col] = 'tournament'
         elif 'tourney_date' in col_lower or 'date' in col_lower:
             column_mapping[col] = 'date'
-        elif 't games' in col_lower or 'total_games' in col_lower or 'games' in col_lower:
+        elif 't games' in col_lower or 'total_games' in col_lower:
             column_mapping[col] = 'total_games'
         elif 'surface' in col_lower:
             column_mapping[col] = 'surface'
-        elif 'score' in col_lower:
-            column_mapping[col] = 'score'
     
-    # Renomear colunas
     df = df.rename(columns=column_mapping)
-    
-    st.write("### Colunas apos mapeamento:")
-    st.write(list(df.columns))
-    
-    # Verificar se temos as colunas necessarias
-    if 'winner' not in df.columns:
-        st.error("Coluna 'winner' nao encontrada. Procure por 'winner_name' no arquivo.")
-        return None, None
-    if 'loser' not in df.columns:
-        st.error("Coluna 'loser' nao encontrada. Procure por 'loser_name' no arquivo.")
-        return None, None
     
     # Converter data
     if 'date' in df.columns:
-        # O formato parece ser YYYYMMDD
         df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
     else:
         df['date'] = pd.Timestamp.now()
     
-    # Calcular total de games se nao existir
+    # Total games
     if 'total_games' not in df.columns:
-        # Tentar calcular a partir do placar
-        if 'score' in df.columns:
-            def extract_games(score):
-                if pd.isna(score):
-                    return 22
-                # Extrair números do placar (ex: "7-6(4) 5-7 6-1" -> 7+6+5+7+6+1 = 32)
-                numbers = re.findall(r'\d+', str(score))
-                games = [int(n) for n in numbers if int(n) < 20]
-                return sum(games) if games else 22
-            df['total_games'] = df['score'].apply(extract_games)
-        else:
-            df['total_games'] = 22
+        df['total_games'] = 22
     
-    # Detectar superficie
+    # Superficie
     if 'surface' in df.columns:
-        df['surface'] = df['surface'].apply(lambda x: 'Clay' if x == 'Clay' else 'Hard' if x == 'Hard' else 'Grass')
+        df['surface'] = df['surface'].apply(lambda x: 'Clay' if str(x) == 'Clay' else 'Hard' if str(x) == 'Hard' else 'Grass')
     elif 'tournament' in df.columns:
         df['surface'] = df['tournament'].apply(detect_surface)
     else:
@@ -121,17 +275,13 @@ def process_historical_data(df):
     df = df[df['loser'] != '']
     df = df[df['winner'] != df['loser']]
     
-    # Extrair jogadores unicos
     all_players = sorted(list(set(df['winner'].unique()) | set(df['loser'].unique())))
     
     st.success(f"Processado: {len(df)} jogos | {len(all_players)} jogadores")
     
-    # Mostrar amostra dos jogadores
     with st.expander(f"Jogadores no historico ({len(all_players)} total)"):
         for i, p in enumerate(all_players[:50]):
             st.write(f"{i+1}. {p}")
-        if len(all_players) > 50:
-            st.write(f"... e mais {len(all_players) - 50} jogadores")
     
     return df, all_players
 
@@ -139,45 +289,34 @@ def process_historical_data(df):
 # PLAYER STATISTICS
 # ==============================================================================
 def calculate_player_stats(df, all_players):
-    """Calculate player statistics"""
-    
     stats = {}
     
     for player in all_players:
         player_matches = df[(df['winner'] == player) | (df['loser'] == player)]
         
         if len(player_matches) == 0:
-            stats[player] = {
-                'matches': 0, 'wins': 0, 'win_rate': 0.5,
-                'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22
-            }
+            stats[player] = {'matches': 0, 'wins': 0, 'win_rate': 0.5,
+                           'recent_form': 0.5, 'very_recent_form': 0.5, 'avg_games': 22}
             continue
         
         wins = len(player_matches[player_matches['winner'] == player])
         total = len(player_matches)
         win_rate = wins / total if total > 0 else 0.5
         
-        # Recent form (last 10 matches)
         recent = player_matches.sort_values('date', ascending=False).head(10)
         recent_wins = len(recent[recent['winner'] == player])
         recent_form = recent_wins / len(recent) if len(recent) > 0 else 0.5
         
-        # Very recent form (last 3 matches)
         very_recent = player_matches.sort_values('date', ascending=False).head(3)
         very_recent_wins = len(very_recent[very_recent['winner'] == player])
         very_recent_form = very_recent_wins / len(very_recent) if len(very_recent) > 0 else 0.5
         
-        # Average games
         avg_games = player_matches['total_games'].mean() if 'total_games' in player_matches.columns else 22
         
         stats[player] = {
-            'matches': total,
-            'wins': wins,
-            'losses': total - wins,
-            'win_rate': win_rate,
-            'recent_form': recent_form,
-            'very_recent_form': very_recent_form,
-            'avg_games': avg_games
+            'matches': total, 'wins': wins, 'losses': total - wins,
+            'win_rate': win_rate, 'recent_form': recent_form,
+            'very_recent_form': very_recent_form, 'avg_games': avg_games
         }
     
     return stats
@@ -186,84 +325,58 @@ def calculate_player_stats(df, all_players):
 # H2H DATA
 # ==============================================================================
 def calculate_h2h(df):
-    """Calculate head-to-head statistics"""
     h2h = defaultdict(lambda: {'wins': 0, 'total': 0})
-    
     for _, row in df.iterrows():
         w, l = row['winner'], row['loser']
         h2h[(w, l)]['wins'] += 1
         h2h[(w, l)]['total'] += 1
-    
     return h2h
 
 # ==============================================================================
 # ELO RATING
 # ==============================================================================
 def calculate_elo(df, all_players, k=32):
-    """Calculate ELO ratings"""
     elo = {p: 1500 for p in all_players}
-    
     for _, row in df.sort_values('date').iterrows():
         w, l = row['winner'], row['loser']
         if w in elo and l in elo:
             exp_w = 1 / (1 + 10 ** ((elo[l] - elo[w]) / 400))
             elo[w] += k * (1 - exp_w)
             elo[l] += k * (0 - (1 - exp_w))
-    
     return elo
 
 # ==============================================================================
 # FEATURE ENGINEERING
 # ==============================================================================
 def build_features(p1, p2, surface, player_stats, h2h, elo):
-    """Build features for prediction"""
-    
     s1 = player_stats.get(p1, {})
     s2 = player_stats.get(p2, {})
     
     if s1.get('matches', 0) == 0 or s2.get('matches', 0) == 0:
         return None
     
-    # ELO difference
     elo_diff = (elo.get(p1, 1500) - elo.get(p2, 1500)) / 400
-    
-    # Form differences
     form_diff = s1.get('recent_form', 0.5) - s2.get('recent_form', 0.5)
     very_recent_diff = s1.get('very_recent_form', 0.5) - s2.get('very_recent_form', 0.5)
-    
-    # Win rate differences
     win_rate_diff = s1.get('win_rate', 0.5) - s2.get('win_rate', 0.5)
     
-    # H2H advantage
     h2h_adv = 0.5
     if (p1, p2) in h2h:
         h2h_adv = h2h[(p1, p2)]['wins'] / h2h[(p1, p2)]['total']
     elif (p2, p1) in h2h:
         h2h_adv = 1 - (h2h[(p2, p1)]['wins'] / h2h[(p2, p1)]['total'])
     
-    # Games average
     games_avg = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     games_norm = (games_avg - 21.5) / 8
-    
-    # Experience difference
     exp_diff = (s1.get('matches', 0) - s2.get('matches', 0)) / 200
-    
-    # Momentum
     momentum = very_recent_diff * 0.6 + form_diff * 0.4
     
-    features = [
-        elo_diff, form_diff, very_recent_diff, win_rate_diff,
-        h2h_adv, games_norm, exp_diff, momentum
-    ]
-    
-    return features
+    return [elo_diff, form_diff, very_recent_diff, win_rate_diff, h2h_adv, games_norm, exp_diff, momentum]
 
 # ==============================================================================
 # TRAIN MODEL
 # ==============================================================================
 def train_model(df, player_stats, h2h, elo):
-    """Train prediction model"""
-    
     X, y = [], []
     
     for _, row in df.iterrows():
@@ -284,30 +397,17 @@ def train_model(df, player_stats, h2h, elo):
         raise ValueError("No training data")
     
     X = np.array(X)
-    
-    model = LGBMClassifier(
-        n_estimators=150, max_depth=5, learning_rate=0.035,
-        num_leaves=16, reg_alpha=0.8, reg_lambda=0.8,
-        random_state=42, verbose=-1
-    )
-    
+    model = LGBMClassifier(n_estimators=150, max_depth=5, learning_rate=0.035, num_leaves=16, reg_alpha=0.8, reg_lambda=0.8, random_state=42, verbose=-1)
     model.fit(X, y)
     return model
 
 # ==============================================================================
-# NAME MATCHER
+# NAME MATCHER COM MAPEAMENTO MANUAL
 # ==============================================================================
-class SimpleNameMatcher:
+class SmartNameMatcher:
     def __init__(self, historical_names):
-        self.historical_names = list(historical_names)
-        self.historical_set = set(historical_names)
-        self.last_name_map = defaultdict(list)
-        
-        for name in self.historical_names:
-            parts = name.split()
-            if parts:
-                last_name = parts[-1].lower()
-                self.last_name_map[last_name].append(name)
+        self.historical_names = set(historical_names)
+        self.mapping = NAME_MAPPING
     
     def find_match(self, search_name):
         if not search_name:
@@ -317,7 +417,7 @@ class SimpleNameMatcher:
         search_lower = search_str.lower()
         
         # Match exato
-        if search_str in self.historical_set:
+        if search_str in self.historical_names:
             return search_str
         
         # Case insensitive
@@ -325,13 +425,15 @@ class SimpleNameMatcher:
             if name.lower() == search_lower:
                 return name
         
-        # Match por sobrenome
-        if search_lower in self.last_name_map:
-            return self.last_name_map[search_lower][0]
+        # Mapeamento manual
+        if search_lower in self.mapping:
+            mapped = self.mapping[search_lower]
+            if mapped in self.historical_names:
+                return mapped
         
-        # Match parcial
+        # Busca por sobrenome
         for name in self.historical_names:
-            if search_lower in name.lower():
+            if name.lower().endswith(search_lower):
                 return name
         
         return None
@@ -367,8 +469,8 @@ def predict_match(model, p1, p2, surface, player_stats, h2h, elo, name_matcher):
     exp_games = (s1.get('avg_games', 22) + s2.get('avg_games', 22)) / 2
     
     return {
-        'Busca_P1': p1,
-        'Busca_P2': p2,
+        'Jogador1': p1,
+        'Jogador2': p2,
         'Encontrado': f"{p1_match} vs {p2_match}",
         'Superficie': surface,
         'Prob_P1': f"{prob_p1:.1%}",
@@ -391,25 +493,18 @@ def parse_colab_text(text):
         if not line:
             continue
         
-        # Remove prefixos
         line = re.sub(r'^(ATP|CHALLENGER|WTA)\s+', '', line, flags=re.IGNORECASE)
         
-        # Procura por vs, VS, x
+        # Procura por vs
         vs_match = re.search(r'([A-Za-z\-\.\s]+?)\s+(?:vs|VS|x)\s+([A-Za-z\-\.\s]+?)(?:\s*$|\s*->)', line)
         
         if vs_match:
             p1 = vs_match.group(1).strip()
             p2 = vs_match.group(2).strip()
-            
             p1 = re.sub(r'\s+', ' ', p1).strip()
             p2 = re.sub(r'\s+', ' ', p2).strip()
             
             surface = 'Clay'
-            if 'hard' in line.lower():
-                surface = 'Hard'
-            elif 'grass' in line.lower():
-                surface = 'Grass'
-            
             if p1 and p2 and p1 != p2:
                 matches.append({'player1': p1, 'player2': p2, 'surface': surface})
     
@@ -420,7 +515,7 @@ def parse_colab_text(text):
 # ==============================================================================
 def main():
     st.title("ATP Predictor v8.0 - Previsao por Lista")
-    st.caption("Upload do historico | Cole os jogos | Previsoes automaticas")
+    st.caption("Upload do historico | Cole os jogos | Normalizacao automatica de nomes")
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico (Excel/CSV)", type=['xlsx', 'csv'])
     
@@ -441,7 +536,7 @@ def main():
                 h2h = calculate_h2h(df)
                 elo = calculate_elo(df, all_players)
                 model = train_model(df, player_stats, h2h, elo)
-                name_matcher = SimpleNameMatcher(all_players)
+                name_matcher = SmartNameMatcher(all_players)
                 
                 st.session_state.model = model
                 st.session_state.player_stats = player_stats
@@ -454,21 +549,13 @@ def main():
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
-                import traceback
-                st.code(traceback.format_exc())
     
     if st.session_state.get('models_ready'):
         st.subheader("Cole sua lista de jogos")
+        st.markdown("**Exemplo:** `Lehecka vs Michelsen` ou `Jiri Lehecka vs Alex Michelsen`")
         
-        matches_text = st.text_area(
-            "Jogos (formato: Jogador1 vs Jogador2):",
-            height=200,
-            placeholder="Mitchell Krueger vs Tung-Lin Wu\nTrevor Svajda vs Liam Draxl\nYuta Shimizu vs Antoine Escoffier"
-        )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            surface_override = st.selectbox("Superficie", ["Clay", "Hard", "Grass"], index=0)
+        matches_text = st.text_area("Jogos:", height=300, 
+                                     placeholder="Lehecka vs Michelsen\nGriekspoor vs Musetti\nPrizmic vs Etcheverry")
         
         if matches_text and st.button("FAZER PREVISOES", type="primary"):
             parsed_matches = parse_colab_text(matches_text)
@@ -478,10 +565,9 @@ def main():
                 not_found = []
                 
                 for match in parsed_matches:
-                    surface = surface_override
                     result, missing = predict_match(
                         st.session_state.model, 
-                        match['player1'], match['player2'], surface,
+                        match['player1'], match['player2'], 'Clay',
                         st.session_state.player_stats, st.session_state.h2h, st.session_state.elo,
                         st.session_state.name_matcher
                     )
@@ -491,7 +577,10 @@ def main():
                         not_found.append(missing)
                 
                 if not_found:
-                    st.warning(f"{len(not_found)} jogos ignorados")
+                    st.warning(f"{len(not_found)} jogos nao encontrados")
+                    with st.expander("Ver jogadores nao encontrados"):
+                        for p1, p2 in not_found:
+                            st.write(f"  - {p1} vs {p2}")
                 
                 if results:
                     df_results = pd.DataFrame(results)
@@ -499,7 +588,7 @@ def main():
                     
                     buffer = io.BytesIO()
                     df_results.to_excel(buffer, index=False)
-                    st.download_button("Download Excel", buffer.getvalue(), f"previsoes.xlsx")
+                    st.download_button("Download Excel", buffer.getvalue(), f"previsoes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
             else:
                 st.warning("Nenhum jogo detectado")
 
