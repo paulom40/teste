@@ -437,7 +437,7 @@ def main():
         st.session_state.run_predictions = False
     
     uploaded_file = st.file_uploader("Upload do ficheiro historico", type=['xlsx', 'csv'])
-        if uploaded_file and 'model' not in st.session_state:
+           if uploaded_file and 'model' not in st.session_state:
         with st.spinner("Processando..."):
             try:
                 if uploaded_file.name.endswith('.csv'):
@@ -480,6 +480,7 @@ def main():
                 st.error(f"Erro: {e}")
                 import traceback
                 st.code(traceback.format_exc())
+
 
 
                 
