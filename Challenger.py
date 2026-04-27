@@ -242,61 +242,67 @@ def find_player(name, historical_names):
 # SCRAPER RAPIDAPI
 # ==============================================================================
 def scrape_matches():
-    API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
-    API_HOST = "tennisapi1.p.rapidapi.com"
+    logs = ["📅 Procurando jogos de HOJE (SofaScore)"]
 
-    headers = {
-        "x-rapidapi-key": API_KEY,
-        "x-rapidapi-host": API_HOST,
-        "Content-Type": "application/json"
-    }
-
-    url = "https://tennisapi1.p.rapidapi.com/api/tennis/matches/today"
-
-    logs = [f"📅 Procurando jogos de HOJE", f"🔎 Endpoint: {url}"]
+    # Endpoint público do SofaScore (não precisa API key)
+    url = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
 
     all_matches = []
 
     try:
-        r = requests.get(url, headers=headers, timeout=15)
+        r = requests.get(url, timeout=15)
 
         if r.status_code != 200:
             logs.append(f"❌ HTTP {r.status_code}")
             return [], logs
 
         data = r.json()
-        matches = data.get("data", [])
+        events = data.get("events", [])
 
-        if not matches:
-            logs.append("⚠️ Nenhum jogo encontrado hoje")
-            return [], logs
+        if not events:
+            logs.append("⚠️ Nenhum jogo live encontrado. Tentando upcoming...")
+            # fallback para jogos do dia
+            url2 = "https://api.sofascore.com/api/v1/sport/tennis/events/next/0"
+            r2 = requests.get(url2, timeout=15)
 
-        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
+            if r2.status_code != 200:
+                logs.append(f"❌ HTTP {r2.status_code}")
+                return [], logs
 
-        for m in matches:
+            events = r2.json().get("events", [])
+
+        logs.append(f"🎾 Encontrados {len(events)} eventos (antes do filtro)")
+
+        for ev in events:
             try:
-                tournament = m["tournament"]["name"]
-                category = m["tournament"].get("category", "").upper()
+                tournament = ev["tournament"]["name"]
+                category = ev["tournament"]["category"]["name"].upper()
 
+                # Filtrar ATP + Challenger
                 if not any(x in category for x in ["ATP", "CHALLENGER"]):
                     continue
 
-                match_id = m["id"]
-                p1 = m["home_player"]["name"]
-                p2 = m["away_player"]["name"]
-                surface = m["tournament"].get("surface", "Hard")
+                p1 = ev["homeTeam"]["name"]
+                p2 = ev["awayTeam"]["name"]
 
-                odds_url = f"https://tennisapi1.p.rapidapi.com/api/tennis/odds/{match_id}"
+                surface = ev.get("surface", "Hard")
+                match_id = ev["id"]
+
+                # Odds (quando disponíveis)
                 odds_home = None
                 odds_away = None
 
                 try:
-                    r_odds = requests.get(odds_url, headers=headers, timeout=10)
+                    odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
+                    r_odds = requests.get(odds_url, timeout=10)
+
                     if r_odds.status_code == 200:
-                        odds_data = r_odds.json().get("data", {})
-                        if "odds" in odds_data:
-                            odds_home = odds_data["odds"].get("home")
-                            odds_away = odds_data["odds"].get("away")
+                        odds_data = r_odds.json().get("markets", [])
+                        if odds_data:
+                            outcomes = odds_data[0].get("outcomes", [])
+                            if len(outcomes) >= 2:
+                                odds_home = outcomes[0].get("value")
+                                odds_away = outcomes[1].get("value")
                 except:
                     pass
 
@@ -319,6 +325,7 @@ def scrape_matches():
         logs.append(f"💥 Erro: {e}")
 
     return all_matches, logs
+
 # ==============================================================================
 # TRAIN MODEL
 # ==============================================================================
