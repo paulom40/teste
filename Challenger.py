@@ -244,6 +244,19 @@ def find_player(name, historical_names):
 def scrape_matches():
     logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
 
+    # Obter data real (não a data do servidor Streamlit)
+    try:
+        real_date = requests.get(
+            "http://worldtimeapi.org/api/timezone/Europe/London",
+            timeout=5
+        ).json()["datetime"][:10]
+    except:
+        real_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+    today = real_date
+
+    logs.append(f"📅 Data real usada: {today}")
+
     API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
     API_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
 
@@ -253,20 +266,7 @@ def scrape_matches():
         "Content-Type": "application/json"
     }
 
-    # Obter data real do mundo (não a data do servidor Streamlit)
-try:
-    real_date = requests.get(
-        "http://worldtimeapi.org/api/timezone/Europe/London",
-        timeout=5
-    ).json()["datetime"][:10]
-except:
-    # fallback caso a API falhe
-    real_date = datetime.utcnow().strftime("%Y-%m-%d")
-
-today = real_date
-
     url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
-
     logs.append(f"🔎 Endpoint: {url}")
 
     try:
@@ -295,7 +295,6 @@ today = real_date
                 surface = m["tournament"].get("surface", "Hard")
                 match_id = m["id"]
 
-                # Odds (se existirem)
                 odds_home = m.get("odds", {}).get("home")
                 odds_away = m.get("odds", {}).get("away")
 
@@ -313,7 +312,6 @@ today = real_date
                 continue
 
         logs.append(f"🎾 Após filtro: {len(all_matches)} jogos")
-
         return all_matches, logs
 
     except Exception as e:
