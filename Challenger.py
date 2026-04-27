@@ -253,7 +253,7 @@ def scrape_matches():
         "Content-Type": "application/json"
     }
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.utcnow().strftime("%Y-%m-%d")
     url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
 
     logs.append(f"🔎 Endpoint: {url}")
