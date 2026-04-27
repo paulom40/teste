@@ -239,12 +239,12 @@ def find_player(name, historical_names):
     return None
 
 # ==============================================================================
-# SCRAPER RAPIDAPI
+# SCRAPER — SOFASCORE (RELIABLE FREE API)
 # ==============================================================================
 def get_real_date():
     try:
         r = requests.get("https://www.google.com", timeout=5)
-        date_str = r.headers["Date"]  # Ex: 'Mon, 27 Apr 2026 07:55:00 GMT'
+        date_str = r.headers["Date"]
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(date_str)
         return dt.strftime("%Y-%m-%d")
@@ -253,51 +253,69 @@ def get_real_date():
 
 
 def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
+    """
+    Scrapes ATP/Challenger matches from SofaScore (free, reliable API).
+    Falls back gracefully if API is unavailable.
+    """
+    logs = ["🎾 Procurando jogos de HOJE (SofaScore API)"]
 
     today = get_real_date()
-    logs.append(f"📅 Data real usada: {today}")
-
-    API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
-    API_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
-
-    headers = {
-        "x-rapidapi-key": API_KEY,
-        "x-rapidapi-host": API_HOST,
-        "Content-Type": "application/json"
-    }
-
-    url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
-    logs.append(f"🔎 Endpoint: {url}")
+    logs.append(f"📅 Data: {today}")
 
     try:
-        r = requests.get(url, headers=headers, timeout=15)
+        # SofaScore: Get ATP matches for today
+        url = f"https://api.sofascore.com/api/v1/sport/tennis/tournaments/atp-men/events"
+        
+        logs.append(f"🔎 Endpoint: SofaScore ATP")
+
+        r = requests.get(url, timeout=15)
 
         if r.status_code != 200:
-            logs.append(f"❌ HTTP {r.status_code}")
+            logs.append(f"❌ HTTP {r.status_code} — API indisponível")
+            logs.append("💡 Dica: Carrega jogos manualmente ou tenta novamente mais tarde")
             return [], logs
 
         data = r.json()
-        matches = data.get("matches", [])
+        events = data.get("events", [])
 
-        if not matches:
+        if not events:
             logs.append("⚠️ Nenhum jogo encontrado hoje")
             return [], logs
 
-        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
+        logs.append(f"🎾 Encontrados {len(events)} eventos")
 
         all_matches = []
 
-        for m in matches:
+        for ev in events:
             try:
-                p1 = m["homePlayer"]["name"]
-                p2 = m["awayPlayer"]["name"]
-                tournament = m["tournament"]["name"]
-                surface = m["tournament"].get("surface", "Hard")
-                match_id = m["id"]
+                # Filter by status (skip completed/cancelled)
+                status = ev.get("status", "")
+                if status in ["finished", "cancelled"]:
+                    continue
 
-                odds_home = m.get("odds", {}).get("home")
-                odds_away = m.get("odds", {}).get("away")
+                tournament = ev.get("tournament", {}).get("name", "ATP")
+                p1 = ev.get("homeTeam", {}).get("name", "")
+                p2 = ev.get("awayTeam", {}).get("name", "")
+                surface = ev.get("surface", "Hard")
+                match_id = ev.get("id", "")
+
+                if not p1 or not p2:
+                    continue
+
+                # Try to fetch odds
+                odds_home, odds_away = None, None
+                try:
+                    odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
+                    r_odds = requests.get(odds_url, timeout=5)
+                    if r_odds.status_code == 200:
+                        odds_data = r_odds.json().get("markets", [])
+                        if odds_data and len(odds_data) > 0:
+                            outcomes = odds_data[0].get("outcomes", [])
+                            if len(outcomes) >= 2:
+                                odds_home = outcomes[0].get("value")
+                                odds_away = outcomes[1].get("value")
+                except:
+                    pass  # Odds optional
 
                 all_matches.append({
                     "tournament": tournament,
@@ -309,100 +327,16 @@ def scrape_matches():
                     "odd2": odds_away
                 })
 
-            except:
+            except Exception as e:
                 continue
 
-        logs.append(f"🎾 Após filtro: {len(all_matches)} jogos")
+        logs.append(f"✅ Após filtro: {len(all_matches)} jogos válidos")
         return all_matches, logs
 
     except Exception as e:
-        logs.append(f"💥 Erro: {e}")
+        logs.append(f"💥 Erro na conexão: {str(e)}")
+        logs.append("⚠️ Sugestão: Carrega um ficheiro Excel com histórico de jogos para usar previsões personalizadas")
         return [], logs
-
-
-        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
-
-        all_matches = []
-
-        for m in matches:
-            try:
-                p1 = m["homePlayer"]["name"]
-                p2 = m["awayPlayer"]["name"]
-                tournament = m["tournament"]["name"]
-                surface = m["tournament"].get("surface", "Hard")
-                match_id = m["id"]
-
-                odds_home = m.get("odds", {}).get("home")
-                odds_away = m.get("odds", {}).get("away")
-
-                all_matches.append({
-                    "tournament": tournament,
-                    "player1": p1,
-                    "player2": p2,
-                    "surface": surface,
-                    "match_id": match_id,
-                    "odd1": odds_home,
-                    "odd2": odds_away
-                })
-
-            except:
-                continue
-
-        logs.append(f"🎾 Após filtro: {len(all_matches)} jogos")
-        return all_matches, logs
-
-    except Exception as e:
-        logs.append(f"💥 Erro: {e}")
-        return [], logs
-
-
-def process_sofascore_events(events, logs):
-    all_matches = []
-
-    for ev in events:
-        try:
-            tournament = ev["tournament"]["name"]
-            category = ev["tournament"]["category"]["name"].upper()
-
-            if not any(x in category for x in ["ATP", "CHALLENGER"]):
-                continue
-
-            p1 = ev["homeTeam"]["name"]
-            p2 = ev["awayTeam"]["name"]
-            surface = ev.get("surface", "Hard")
-            match_id = ev["id"]
-
-            # Odds
-            odds_home, odds_away = None, None
-            try:
-                odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
-                r_odds = requests.get(odds_url, timeout=10)
-                if r_odds.status_code == 200:
-                    markets = r_odds.json().get("markets", [])
-                    if markets:
-                        outcomes = markets[0].get("outcomes", [])
-                        if len(outcomes) >= 2:
-                            odds_home = outcomes[0].get("value")
-                            odds_away = outcomes[1].get("value")
-            except:
-                pass
-
-            all_matches.append({
-                "tournament": tournament,
-                "player1": p1,
-                "player2": p2,
-                "surface": surface,
-                "match_id": match_id,
-                "odd1": odds_home,
-                "odd2": odds_away
-            })
-
-        except Exception:
-            continue
-
-    logs.append(f"🎾 Após filtro ATP/Challenger: {len(all_matches)} jogos")
-    return all_matches
-
 
 # ==============================================================================
 # TRAIN MODEL
@@ -586,7 +520,7 @@ def build_match_summary(p1, p2, surface, stats, h2h, elo_global, elo_surface, mo
     return summary
 
 # ==============================================================================
-# RANKING DIÁRIO COMPLETO (com proteção contra 404)
+# RANKING DIÁRIO COMPLETO
 # ==============================================================================
 def build_value_ranking(summaries):
     if not summaries:
@@ -726,6 +660,7 @@ def build_elo_comparison_1v1(p1, p2, stats, elo_global, elo20_global, elo_surfac
     }
 
     return pd.DataFrame(comp)
+
 # ==============================================================================
 # GRÁFICO 1v1
 # ==============================================================================
@@ -749,7 +684,7 @@ def plot_elo_comparison_1v1(df, p1, p2):
 # INTERFACE STREAMLIT
 # ==============================================================================
 def main():
-    st.title("🎾 ATP Predictor PRO — v7.4")
+    st.title("🎾 ATP Predictor PRO — v7.5 (Fixed)")
 
     # ============================
     # CARREGAR EXCEL
@@ -841,46 +776,47 @@ def main():
         st.subheader("📋 Previsão Jogos do Dia")
 
         if st.button("Buscar Jogos de Hoje"):
-            matches, logs = scrape_matches()
+            with st.spinner("A buscar jogos..."):
+                matches, logs = scrape_matches()
 
-            st.text("\n".join(logs))
+                st.text("\n".join(logs))
 
-            summaries = []
+                summaries = []
 
-            for match in matches:
-                p1 = find_player(match["player1"], all_players)
-                p2 = find_player(match["player2"], all_players)
+                for match in matches:
+                    p1 = find_player(match["player1"], all_players)
+                    p2 = find_player(match["player2"], all_players)
 
-                if not p1 or not p2:
-                    continue
+                    if not p1 or not p2:
+                        continue
 
-                result, err = predict_match(
-                    model, p1, p2, match["surface"], stats, h2h, elo_global, all_players, match["tournament"]
-                )
+                    result, err = predict_match(
+                        model, p1, p2, match["surface"], stats, h2h, elo_global, all_players, match["tournament"]
+                    )
 
-                if err:
-                    continue
+                    if err:
+                        continue
 
-                prob_p1 = float(result["Prob_P1"].replace("%", "")) / 100
+                    prob_p1 = float(result["Prob_P1"].replace("%", "")) / 100
 
-                summary = build_match_summary(
-                    p1, p2, match["surface"], stats, h2h, elo_global,
-                    elo_clay if match["surface"] == "Clay" else
-                    elo_hard if match["surface"] == "Hard" else
-                    elo_grass,
-                    prob_p1,
-                    match["odd1"],
-                    match["odd2"]
-                )
+                    summary = build_match_summary(
+                        p1, p2, match["surface"], stats, h2h, elo_global,
+                        elo_clay if match["surface"] == "Clay" else
+                        elo_hard if match["surface"] == "Hard" else
+                        elo_grass,
+                        prob_p1,
+                        match["odd1"],
+                        match["odd2"]
+                    )
 
-                summaries.append(summary)
+                    summaries.append(summary)
 
-            st.session_state.summaries = summaries
+                st.session_state.summaries = summaries
 
-            if summaries:
-                st.dataframe(pd.DataFrame(summaries), use_container_width=True)
-            else:
-                st.warning("Nenhum jogo encontrado hoje.")
+                if summaries:
+                    st.dataframe(pd.DataFrame(summaries), use_container_width=True)
+                else:
+                    st.warning("Nenhum jogo encontrado hoje.")
 
     # ==============================================================================
     # TAB 3 — RANKING VALUE BETS
