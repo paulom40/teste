@@ -8,7 +8,6 @@ from email.utils import parsedate_to_datetime
 
 
 # ---------- NORMALIZAÇÃO DE NOMES ----------
-
 def normalize_name(name):
     if not name:
         return ""
@@ -28,7 +27,7 @@ def find_player(name, all_players):
         if normalize_name(p) == name_norm:
             return p
 
-    # Matching parcial (ex: "T Longacre" → "Trevor Longacre")
+    # Matching parcial
     for p in all_players:
         if normalize_name(p).startswith(name_norm.split()[0]):
             return p
@@ -36,8 +35,7 @@ def find_player(name, all_players):
     return None
 
 
-# ---------- DATA REAL (IGNORA DATA DO SERVIDOR) ----------
-
+# ---------- DATA REAL ----------
 def get_real_date():
     try:
         r = requests.get("https://www.google.com", timeout=5)
@@ -46,11 +44,25 @@ def get_real_date():
         return dt.strftime("%Y-%m-%d")
     except:
         return datetime.utcnow().strftime("%Y-%m-%d")
-# ---------- MODELO DUMMY (SUBSTITUI PELO TEU MODELO REAL) ----------
+# ---------- CARREGAR JOGADORES DO TEU EXCEL ----------
+@st.cache_data
+def load_players_from_csv(uploaded_file):
+    df = pd.read_csv(uploaded_file)
 
+    if "winner_name" not in df.columns or "loser_name" not in df.columns:
+        st.error("O CSV deve conter as colunas 'winner_name' e 'loser_name'.")
+        return []
+
+    winners = df["winner_name"].dropna().unique().tolist()
+    losers = df["loser_name"].dropna().unique().tolist()
+
+    players = sorted(list(set(winners + losers)))
+    return players
+
+
+# ---------- MODELO DUMMY (para correr no Streamlit Cloud) ----------
 class DummyModel:
     def predict_proba(self, X):
-        # devolve sempre 50% / 50% só para o app correr
         X = np.array(X)
         if X.ndim == 1:
             X = X.reshape(1, -1)
@@ -60,38 +72,16 @@ class DummyModel:
 model = DummyModel()
 
 
-# ---------- BUILD_MATCH_SUMMARY (SUBSTITUI PELO TEU) ----------
-
+# ---------- BUILD_MATCH_SUMMARY (substitui pelo teu depois) ----------
 def build_match_summary(player1, player2, surface):
-    # Aqui podes pôr o teu verdadeiro pipeline de features.
-    # Por agora, devolve um vetor simples só para o modelo correr.
     features = {
-        "feat_surface_hard": 1 if surface.lower() == "hard" else 0,
-        "feat_surface_clay": 1 if surface.lower() == "clay" else 0,
-        "feat_surface_grass": 1 if surface.lower() == "grass" else 0,
-        "feat_dummy_strength": 0.5
+        "surface_hard": 1 if surface.lower() == "hard" else 0,
+        "surface_clay": 1 if surface.lower() == "clay" else 0,
+        "surface_grass": 1 if surface.lower() == "grass" else 0,
+        "dummy_strength": 0.5
     }
     return pd.Series(features)
-
-
-# ---------- CARREGAMENTO DE JOGADORES A PARTIR DE UM CSV ----------
-
-@st.cache_data
-def load_players_from_csv(uploaded_file):
-    df = pd.read_csv(uploaded_file)
-    cols = [c.lower() for c in df.columns]
-
-    players = set()
-
-    # tenta encontrar colunas de winner/loser
-    for col in df.columns:
-        cl = col.lower()
-        if "winner_name" in cl or "loser_name" in cl or "player" in cl:
-            players.update(df[col].dropna().unique().tolist())
-
-    return sorted(list(players))
 # ---------- SCRAPER ATP + CHALLENGER ----------
-
 def scrape_matches():
     logs = ["📅 Procurando jogos de HOJE (ATP + CHALLENGER)"]
 
@@ -165,8 +155,7 @@ def scrape_matches():
     return all_matches, logs
 
 
-# ---------- PREPARAR JOGO PARA PREVISÃO ----------
-
+# ---------- PREPARAR MATCH PARA PREVISÃO ----------
 def prepare_match_for_prediction(match, all_players, surface_default="Hard"):
     p1_name_api = match["player1"]
     p2_name_api = match["player2"]
@@ -188,8 +177,7 @@ def prepare_match_for_prediction(match, all_players, surface_default="Hard"):
     return summary, f"✅ Matching OK: API({p1_name_api} vs {p2_name_api}) → HIST({p1_hist} vs {p2_hist})"
 
 
-# ---------- EXPORTAR EXCEL COM CORES (VALUE BET) ----------
-
+# ---------- EXPORTAR EXCEL COM CORES ----------
 def export_daily_predictions_to_excel(df):
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="xlsxwriter")
@@ -219,8 +207,7 @@ def export_daily_predictions_to_excel(df):
     writer.close()
     output.seek(0)
     return output
-# ---------- PIPELINE DE PREVISÃO DOS JOGOS DO DIA ----------
-
+# ---------- PIPELINE DE PREVISÃO ----------
 def run_daily_predictions(all_players):
     matches, logs = scrape_matches()
 
@@ -241,7 +228,7 @@ def run_daily_predictions(all_players):
         if summary is None:
             continue
 
-        X = summary.values.reshape(1, -1) if hasattr(summary, "values") else summary
+        X = summary.values.reshape(1, -1)
         prob = model.predict_proba(X)[0][1]
 
         odd1 = match.get("odd1")
@@ -263,7 +250,7 @@ def run_daily_predictions(all_players):
         })
 
     if not resultados:
-        st.error("❌ Nenhum jogo pôde ser previsto (matching falhou para todos).")
+        st.error("❌ Nenhum jogo pôde ser previsto.")
         return
 
     df_res = pd.DataFrame(resultados)
@@ -280,8 +267,7 @@ def run_daily_predictions(all_players):
     )
 
 
-# ---------- APP STREAMLIT (MAIN) ----------
-
+# ---------- STREAMLIT APP ----------
 def main():
     st.set_page_config(page_title="Challenger Predictions", layout="wide")
     st.title("🎾 Challenger / ATP — Previsões")
@@ -289,16 +275,16 @@ def main():
     st.sidebar.header("Configuração")
 
     uploaded_file = st.sidebar.file_uploader(
-        "Carregar histórico (CSV com jogadores)",
+        "Carregar histórico (CSV com winner_name / loser_name)",
         type=["csv"]
     )
 
     if uploaded_file is None:
-        st.warning("Carrega um CSV com histórico (winner_name / loser_name) para construir a lista de jogadores.")
+        st.warning("Carrega um CSV com histórico para construir a lista de jogadores.")
         return
 
     all_players = load_players_from_csv(uploaded_file)
-    st.sidebar.success(f"{len(all_players)} jogadores carregados do histórico.")
+    st.sidebar.success(f"{len(all_players)} jogadores carregados.")
 
     menu = st.sidebar.radio(
         "Menu",
