@@ -277,17 +277,16 @@ def main():
     st.sidebar.header("Configuração")
 
     uploaded_file = st.sidebar.file_uploader(
-    "Carregar histórico (Excel .xlsx com winner_name / loser_name)",
-    type=["xlsx"]
+        "Carregar histórico (Excel .xlsx com winner_name / loser_name)",
+        type=["xlsx"]
     )
 
-
     if uploaded_file is None:
-        st.warning("Carrega um CSV com histórico para construir a lista de jogadores.")
+        st.warning("Carrega um Excel com histórico para construir a lista de jogadores.")
         return
 
-   all_players = load_players_from_excel(uploaded_file)
-   st.sidebar.success(f"{len(all_players)} jogadores carregados.")
+    all_players = load_players_from_excel(uploaded_file)
+    st.sidebar.success(f"{len(all_players)} jogadores carregados.")
 
     menu = st.sidebar.radio(
         "Menu",
@@ -298,6 +297,7 @@ def main():
         st.header("📋 Previsão Jogos do Dia (ATP + Challenger)")
         if st.button("Buscar jogos de hoje e prever"):
             run_daily_predictions(all_players)
+
 
 
 if __name__ == "__main__":
