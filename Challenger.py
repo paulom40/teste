@@ -242,89 +242,121 @@ def find_player(name, historical_names):
 # SCRAPER RAPIDAPI
 # ==============================================================================
 def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (SofaScore)"]
+    logs = ["📅 Procurando jogos de HOJE (SofaScore — modo anti‑403)"]
 
-    # Endpoint público do SofaScore (não precisa API key)
-    url = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
+    # Headers reais de browser
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,pt;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Origin": "https://www.sofascore.com",
+        "Referer": "https://www.sofascore.com/",
+        "Connection": "keep-alive"
+    }
 
-    all_matches = []
+    # Cookies básicos (SofaScore exige pelo menos estes)
+    cookies = {
+        "SOFA_LANGUAGE": "en",
+        "SOFA_TIMEZONE": "UTC"
+    }
+
+    # Endpoint live
+    url_live = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
 
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url_live, headers=headers, cookies=cookies, timeout=15)
 
-        if r.status_code != 200:
+        if r.status_code == 403:
+            logs.append("❌ 403 — Acesso bloqueado (live). Tentando upcoming...")
+        elif r.status_code != 200:
             logs.append(f"❌ HTTP {r.status_code}")
+        else:
+            data = r.json()
+            events = data.get("events", [])
+            if events:
+                logs.append(f"🎾 LIVE encontrados: {len(events)}")
+                return process_sofascore_events(events, logs), logs
+    except Exception as e:
+        logs.append(f"💥 Erro live: {e}")
+
+    # Fallback: upcoming do dia
+    url_upcoming = "https://api.sofascore.com/api/v1/sport/tennis/events/next/0"
+
+    try:
+        r2 = requests.get(url_upcoming, headers=headers, cookies=cookies, timeout=15)
+
+        if r2.status_code == 403:
+            logs.append("❌ 403 — Acesso bloqueado (upcoming).")
             return [], logs
 
-        data = r.json()
-        events = data.get("events", [])
+        if r2.status_code != 200:
+            logs.append(f"❌ HTTP {r2.status_code}")
+            return [], logs
 
-        if not events:
-            logs.append("⚠️ Nenhum jogo live encontrado. Tentando upcoming...")
-            # fallback para jogos do dia
-            url2 = "https://api.sofascore.com/api/v1/sport/tennis/events/next/0"
-            r2 = requests.get(url2, timeout=15)
+        data2 = r2.json()
+        events2 = data2.get("events", [])
 
-            if r2.status_code != 200:
-                logs.append(f"❌ HTTP {r2.status_code}")
-                return [], logs
+        logs.append(f"🎾 Upcoming encontrados: {len(events2)}")
 
-            events = r2.json().get("events", [])
-
-        logs.append(f"🎾 Encontrados {len(events)} eventos (antes do filtro)")
-
-        for ev in events:
-            try:
-                tournament = ev["tournament"]["name"]
-                category = ev["tournament"]["category"]["name"].upper()
-
-                # Filtrar ATP + Challenger
-                if not any(x in category for x in ["ATP", "CHALLENGER"]):
-                    continue
-
-                p1 = ev["homeTeam"]["name"]
-                p2 = ev["awayTeam"]["name"]
-
-                surface = ev.get("surface", "Hard")
-                match_id = ev["id"]
-
-                # Odds (quando disponíveis)
-                odds_home = None
-                odds_away = None
-
-                try:
-                    odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
-                    r_odds = requests.get(odds_url, timeout=10)
-
-                    if r_odds.status_code == 200:
-                        odds_data = r_odds.json().get("markets", [])
-                        if odds_data:
-                            outcomes = odds_data[0].get("outcomes", [])
-                            if len(outcomes) >= 2:
-                                odds_home = outcomes[0].get("value")
-                                odds_away = outcomes[1].get("value")
-                except:
-                    pass
-
-                all_matches.append({
-                    "tournament": tournament,
-                    "player1": p1,
-                    "player2": p2,
-                    "surface": surface,
-                    "match_id": match_id,
-                    "odd1": odds_home,
-                    "odd2": odds_away
-                })
-
-            except Exception:
-                continue
-
-        logs.append(f"🎾 Após filtro ATP/Challenger: {len(all_matches)} jogos")
+        return process_sofascore_events(events2, logs), logs
 
     except Exception as e:
-        logs.append(f"💥 Erro: {e}")
+        logs.append(f"💥 Erro upcoming: {e}")
+        return [], logs
 
-    return all_matches, logs
+
+def process_sofascore_events(events, logs):
+    all_matches = []
+
+    for ev in events:
+        try:
+            tournament = ev["tournament"]["name"]
+            category = ev["tournament"]["category"]["name"].upper()
+
+            if not any(x in category for x in ["ATP", "CHALLENGER"]):
+                continue
+
+            p1 = ev["homeTeam"]["name"]
+            p2 = ev["awayTeam"]["name"]
+            surface = ev.get("surface", "Hard")
+            match_id = ev["id"]
+
+            # Odds
+            odds_home, odds_away = None, None
+            try:
+                odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
+                r_odds = requests.get(odds_url, timeout=10)
+                if r_odds.status_code == 200:
+                    markets = r_odds.json().get("markets", [])
+                    if markets:
+                        outcomes = markets[0].get("outcomes", [])
+                        if len(outcomes) >= 2:
+                            odds_home = outcomes[0].get("value")
+                            odds_away = outcomes[1].get("value")
+            except:
+                pass
+
+            all_matches.append({
+                "tournament": tournament,
+                "player1": p1,
+                "player2": p2,
+                "surface": surface,
+                "match_id": match_id,
+                "odd1": odds_home,
+                "odd2": odds_away
+            })
+
+        except Exception:
+            continue
+
+    logs.append(f"🎾 Após filtro ATP/Challenger: {len(all_matches)} jogos")
+    return all_matches
+
 
 # ==============================================================================
 # TRAIN MODEL
