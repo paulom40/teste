@@ -241,17 +241,9 @@ def find_player(name, historical_names):
 # ==============================================================================
 # SCRAPER RAPIDAPI
 # ==============================================================================
-def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
-
-    # Obter data real (não a data do servidor Streamlit)
+def get_real_date():
     try:
-       def get_real_date():
-    try:r = requests.get(
-            "https://www.google.com",
-            timeout=5
-        )
-        # O header 'Date' do Google tem a data real do mundo
+        r = requests.get("https://www.google.com", timeout=5)
         date_str = r.headers["Date"]  # Ex: 'Mon, 27 Apr 2026 07:55:00 GMT'
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(date_str)
@@ -260,8 +252,10 @@ def scrape_matches():
         return datetime.utcnow().strftime("%Y-%m-%d")
 
 
-    today = real_date
+def scrape_matches():
+    logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
 
+    today = get_real_date()
     logs.append(f"📅 Data real usada: {today}")
 
     API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
@@ -289,6 +283,42 @@ def scrape_matches():
         if not matches:
             logs.append("⚠️ Nenhum jogo encontrado hoje")
             return [], logs
+
+        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
+
+        all_matches = []
+
+        for m in matches:
+            try:
+                p1 = m["homePlayer"]["name"]
+                p2 = m["awayPlayer"]["name"]
+                tournament = m["tournament"]["name"]
+                surface = m["tournament"].get("surface", "Hard")
+                match_id = m["id"]
+
+                odds_home = m.get("odds", {}).get("home")
+                odds_away = m.get("odds", {}).get("away")
+
+                all_matches.append({
+                    "tournament": tournament,
+                    "player1": p1,
+                    "player2": p2,
+                    "surface": surface,
+                    "match_id": match_id,
+                    "odd1": odds_home,
+                    "odd2": odds_away
+                })
+
+            except:
+                continue
+
+        logs.append(f"🎾 Após filtro: {len(all_matches)} jogos")
+        return all_matches, logs
+
+    except Exception as e:
+        logs.append(f"💥 Erro: {e}")
+        return [], logs
+
 
         logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
 
