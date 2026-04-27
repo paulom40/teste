@@ -67,64 +67,66 @@ def build_match_summary(player1, player2, surface):
     }
     return pd.Series(features)
 # ---------- SCRAPER TENNIS24 ----------
-def scrape_tennis24_api():
-    logs = ["📅 Procurando jogos de HOJE via API Tennis24 (ATP + Challenger)"]
+def scrape_sofascore():
+    logs = ["📅 Procurando jogos de HOJE via SofaScore (ATP + Challenger)"]
 
-    base_url = "https://d.livesport.services/api/v1/tennis/matches"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.tennis24.com/"
-    }
+    url = "https://api.sofascore.com/api/v1/sport/tennis/events/today"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    categories = ["atp", "challenger"]
-    all_matches = []
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            logs.append(f"❌ HTTP {r.status_code} no SofaScore")
+            return [], logs
 
-    for cat in categories:
-        url = f"{base_url}?category={cat}&day=today"
-        logs.append(f"🔎 {cat.upper()} → {url}")
+        data = r.json()
 
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code != 200:
-                logs.append(f"❌ HTTP {r.status_code} em {cat.upper()}")
-                continue
+        if "events" not in data:
+            logs.append("❌ Nenhum evento encontrado no SofaScore")
+            return [], logs
 
-            data = r.json()
+        matches = []
 
-            if "events" not in data:
-                logs.append(f"❌ Sem 'events' em {cat.upper()}")
-                continue
+        for ev in data["events"]:
+            try:
+                tournament = ev["tournament"]["name"]
+                category = ev["tournament"]["category"]["name"].upper()
 
-            for ev in data["events"]:
-                try:
-                    p1 = ev["homeParticipant"]["name"]
-                    p2 = ev["awayParticipant"]["name"]
-
-                    tournament = ev["tournament"]["name"]
-                    surface = ev["tournament"].get("ground", "Hard")
-
-                    odds = ev.get("odds", {})
-                    odd1 = odds.get("home")
-                    odd2 = odds.get("away")
-
-                    all_matches.append({
-                        "tournament": tournament,
-                        "player1": p1,
-                        "player2": p2,
-                        "surface": surface,
-                        "odd1": odd1,
-                        "odd2": odd2
-                    })
-
-                except Exception as e:
-                    logs.append(f"Erro num evento {cat}: {e}")
+                # Filtrar apenas ATP + Challenger
+                if not any(x in category for x in ["ATP", "CHALLENGER"]):
                     continue
 
-        except Exception as e:
-            logs.append(f"💥 Erro no scraper API Tennis24: {e}")
+                p1 = ev["homeTeam"]["name"]
+                p2 = ev["awayTeam"]["name"]
 
-    logs.append(f"🎾 TOTAL FINAL: {len(all_matches)} jogos encontrados")
-    return all_matches, logs
+                # Superfície (nem sempre disponível)
+                surface = ev.get("surface", "Hard")
+
+                # Odds (nem sempre disponíveis)
+                odds = ev.get("odds", {})
+                odd1 = odds.get("home")
+                odd2 = odds.get("away")
+
+                matches.append({
+                    "tournament": tournament,
+                    "player1": p1,
+                    "player2": p2,
+                    "surface": surface,
+                    "odd1": odd1,
+                    "odd2": odd2
+                })
+
+            except Exception as e:
+                logs.append(f"Erro num evento: {e}")
+                continue
+
+        logs.append(f"🎾 TOTAL FINAL: {len(matches)} jogos encontrados no SofaScore")
+        return matches, logs
+
+    except Exception as e:
+        logs.append(f"💥 Erro no scraper SofaScore: {e}")
+        return [], logs
+
 
 
 # ---------- PREPARAR MATCH ----------
