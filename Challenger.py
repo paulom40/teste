@@ -3,8 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 from io import BytesIO
-from datetime import datetime
-from email.utils import parsedate_to_datetime
+from bs4 import BeautifulSoup
 
 
 # ---------- NORMALIZAÇÃO DE NOMES ----------
@@ -12,11 +11,8 @@ def normalize_name(name):
     if not name:
         return ""
     name = name.lower().strip()
-    name = name.replace(".", "")
-    name = name.replace(",", "")
-    name = name.replace("-", " ")
-    parts = name.split()
-    return " ".join(parts)
+    name = name.replace(".", "").replace(",", "").replace("-", " ")
+    return " ".join(name.split())
 
 
 def find_player(name, all_players):
@@ -35,22 +31,11 @@ def find_player(name, all_players):
     return None
 
 
-# ---------- DATA REAL ----------
-def get_real_date():
-    try:
-        r = requests.get("http://worldtimeapi.org/api/timezone/Europe/Lisbon", timeout=5)
-        data = r.json()
-        date_str = data["datetime"][:10]  # formato YYYY-MM-DD
-        return date_str
-    except:
-        return datetime.utcnow().strftime("%Y-%m-%d")
-
-# ---------- CARREGAR JOGADORES DO TEU EXCEL ----------
+# ---------- CARREGAR JOGADORES DO EXCEL ----------
 @st.cache_data
 def load_players_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    # Garante que as colunas existem
     if "winner_name" not in df.columns or "loser_name" not in df.columns:
         st.error("O Excel deve conter as colunas 'winner_name' e 'loser_name'.")
         return []
@@ -60,9 +45,6 @@ def load_players_from_excel(uploaded_file):
 
     players = sorted(list(set(winners + losers)))
     return players
-
-
-
 # ---------- MODELO DUMMY (para correr no Streamlit Cloud) ----------
 class DummyModel:
     def predict_proba(self, X):
@@ -84,103 +66,79 @@ def build_match_summary(player1, player2, surface):
         "dummy_strength": 0.5
     }
     return pd.Series(features)
-# ---------- SCRAPER ATP + CHALLENGER ----------
-def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (ATP + CHALLENGER)"]
+# ---------- SCRAPER TENNIS24 ----------
+def scrape_tennis24():
+    logs = ["📅 Procurando jogos de HOJE no Tennis24 (ATP + Challenger)"]
 
-    today = get_real_date()
-    logs.append(f"📅 Data real usada: {today}")
+    url = "https://www.tennis24.com/"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
-    API_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            logs.append(f"❌ HTTP {r.status_code} no Tennis24")
+            return [], logs
 
-    headers = {
-        "x-rapidapi-key": API_KEY,
-        "x-rapidapi-host": API_HOST,
-        "Content-Type": "application/json"
-    }
+        soup = BeautifulSoup(r.text, "html.parser")
+        matches = []
 
-    tours = ["atp", "challenger"]
-    all_matches = []
+        for m in soup.select(".event__match"):
 
-    for tour in tours:
-        url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/{tour}/matches-by-date/{today}"
-        logs.append(f"🔎 {tour.upper()} → {url}")
+            tournament = m.get("data-competition-name", "")
 
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-
-            if r.status_code != 200:
-                logs.append(f"❌ {tour.upper()} HTTP {r.status_code}")
+            # Filtrar apenas ATP + Challenger
+            if not any(x in tournament.upper() for x in ["ATP", "CHALLENGER"]):
                 continue
 
-            data = r.json()
-            matches = data.get("matches", [])
+            p1 = m.select_one(".event__participant--home")
+            p2 = m.select_one(".event__participant--away")
 
-            logs.append(f"🎾 {tour.upper()} encontrou {len(matches)} jogos")
+            if not p1 or not p2:
+                continue
 
-            for m in matches:
-                try:
-                    p1_api = m["homePlayer"]["name"]
-                    p2_api = m["awayPlayer"]["name"]
+            p1_name = p1.text.strip()
+            p2_name = p2.text.strip()
 
-                    tournament = m["tournament"]["name"]
-                    surface = m["tournament"].get("surface", "Hard")
-                    match_id = m["id"]
+            odd_home = m.get("data-odd-home")
+            odd_away = m.get("data-odd-away")
 
-                    odds_home = m.get("odds", {}).get("home")
-                    odds_away = m.get("odds", {}).get("away")
+            try:
+                odd_home = float(odd_home) if odd_home else None
+                odd_away = float(odd_away) if odd_away else None
+            except:
+                odd_home = None
+                odd_away = None
 
-                    # Corrigir ordem: favorito = Jogador 1
-                    if odds_home and odds_away and odds_home > odds_away:
-                        p1_api, p2_api = p2_api, p1_api
-                        odds_home, odds_away = odds_away, odds_home
+            matches.append({
+                "tournament": tournament,
+                "player1": p1_name,
+                "player2": p2_name,
+                "surface": "Hard",  # Tennis24 não mostra superfície
+                "odd1": odd_home,
+                "odd2": odd_away
+            })
 
-                    all_matches.append({
-                        "tournament": tournament,
-                        "player1": p1_api,
-                        "player2": p2_api,
-                        "surface": surface,
-                        "match_id": match_id,
-                        "odd1": odds_home,
-                        "odd2": odds_away
-                    })
+        logs.append(f"🎾 TOTAL: {len(matches)} jogos encontrados no Tennis24")
+        return matches, logs
 
-                except Exception as e:
-                    logs.append(f"Erro num match {tour}: {e}")
-                    continue
-
-        except Exception as e:
-            logs.append(f"💥 Erro no tour {tour}: {e}")
-
-    logs.append(f"🎾 TOTAL FINAL: {len(all_matches)} jogos encontrados")
-
-    return all_matches, logs
+    except Exception as e:
+        logs.append(f"💥 Erro no scraper Tennis24: {e}")
+        return [], logs
 
 
-# ---------- PREPARAR MATCH PARA PREVISÃO ----------
-def prepare_match_for_prediction(match, all_players, surface_default="Hard"):
-    p1_name_api = match["player1"]
-    p2_name_api = match["player2"]
-
-    p1_hist = find_player(p1_name_api, all_players)
-    p2_hist = find_player(p2_name_api, all_players)
+# ---------- PREPARAR MATCH ----------
+def prepare_match_for_prediction(match, all_players):
+    p1_hist = find_player(match["player1"], all_players)
+    p2_hist = find_player(match["player2"], all_players)
 
     if not p1_hist or not p2_hist:
-        return None, f"❌ Matching falhou: API({p1_name_api} vs {p2_name_api}) → HIST({p1_hist} vs {p2_hist})"
+        return None, f"❌ Matching falhou: {match['player1']} vs {match['player2']}"
 
-    surface = match.get("surface") or surface_default
-
-    summary = build_match_summary(
-        player1=p1_hist,
-        player2=p2_hist,
-        surface=surface
-    )
-
-    return summary, f"✅ Matching OK: API({p1_name_api} vs {p2_name_api}) → HIST({p1_hist} vs {p2_hist})"
+    summary = build_match_summary(p1_hist, p2_hist, match["surface"])
+    return summary, f"✅ Matching OK: {match['player1']} vs {match['player2']}"
 
 
-# ---------- EXPORTAR EXCEL COM CORES ----------
+# ---------- EXPORTAR EXCEL ----------
 def export_daily_predictions_to_excel(df):
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="xlsxwriter")
@@ -190,29 +148,21 @@ def export_daily_predictions_to_excel(df):
     workbook = writer.book
     worksheet = writer.sheets["Previsoes"]
 
-    fmt_num = workbook.add_format({"num_format": "0.00"})
     fmt_green = workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"})
     fmt_red = workbook.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"})
 
-    for col in range(len(df.columns)):
-        worksheet.set_column(col, col, 18, fmt_num)
-
     if "VALUE BET" in df.columns:
         col_idx = df.columns.get_loc("VALUE BET")
-
         for row in range(1, len(df) + 1):
             value = df.iloc[row - 1, col_idx]
-            if value == "YES":
-                worksheet.write(row, col_idx, value, fmt_green)
-            else:
-                worksheet.write(row, col_idx, value, fmt_red)
+            worksheet.write(row, col_idx, value, fmt_green if value == "YES" else fmt_red)
 
     writer.close()
     output.seek(0)
     return output
-# ---------- PIPELINE DE PREVISÃO ----------
+# ---------- PIPELINE ----------
 def run_daily_predictions(all_players):
-    matches, logs = scrape_matches()
+    matches, logs = scrape_tennis24()
 
     st.subheader("Logs do scraper")
     for l in logs:
@@ -234,9 +184,7 @@ def run_daily_predictions(all_players):
         X = summary.values.reshape(1, -1)
         prob = model.predict_proba(X)[0][1]
 
-        odd1 = match.get("odd1")
-        odd2 = match.get("odd2")
-
+        odd1 = match["odd1"]
         ev1 = prob * odd1 - 1 if odd1 else None
         value_bet = "YES" if ev1 and ev1 > 0 else "NO"
 
@@ -244,20 +192,14 @@ def run_daily_predictions(all_players):
             "Torneio": match["tournament"],
             "Jogador 1": match["player1"],
             "Jogador 2": match["player2"],
-            "Superfície": match["surface"],
             "Odd J1": odd1,
-            "Odd J2": odd2,
+            "Odd J2": match["odd2"],
             "Prob J1": prob,
             "EV J1": ev1,
             "VALUE BET": value_bet
         })
 
-    if not resultados:
-        st.error("❌ Nenhum jogo pôde ser previsto.")
-        return
-
     df_res = pd.DataFrame(resultados)
-
     st.subheader("Previsões Jogos do Dia")
     st.dataframe(df_res)
 
@@ -265,7 +207,7 @@ def run_daily_predictions(all_players):
     st.download_button(
         label="📥 Baixar Excel com Previsões",
         data=excel_file,
-        file_name=f"previsoes_{get_real_date()}.xlsx",
+        file_name="previsoes_tennis24.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
@@ -273,7 +215,7 @@ def run_daily_predictions(all_players):
 # ---------- STREAMLIT APP ----------
 def main():
     st.set_page_config(page_title="Challenger Predictions", layout="wide")
-    st.title("🎾 Challenger / ATP — Previsões")
+    st.title("🎾 Challenger / ATP — Previsões (Tennis24)")
 
     st.sidebar.header("Configuração")
 
@@ -289,16 +231,8 @@ def main():
     all_players = load_players_from_excel(uploaded_file)
     st.sidebar.success(f"{len(all_players)} jogadores carregados.")
 
-    menu = st.sidebar.radio(
-        "Menu",
-        ["📋 Previsão Jogos do Dia"]
-    )
-
-    if menu == "📋 Previsão Jogos do Dia":
-        st.header("📋 Previsão Jogos do Dia (ATP + Challenger)")
-        if st.button("Buscar jogos de hoje e prever"):
-            run_daily_predictions(all_players)
-
+    if st.button("Buscar jogos de hoje e prever"):
+        run_daily_predictions(all_players)
 
 
 if __name__ == "__main__":
