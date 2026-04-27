@@ -242,71 +242,71 @@ def find_player(name, historical_names):
 # SCRAPER RAPIDAPI
 # ==============================================================================
 def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (SofaScore — modo anti‑403)"]
+    logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
 
-    # Headers reais de browser
+    API_KEY = "bba6af0e8dmsh6350139b0f77a4ap16b6fajsn219553636a44"
+    API_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
+
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9,pt;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Origin": "https://www.sofascore.com",
-        "Referer": "https://www.sofascore.com/",
-        "Connection": "keep-alive"
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": API_HOST,
+        "Content-Type": "application/json"
     }
 
-    # Cookies básicos (SofaScore exige pelo menos estes)
-    cookies = {
-        "SOFA_LANGUAGE": "en",
-        "SOFA_TIMEZONE": "UTC"
-    }
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
 
-    # Endpoint live
-    url_live = "https://api.sofascore.com/api/v1/sport/tennis/events/live"
+    logs.append(f"🔎 Endpoint: {url}")
 
     try:
-        r = requests.get(url_live, headers=headers, cookies=cookies, timeout=15)
+        r = requests.get(url, headers=headers, timeout=15)
 
-        if r.status_code == 403:
-            logs.append("❌ 403 — Acesso bloqueado (live). Tentando upcoming...")
-        elif r.status_code != 200:
+        if r.status_code != 200:
             logs.append(f"❌ HTTP {r.status_code}")
-        else:
-            data = r.json()
-            events = data.get("events", [])
-            if events:
-                logs.append(f"🎾 LIVE encontrados: {len(events)}")
-                return process_sofascore_events(events, logs), logs
-    except Exception as e:
-        logs.append(f"💥 Erro live: {e}")
-
-    # Fallback: upcoming do dia
-    url_upcoming = "https://api.sofascore.com/api/v1/sport/tennis/events/next/0"
-
-    try:
-        r2 = requests.get(url_upcoming, headers=headers, cookies=cookies, timeout=15)
-
-        if r2.status_code == 403:
-            logs.append("❌ 403 — Acesso bloqueado (upcoming).")
             return [], logs
 
-        if r2.status_code != 200:
-            logs.append(f"❌ HTTP {r2.status_code}")
+        data = r.json()
+        matches = data.get("matches", [])
+
+        if not matches:
+            logs.append("⚠️ Nenhum jogo encontrado hoje")
             return [], logs
 
-        data2 = r2.json()
-        events2 = data2.get("events", [])
+        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
 
-        logs.append(f"🎾 Upcoming encontrados: {len(events2)}")
+        all_matches = []
 
-        return process_sofascore_events(events2, logs), logs
+        for m in matches:
+            try:
+                p1 = m["homePlayer"]["name"]
+                p2 = m["awayPlayer"]["name"]
+                tournament = m["tournament"]["name"]
+                surface = m["tournament"].get("surface", "Hard")
+                match_id = m["id"]
+
+                # Odds (se existirem)
+                odds_home = m.get("odds", {}).get("home")
+                odds_away = m.get("odds", {}).get("away")
+
+                all_matches.append({
+                    "tournament": tournament,
+                    "player1": p1,
+                    "player2": p2,
+                    "surface": surface,
+                    "match_id": match_id,
+                    "odd1": odds_home,
+                    "odd2": odds_away
+                })
+
+            except:
+                continue
+
+        logs.append(f"🎾 Após filtro: {len(all_matches)} jogos")
+
+        return all_matches, logs
 
     except Exception as e:
-        logs.append(f"💥 Erro upcoming: {e}")
+        logs.append(f"💥 Erro: {e}")
         return [], logs
 
 
