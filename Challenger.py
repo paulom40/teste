@@ -9,6 +9,12 @@ import requests
 from lightgbm import LGBMClassifier
 import matplotlib.pyplot as plt
 
+try:
+    from bs4 import BeautifulSoup
+    HAS_BEAUTIFULSOUP = True
+except ImportError:
+    HAS_BEAUTIFULSOUP = False
+
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="ATP Predictor PRO", page_icon="🎾", layout="wide")
@@ -254,88 +260,130 @@ def get_real_date():
 
 def scrape_matches():
     """
-    Scrapes ATP/Challenger matches from SofaScore (free, reliable API).
-    Falls back gracefully if API is unavailable.
+    Scrapes ATP matches from FlashScore using web scraping.
+    Extracts live and upcoming matches with player names and odds.
     """
-    logs = ["🎾 Procurando jogos de HOJE (SofaScore API)"]
+    logs = ["🎾 Procurando jogos de HOJE (FlashScore Web Scraping)"]
 
     today = get_real_date()
     logs.append(f"📅 Data: {today}")
 
-    try:
-        # SofaScore: Get ATP matches for today
-        url = f"https://api.sofascore.com/api/v1/sport/tennis/tournaments/atp-men/events"
-        
-        logs.append(f"🔎 Endpoint: SofaScore ATP")
+    if not HAS_BEAUTIFULSOUP:
+        logs.append("❌ Erro: BeautifulSoup4 não está instalado")
+        logs.append("💡 Para usar scraping, instala: pip install beautifulsoup4 lxml")
+        logs.append("🔧 Alternativa: Usa o separador 'Previsão Individual' com formulário manual")
+        return [], logs
 
-        r = requests.get(url, timeout=15)
+    try:
+        # FlashScore ATP live page
+        url = "https://www.flashscore.com/tennis/atp/"
+        logs.append(f"🔎 Scraping: {url}")
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+
+        r = requests.get(url, headers=headers, timeout=15)
 
         if r.status_code != 200:
-            logs.append(f"❌ HTTP {r.status_code} — API indisponível")
-            logs.append("💡 Dica: Carrega jogos manualmente ou tenta novamente mais tarde")
+            logs.append(f"❌ HTTP {r.status_code} — FlashScore indisponível")
+            logs.append("💡 Alternativa: Usa o formulário manual para jogos específicos")
             return [], logs
 
-        data = r.json()
-        events = data.get("events", [])
-
-        if not events:
-            logs.append("⚠️ Nenhum jogo encontrado hoje")
-            return [], logs
-
-        logs.append(f"🎾 Encontrados {len(events)} eventos")
-
+        soup = BeautifulSoup(r.content, "html.parser")
+        
         all_matches = []
 
-        for ev in events:
-            try:
-                # Filter by status (skip completed/cancelled)
-                status = ev.get("status", "")
-                if status in ["finished", "cancelled"]:
-                    continue
+        # FlashScore uses different class names - try multiple selectors
+        selectors = [
+            soup.find_all("div", {"class": lambda x: x and "event__match" in x}),
+            soup.find_all("div", {"class": lambda x: x and "event__item" in x}),
+            soup.find_all("tr", {"class": lambda x: x and "event__row" in x}),
+        ]
 
-                tournament = ev.get("tournament", {}).get("name", "ATP")
-                p1 = ev.get("homeTeam", {}).get("name", "")
-                p2 = ev.get("awayTeam", {}).get("name", "")
-                surface = ev.get("surface", "Hard")
-                match_id = ev.get("id", "")
+        matches = []
+        for selector_result in selectors:
+            if selector_result:
+                matches = selector_result
+                break
+
+        if not matches:
+            logs.append("⚠️ Estrutura HTML não encontrada")
+            logs.append("💡 FlashScore pode ter mudado a estrutura — tenta manual")
+            return [], logs
+
+        logs.append(f"🎾 Encontrados {len(matches)} elementos no HTML")
+
+        for match_div in matches[:20]:  # Limit to first 20
+            try:
+                # Extract player names - try multiple selectors
+                p1, p2 = None, None
+                
+                # Method 1: eventRowLink
+                players = match_div.find_all("a", {"class": lambda x: x and "eventRowLink" in x})
+                if len(players) >= 2:
+                    p1 = players[0].get_text(strip=True)
+                    p2 = players[1].get_text(strip=True)
+                
+                # Method 2: Look for team names
+                if not p1 or not p2:
+                    teams = match_div.find_all("div", {"class": lambda x: x and "teamName" in x})
+                    if len(teams) >= 2:
+                        p1 = teams[0].get_text(strip=True)
+                        p2 = teams[1].get_text(strip=True)
 
                 if not p1 or not p2:
                     continue
 
-                # Try to fetch odds
-                odds_home, odds_away = None, None
+                # Extract tournament name
+                tournament = "ATP"
+                tournament_div = match_div.find("div", {"class": lambda x: x and "tournament" in x})
+                if tournament_div:
+                    tournament = tournament_div.get_text(strip=True)
+
+                # Extract surface (heuristic from tournament name)
+                surface = detect_surface(tournament)
+
+                # Try to extract odds
+                odds_p1, odds_p2 = None, None
                 try:
-                    odds_url = f"https://api.sofascore.com/api/v1/event/{match_id}/odds/1"
-                    r_odds = requests.get(odds_url, timeout=5)
-                    if r_odds.status_code == 200:
-                        odds_data = r_odds.json().get("markets", [])
-                        if odds_data and len(odds_data) > 0:
-                            outcomes = odds_data[0].get("outcomes", [])
-                            if len(outcomes) >= 2:
-                                odds_home = outcomes[0].get("value")
-                                odds_away = outcomes[1].get("value")
+                    odds_spans = match_div.find_all("span", {"class": lambda x: x and "odds" in x})
+                    if len(odds_spans) >= 2:
+                        try:
+                            odds_p1 = float(odds_spans[0].get_text(strip=True))
+                        except:
+                            pass
+                        try:
+                            odds_p2 = float(odds_spans[1].get_text(strip=True))
+                        except:
+                            pass
                 except:
-                    pass  # Odds optional
+                    pass
 
                 all_matches.append({
                     "tournament": tournament,
-                    "player1": p1,
-                    "player2": p2,
+                    "player1": p1.strip(),
+                    "player2": p2.strip(),
                     "surface": surface,
-                    "match_id": match_id,
-                    "odd1": odds_home,
-                    "odd2": odds_away
+                    "match_id": f"{p1}_{p2}",
+                    "odd1": odds_p1,
+                    "odd2": odds_p2
                 })
 
             except Exception as e:
                 continue
 
-        logs.append(f"✅ Após filtro: {len(all_matches)} jogos válidos")
+        if all_matches:
+            logs.append(f"✅ Extraídos {len(all_matches)} jogos com sucesso")
+        else:
+            logs.append("⚠️ Nenhum jogo válido encontrado")
+            logs.append("💡 FlashScore pode bloquear scraping — tenta nova tentativa")
+        
         return all_matches, logs
 
     except Exception as e:
-        logs.append(f"💥 Erro na conexão: {str(e)}")
-        logs.append("⚠️ Sugestão: Carrega um ficheiro Excel com histórico de jogos para usar previsões personalizadas")
+        logs.append(f"💥 Erro: {str(e)}")
+        logs.append("⚠️ Sugestão: Carrega um ficheiro Excel ou usa previsões individuais")
         return [], logs
 
 # ==============================================================================
