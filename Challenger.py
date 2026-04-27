@@ -277,9 +277,10 @@ def main():
     st.sidebar.header("Configuração")
 
     uploaded_file = st.sidebar.file_uploader(
-        "Carregar histórico (CSV com winner_name / loser_name)",
-        type=["csv"]
+    "Carregar histórico (Excel .xlsx com winner_name / loser_name)",
+    type=["xlsx"]
     )
+
 
     if uploaded_file is None:
         st.warning("Carrega um CSV com histórico para construir a lista de jogadores.")
