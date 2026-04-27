@@ -67,63 +67,64 @@ def build_match_summary(player1, player2, surface):
     }
     return pd.Series(features)
 # ---------- SCRAPER TENNIS24 ----------
-def scrape_tennis24():
-    logs = ["📅 Procurando jogos de HOJE no Tennis24 (ATP + Challenger)"]
+def scrape_tennis24_api():
+    logs = ["📅 Procurando jogos de HOJE via API Tennis24 (ATP + Challenger)"]
 
-    url = "https://www.tennis24.com/"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    base_url = "https://d.livesport.services/api/v1/tennis/matches"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.tennis24.com/"
+    }
 
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            logs.append(f"❌ HTTP {r.status_code} no Tennis24")
-            return [], logs
+    categories = ["atp", "challenger"]
+    all_matches = []
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        matches = []
+    for cat in categories:
+        url = f"{base_url}?category={cat}&day=today"
+        logs.append(f"🔎 {cat.upper()} → {url}")
 
-        for m in soup.select(".event__match"):
-
-            tournament = m.get("data-competition-name", "")
-
-            # Filtrar apenas ATP + Challenger
-            if not any(x in tournament.upper() for x in ["ATP", "CHALLENGER"]):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                logs.append(f"❌ HTTP {r.status_code} em {cat.upper()}")
                 continue
 
-            p1 = m.select_one(".event__participant--home")
-            p2 = m.select_one(".event__participant--away")
+            data = r.json()
 
-            if not p1 or not p2:
+            if "events" not in data:
+                logs.append(f"❌ Sem 'events' em {cat.upper()}")
                 continue
 
-            p1_name = p1.text.strip()
-            p2_name = p2.text.strip()
+            for ev in data["events"]:
+                try:
+                    p1 = ev["homeParticipant"]["name"]
+                    p2 = ev["awayParticipant"]["name"]
 
-            odd_home = m.get("data-odd-home")
-            odd_away = m.get("data-odd-away")
+                    tournament = ev["tournament"]["name"]
+                    surface = ev["tournament"].get("ground", "Hard")
 
-            try:
-                odd_home = float(odd_home) if odd_home else None
-                odd_away = float(odd_away) if odd_away else None
-            except:
-                odd_home = None
-                odd_away = None
+                    odds = ev.get("odds", {})
+                    odd1 = odds.get("home")
+                    odd2 = odds.get("away")
 
-            matches.append({
-                "tournament": tournament,
-                "player1": p1_name,
-                "player2": p2_name,
-                "surface": "Hard",  # Tennis24 não mostra superfície
-                "odd1": odd_home,
-                "odd2": odd_away
-            })
+                    all_matches.append({
+                        "tournament": tournament,
+                        "player1": p1,
+                        "player2": p2,
+                        "surface": surface,
+                        "odd1": odd1,
+                        "odd2": odd2
+                    })
 
-        logs.append(f"🎾 TOTAL: {len(matches)} jogos encontrados no Tennis24")
-        return matches, logs
+                except Exception as e:
+                    logs.append(f"Erro num evento {cat}: {e}")
+                    continue
 
-    except Exception as e:
-        logs.append(f"💥 Erro no scraper Tennis24: {e}")
-        return [], logs
+        except Exception as e:
+            logs.append(f"💥 Erro no scraper API Tennis24: {e}")
+
+    logs.append(f"🎾 TOTAL FINAL: {len(all_matches)} jogos encontrados")
+    return all_matches, logs
 
 
 # ---------- PREPARAR MATCH ----------
