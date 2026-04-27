@@ -247,8 +247,7 @@ def scrape_matches():
     # Obter data real (não a data do servidor Streamlit)
     try:
        def get_real_date():
-    try:
-        r = requests.get(
+    try:r = requests.get(
             "https://www.google.com",
             timeout=5
         )
