@@ -67,65 +67,69 @@ def build_match_summary(player1, player2, surface):
     }
     return pd.Series(features)
 # ---------- SCRAPER TENNIS24 ----------
-def scrape_sofascore():
-    logs = ["📅 Procurando jogos de HOJE via SofaScore (ATP + Challenger)"]
+def scrape_xscores():
+    logs = ["📅 Procurando jogos de HOJE via XScores (ATP + Challenger)"]
 
-    url = "https://api.sofascore.com/api/v1/sport/tennis/events/today"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    url = "https://www.xscores.com/tennis"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
 
     try:
         r = requests.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
-            logs.append(f"❌ HTTP {r.status_code} no SofaScore")
+            logs.append(f"❌ HTTP {r.status_code} no XScores")
             return [], logs
 
-        data = r.json()
-
-        if "events" not in data:
-            logs.append("❌ Nenhum evento encontrado no SofaScore")
-            return [], logs
+        soup = BeautifulSoup(r.text, "html.parser")
 
         matches = []
 
-        for ev in data["events"]:
-            try:
-                tournament = ev["tournament"]["name"]
-                category = ev["tournament"]["category"]["name"].upper()
+        # Cada jogo está dentro de <div class="score_row">
+        rows = soup.select(".score_row")
 
-                # Filtrar apenas ATP + Challenger
-                if not any(x in category for x in ["ATP", "CHALLENGER"]):
+        for row in rows:
+            try:
+                # Torneio (ex: ATP, Challenger)
+                tournament = row.select_one(".score_league").get_text(strip=True)
+
+                if not any(x in tournament.upper() for x in ["ATP", "CHALLENGER"]):
                     continue
 
-                p1 = ev["homeTeam"]["name"]
-                p2 = ev["awayTeam"]["name"]
+                # Jogadores
+                players = row.select(".score_home_txt, .score_away_txt")
+                if len(players) != 2:
+                    continue
 
-                # Superfície (nem sempre disponível)
-                surface = ev.get("surface", "Hard")
+                p1 = players[0].get_text(strip=True)
+                p2 = players[1].get_text(strip=True)
 
-                # Odds (nem sempre disponíveis)
-                odds = ev.get("odds", {})
-                odd1 = odds.get("home")
-                odd2 = odds.get("away")
+                # Odds (se existirem)
+                odds = row.select(".odds")
+                odd1 = float(odds[0].get_text(strip=True)) if len(odds) >= 2 else None
+                odd2 = float(odds[1].get_text(strip=True)) if len(odds) >= 2 else None
 
                 matches.append({
                     "tournament": tournament,
                     "player1": p1,
                     "player2": p2,
-                    "surface": surface,
+                    "surface": "Hard",  # XScores não mostra superfície
                     "odd1": odd1,
                     "odd2": odd2
                 })
 
             except Exception as e:
-                logs.append(f"Erro num evento: {e}")
+                logs.append(f"Erro num jogo: {e}")
                 continue
 
-        logs.append(f"🎾 TOTAL FINAL: {len(matches)} jogos encontrados no SofaScore")
+        logs.append(f"🎾 TOTAL FINAL: {len(matches)} jogos encontrados no XScores")
         return matches, logs
 
     except Exception as e:
-        logs.append(f"💥 Erro no scraper SofaScore: {e}")
+        logs.append(f"💥 Erro no scraper XScores: {e}")
         return [], logs
+
 
 
 
