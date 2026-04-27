@@ -251,79 +251,72 @@ def scrape_matches():
         "Content-Type": "application/json"
     }
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    url = "https://tennisapi1.p.rapidapi.com/api/tennis/matches/today"
 
-    dates_to_check = [today, tomorrow]
+    logs = [f"📅 Procurando jogos de HOJE", f"🔎 Endpoint: {url}"]
 
     all_matches = []
-    logs = []
 
-    for d in dates_to_check:
-        url = f"https://tennisapi1.p.rapidapi.com/api/tennis/matches/date/{d}"
-        logs.append(f"📅 Procurando jogos para {d}")
-        logs.append(f"🔎 Endpoint: {url}")
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
 
-        try:
-            r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            logs.append(f"❌ HTTP {r.status_code}")
+            return [], logs
 
-            if r.status_code != 200:
-                logs.append(f"❌ HTTP {r.status_code}")
-                continue
+        data = r.json()
+        matches = data.get("data", [])
 
-            data = r.json()
-            matches = data.get("data", [])
+        if not matches:
+            logs.append("⚠️ Nenhum jogo encontrado hoje")
+            return [], logs
 
-            if not matches:
-                logs.append("⚠️ Nenhum jogo encontrado nesta data")
-                continue
+        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
 
-            logs.append(f"✅ Encontrados {len(matches)} jogos (antes do filtro)")
+        for m in matches:
+            try:
+                tournament = m["tournament"]["name"]
+                category = m["tournament"].get("category", "").upper()
 
-            for m in matches:
-                try:
-                    tournament = m["tournament"]["name"]
-                    category = m["tournament"].get("category", "").upper()
-
-                    if not any(x in category for x in ["ATP", "CHALLENGER"]):
-                        continue
-
-                    match_id = m["id"]
-                    p1 = m["home_player"]["name"]
-                    p2 = m["away_player"]["name"]
-                    surface = m["tournament"].get("surface", "Hard")
-
-                    odds_url = f"https://tennisapi1.p.rapidapi.com/api/tennis/odds/{match_id}"
-                    odds_home = None
-                    odds_away = None
-
-                    try:
-                        r_odds = requests.get(odds_url, headers=headers, timeout=10)
-                        if r_odds.status_code == 200:
-                            odds_data = r_odds.json().get("data", {})
-                            if "odds" in odds_data:
-                                odds_home = odds_data["odds"].get("home")
-                                odds_away = odds_data["odds"].get("away")
-                    except:
-                        pass
-
-                    all_matches.append({
-                        "tournament": tournament,
-                        "player1": p1,
-                        "player2": p2,
-                        "surface": surface,
-                        "match_id": match_id,
-                        "odd1": odds_home,
-                        "odd2": odds_away
-                    })
-
-                except Exception:
+                if not any(x in category for x in ["ATP", "CHALLENGER"]):
                     continue
 
-            logs.append(f"🎾 Após filtro ATP/Challenger: {len(all_matches)} jogos")
+                match_id = m["id"]
+                p1 = m["home_player"]["name"]
+                p2 = m["away_player"]["name"]
+                surface = m["tournament"].get("surface", "Hard")
 
-        except Exception as e:
-            logs.append(f"💥 Erro: {e}")
+                odds_url = f"https://tennisapi1.p.rapidapi.com/api/tennis/odds/{match_id}"
+                odds_home = None
+                odds_away = None
+
+                try:
+                    r_odds = requests.get(odds_url, headers=headers, timeout=10)
+                    if r_odds.status_code == 200:
+                        odds_data = r_odds.json().get("data", {})
+                        if "odds" in odds_data:
+                            odds_home = odds_data["odds"].get("home")
+                            odds_away = odds_data["odds"].get("away")
+                except:
+                    pass
+
+                all_matches.append({
+                    "tournament": tournament,
+                    "player1": p1,
+                    "player2": p2,
+                    "surface": surface,
+                    "match_id": match_id,
+                    "odd1": odds_home,
+                    "odd2": odds_away
+                })
+
+            except Exception:
+                continue
+
+        logs.append(f"🎾 Após filtro ATP/Challenger: {len(all_matches)} jogos")
+
+    except Exception as e:
+        logs.append(f"💥 Erro: {e}")
 
     return all_matches, logs
 # ==============================================================================
