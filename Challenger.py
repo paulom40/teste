@@ -163,7 +163,8 @@ def export_daily_predictions_to_excel(df):
     return output
 # ---------- PIPELINE ----------
 def run_daily_predictions(all_players):
-    matches, logs = scrape_tennis24()
+    matches, logs = scrape_tennis24_api()
+
 
     st.subheader("Logs do scraper")
     for l in logs:
