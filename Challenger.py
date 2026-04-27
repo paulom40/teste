@@ -46,11 +46,12 @@ def get_real_date():
         return datetime.utcnow().strftime("%Y-%m-%d")
 # ---------- CARREGAR JOGADORES DO TEU EXCEL ----------
 @st.cache_data
-def load_players_from_csv(uploaded_file):
-    df = pd.read_csv(uploaded_file)
+def load_players_from_excel(uploaded_file):
+    df = pd.read_excel(uploaded_file)
 
+    # Garante que as colunas existem
     if "winner_name" not in df.columns or "loser_name" not in df.columns:
-        st.error("O CSV deve conter as colunas 'winner_name' e 'loser_name'.")
+        st.error("O Excel deve conter as colunas 'winner_name' e 'loser_name'.")
         return []
 
     winners = df["winner_name"].dropna().unique().tolist()
@@ -58,6 +59,7 @@ def load_players_from_csv(uploaded_file):
 
     players = sorted(list(set(winners + losers)))
     return players
+
 
 
 # ---------- MODELO DUMMY (para correr no Streamlit Cloud) ----------
