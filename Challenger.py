@@ -165,7 +165,8 @@ def export_daily_predictions_to_excel(df):
     return output
 # ---------- PIPELINE ----------
 def run_daily_predictions(all_players):
-    matches, logs = scrape_tennis24_api()
+    matches, logs = scrape_sofascore()
+
 
 
     st.subheader("Logs do scraper")
