@@ -246,12 +246,20 @@ def scrape_matches():
 
     # Obter data real (não a data do servidor Streamlit)
     try:
-        real_date = requests.get(
-            "http://worldtimeapi.org/api/timezone/Europe/London",
+       def get_real_date():
+    try:
+        r = requests.get(
+            "https://www.google.com",
             timeout=5
-        ).json()["datetime"][:10]
+        )
+        # O header 'Date' do Google tem a data real do mundo
+        date_str = r.headers["Date"]  # Ex: 'Mon, 27 Apr 2026 07:55:00 GMT'
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(date_str)
+        return dt.strftime("%Y-%m-%d")
     except:
-        real_date = datetime.utcnow().strftime("%Y-%m-%d")
+        return datetime.utcnow().strftime("%Y-%m-%d")
+
 
     today = real_date
 
