@@ -286,8 +286,8 @@ def main():
         st.warning("Carrega um CSV com histórico para construir a lista de jogadores.")
         return
 
-    all_players = load_players_from_csv(uploaded_file)
-    st.sidebar.success(f"{len(all_players)} jogadores carregados.")
+   all_players = load_players_from_excel(uploaded_file)
+   st.sidebar.success(f"{len(all_players)} jogadores carregados.")
 
     menu = st.sidebar.radio(
         "Menu",
