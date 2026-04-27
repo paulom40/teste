@@ -38,12 +38,13 @@ def find_player(name, all_players):
 # ---------- DATA REAL ----------
 def get_real_date():
     try:
-        r = requests.get("https://www.google.com", timeout=5)
-        date_str = r.headers["Date"]
-        dt = parsedate_to_datetime(date_str)
-        return dt.strftime("%Y-%m-%d")
+        r = requests.get("http://worldtimeapi.org/api/timezone/Europe/Lisbon", timeout=5)
+        data = r.json()
+        date_str = data["datetime"][:10]  # formato YYYY-MM-DD
+        return date_str
     except:
         return datetime.utcnow().strftime("%Y-%m-%d")
+
 # ---------- CARREGAR JOGADORES DO TEU EXCEL ----------
 @st.cache_data
 def load_players_from_excel(uploaded_file):
