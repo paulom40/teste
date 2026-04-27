@@ -1,8 +1,13 @@
-import requests
+import streamlit as st
 import pandas as pd
+import numpy as np
+import requests
 from io import BytesIO
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+
+
+# ---------- NORMALIZAÇÃO DE NOMES ----------
 
 def normalize_name(name):
     if not name:
@@ -13,6 +18,7 @@ def normalize_name(name):
     name = name.replace("-", " ")
     parts = name.split()
     return " ".join(parts)
+
 
 def find_player(name, all_players):
     name_norm = normalize_name(name)
@@ -29,6 +35,9 @@ def find_player(name, all_players):
 
     return None
 
+
+# ---------- DATA REAL (IGNORA DATA DO SERVIDOR) ----------
+
 def get_real_date():
     try:
         r = requests.get("https://www.google.com", timeout=5)
@@ -37,8 +46,54 @@ def get_real_date():
         return dt.strftime("%Y-%m-%d")
     except:
         return datetime.utcnow().strftime("%Y-%m-%d")
+# ---------- MODELO DUMMY (SUBSTITUI PELO TEU MODELO REAL) ----------
+
+class DummyModel:
+    def predict_proba(self, X):
+        # devolve sempre 50% / 50% só para o app correr
+        X = np.array(X)
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+        return np.tile(np.array([[0.5, 0.5]]), (X.shape[0], 1))
+
+
+model = DummyModel()
+
+
+# ---------- BUILD_MATCH_SUMMARY (SUBSTITUI PELO TEU) ----------
+
+def build_match_summary(player1, player2, surface):
+    # Aqui podes pôr o teu verdadeiro pipeline de features.
+    # Por agora, devolve um vetor simples só para o modelo correr.
+    features = {
+        "feat_surface_hard": 1 if surface.lower() == "hard" else 0,
+        "feat_surface_clay": 1 if surface.lower() == "clay" else 0,
+        "feat_surface_grass": 1 if surface.lower() == "grass" else 0,
+        "feat_dummy_strength": 0.5
+    }
+    return pd.Series(features)
+
+
+# ---------- CARREGAMENTO DE JOGADORES A PARTIR DE UM CSV ----------
+
+@st.cache_data
+def load_players_from_csv(uploaded_file):
+    df = pd.read_csv(uploaded_file)
+    cols = [c.lower() for c in df.columns]
+
+    players = set()
+
+    # tenta encontrar colunas de winner/loser
+    for col in df.columns:
+        cl = col.lower()
+        if "winner_name" in cl or "loser_name" in cl or "player" in cl:
+            players.update(df[col].dropna().unique().tolist())
+
+    return sorted(list(players))
+# ---------- SCRAPER ATP + CHALLENGER ----------
+
 def scrape_matches():
-    logs = ["📅 Procurando jogos de HOJE (RapidAPI — ATP/WTA/ITF)"]
+    logs = ["📅 Procurando jogos de HOJE (ATP + CHALLENGER)"]
 
     today = get_real_date()
     logs.append(f"📅 Data real usada: {today}")
@@ -52,64 +107,66 @@ def scrape_matches():
         "Content-Type": "application/json"
     }
 
-    url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
-    logs.append(f"🔎 Endpoint: {url}")
+    tours = ["atp", "challenger"]
+    all_matches = []
 
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
+    for tour in tours:
+        url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/{tour}/matches-by-date/{today}"
+        logs.append(f"🔎 {tour.upper()} → {url}")
 
-        if r.status_code != 200:
-            logs.append(f"❌ HTTP {r.status_code}")
-            return [], logs
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
 
-        data = r.json()
-        matches = data.get("matches", [])
-
-        if not matches:
-            logs.append("⚠️ Nenhum jogo encontrado hoje")
-            return [], logs
-
-        logs.append(f"🎾 Encontrados {len(matches)} jogos (antes do filtro)")
-
-        all_matches = []
-
-        for m in matches:
-            try:
-                p1_api = m["homePlayer"]["name"]
-                p2_api = m["awayPlayer"]["name"]
-
-                tournament = m["tournament"]["name"]
-                surface = m["tournament"].get("surface", "Hard")
-                match_id = m["id"]
-
-                odds_home = m.get("odds", {}).get("home")
-                odds_away = m.get("odds", {}).get("away")
-
-                # Corrigir ordem: favorito = Jogador 1
-                if odds_home and odds_away and odds_home > odds_away:
-                    p1_api, p2_api = p2_api, p1_api
-                    odds_home, odds_away = odds_away, odds_home
-
-                all_matches.append({
-                    "tournament": tournament,
-                    "player1": p1_api,
-                    "player2": p2_api,
-                    "surface": surface,
-                    "match_id": match_id,
-                    "odd1": odds_home,
-                    "odd2": odds_away
-                })
-
-            except Exception as e:
-                logs.append(f"Erro num match: {e}")
+            if r.status_code != 200:
+                logs.append(f"❌ {tour.upper()} HTTP {r.status_code}")
                 continue
 
-        logs.append(f"🎾 Após correção de ordem: {len(all_matches)} jogos")
-        return all_matches, logs
+            data = r.json()
+            matches = data.get("matches", [])
 
-    except Exception as e:
-        logs.append(f"💥 Erro: {e}")
-        return [], logs
+            logs.append(f"🎾 {tour.upper()} encontrou {len(matches)} jogos")
+
+            for m in matches:
+                try:
+                    p1_api = m["homePlayer"]["name"]
+                    p2_api = m["awayPlayer"]["name"]
+
+                    tournament = m["tournament"]["name"]
+                    surface = m["tournament"].get("surface", "Hard")
+                    match_id = m["id"]
+
+                    odds_home = m.get("odds", {}).get("home")
+                    odds_away = m.get("odds", {}).get("away")
+
+                    # Corrigir ordem: favorito = Jogador 1
+                    if odds_home and odds_away and odds_home > odds_away:
+                        p1_api, p2_api = p2_api, p1_api
+                        odds_home, odds_away = odds_away, odds_home
+
+                    all_matches.append({
+                        "tournament": tournament,
+                        "player1": p1_api,
+                        "player2": p2_api,
+                        "surface": surface,
+                        "match_id": match_id,
+                        "odd1": odds_home,
+                        "odd2": odds_away
+                    })
+
+                except Exception as e:
+                    logs.append(f"Erro num match {tour}: {e}")
+                    continue
+
+        except Exception as e:
+            logs.append(f"💥 Erro no tour {tour}: {e}")
+
+    logs.append(f"🎾 TOTAL FINAL: {len(all_matches)} jogos encontrados")
+
+    return all_matches, logs
+
+
+# ---------- PREPARAR JOGO PARA PREVISÃO ----------
+
 def prepare_match_for_prediction(match, all_players, surface_default="Hard"):
     p1_name_api = match["player1"]
     p2_name_api = match["player2"]
@@ -131,6 +188,8 @@ def prepare_match_for_prediction(match, all_players, surface_default="Hard"):
     return summary, f"✅ Matching OK: API({p1_name_api} vs {p2_name_api}) → HIST({p1_hist} vs {p2_hist})"
 
 
+# ---------- EXPORTAR EXCEL COM CORES (VALUE BET) ----------
+
 def export_daily_predictions_to_excel(df):
     output = BytesIO()
     writer = pd.ExcelWriter(output, engine="xlsxwriter")
@@ -147,32 +206,31 @@ def export_daily_predictions_to_excel(df):
     for col in range(len(df.columns)):
         worksheet.set_column(col, col, 18, fmt_num)
 
-    col_idx = df.columns.get_loc("VALUE BET")
+    if "VALUE BET" in df.columns:
+        col_idx = df.columns.get_loc("VALUE BET")
 
-    for row in range(1, len(df) + 1):
-        value = df.iloc[row - 1, col_idx]
-        if value == "YES":
-            worksheet.write(row, col_idx, value, fmt_green)
-        else:
-            worksheet.write(row, col_idx, value, fmt_red)
+        for row in range(1, len(df) + 1):
+            value = df.iloc[row - 1, col_idx]
+            if value == "YES":
+                worksheet.write(row, col_idx, value, fmt_green)
+            else:
+                worksheet.write(row, col_idx, value, fmt_red)
 
     writer.close()
     output.seek(0)
     return output
-import streamlit as st
+# ---------- PIPELINE DE PREVISÃO DOS JOGOS DO DIA ----------
 
-def run_daily_predictions(all_players, model):
+def run_daily_predictions(all_players):
     matches, logs = scrape_matches()
-
-    if not matches:
-        st.write("Nenhum jogo encontrado hoje.")
-        for l in logs:
-            st.text(l)
-        return
 
     st.subheader("Logs do scraper")
     for l in logs:
         st.text(l)
+
+    if not matches:
+        st.error("❌ Nenhum jogo encontrado hoje.")
+        return
 
     resultados = []
 
@@ -205,7 +263,7 @@ def run_daily_predictions(all_players, model):
         })
 
     if not resultados:
-        st.write("Nenhum jogo com jogadores encontrados no histórico.")
+        st.error("❌ Nenhum jogo pôde ser previsto (matching falhou para todos).")
         return
 
     df_res = pd.DataFrame(resultados)
@@ -220,3 +278,38 @@ def run_daily_predictions(all_players, model):
         file_name=f"previsoes_{get_real_date()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+# ---------- APP STREAMLIT (MAIN) ----------
+
+def main():
+    st.set_page_config(page_title="Challenger Predictions", layout="wide")
+    st.title("🎾 Challenger / ATP — Previsões")
+
+    st.sidebar.header("Configuração")
+
+    uploaded_file = st.sidebar.file_uploader(
+        "Carregar histórico (CSV com jogadores)",
+        type=["csv"]
+    )
+
+    if uploaded_file is None:
+        st.warning("Carrega um CSV com histórico (winner_name / loser_name) para construir a lista de jogadores.")
+        return
+
+    all_players = load_players_from_csv(uploaded_file)
+    st.sidebar.success(f"{len(all_players)} jogadores carregados do histórico.")
+
+    menu = st.sidebar.radio(
+        "Menu",
+        ["📋 Previsão Jogos do Dia"]
+    )
+
+    if menu == "📋 Previsão Jogos do Dia":
+        st.header("📋 Previsão Jogos do Dia (ATP + Challenger)")
+        if st.button("Buscar jogos de hoje e prever"):
+            run_daily_predictions(all_players)
+
+
+if __name__ == "__main__":
+    main()
