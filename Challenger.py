@@ -253,7 +253,18 @@ def scrape_matches():
         "Content-Type": "application/json"
     }
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    # Obter data real do mundo (não a data do servidor Streamlit)
+try:
+    real_date = requests.get(
+        "http://worldtimeapi.org/api/timezone/Europe/London",
+        timeout=5
+    ).json()["datetime"][:10]
+except:
+    # fallback caso a API falhe
+    real_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+today = real_date
+
     url = f"https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/atp/matches-by-date/{today}"
 
     logs.append(f"🔎 Endpoint: {url}")
