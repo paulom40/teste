@@ -4,22 +4,18 @@ import numpy as np
 from io import BytesIO
 import time
 import re
-import shutil
-import subprocess
 
 # =====================================================
-# Selenium + Chromium Driver Setup
+# OPTION A: Selenium-based FlashScore scraper (FREE)
+# Requires: pip install selenium webdriver-manager
 # =====================================================
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromiumService
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
-# webdriver_manager handles Chromium driver download automatically
 from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 
 
 # ---------- NORMALIZATION ----------
@@ -31,13 +27,14 @@ def normalize_name(name: str) -> str:
     # Remove common suffixes like (1), [5], nationality codes
     name = re.sub(r"\s*[\(\[\{].*?[\)\]\}]", "", name)
     name = name.replace(".", "").replace(",", "").replace("-", " ")
+    # Collapse whitespace
     return " ".join(name.split())
 
 
 def find_player(name: str, all_players: list) -> str | None:
     """
     Match a scraped name against the known player list.
-    Strategy: exact → last-name match → first+last combo.
+    Strategy: exact → last-name match → first-token match.
     """
     name_norm = normalize_name(name)
     tokens = name_norm.split()
@@ -83,9 +80,9 @@ def load_players_from_excel(uploaded_file):
     return sorted(set(winners + losers))
 
 
-# ---------- DUMMY MODEL (replace with real trained model!) ----------
+# ---------- DUMMY MODEL (replace with a real trained model!) ----------
 class DummyModel:
-    """Always predicts 50/50 — REPLACE with your trained model."""
+    """Always predicts 50/50 — replace with your trained model."""
     def predict_proba(self, X):
         X = np.array(X)
         if X.ndim == 1:
@@ -96,17 +93,14 @@ class DummyModel:
 model = DummyModel()
 
 
-# ---------- INFER SURFACE FROM TOURNAMENT NAME ----------
+# ---------- INFER SURFACE ----------
 SURFACE_KEYWORDS = {
-    "clay": [
-        "roland garros", "rome", "madrid", "barcelona", "monte carlo",
-        "buenos aires", "rio", "lyon", "hamburg", "kitzbuhel",
-        "bastad", "umag", "gstaad", "bucharest", "marrakech", "clay",
-    ],
-    "grass": [
-        "wimbledon", "halle", "queens", "stuttgart", "eastbourne",
-        "mallorca", "s-hertogenbosch", "grass",
-    ],
+    "clay": ["roland garros", "rome", "madrid", "barcelona", "monte carlo",
+             "buenos aires", "rio", "lyon", "hamburg", "kitzbuhel",
+             "bastad", "umag", "gstaad", "bucharest", "marrakech",
+             "clay"],
+    "grass": ["wimbledon", "halle", "queens", "stuttgart", "eastbourne",
+              "mallorca", "s-hertogenbosch", "grass"],
 }
 
 
@@ -130,84 +124,26 @@ def build_match_summary(player1, player2, surface):
     return pd.Series(features)
 
 
-# =====================================================
-# CHROMIUM DRIVER — works locally AND on Streamlit Cloud
-# =====================================================
-def _find_chromium_binary() -> str | None:
-    """
-    Locate the Chromium browser binary on the system.
-    Checks common names across Linux, macOS, and Windows.
-    """
-    # Common binary names across platforms
-    candidates = [
-        "chromium-browser",   # Debian/Ubuntu apt package
-        "chromium",           # Arch, Alpine, snap, macOS brew
-        "google-chrome",      # If Chrome is installed instead
-        "google-chrome-stable",
-    ]
-    for name in candidates:
-        path = shutil.which(name)
-        if path:
-            return path
-
-    # Fallback: check common fixed paths
-    import os
-    fixed_paths = [
-        "/usr/bin/chromium-browser",
-        "/usr/bin/chromium",
-        "/snap/bin/chromium",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-    ]
-    for p in fixed_paths:
-        if os.path.isfile(p):
-            return p
-
-    return None
-
-
-def get_chromium_driver():
-    """
-    Create a headless Chromium WebDriver instance.
-    Uses webdriver_manager with ChromeType.CHROMIUM for automatic
-    driver binary management.
-    """
-    options = Options()
-
-    # ---- Headless & stability flags ----
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+# ---------- SELENIUM FLASHSCORE SCRAPER ----------
+def get_selenium_driver():
+    """Create a headless Chrome driver."""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-
-    # ---- Point to Chromium binary if not in default Chrome location ----
-    chromium_path = _find_chromium_binary()
-    if chromium_path:
-        options.binary_location = chromium_path
-
-    # ---- Let webdriver_manager fetch the correct chromedriver for Chromium ----
-    service = ChromiumService(
-        ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-    )
-
-    driver = webdriver.Chrome(service=service, options=options)
-    return driver
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=chrome_options)
 
 
-# =====================================================
-# FLASHSCORE SCRAPER (Selenium + Chromium)
-# =====================================================
 def scrape_flashscore_tennis():
     """
-    Scrape today's tennis matches from FlashScore using headless Chromium.
+    Scrape today's tennis matches from FlashScore using Selenium.
     Returns (list[dict], list[str]) = (matches, logs).
     """
     logs = ["📅 Searching today's matches on FlashScore (tennis)..."]
@@ -215,34 +151,33 @@ def scrape_flashscore_tennis():
     driver = None
 
     try:
-        driver = get_chromium_driver()
-        logs.append("✅ Chromium driver initialized successfully")
-
+        driver = get_selenium_driver()
         driver.get("https://www.flashscore.com/tennis/")
-        logs.append("🌐 Page loaded, waiting for match data to render...")
+        logs.append("🌐 Page loaded, waiting for match data...")
 
-        # Wait for match rows to appear
-        WebDriverWait(driver, 20).until(
+        # Wait for match rows to appear (FlashScore uses class 'event__match')
+        WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".event__match"))
         )
         # Extra wait for all JS to finish rendering
-        time.sleep(4)
+        time.sleep(3)
 
         # --- Extract tournament headers and match rows ---
+        # FlashScore groups matches under tournament headers
         elements = driver.find_elements(
             By.CSS_SELECTOR,
             ".event__header, .event__match"
         )
 
         current_tournament = "Unknown"
-        logs.append(f"📋 Found {len(elements)} DOM elements to parse")
 
         for el in elements:
             class_attr = el.get_attribute("class") or ""
 
-            # ---- Tournament header ----
+            # Tournament header
             if "event__header" in class_attr:
                 try:
+                    # Category (e.g., "ATP") + tournament name
                     cat_el = el.find_elements(By.CSS_SELECTOR, ".event__title--type")
                     name_el = el.find_elements(By.CSS_SELECTOR, ".event__title--name")
                     cat = cat_el[0].text.strip() if cat_el else ""
@@ -252,7 +187,7 @@ def scrape_flashscore_tennis():
                     pass
                 continue
 
-            # ---- Match row ----
+            # Match row
             if "event__match" in class_attr:
                 try:
                     # Filter: only ATP / Challenger / ITF Men
@@ -261,6 +196,14 @@ def scrape_flashscore_tennis():
                         "ATP", "CHALLENGER", "ITF MEN"
                     ]):
                         continue
+
+                    # Skip live / finished — only want "not started"
+                    # (Remove this filter if you want all matches)
+                    status_els = el.find_elements(
+                        By.CSS_SELECTOR, ".event__stage--block"
+                    )
+                    # If there's a live stage indicator, skip
+                    # (Comment out if you want live matches too)
 
                     # Players
                     participants = el.find_elements(
@@ -275,10 +218,9 @@ def scrape_flashscore_tennis():
                     if not p1 or not p2:
                         continue
 
-                    # Odds (FlashScore sometimes shows inline odds)
+                    # Odds (FlashScore sometimes shows odds in the row)
                     odds_els = el.find_elements(
-                        By.CSS_SELECTOR,
-                        "[class*='odds'], .odds__odd"
+                        By.CSS_SELECTOR, "[class*='odds'], .odds__odd"
                     )
                     odd1 = None
                     odd2 = None
@@ -304,20 +246,69 @@ def scrape_flashscore_tennis():
                     })
 
                 except Exception as e:
-                    logs.append(f"⚠️  Error parsing match row: {e}")
+                    logs.append(f"⚠️  Error parsing a match row: {e}")
                     continue
 
         logs.append(f"🎾 TOTAL: {len(matches)} ATP/Challenger matches found")
 
     except Exception as e:
-        logs.append(f"💥 Chromium scraper error: {e}")
+        logs.append(f"💥 Selenium error: {e}")
 
     finally:
         if driver:
             driver.quit()
-            logs.append("🔒 Chromium driver closed")
 
     return matches, logs
+
+
+# =====================================================
+# OPTION B: API-based scraper (if you have an API key)
+# Uncomment and use instead of Selenium if preferred
+# =====================================================
+#
+# import requests
+#
+# def scrape_flashscore_api():
+#     """Use a FlashScore API (e.g., RapidAPI or Apify) to get matches."""
+#     logs = ["📅 Fetching today's tennis matches via API..."]
+#     matches = []
+#
+#     url = "https://flashscore-api.p.rapidapi.com/v1/events/list"
+#     headers = {
+#         "X-RapidAPI-Key": "YOUR_API_KEY_HERE",
+#         "X-RapidAPI-Host": "flashscore-api.p.rapidapi.com",
+#     }
+#     params = {
+#         "sport_id": 2,       # 2 = Tennis
+#         "day_diff": 0,       # 0 = today
+#         "locale": "en_INT",
+#     }
+#
+#     try:
+#         r = requests.get(url, headers=headers, params=params, timeout=15)
+#         r.raise_for_status()
+#         data = r.json()
+#
+#         for event in data.get("DATA", []):
+#             tournament = event.get("TOURNAMENT_NAME", "")
+#             if not any(k in tournament.upper() for k in ["ATP", "CHALLENGER"]):
+#                 continue
+#
+#             matches.append({
+#                 "tournament": tournament,
+#                 "player1": event.get("HOME_NAME", ""),
+#                 "player2": event.get("AWAY_NAME", ""),
+#                 "surface": infer_surface(tournament),
+#                 "odd1": event.get("ODDS_HOME"),
+#                 "odd2": event.get("ODDS_AWAY"),
+#             })
+#
+#         logs.append(f"🎾 TOTAL: {len(matches)} matches from API")
+#
+#     except Exception as e:
+#         logs.append(f"💥 API error: {e}")
+#
+#     return matches, logs
 
 
 # ---------- EXPORT EXCEL ----------
@@ -340,14 +331,18 @@ def prepare_match_for_prediction(match, all_players):
             missing.append(match["player1"])
         if not p2_hist:
             missing.append(match["player2"])
-        return None, f"❌ Not in history: {', '.join(missing)}"
+        return None, f"❌ Not found in history: {', '.join(missing)}"
 
     summary = build_match_summary(p1_hist, p2_hist, match["surface"])
     return summary, f"✅ Matched: {match['player1']} vs {match['player2']} ({match['surface']})"
 
 
 def run_daily_predictions(all_players):
+    # --- Use Selenium scraper (Option A) ---
     matches, logs = scrape_flashscore_tennis()
+
+    # --- Or use API scraper (Option B) ---
+    # matches, logs = scrape_flashscore_api()
 
     st.subheader("🔍 Scraper Logs")
     for log in logs:
@@ -389,7 +384,7 @@ def run_daily_predictions(all_players):
         })
 
     if not resultados:
-        st.warning("⚠️  Matches found but none matched your player history.")
+        st.warning("⚠️  Matches were found but none could be matched to your player history.")
         return
 
     df_res = pd.DataFrame(resultados)
@@ -397,7 +392,7 @@ def run_daily_predictions(all_players):
     st.subheader("📊 Today's Predictions")
     st.dataframe(df_res, use_container_width=True)
 
-    # Stats row
+    # Stats
     col1, col2, col3 = st.columns(3)
     col1.metric("Matches Analyzed", len(df_res))
     col2.metric("Value Bets", len(df_res[df_res["VALUE BET P1"] == "✅ YES"]))
@@ -417,19 +412,6 @@ def main():
     st.set_page_config(page_title="Tennis Predictions", layout="wide")
     st.title("🎾 ATP / Challenger — Tennis Predictions (FlashScore)")
 
-    # Show Chromium status in sidebar
-    chromium_path = _find_chromium_binary()
-    if chromium_path:
-        st.sidebar.success(f"🌐 Chromium found: `{chromium_path}`")
-    else:
-        st.sidebar.warning(
-            "⚠️ Chromium not found. Install it:\n\n"
-            "**Ubuntu/Debian:**\n"
-            "```\nsudo apt install chromium-browser\n```\n"
-            "**macOS:**\n"
-            "```\nbrew install --cask chromium\n```"
-        )
-
     uploaded_file = st.sidebar.file_uploader(
         "Upload player history (Excel .xlsx with winner_name / loser_name)",
         type=["xlsx"],
@@ -446,7 +428,7 @@ def main():
     st.sidebar.success(f"✅ {len(all_players)} players loaded.")
 
     if st.button("🔍 Fetch today's matches & predict"):
-        with st.spinner("Starting Chromium & scraping FlashScore..."):
+        with st.spinner("Scraping FlashScore..."):
             run_daily_predictions(all_players)
 
 
