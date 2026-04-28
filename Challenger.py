@@ -1,18 +1,3 @@
-Here's the complete updated code using **Chromium driver** — properly configured for both local and Streamlit Cloud deployment:
-
----
-
-## Key Changes for Chromium
-
-For Selenium 4 with Chromium, you need to use `ChromeType.CHROMIUM` from `webdriver_manager.core.os_manager` and pass it via `ChromiumService`.
-
-On Streamlit Cloud or in Docker containers, `--headless` is mandatory since there's no GUI, and only `chromium` & `chromedriver` from default apt repositories are available.
-
----
-
-## Full Updated Code
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
